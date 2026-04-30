@@ -73,6 +73,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
     resolveGeneratedImageInputForEdit,
     selectGeneratedImageAsset,
     buildProductImageView,
+    verifySignedAssetRequest,
     sortProductImages,
     collectBody,
     getSessionToken,
@@ -173,7 +174,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
     }
     storeState.brands.unshift(brand);
     await writeStore(storeState);
-    json(res, 201, { brand: sanitizeBrand(brand) });
+    json(res, 201, { brand: sanitizeBrand(brand, appConfig) });
     return true;
   }
 
@@ -187,7 +188,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
       notFound(res);
       return true;
     }
-    json(res, 200, { brand: sanitizeBrand(brand) });
+    json(res, 200, { brand: sanitizeBrand(brand, appConfig) });
     return true;
   }
 
@@ -250,7 +251,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
     }
 
     await writeStore(storeState);
-    json(res, 200, { brand: sanitizeBrand(brand) });
+    json(res, 200, { brand: sanitizeBrand(brand, appConfig) });
     return true;
   }
 
@@ -311,16 +312,18 @@ async function handleBrandRoutes(context, req, res, pathname) {
       return true;
     }
     await writeStore(storeState);
-    json(res, 200, { brand: sanitizeBrand(brand) });
+    json(res, 200, { brand: sanitizeBrand(brand, appConfig) });
     return true;
   }
 
   const brandLogoFileMatch = pathname.match(/^\/api\/brands\/(\d+)\/logo\/file$/);
   if (req.method === "GET" && brandLogoFileMatch) {
+    if (!verifySignedAssetRequest(appConfig, req)) {
+      unauthorized(res, "图片链接已失效，请刷新页面后重试");
+      return true;
+    }
     const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
-    if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(brandLogoFileMatch[1]) && item.ownerUserId === user.id);
+    const brand = storeState.brands.find((item) => item.id === Number(brandLogoFileMatch[1]));
     if (!brand?.logo) {
       notFound(res);
       return true;

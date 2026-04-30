@@ -1,7 +1,5 @@
-const STORAGE_KEY = "redbase.sessionToken";
-
 const state = {
-  sessionToken: localStorage.getItem(STORAGE_KEY) || "",
+  sessionToken: "",
   currentAdmin: null,
   overview: null,
   brandUserId: "all",
@@ -25,10 +23,7 @@ function safeImageSrc(value) {
 }
 
 function authenticatedImageSrc(value) {
-  const src = safeImageSrc(value);
-  if (!src || !state.sessionToken || !src.startsWith("/api/") || src.includes("token=")) return src;
-  const separator = src.includes("?") ? "&" : "?";
-  return `${src}${separator}token=${encodeURIComponent(state.sessionToken)}`;
+  return safeImageSrc(value);
 }
 
 async function request(url, options = {}) {
@@ -36,12 +31,9 @@ async function request(url, options = {}) {
     "Content-Type": "application/json",
     ...(options.headers || {}),
   };
-  if (state.sessionToken) {
-    headers["X-Session-Token"] = state.sessionToken;
-  }
-
   const response = await fetch(url, {
     headers,
+    credentials: "same-origin",
     ...options,
   });
   const payload = await response.json().catch(() => ({}));
@@ -56,10 +48,6 @@ async function request(url, options = {}) {
 
 async function init() {
   bindEvents();
-  if (!state.sessionToken) {
-    showAuth();
-    return;
-  }
   await loadOverview();
 }
 
@@ -74,8 +62,7 @@ function bindEvents() {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      state.sessionToken = result.sessionToken;
-      localStorage.setItem(STORAGE_KEY, state.sessionToken);
+      state.sessionToken = "cookie";
       await loadOverview();
     } catch (error) {
       errorBox.textContent = error.message;
@@ -220,7 +207,6 @@ function clearSession() {
   state.sessionToken = "";
   state.currentAdmin = null;
   state.overview = null;
-  localStorage.removeItem(STORAGE_KEY);
 }
 
 function showAuth() {

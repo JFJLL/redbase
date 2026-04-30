@@ -2,13 +2,16 @@ const crypto = require("crypto");
 const fsp = require("fs/promises");
 const path = require("path");
 const { DATA_DIR } = require("../config");
+const { getCookieSessionToken } = require("../auth/cookies");
+const { signAssetUrl, verifySignedAssetRequest, signLocalAssetUrls } = require("../assets/signed-urls");
 const {
   randomId,
   sanitizeUser,
   sanitizeTrend,
-  sanitizeGeneration,
+  sanitizeGeneration: baseSanitizeGeneration,
   normalizeChineseCopy,
   pickVariant,
+  sanitizeBrand: baseSanitizeBrand,
 } = require("../utils");
 
 const CREDIT_COSTS = {
@@ -733,11 +736,27 @@ function selectGeneratedImageAsset(generation, sourceImageUrl, parentEditId) {
   return payload.localImage || null;
 }
 
-function buildProductImageView(image) {
+function sanitizeGeneration(generation, appConfig) {
+  const sanitized = baseSanitizeGeneration(generation);
+  return signLocalAssetUrls(sanitized, appConfig);
+}
+
+function sanitizeBrand(brand, appConfig) {
+  const sanitized = baseSanitizeBrand(brand);
+  if (sanitized.logo?.url) {
+    sanitized.logo = {
+      ...sanitized.logo,
+      url: signAssetUrl(appConfig, sanitized.logo.url),
+    };
+  }
+  return sanitized;
+}
+
+function buildProductImageView(image, appConfig) {
   return {
     id: image.id,
     originalName: image.originalName,
-    url: `/api/product-images/${image.id}/file`,
+    url: signAssetUrl(appConfig, `/api/product-images/${image.id}/file`),
     mimeType: image.mimeType,
     sizeBytes: Number(image.sizeBytes || 0),
     createdAt: image.createdAt,
@@ -786,13 +805,11 @@ async function collectBody(req) {
 }
 
 function getSessionToken(req) {
+  const cookieToken = getCookieSessionToken(req);
+  if (cookieToken) return cookieToken;
   const headerToken = req.headers["x-session-token"];
   if (headerToken) return headerToken;
-  try {
-    return new URL(req.url, `http://${req.headers.host || "localhost"}`).searchParams.get("token") || "";
-  } catch (error) {
-    return "";
-  }
+  return "";
 }
 
 function shouldLogApiRequest(pathname) {
@@ -829,7 +846,7 @@ function buildApiRequestLog(req) {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     for (const key of url.searchParams.keys()) {
-      if (!["token", "password", "code", "sessionToken"].includes(key)) {
+      if (!["token", "password", "code", "sessionToken", "assetSignature"].includes(key)) {
         queryKeys.push(key);
       }
     }
@@ -973,7 +990,7 @@ function isRenderableGeneration(item) {
   return slides.length === 4 && slides.every((slide) => Boolean(String(slide.imageUrl || slide.previewUrl || "").trim()));
 }
 
-function buildAdminOverview(storeState) {
+function buildAdminOverview(storeState, appConfig) {
   const usersById = new Map((storeState.users || []).map((user) => [user.id, user]));
   const events = [...(storeState.creditEvents || [])].sort(sortByCreatedAtDesc);
   const generationEventsById = new Map(events.filter((event) => event.generationId != null).map((event) => [event.generationId, event]));
@@ -1025,7 +1042,7 @@ function buildAdminOverview(storeState) {
 
   const generations = [...(storeState.generations || [])]
     .sort(sortByCreatedAtDesc)
-    .map((generation) => buildAdminGenerationView(generation, usersById, generationEventsById.get(generation.id)));
+    .map((generation) => buildAdminGenerationView(generation, usersById, generationEventsById.get(generation.id), appConfig));
   const brands = [...(storeState.brands || [])].sort(sortByCreatedAtDesc).map((brand) => buildAdminBrandView(brand, usersById));
 
   return {
@@ -1100,10 +1117,10 @@ function sanitizeCreditEvent(event, usersById) {
   };
 }
 
-function buildAdminGenerationView(generation, usersById, event) {
+function buildAdminGenerationView(generation, usersById, event, appConfig) {
   const user = usersById.get(generation.ownerUserId);
   return {
-    ...sanitizeGeneration(generation),
+    ...sanitizeGeneration(generation, appConfig),
     tokenCost: getGenerationTokenCost(generation, event),
     usageEventId: event?.id || null,
     user: user
@@ -1471,7 +1488,10 @@ module.exports = {
   serveStoredGeneratedImage,
   resolveGeneratedImageInputForEdit,
   selectGeneratedImageAsset,
+  sanitizeGeneration,
+  sanitizeBrand,
   buildProductImageView,
+  verifySignedAssetRequest,
   sortProductImages,
   collectBody,
   getSessionToken,

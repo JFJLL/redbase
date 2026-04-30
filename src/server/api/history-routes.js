@@ -73,6 +73,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     resolveGeneratedImageInputForEdit,
     selectGeneratedImageAsset,
     buildProductImageView,
+    verifySignedAssetRequest,
     sortProductImages,
     collectBody,
     getSessionToken,
@@ -122,7 +123,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     const user = requireAuth(storeState, req, res);
     if (!user) return true;
     json(res, 200, {
-      brands: storeState.brands.filter((brand) => brand.ownerUserId === user.id).map(sanitizeBrand),
+      brands: storeState.brands.filter((brand) => brand.ownerUserId === user.id).map((brand) => sanitizeBrand(brand, appConfig)),
     });
     return true;
   }
@@ -135,7 +136,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       generations: (storeState.generations || [])
         .filter((item) => item.ownerUserId === user.id)
         .filter(isRenderableGeneration)
-        .map(sanitizeGeneration),
+        .map((generation) => sanitizeGeneration(generation, appConfig)),
     });
     return true;
   }
@@ -162,10 +163,12 @@ async function handleHistoryRoutes(context, req, res, pathname) {
 
   const generatedImageFileMatch = pathname.match(/^\/api\/generated-images\/(\d+)\/file$/);
   if (req.method === "GET" && generatedImageFileMatch) {
+    if (!verifySignedAssetRequest(appConfig, req)) {
+      unauthorized(res, "图片链接已失效，请刷新页面后重试");
+      return true;
+    }
     const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
-    if (!user) return true;
-    const generation = findOwnedGeneration(storeState, user, Number(generatedImageFileMatch[1]));
+    const generation = (storeState.generations || []).find((item) => item.id === Number(generatedImageFileMatch[1]));
     const asset = generation?.payload?.localImage;
     await serveStoredGeneratedImage(res, asset);
     return true;
@@ -173,10 +176,12 @@ async function handleHistoryRoutes(context, req, res, pathname) {
 
   const generatedSlideFileMatch = pathname.match(/^\/api\/generated-images\/(\d+)\/slides\/(\d+)\/file$/);
   if (req.method === "GET" && generatedSlideFileMatch) {
+    if (!verifySignedAssetRequest(appConfig, req)) {
+      unauthorized(res, "图片链接已失效，请刷新页面后重试");
+      return true;
+    }
     const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
-    if (!user) return true;
-    const generation = findOwnedGeneration(storeState, user, Number(generatedSlideFileMatch[1]));
+    const generation = (storeState.generations || []).find((item) => item.id === Number(generatedSlideFileMatch[1]));
     const slides = Array.isArray(generation?.payload?.slides) ? generation.payload.slides : [];
     const slide = slides[Number(generatedSlideFileMatch[2])];
     await serveStoredGeneratedImage(res, slide?.localImage);
@@ -185,10 +190,12 @@ async function handleHistoryRoutes(context, req, res, pathname) {
 
   const generatedEditFileMatch = pathname.match(/^\/api\/generated-images\/(\d+)\/edits\/([a-f0-9]+)\/file$/);
   if (req.method === "GET" && generatedEditFileMatch) {
+    if (!verifySignedAssetRequest(appConfig, req)) {
+      unauthorized(res, "图片链接已失效，请刷新页面后重试");
+      return true;
+    }
     const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
-    if (!user) return true;
-    const generation = findOwnedGeneration(storeState, user, Number(generatedEditFileMatch[1]));
+    const generation = (storeState.generations || []).find((item) => item.id === Number(generatedEditFileMatch[1]));
     const editHistory = Array.isArray(generation?.payload?.editHistory) ? generation.payload.editHistory : [];
     const edit = editHistory.find((item) => item.id === generatedEditFileMatch[2]);
     await serveStoredGeneratedImage(res, edit?.localImage);

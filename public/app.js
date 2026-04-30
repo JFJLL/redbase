@@ -1,4 +1,3 @@
-const STORAGE_KEY = "redbase.sessionToken";
 const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
 const PENDING_IMAGE_TASKS_KEY = "redbase.pendingImageTasks";
 const IMAGE_JOB_MAX_WAIT_MS = 10 * 60 * 1000;
@@ -56,7 +55,7 @@ const state = {
   selectedTrendMode: DEFAULT_TREND_MODE,
   loading: false,
   currentUser: null,
-  sessionToken: localStorage.getItem(STORAGE_KEY) || "",
+  sessionToken: "",
   productImages: {},
   productImageLibrary: [],
   productImagePickerIdeaIndex: null,
@@ -88,10 +87,7 @@ function safeImageSrc(value) {
 }
 
 function authenticatedImageSrc(value) {
-  const src = safeImageSrc(value);
-  if (!src || !state.sessionToken || !src.startsWith("/api/") || src.includes("token=")) return src;
-  const separator = src.includes("?") ? "&" : "?";
-  return `${src}${separator}token=${encodeURIComponent(state.sessionToken)}`;
+  return safeImageSrc(value);
 }
 
 function productImageSrc(image) {
@@ -104,12 +100,9 @@ async function request(url, options = {}) {
     ...(options.headers || {}),
   };
 
-  if (state.sessionToken) {
-    headers["X-Session-Token"] = state.sessionToken;
-  }
-
   const response = await fetch(url, {
     headers,
+    credentials: "same-origin",
     ...options,
   });
 
@@ -911,7 +904,7 @@ function bindAuthModal() {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      applySession(result.sessionToken, result.user);
+      applySession(result.user);
       registerForm.reset();
       syncDepartmentField();
       document.getElementById("authModal").classList.remove("is-open");
@@ -932,7 +925,7 @@ function bindAuthModal() {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      applySession(result.sessionToken, result.user);
+      applySession(result.user);
       document.getElementById("authModal").classList.remove("is-open");
       await loadBrands();
       switchPage("dashboard");
@@ -1038,16 +1031,9 @@ function bindLogout() {
 }
 
 async function restoreSession() {
-  if (!state.sessionToken) {
-    switchPage("landing");
-    renderUser();
-    return;
-  }
-
   try {
     const result = await request("/api/session");
-    state.currentUser = result.user;
-    renderUser();
+    applySession(result.user);
     await loadBrands();
     switchPage("dashboard");
     switchTab(state.currentTab);
@@ -1059,10 +1045,9 @@ async function restoreSession() {
   }
 }
 
-function applySession(token, user) {
-  state.sessionToken = token;
+function applySession(user) {
+  state.sessionToken = "cookie";
   state.currentUser = user;
-  localStorage.setItem(STORAGE_KEY, token);
   renderUser();
 }
 
@@ -1075,7 +1060,6 @@ function updateCurrentUser(user) {
 function clearSession() {
   state.sessionToken = "";
   state.currentUser = null;
-  localStorage.removeItem(STORAGE_KEY);
   renderUser();
 }
 
@@ -1132,7 +1116,7 @@ async function loadBrands() {
     }
     renderAll();
   } catch (error) {
-    alert(`加载失败：${error.message}`);
+    throw new Error(`加载失败：${error.message}`);
   } finally {
     setBusy(false);
   }

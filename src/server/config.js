@@ -48,6 +48,9 @@ const DEFAULT_APP_CONFIG = {
   cors: {
     origins: [],
   },
+  security: {
+    assetSigningSecret: "",
+  },
 };
 
 function deepMerge(base, override) {
@@ -111,6 +114,9 @@ function loadAppConfig() {
         .filter(Boolean)
         .concat(Array.isArray(merged.cors?.origins) ? merged.cors.origins.map((origin) => String(origin || "").trim()).filter(Boolean) : [])
         .filter((origin, index, all) => all.indexOf(origin) === index),
+    },
+    security: {
+      assetSigningSecret: String(process.env.ASSET_SIGNING_SECRET || merged.security?.assetSigningSecret || "").trim(),
     },
   };
 }

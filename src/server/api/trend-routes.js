@@ -172,7 +172,7 @@ async function handleTrendRoutes(context, req, res, pathname) {
     });
     brand.analyses[0].trendSnapshot = cloneTrendBuckets(brand.trends);
     await writeStore(storeState);
-    json(res, 200, { brand: sanitizeBrand(brand), user: sanitizeUser(user) });
+    json(res, 200, { brand: sanitizeBrand(brand, appConfig), user: sanitizeUser(user) });
     return true;
   }
 

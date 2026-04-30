@@ -1,4 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
+const { hashPassword, verifyAndMigratePassword } = require("../auth/passwords");
+const { setSessionCookie, clearSessionCookie } = require("../auth/cookies");
 
 async function handleAuthRoutes(context, req, res, pathname) {
   const {
@@ -166,7 +168,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
       id: storeState.nextUserId++,
       name,
       phone,
-      password,
+      password: await hashPassword(password),
       accountType,
       department,
       credits: accountType === "yimei" ? 50 : 5,
@@ -184,9 +186,9 @@ async function handleAuthRoutes(context, req, res, pathname) {
 
     await writeStore(storeState);
     req.__redbaseApiUser = buildApiUserLog(user);
+    setSessionCookie(res, token);
     json(res, 201, {
       user: sanitizeUser(user),
-      sessionToken: token,
     });
     return true;
   }
@@ -195,8 +197,9 @@ async function handleAuthRoutes(context, req, res, pathname) {
     const payload = await collectBody(req);
     const { phone, password } = payload;
     const storeState = await readStore();
-    const user = storeState.users.find((item) => item.phone === phone && item.password === password);
-    if (!user) {
+    const user = storeState.users.find((item) => item.phone === phone);
+    const verified = await verifyAndMigratePassword(user, password);
+    if (!verified.ok) {
       unauthorized(res, "手机号或密码错误");
       return true;
     }
@@ -209,9 +212,9 @@ async function handleAuthRoutes(context, req, res, pathname) {
     });
     await writeStore(storeState);
     req.__redbaseApiUser = buildApiUserLog(user);
+    setSessionCookie(res, token);
     json(res, 200, {
       user: sanitizeUser(user),
-      sessionToken: token,
     });
     return true;
   }
@@ -234,6 +237,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
       storeState.sessions = storeState.sessions.filter((session) => session.token !== token);
       await writeStore(storeState);
     }
+    clearSessionCookie(res);
     json(res, 200, { ok: true });
     return true;
   }

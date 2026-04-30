@@ -121,7 +121,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
     const storeState = await readStore();
     const adminUser = requireAdmin(storeState, req, res, appConfig);
     if (!adminUser) return true;
-    json(res, 200, buildAdminOverview(storeState));
+    json(res, 200, buildAdminOverview(storeState, appConfig));
     return true;
   }
 
@@ -160,7 +160,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
     await writeStore(storeState);
     json(res, 200, {
       user: sanitizeUser(targetUser),
-      overview: buildAdminOverview(storeState),
+      overview: buildAdminOverview(storeState, appConfig),
     });
     return true;
   }
@@ -187,7 +187,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
     json(res, 200, {
       ok: true,
       deletedUserId: targetUser.id,
-      overview: buildAdminOverview(storeState),
+      overview: buildAdminOverview(storeState, appConfig),
     });
     return true;
   }
@@ -208,7 +208,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
     json(res, 200, {
       ok: true,
       deletedGenerationId: generation.id,
-      overview: buildAdminOverview(storeState),
+      overview: buildAdminOverview(storeState, appConfig),
     });
     return true;
   }

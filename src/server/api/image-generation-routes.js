@@ -789,7 +789,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const existingGeneration = findGenerationForCreditEvent(storeState, Number(payload.creditEventId), user.id);
     if (existingGeneration) {
       json(res, 200, {
-        generation: sanitizeGeneration(existingGeneration),
+        generation: sanitizeGeneration(existingGeneration, appConfig),
         creditEventId: Number(payload.creditEventId) || null,
         user: sanitizeUser(user),
       });
@@ -811,7 +811,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       });
     await writeStore(storeState);
     json(res, 200, {
-      generation: sanitizeGeneration(generation),
+      generation: sanitizeGeneration(generation, appConfig),
       creditEventId: creditEvent?.id || null,
       user: sanitizeUser(user),
     });

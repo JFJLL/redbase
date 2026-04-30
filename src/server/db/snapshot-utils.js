@@ -1,3 +1,5 @@
+const { hashPasswordSync } = require("../auth/passwords");
+
 function createEmptyStore() {
   return {
     nextUserId: 2,
@@ -12,7 +14,7 @@ function createEmptyStore() {
         id: 1,
         name: "Test User",
         phone: "13800000000",
-        password: "123456",
+        password: hashPasswordSync("123456"),
         accountType: "yimei",
         department: "其他",
         credits: 50,

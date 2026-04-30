@@ -36,6 +36,7 @@ $env:TEXT_BASE_URL = "https://api.im-red-magic.cn"
 $env:TEXT_API_KEY = "<your-text-api-key>"
 $env:IMAGE_API_KEY = "<your-image-api-key>"
 $env:ADMIN_PHONES = "13800000000"
+$env:ASSET_SIGNING_SECRET = "<long-random-string>"
 npm start
 ```
 
@@ -56,6 +57,7 @@ npm start
 - `IMAGE_ASPECT_RATIO`、`IMAGE_RESOLUTION`、`IMAGE_QUALITY`、`IMAGE_COUNT`：图片参数
 - `ADMIN_PHONES`：管理员手机号，多个用英文逗号分隔
 - `CORS_ORIGINS`：允许跨域访问的前端来源，多个用英文逗号分隔；同源本地访问不需要配置
+- `ASSET_SIGNING_SECRET`：图片/资产签名 URL 的 HMAC 密钥；生产环境建议配置长随机字符串，未配置时会使用进程内临时密钥
 
 趋势分析默认会先尝试 `google_search`，失败时自动降级为纯模型生成，避免主流程卡死。
 

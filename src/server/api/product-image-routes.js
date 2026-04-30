@@ -73,6 +73,7 @@ async function handleProductImageRoutes(context, req, res, pathname) {
     resolveGeneratedImageInputForEdit,
     selectGeneratedImageAsset,
     buildProductImageView,
+    verifySignedAssetRequest,
     sortProductImages,
     collectBody,
     getSessionToken,
@@ -125,7 +126,7 @@ async function handleProductImageRoutes(context, req, res, pathname) {
       images: (storeState.productImages || [])
         .filter((image) => image.ownerUserId === user.id && !image.deletedAt)
         .sort(sortProductImages)
-        .map(buildProductImageView),
+        .map((image) => buildProductImageView(image, appConfig)),
     });
     return true;
   }
@@ -144,16 +145,18 @@ async function handleProductImageRoutes(context, req, res, pathname) {
       return true;
     }
     await writeStore(storeState);
-    json(res, 201, { image: buildProductImageView(saved.image), duplicate: saved.duplicate });
+    json(res, 201, { image: buildProductImageView(saved.image, appConfig), duplicate: saved.duplicate });
     return true;
   }
 
   const productImageFileMatch = pathname.match(/^\/api\/product-images\/(\d+)\/file$/);
   if (req.method === "GET" && productImageFileMatch) {
+    if (!verifySignedAssetRequest(appConfig, req)) {
+      unauthorized(res, "图片链接已失效，请刷新页面后重试");
+      return true;
+    }
     const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
-    if (!user) return true;
-    const image = findOwnedProductImage(storeState, user, Number(productImageFileMatch[1]));
+    const image = (storeState.productImages || []).find((item) => item.id === Number(productImageFileMatch[1]) && !item.deletedAt) || null;
     if (!image) {
       notFound(res);
       return true;
@@ -190,7 +193,7 @@ async function handleProductImageRoutes(context, req, res, pathname) {
     }
     image.deletedAt = new Date().toISOString();
     await writeStore(storeState);
-    json(res, 200, { ok: true, image: buildProductImageView(image) });
+    json(res, 200, { ok: true, image: buildProductImageView(image, appConfig) });
     return true;
   }
 

@@ -19,5 +19,8 @@
   },
   "admin": {
     "phones": []
+  },
+  "security": {
+    "assetSigningSecret": ""
   }
 }
