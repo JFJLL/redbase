@@ -1,4 +1,90 @@
 const { bindRouteScope } = require("./route-scope");
+const { requireSqlAuth } = require("./sql-auth");
+const { allocateCounter } = require("../db/repositories/core-repository");
+const { findUserById, updateUserCredits } = require("../db/repositories/auth-repository");
+const {
+  insertCreditEvent,
+  findGenerationForCreditEvent: findGenerationIdForCreditEvent,
+  updateCreditEventGeneration,
+  updateCreditEventEditResult,
+  attachGenerationToLatestCreditEvent,
+} = require("../db/repositories/admin-repository");
+const { findBrandByOwner } = require("../db/repositories/brand-repository");
+const { findGenerationByOwner, insertGeneration, upsertGeneration } = require("../db/repositories/generation-repository");
+const { findProductImageByOwner, touchProductImageUsed } = require("../db/repositories/product-image-repository");
+const { findImageJobByOwner, upsertImageJob } = require("../db/repositories/image-job-repository");
+
+function requireRouteUser(req, res, helpers) {
+  return requireSqlAuth(req, res, {
+    getSessionToken: helpers.getSessionToken,
+    buildApiUserLog: helpers.buildApiUserLog,
+    unauthorized: helpers.unauthorized,
+  });
+}
+
+function createSqlCreditEvent({ user, actionType, actionLabel, creditDelta, creditCost, brand, trend, idea, channelLabel, summary, payload }) {
+  return insertCreditEvent({
+    userId: user.id,
+    actionType,
+    actionLabel,
+    creditDelta,
+    creditCost,
+    brandId: brand?.id ?? null,
+    brandName: brand?.name || "",
+    trendId: trend?.id ?? null,
+    trendTitle: trend?.title || "",
+    ideaTitle: idea?.title || "",
+    channelLabel,
+    summary,
+    payload,
+  });
+}
+
+function spendUserCredits(user, cost) {
+  const nextCredits = Number(user.credits || 0) - Number(cost || 0);
+  updateUserCredits(user.id, nextCredits);
+  user.credits = nextCredits;
+  return findUserById(user.id) || user;
+}
+
+function createSqlGenerationRecord(userId, brand, trend, idea, type, channelLabel, payload) {
+  const summaryByType = {
+    moments: payload.caption || payload.visualDirection || "",
+    wechat: payload.publishTitle || payload.intro || "",
+    xhsCarousel: payload.publishCaption || payload.caption || "",
+    styleImage: payload.stylePrompt || payload.visualDirection || "",
+  };
+  return {
+    id: allocateCounter("nextGenerationId", 1),
+    ownerUserId: userId,
+    type,
+    channelLabel,
+    brandId: brand.id,
+    brandName: brand.name,
+    trendId: trend.id,
+    trendTitle: trend.title,
+    ideaTitle: idea.title,
+    cardTitle: payload.title,
+    createdAt: new Date().toISOString(),
+    previewUrl: payload.previewUrl || payload.imageUrl || payload.slides?.[0]?.previewUrl || "",
+    summary: summaryByType[type] || "",
+    payload,
+  };
+}
+
+function requireIdea({ brand, trendId, ideaIndex, res, badRequest, findTrendItem }) {
+  const trend = findTrendItem(brand, Number(trendId));
+  if (!trend) {
+    badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
+    return null;
+  }
+  const idea = trend.ideas[Number(ideaIndex)];
+  if (!idea) {
+    badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
+    return null;
+  }
+  return { trend, idea };
+}
 
 async function handleImageGenerationRoutes(context, req, res, pathname) {
   const {
@@ -117,6 +203,89 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     forbidden,
   } = bindRouteScope(context);
 
+  async function resolveProductImageInputSql(user, input) {
+    const imageId = Number(input?.id || input?.productImageId || 0);
+    if (Number.isFinite(imageId) && imageId > 0) {
+      const image = findProductImageByOwner(imageId, user.id);
+      if (!image) return null;
+      const buffer = await fsp.readFile(resolveStoredProductImagePath(image));
+      touchProductImageUsed(image.id, new Date().toISOString());
+      return {
+        id: image.id,
+        name: image.originalName,
+        dataUrl: `data:${image.mimeType};base64,${buffer.toString("base64")}`,
+        sizeBytes: Number(image.sizeBytes || buffer.length),
+      };
+    }
+    return normalizeProductImage(input);
+  }
+
+  async function resolveProductImageInputsSql(user, input, options = {}) {
+    const rawImages = Array.isArray(input) ? input : input ? [input] : [];
+    const maxCount = Number(options.maxCount || MAX_PRODUCT_IMAGE_SELECTION_COUNT);
+    const maxTotalBytes = Number(options.maxTotalBytes || MAX_PRODUCT_IMAGE_SELECTION_BYTES);
+    const label = String(options.label || "产品参考图");
+    if (rawImages.length > maxCount) {
+      throw Object.assign(new Error(`${label}最多选择 ${maxCount} 张。请删除已有图片后重新上传或选择。`), {
+        code: "IMAGE_LIMIT_EXCEEDED",
+      });
+    }
+    const resolved = [];
+    let totalBytes = 0;
+    for (const rawImage of rawImages) {
+      const image = await resolveProductImageInputSql(user, rawImage);
+      if (!image) continue;
+      totalBytes += Number(image.sizeBytes || estimateDataUrlBytes(image.dataUrl) || 0);
+      if (totalBytes > maxTotalBytes) {
+        throw Object.assign(
+          new Error(`${label}总大小最多 ${formatBytes(maxTotalBytes)}。请压缩图片或删除已有图片后重新上传。`),
+          { code: "IMAGE_LIMIT_EXCEEDED" },
+        );
+      }
+      resolved.push(image);
+    }
+    return resolved;
+  }
+
+  async function appendImageEditToGenerationSql(userId, job) {
+    const generationId = Number(job?.generationContext?.sourceGenerationId || 0);
+    if (!Number.isFinite(generationId) || generationId <= 0) return null;
+    const generation = findGenerationByOwner(generationId, userId);
+    if (!generation) return null;
+
+    generation.payload = generation.payload && typeof generation.payload === "object" ? generation.payload : {};
+    generation.payload.editHistory = Array.isArray(generation.payload.editHistory) ? generation.payload.editHistory : [];
+    const existing = generation.payload.editHistory.find((item) => item.id === job.id);
+    if (existing) return existing;
+
+    const editEntry = {
+      id: job.id,
+      parentEditId: job.generationContext.parentEditId || "",
+      prompt: job.generationContext.editPrompt || job.metadata?.editPrompt || job.metadata?.prompt || "",
+      sourceImageUrl: job.generationContext.sourceImageUrl || job.metadata?.originalImageUrl || "",
+      sourceSlideIndex: Number.isInteger(job.generationContext.sourceSlideIndex) ? job.generationContext.sourceSlideIndex : null,
+      imageUrl: job.imageUrl || "",
+      previewUrl: job.imageUrl || "",
+      title: job.generationContext.title || job.metadata?.title || "改图结果",
+      aspectRatio: job.generationContext.aspectRatio || job.metadata?.aspectRatio || "",
+      model: job.model || "",
+      provider: job.provider || "",
+      createdAt: new Date(Number(job.createdAt || Date.now())).toISOString(),
+      completedAt: job.completedAt || new Date().toISOString(),
+    };
+    await persistGeneratedImageReference({
+      ownerUserId: generation.ownerUserId,
+      generationId: generation.id,
+      target: editEntry,
+      remoteUrl: job.imageUrl || "",
+      variant: `edit_${job.id}`,
+      localUrl: buildGeneratedEditImageUrl(generation.id, job.id),
+    });
+    generation.payload.editHistory.unshift(editEntry);
+    upsertGeneration(generation);
+    return editEntry;
+  }
+
   const imageMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/image$/);
   if (req.method === "POST" && imageMatch) {
     const requestStartedAt = Date.now();
@@ -126,34 +295,21 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       ideaIndex: Number(imageMatch[3]),
     });
 
-    const storeState = await readStore();
-    console.log("[image-job] store loaded", {
-      elapsedMs: Date.now() - requestStartedAt,
-      brandCount: Array.isArray(storeState.brands) ? storeState.brands.length : 0,
-    });
-
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
     console.log("[image-job] user authenticated", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
     });
 
-    const brand = storeState.brands.find((item) => item.id === Number(imageMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(imageMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(imageMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
-    const idea = trend.ideas[Number(imageMatch[3])];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: imageMatch[2], ideaIndex: imageMatch[3], res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
 
     const payload = await collectBody(req);
     console.log("[image-job] request body collected", {
@@ -161,7 +317,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       hasProductImage: Array.isArray(payload.productImages) ? payload.productImages.length > 0 : Boolean(payload.productImage),
     });
 
-    const productImages = await resolveProductImageInputs(storeState, user, payload.productImages || payload.productImage);
+    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     if (!hasEnoughCredits(user, CREDIT_COSTS.momentsImage, res)) return true;
     console.log("[image-job] credits checked", {
@@ -178,8 +334,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       trendId: trend.id,
       ideaIndex: Number(imageMatch[3]),
     });
-    spendCredits(user, CREDIT_COSTS.momentsImage);
-    const creditEvent = recordCreditEvent(storeState, {
+    spendUserCredits(user, CREDIT_COSTS.momentsImage);
+    const creditEvent = createSqlCreditEvent({
       user,
       actionType: "momentsImage",
       actionLabel: "朋友圈图生成",
@@ -208,19 +364,17 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       ideaIndex: Number(imageMatch[3]),
       creditEventId: creditEvent.id,
     };
-    upsertImageJobRecord(storeState, user.id, job);
-    await writeStore(storeState);
+    upsertImageJob(user.id, job);
     json(res, 202, { ...buildImageJobResponse(job), user: sanitizeUser(user) });
     return true;
   }
 
   const imageJobMatch = pathname.match(/^\/api\/image-jobs\/([a-f0-9]+)$/);
   if (req.method === "GET" && imageJobMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const job = imageJobs.get(imageJobMatch[1]) || findOwnedImageJob(storeState, user, imageJobMatch[1]);
+    const job = imageJobs.get(imageJobMatch[1]) || findImageJobByOwner(imageJobMatch[1], user.id);
     if (!job) {
       badRequest(res, "图片任务不存在或已过期，请重新发起生图。");
       return true;
@@ -247,47 +401,44 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       };
       imageJobs.set(job.id, resolved);
     }
-    upsertImageJobRecord(storeState, user.id, resolved);
+    upsertImageJob(user.id, resolved);
     if (resolved.status === "completed" && resolved.generationContext && !resolved.generationId) {
       if (resolved.generationContext.type === "imageEdit") {
-        const editEntry = await appendImageEditToGeneration(storeState, user.id, resolved);
+        const editEntry = await appendImageEditToGenerationSql(user.id, resolved);
         if (editEntry) {
-          attachImageEditToCreditEvent(storeState, resolved.generationContext.creditEventId, editEntry, resolved.generationContext.sourceGenerationId);
+          updateCreditEventEditResult(resolved.generationContext.creditEventId, editEntry, resolved.generationContext.sourceGenerationId);
           resolved.generationId = resolved.generationContext.sourceGenerationId;
           if (editEntry.imageUrl) {
             resolved.imageUrl = editEntry.imageUrl;
           }
-          upsertImageJobRecord(storeState, user.id, resolved);
+          upsertImageJob(user.id, resolved);
         }
       } else {
-        const brand = storeState.brands.find(
-          (item) => item.id === resolved.generationContext.brandId && item.ownerUserId === user.id,
-        );
+        const brand = findBrandByOwner(resolved.generationContext.brandId, user.id);
         const trend = findTrendItem(brand, resolved.generationContext.trendId);
         const idea = trend?.ideas?.[resolved.generationContext.ideaIndex];
         if (brand && trend && idea && resolved.generationContext.type !== "xhsCarouselSlide") {
           const type = resolved.generationContext.type || "moments";
           const channelLabel = resolved.generationContext.channelLabel || "朋友圈图";
           const payload = type === "wechat" ? buildGeneratedAssetPayload(resolved) : buildMomentsGenerationPayload(resolved);
-          const generation = createGenerationRecord(storeState, user.id, brand, trend, idea, type, channelLabel, payload);
+          const generation = createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
           await persistGenerationImages(generation);
-          attachGenerationToCreditEvent(storeState, resolved.generationContext.creditEventId, generation, payload);
+          insertGeneration(generation);
+          updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, payload);
           resolved.generationId = generation.id;
           if (generation.previewUrl) {
             resolved.imageUrl = generation.previewUrl;
           }
-          upsertImageJobRecord(storeState, user.id, resolved);
+          upsertImageJob(user.id, resolved);
         }
       }
     }
-    await writeStore(storeState);
     json(res, 200, buildImageJobResponse(resolved));
     return true;
   }
 
   if (req.method === "POST" && pathname === "/api/image-edits") {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
     const payload = await collectBody(req);
@@ -299,7 +450,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
     const sourceGenerationId = Number(payload.generationId || 0);
-    const sourceGeneration = sourceGenerationId ? findOwnedGeneration(storeState, user, sourceGenerationId) : null;
+    const sourceGeneration = sourceGenerationId ? findGenerationByOwner(sourceGenerationId, user.id) : null;
     if (sourceGenerationId && !sourceGeneration) {
       badRequest(res, "当前历史图片不存在或你没有访问权限。");
       return true;
@@ -329,8 +480,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         sourceStoredPath: localSourceImage?.storedPath || "",
       },
     });
-    spendCredits(user, CREDIT_COSTS.imageEdit);
-    const creditEvent = recordCreditEvent(storeState, {
+    spendUserCredits(user, CREDIT_COSTS.imageEdit);
+    const creditEvent = createSqlCreditEvent({
       user,
       actionType: "imageEdit",
       actionLabel: "追加提示词改图",
@@ -359,8 +510,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       aspectRatio: String(payload.aspectRatio || ""),
       sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
     };
-    upsertImageJobRecord(storeState, user.id, job);
-    await writeStore(storeState);
+    upsertImageJob(user.id, job);
     json(res, 202, { ...buildImageJobResponse(job), user: sanitizeUser(user) });
     return true;
   }
@@ -373,28 +523,20 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       trendId: Number(wechatLongImageMatch[2]),
       ideaIndex: Number(wechatLongImageMatch[3]),
     });
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const brand = storeState.brands.find((item) => item.id === Number(wechatLongImageMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(wechatLongImageMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(wechatLongImageMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
-    const idea = trend.ideas[Number(wechatLongImageMatch[3])];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: wechatLongImageMatch[2], ideaIndex: wechatLongImageMatch[3], res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
 
     const payload = await collectBody(req);
-    const productImages = await resolveProductImageInputs(storeState, user, payload.productImages || payload.productImage);
+    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     console.log("[image-job] wechat request body collected", {
       elapsedMs: Date.now() - requestStartedAt,
@@ -442,8 +584,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       jobId: job.id,
       userId: user.id,
     });
-    spendCredits(user, CREDIT_COSTS.wechatImage);
-    const creditEvent = recordCreditEvent(storeState, {
+    spendUserCredits(user, CREDIT_COSTS.wechatImage);
+    const creditEvent = createSqlCreditEvent({
       user,
       actionType: "wechatImage",
       actionLabel: "公众号长图生成",
@@ -462,14 +604,13 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       },
     });
     job.generationContext.creditEventId = creditEvent.id;
-    upsertImageJobRecord(storeState, user.id, job);
+    upsertImageJob(user.id, job);
     console.log("[image-job] wechat credits spent", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
       remainingCredits: user.credits,
       creditEventId: creditEvent.id,
     });
-    await writeStore(storeState);
     json(res, 200, {
       wechatPack,
       jobId: job.id,
@@ -480,25 +621,17 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
   const xhsCarouselPreviewMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/xhs-carousel\/preview$/);
   if (req.method === "POST" && xhsCarouselPreviewMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const brand = storeState.brands.find((item) => item.id === Number(xhsCarouselPreviewMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(xhsCarouselPreviewMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(xhsCarouselPreviewMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
-    const idea = trend.ideas[Number(xhsCarouselPreviewMatch[3])];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: xhsCarouselPreviewMatch[2], ideaIndex: xhsCarouselPreviewMatch[3], res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
 
     json(res, 200, {
       carouselPack: buildXhsCarouselPack({ brand, trend, idea }),
@@ -515,28 +648,20 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       trendId: Number(xhsCarouselMatch[2]),
       ideaIndex: Number(xhsCarouselMatch[3]),
     });
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const brand = storeState.brands.find((item) => item.id === Number(xhsCarouselMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(xhsCarouselMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(xhsCarouselMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
-    const idea = trend.ideas[Number(xhsCarouselMatch[3])];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: xhsCarouselMatch[2], ideaIndex: xhsCarouselMatch[3], res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
 
     const payload = await collectBody(req);
-    const productImages = await resolveProductImageInputs(storeState, user, payload.productImages || payload.productImage);
+    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     console.log("[image-job] carousel request body collected", {
       elapsedMs: Date.now() - requestStartedAt,
@@ -598,10 +723,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       jobId: job.id,
     }));
     for (const { job } of slideJobRecords) {
-      upsertImageJobRecord(storeState, user.id, job);
+      upsertImageJob(user.id, job);
     }
-    spendCredits(user, CREDIT_COSTS.xhsCarousel);
-    const creditEvent = recordCreditEvent(storeState, {
+    spendUserCredits(user, CREDIT_COSTS.xhsCarousel);
+    const creditEvent = createSqlCreditEvent({
       user,
       actionType: "xhsCarousel",
       actionLabel: "小红书组图生成",
@@ -630,10 +755,9 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       const job = imageJobs.get(slideJob.jobId);
       if (job?.generationContext) {
         job.generationContext.creditEventId = creditEvent.id;
-        upsertImageJobRecord(storeState, user.id, job);
+        upsertImageJob(user.id, job);
       }
     }
-    await writeStore(storeState);
     json(res, 200, {
       carouselPack,
       slideJobs,
@@ -647,30 +771,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
   if (req.method === "POST" && xhsCarouselSlideMatch) {
     const requestStartedAt = Date.now();
     const slideIndex = Number(xhsCarouselSlideMatch[4]);
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
     if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > 3) {
       badRequest(res, "小红书组图页码无效。");
       return true;
     }
 
-    const brand = storeState.brands.find((item) => item.id === Number(xhsCarouselSlideMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(xhsCarouselSlideMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(xhsCarouselSlideMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
     const ideaIndex = Number(xhsCarouselSlideMatch[3]);
-    const idea = trend.ideas[ideaIndex];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: xhsCarouselSlideMatch[2], ideaIndex, res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
 
     const payload = await collectBody(req);
     const defaultPack = buildXhsCarouselPack({ brand, trend, idea });
@@ -682,7 +798,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const productImages = await resolveProductImageInputs(storeState, user, payload.productImages || payload.productImage);
+    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     if (!hasEnoughCredits(user, CREDIT_COSTS.xhsCarouselSlide, res)) return true;
 
@@ -722,8 +838,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       ideaIndex,
       slideIndex,
     };
-    spendCredits(user, CREDIT_COSTS.xhsCarouselSlide);
-    const creditEvent = recordCreditEvent(storeState, {
+    spendUserCredits(user, CREDIT_COSTS.xhsCarouselSlide);
+    const creditEvent = createSqlCreditEvent({
       user,
       actionType: "xhsCarousel",
       actionLabel: "小红书组图单张生成",
@@ -743,8 +859,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       },
     });
     job.generationContext.creditEventId = creditEvent.id;
-    upsertImageJobRecord(storeState, user.id, job);
-    await writeStore(storeState);
+    upsertImageJob(user.id, job);
     json(res, 202, {
       slideJob: {
         slideIndex,
@@ -758,25 +873,17 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
   const xhsCarouselCompleteMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/xhs-carousel\/complete$/);
   if (req.method === "POST" && xhsCarouselCompleteMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const brand = storeState.brands.find((item) => item.id === Number(xhsCarouselCompleteMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(xhsCarouselCompleteMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(xhsCarouselCompleteMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
-    const idea = trend.ideas[Number(xhsCarouselCompleteMatch[3])];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: xhsCarouselCompleteMatch[2], ideaIndex: xhsCarouselCompleteMatch[3], res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
 
     const payload = await collectBody(req);
     const carouselPack = payload.carouselPack || {};
@@ -786,7 +893,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const existingGeneration = findGenerationForCreditEvent(storeState, Number(payload.creditEventId), user.id);
+    const existingGenerationId = findGenerationIdForCreditEvent(Number(payload.creditEventId), user.id);
+    const existingGeneration = existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null;
     if (existingGeneration) {
       json(res, 200, {
         generation: sanitizeGeneration(existingGeneration, appConfig),
@@ -796,11 +904,12 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const generation = createGenerationRecord(storeState, user.id, brand, trend, idea, "xhsCarousel", "小红书组图", carouselPack);
+    const generation = createSqlGenerationRecord(user.id, brand, trend, idea, "xhsCarousel", "小红书组图", carouselPack);
     await persistGenerationImages(generation);
+    insertGeneration(generation);
     const creditEvent =
-      attachGenerationToCreditEvent(storeState, Number(payload.creditEventId), generation, carouselPack) ||
-      attachGenerationToLatestMatchingCreditEvent(storeState, {
+      updateCreditEventGeneration(Number(payload.creditEventId), generation, carouselPack) ||
+      attachGenerationToLatestCreditEvent({
         user,
         actionType: "xhsCarousel",
         brand,
@@ -809,7 +918,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         generation,
         generationPayload: carouselPack,
       });
-    await writeStore(storeState);
     json(res, 200, {
       generation: sanitizeGeneration(generation, appConfig),
       creditEventId: creditEvent?.id || null,
@@ -820,31 +928,23 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
   const styleImageMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/style-image$/);
   if (req.method === "POST" && styleImageMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(styleImageMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(styleImageMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
     }
-    const trend = findTrendItem(brand, Number(styleImageMatch[2]));
-    if (!trend) {
-      badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
-      return true;
-    }
-    const idea = trend.ideas[Number(styleImageMatch[3])];
-    if (!idea) {
-      badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
-      return true;
-    }
+    const selected = requireIdea({ brand, trendId: styleImageMatch[2], ideaIndex: styleImageMatch[3], res, badRequest, findTrendItem });
+    if (!selected) return true;
+    const { trend, idea } = selected;
     const payload = await collectBody(req);
     const stylePrompt = String(payload.stylePrompt || payload.prompt || "").trim();
     if (!stylePrompt) {
       badRequest(res, "请先填写风格化图提示词。");
       return true;
     }
-    const styleReferenceImages = await resolveProductImageInputs(storeState, user, payload.styleReferenceImages || payload.styleReferenceImage, {
+    const styleReferenceImages = await resolveProductImageInputsSql(user, payload.styleReferenceImages || payload.styleReferenceImage, {
       maxCount: 1,
       maxTotalBytes: MAX_PRODUCT_IMAGE_BYTES,
       label: "风格参考图",
@@ -873,8 +973,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       json(res, 502, { error: formatImageServiceError(error) });
       return true;
     }
-    spendCredits(user, CREDIT_COSTS.styleImage);
-    const creditEvent = recordCreditEvent(storeState, {
+    spendUserCredits(user, CREDIT_COSTS.styleImage);
+    const creditEvent = createSqlCreditEvent({
       user,
       actionType: "styleImage",
       actionLabel: "风格化图生成",
@@ -900,8 +1000,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       ideaIndex: Number(styleImageMatch[3]),
       creditEventId: creditEvent.id,
     };
-    upsertImageJobRecord(storeState, user.id, job);
-    await writeStore(storeState);
+    upsertImageJob(user.id, job);
     json(res, 202, { ...buildImageJobResponse(job), user: sanitizeUser(user) });
     return true;
   }

@@ -1,4 +1,7 @@
 const { bindRouteScope } = require("./route-scope");
+const { findUserById, findUserBySessionToken } = require("../db/repositories/auth-repository");
+const { addCredits, deleteUserCascadeRows } = require("../db/repositories/admin-repository");
+const { findGenerationById, deleteGenerationRows } = require("../db/repositories/generation-repository");
 
 async function handleAdminRoutes(context, req, res, pathname) {
   const {
@@ -117,21 +120,35 @@ async function handleAdminRoutes(context, req, res, pathname) {
     forbidden,
   } = bindRouteScope(context);
 
+  function requireAdminFromSql() {
+    const token = getSessionToken(req);
+    const user = token ? findUserBySessionToken(token) : null;
+    if (!user) {
+      unauthorized(res, "请先登录");
+      return null;
+    }
+    if (!isAdminUser(user, appConfig)) {
+      forbidden(res, "当前账号没有管理后台权限");
+      return null;
+    }
+    req.__redbaseApiUser = buildApiUserLog(user);
+    return user;
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/overview") {
-    const storeState = await readStore();
-    const adminUser = requireAdmin(storeState, req, res, appConfig);
+    const adminUser = requireAdminFromSql();
     if (!adminUser) return true;
+    const storeState = await readStore();
     json(res, 200, buildAdminOverview(storeState, appConfig));
     return true;
   }
 
   const adminCreditMatch = pathname.match(/^\/api\/admin\/users\/(\d+)\/credits$/);
   if (req.method === "POST" && adminCreditMatch) {
-    const storeState = await readStore();
-    const adminUser = requireAdmin(storeState, req, res, appConfig);
+    const adminUser = requireAdminFromSql();
     if (!adminUser) return true;
 
-    const targetUser = storeState.users.find((item) => item.id === Number(adminCreditMatch[1]));
+    const targetUser = findUserById(Number(adminCreditMatch[1]));
     if (!targetUser) {
       notFound(res);
       return true;
@@ -144,22 +161,15 @@ async function handleAdminRoutes(context, req, res, pathname) {
       return true;
     }
 
-    targetUser.credits = Number(targetUser.credits || 0) + amount;
-    recordCreditEvent(storeState, {
-      user: targetUser,
-      actionType: "adminAddCredits",
-      actionLabel: "管理员加额度",
-      creditDelta: amount,
-      creditCost: 0,
+    const updatedUser = addCredits({
+      targetUserId: targetUser.id,
+      amount,
       adminUser,
-      summary: String(payload.note || "").trim() || `管理员为用户增加 ${amount} 额度`,
-      payload: {
-        note: String(payload.note || "").trim(),
-      },
+      note: String(payload.note || "").trim(),
     });
-    await writeStore(storeState);
+    const storeState = await readStore();
     json(res, 200, {
-      user: sanitizeUser(targetUser),
+      user: sanitizeUser(updatedUser),
       overview: buildAdminOverview(storeState, appConfig),
     });
     return true;
@@ -167,12 +177,11 @@ async function handleAdminRoutes(context, req, res, pathname) {
 
   const adminUserMatch = pathname.match(/^\/api\/admin\/users\/(\d+)$/);
   if (req.method === "DELETE" && adminUserMatch) {
-    const storeState = await readStore();
-    const adminUser = requireAdmin(storeState, req, res, appConfig);
+    const adminUser = requireAdminFromSql();
     if (!adminUser) return true;
 
     const targetUserId = Number(adminUserMatch[1]);
-    const targetUser = storeState.users.find((item) => item.id === targetUserId);
+    const targetUser = findUserById(targetUserId);
     if (!targetUser) {
       notFound(res);
       return true;
@@ -182,8 +191,8 @@ async function handleAdminRoutes(context, req, res, pathname) {
       return true;
     }
 
-    await deleteUserCascade(storeState, targetUser);
-    await writeStore(storeState);
+    deleteUserCascadeRows(targetUser.id);
+    const storeState = await readStore();
     json(res, 200, {
       ok: true,
       deletedUserId: targetUser.id,
@@ -194,17 +203,17 @@ async function handleAdminRoutes(context, req, res, pathname) {
 
   const adminGenerationMatch = pathname.match(/^\/api\/admin\/generations\/(\d+)$/);
   if (req.method === "DELETE" && adminGenerationMatch) {
-    const storeState = await readStore();
-    const adminUser = requireAdmin(storeState, req, res, appConfig);
+    const adminUser = requireAdminFromSql();
     if (!adminUser) return true;
-    const generation = (storeState.generations || []).find((item) => item.id === Number(adminGenerationMatch[1]));
+    const generation = findGenerationById(Number(adminGenerationMatch[1]));
     if (!generation) {
       notFound(res);
       return true;
     }
 
-    await deleteGenerationCascade(storeState, generation, imageJobs);
-    await writeStore(storeState);
+    await removeGenerationLocalFiles(generation);
+    deleteGenerationRows(generation.id);
+    const storeState = await readStore();
     json(res, 200, {
       ok: true,
       deletedGenerationId: generation.id,

@@ -1,4 +1,12 @@
 const { bindRouteScope } = require("./route-scope");
+const { requireSqlAuth } = require("./sql-auth");
+const { listBrandsByOwner } = require("../db/repositories/brand-repository");
+const {
+  listGenerationsByOwner,
+  findGenerationByOwner,
+  findGenerationById,
+  deleteGenerationRows,
+} = require("../db/repositories/generation-repository");
 
 async function handleHistoryRoutes(context, req, res, pathname) {
   const {
@@ -119,22 +127,19 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   } = bindRouteScope(context);
 
   if (req.method === "GET" && pathname === "/api/brands") {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
     json(res, 200, {
-      brands: storeState.brands.filter((brand) => brand.ownerUserId === user.id).map((brand) => sanitizeBrand(brand, appConfig)),
+      brands: listBrandsByOwner(user.id).map((brand) => sanitizeBrand(brand, appConfig)),
     });
     return true;
   }
 
   if (req.method === "GET" && pathname === "/api/history") {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
     json(res, 200, {
-      generations: (storeState.generations || [])
-        .filter((item) => item.ownerUserId === user.id)
+      generations: listGenerationsByOwner(user.id)
         .filter(isRenderableGeneration)
         .map((generation) => sanitizeGeneration(generation, appConfig)),
     });
@@ -143,17 +148,16 @@ async function handleHistoryRoutes(context, req, res, pathname) {
 
   const historyGenerationMatch = pathname.match(/^\/api\/history\/(\d+)$/);
   if (req.method === "DELETE" && historyGenerationMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const generation = findOwnedGeneration(storeState, user, Number(historyGenerationMatch[1]));
+    const generation = findGenerationByOwner(Number(historyGenerationMatch[1]), user.id);
     if (!generation) {
       notFound(res);
       return true;
     }
 
-    await deleteGenerationCascade(storeState, generation, imageJobs);
-    await writeStore(storeState);
+    await removeGenerationLocalFiles(generation);
+    deleteGenerationRows(generation.id);
     json(res, 200, {
       ok: true,
       deletedGenerationId: generation.id,
@@ -167,8 +171,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       unauthorized(res, "图片链接已失效，请刷新页面后重试");
       return true;
     }
-    const storeState = await readStore();
-    const generation = (storeState.generations || []).find((item) => item.id === Number(generatedImageFileMatch[1]));
+    const generation = findGenerationById(Number(generatedImageFileMatch[1]));
     const asset = generation?.payload?.localImage;
     await serveStoredGeneratedImage(res, asset);
     return true;
@@ -180,8 +183,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       unauthorized(res, "图片链接已失效，请刷新页面后重试");
       return true;
     }
-    const storeState = await readStore();
-    const generation = (storeState.generations || []).find((item) => item.id === Number(generatedSlideFileMatch[1]));
+    const generation = findGenerationById(Number(generatedSlideFileMatch[1]));
     const slides = Array.isArray(generation?.payload?.slides) ? generation.payload.slides : [];
     const slide = slides[Number(generatedSlideFileMatch[2])];
     await serveStoredGeneratedImage(res, slide?.localImage);
@@ -194,8 +196,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       unauthorized(res, "图片链接已失效，请刷新页面后重试");
       return true;
     }
-    const storeState = await readStore();
-    const generation = (storeState.generations || []).find((item) => item.id === Number(generatedEditFileMatch[1]));
+    const generation = findGenerationById(Number(generatedEditFileMatch[1]));
     const editHistory = Array.isArray(generation?.payload?.editHistory) ? generation.payload.editHistory : [];
     const edit = editHistory.find((item) => item.id === generatedEditFileMatch[2]);
     await serveStoredGeneratedImage(res, edit?.localImage);

@@ -1,4 +1,12 @@
 const { bindRouteScope } = require("./route-scope");
+const { requireSqlAuth } = require("./sql-auth");
+const { findUserById, updateUserCredits } = require("../db/repositories/auth-repository");
+const { insertCreditEvent } = require("../db/repositories/admin-repository");
+const {
+  findBrandByOwner,
+  upsertBrandFull,
+  allocateAnalysisAndTrendBase,
+} = require("../db/repositories/brand-repository");
 
 async function handleTrendRoutes(context, req, res, pathname) {
   const {
@@ -119,11 +127,10 @@ async function handleTrendRoutes(context, req, res, pathname) {
 
   const analysisMatch = pathname.match(/^\/api\/brands\/(\d+)\/analyses$/);
   if (req.method === "POST" && analysisMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const brand = storeState.brands.find((item) => item.id === Number(analysisMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(analysisMatch[1]), user.id);
     if (!brand) {
       notFound(res);
       return true;
@@ -139,9 +146,7 @@ async function handleTrendRoutes(context, req, res, pathname) {
     }
 
     if (!hasEnoughCredits(user, CREDIT_COSTS.analysis, res)) return true;
-    const analysisId = storeState.nextAnalysisId++;
-    const trendBase = storeState.nextTrendId;
-    storeState.nextTrendId += 300;
+    const { analysisId, trendBase } = allocateAnalysisAndTrendBase();
     brand.analyses.unshift({
       id: analysisId,
       name: `${brand.name} - 热门趋势分析`,
@@ -160,28 +165,30 @@ async function handleTrendRoutes(context, req, res, pathname) {
       badRequest(res, "本次分析未能获取到可用热点，请稍后重试。");
       return true;
     }
-    spendCredits(user, CREDIT_COSTS.analysis);
-    recordCreditEvent(storeState, {
-      user,
+    const nextCredits = Number(user.credits || 0) - CREDIT_COSTS.analysis;
+    updateUserCredits(user.id, nextCredits);
+    const updatedUser = findUserById(user.id);
+    insertCreditEvent({
+      userId: user.id,
       actionType: "analysis",
       actionLabel: "AI 热点分析",
       creditDelta: -CREDIT_COSTS.analysis,
       creditCost: CREDIT_COSTS.analysis,
-      brand,
+      brandId: brand.id,
+      brandName: brand.name,
       summary: `${brand.name} 热点趋势分析`,
     });
     brand.analyses[0].trendSnapshot = cloneTrendBuckets(brand.trends);
-    await writeStore(storeState);
-    json(res, 200, { brand: sanitizeBrand(brand, appConfig), user: sanitizeUser(user) });
+    const savedBrand = upsertBrandFull(brand);
+    json(res, 200, { brand: sanitizeBrand(savedBrand, appConfig), user: sanitizeUser(updatedUser) });
     return true;
   }
 
   const ideaUpdateMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)$/);
   if (req.method === "PATCH" && ideaUpdateMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(ideaUpdateMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(ideaUpdateMatch[1]), user.id);
     if (!brand) {
       notFound(res);
       return true;
@@ -204,18 +211,17 @@ async function handleTrendRoutes(context, req, res, pathname) {
     idea.brandFit = normalizeEditableText(payload.brandFit, 220);
     idea.audience = normalizeEditableText(payload.audience, 180);
     idea.hook = normalizeEditableText(payload.hook, 220);
-    await writeStore(storeState);
+    upsertBrandFull(brand);
     json(res, 200, { trend: sanitizeTrend(trend), idea: sanitizeTrend(trend).ideas[ideaIndex] });
     return true;
   }
 
   const regenerateMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/regenerate$/);
   if (req.method === "POST" && regenerateMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const brand = storeState.brands.find((item) => item.id === Number(regenerateMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(regenerateMatch[1]), user.id);
     if (!brand) {
       badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
       return true;
@@ -230,15 +236,19 @@ async function handleTrendRoutes(context, req, res, pathname) {
     const customPrompt = String(payload.customPrompt || "").trim();
     if (!hasEnoughCredits(user, CREDIT_COSTS.regenerateIdeas, res)) return true;
     const next = await regenerateTrendIdeas(brand, trend, customPrompt);
-    spendCredits(user, CREDIT_COSTS.regenerateIdeas);
-    recordCreditEvent(storeState, {
-      user,
+    const nextCredits = Number(user.credits || 0) - CREDIT_COSTS.regenerateIdeas;
+    updateUserCredits(user.id, nextCredits);
+    const updatedUser = findUserById(user.id);
+    insertCreditEvent({
+      userId: user.id,
       actionType: "regenerateIdeas",
       actionLabel: "重新生成选题",
       creditDelta: -CREDIT_COSTS.regenerateIdeas,
       creditCost: CREDIT_COSTS.regenerateIdeas,
-      brand,
-      trend,
+      brandId: brand.id,
+      brandName: brand.name,
+      trendId: trend.id,
+      trendTitle: trend.title,
       summary: customPrompt || `${brand.name} / ${trend.title}`,
       payload: {
         customPrompt,
@@ -247,10 +257,10 @@ async function handleTrendRoutes(context, req, res, pathname) {
     trend.customPrompt = customPrompt;
     trend.systemPrompt = next.systemPrompt;
     trend.ideas = next.ideas;
-    await writeStore(storeState);
+    upsertBrandFull(brand);
     json(res, 200, {
       trend: sanitizeTrend(trend),
-      user: sanitizeUser(user),
+      user: sanitizeUser(updatedUser),
       promptInfo: {
         systemPrompt: trend.systemPrompt,
         customPrompt,

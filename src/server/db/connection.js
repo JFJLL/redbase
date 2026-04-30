@@ -8,6 +8,7 @@ function openDatabase() {
   if (!db) {
     db = new Database(DB_FILE);
     db.pragma("foreign_keys = ON");
+    db.pragma("journal_mode = WAL");
   }
   return db;
 }
@@ -35,8 +36,14 @@ function getDbProxy() {
   return dbProxy;
 }
 
+function transaction(work) {
+  const database = getDatabase();
+  return database.transaction(work);
+}
+
 module.exports = {
   openDatabase,
   getDatabase,
   getDbProxy,
+  transaction,
 };

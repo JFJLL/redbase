@@ -1,4 +1,14 @@
 const { bindRouteScope } = require("./route-scope");
+const { requireSqlAuth } = require("./sql-auth");
+const { allocateCounter } = require("../db/repositories/core-repository");
+const {
+  findBrandByOwner,
+  findBrandById,
+  insertBrand,
+  updateBrand,
+  deleteBrandById,
+} = require("../db/repositories/brand-repository");
+const { listGenerationsByOwner, deleteGenerationRows } = require("../db/repositories/generation-repository");
 
 async function handleBrandRoutes(context, req, res, pathname) {
   const {
@@ -119,8 +129,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
   } = bindRouteScope(context);
 
   if (req.method === "POST" && pathname === "/api/brands") {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
     const payload = await collectBody(req);
@@ -145,8 +154,9 @@ async function handleBrandRoutes(context, req, res, pathname) {
       return true;
     }
 
+    const brandId = allocateCounter("nextBrandId", 1);
     const brand = {
-      id: storeState.nextBrandId++,
+      id: brandId,
       ownerUserId: user.id,
       name: payload.name,
       industry: payload.industry,
@@ -172,18 +182,16 @@ async function handleBrandRoutes(context, req, res, pathname) {
         return true;
       }
     }
-    storeState.brands.unshift(brand);
-    await writeStore(storeState);
-    json(res, 201, { brand: sanitizeBrand(brand, appConfig) });
+    const savedBrand = insertBrand(brand);
+    json(res, 201, { brand: sanitizeBrand(savedBrand, appConfig) });
     return true;
   }
 
   const brandMatch = pathname.match(/^\/api\/brands\/(\d+)$/);
   if (req.method === "GET" && brandMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(brandMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(brandMatch[1]), user.id);
     if (!brand) {
       notFound(res);
       return true;
@@ -193,10 +201,9 @@ async function handleBrandRoutes(context, req, res, pathname) {
   }
 
   if (req.method === "PUT" && brandMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(brandMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(brandMatch[1]), user.id);
     if (!brand) {
       notFound(res);
       return true;
@@ -250,16 +257,15 @@ async function handleBrandRoutes(context, req, res, pathname) {
       }
     }
 
-    await writeStore(storeState);
-    json(res, 200, { brand: sanitizeBrand(brand, appConfig) });
+    const savedBrand = updateBrand(brand);
+    json(res, 200, { brand: sanitizeBrand(savedBrand, appConfig) });
     return true;
   }
 
   if (req.method === "DELETE" && brandMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(brandMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(brandMatch[1]), user.id);
     if (!brand) {
       notFound(res);
       return true;
@@ -268,29 +274,26 @@ async function handleBrandRoutes(context, req, res, pathname) {
     const deleteGenerations = Boolean(payload.deleteGenerations);
     const deletedGenerationIds = [];
     if (deleteGenerations) {
-      const brandGenerations = (storeState.generations || []).filter(
-        (generation) => generation.ownerUserId === user.id && generation.brandId === brand.id,
-      );
+      const brandGenerations = listGenerationsByOwner(user.id).filter((generation) => generation.brandId === brand.id);
       for (const generation of brandGenerations) {
         deletedGenerationIds.push(generation.id);
-        await deleteGenerationCascade(storeState, generation, imageJobs);
+        await removeGenerationLocalFiles(generation);
+        deleteGenerationRows(generation.id);
       }
     }
     if (brand.logo?.storedPath) {
       await removeStoredFileIfExists(resolveStoredAssetPath(brand.logo.storedPath));
     }
-    storeState.brands = storeState.brands.filter((item) => item.id !== brand.id);
-    await writeStore(storeState);
+    deleteBrandById(brand.id);
     json(res, 200, { ok: true, deletedGenerationIds });
     return true;
   }
 
   const brandLogoMatch = pathname.match(/^\/api\/brands\/(\d+)\/logo$/);
   if (req.method === "POST" && brandLogoMatch) {
-    const storeState = await readStore();
-    const user = requireAuth(storeState, req, res);
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    const brand = storeState.brands.find((item) => item.id === Number(brandLogoMatch[1]) && item.ownerUserId === user.id);
+    const brand = findBrandByOwner(Number(brandLogoMatch[1]), user.id);
     if (!brand) {
       notFound(res);
       return true;
@@ -311,8 +314,8 @@ async function handleBrandRoutes(context, req, res, pathname) {
       badRequest(res, error.message || "品牌 Logo 上传失败");
       return true;
     }
-    await writeStore(storeState);
-    json(res, 200, { brand: sanitizeBrand(brand, appConfig) });
+    const savedBrand = updateBrand(brand);
+    json(res, 200, { brand: sanitizeBrand(savedBrand, appConfig) });
     return true;
   }
 
@@ -322,8 +325,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
       unauthorized(res, "图片链接已失效，请刷新页面后重试");
       return true;
     }
-    const storeState = await readStore();
-    const brand = storeState.brands.find((item) => item.id === Number(brandLogoFileMatch[1]));
+    const brand = findBrandById(Number(brandLogoFileMatch[1]));
     if (!brand?.logo) {
       notFound(res);
       return true;

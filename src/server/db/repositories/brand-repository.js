@@ -1,0 +1,284 @@
+const { getDbProxy } = require("../connection");
+const {
+  normalizeBrandLogo,
+  groupTrendRows,
+  flattenTrendBuckets,
+  safeParseArray,
+  safeParseObject,
+} = require("../snapshot-utils");
+const { readIdeasForTrendRow } = require("../legacy-readers");
+const { allocateCounter, runTransaction } = require("./core-repository");
+
+const db = getDbProxy();
+
+function mapBrandRow(row) {
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    name: row.name,
+    industry: row.industry,
+    audience: row.audience,
+    description: row.description,
+    product: row.product,
+    goal: row.goal,
+    knowledgeBase: row.knowledge_base,
+    logo: normalizeBrandLogo(safeParseObject(row.logo_json)),
+    assetTags: safeParseArray(row.asset_tags_json),
+    analyses: [],
+    trends: [],
+  };
+}
+
+function getBrandsBySql(sql, params = []) {
+  const brands = db.prepare(sql).all(...params).map(mapBrandRow);
+  hydrateBrandContent(brands);
+  return brands;
+}
+
+function listBrandsByOwner(ownerUserId) {
+  return getBrandsBySql(
+    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+     FROM brands WHERE owner_user_id = ? ORDER BY id DESC`,
+    [Number(ownerUserId)],
+  );
+}
+
+function findBrandByOwner(brandId, ownerUserId) {
+  return getBrandsBySql(
+    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+     FROM brands WHERE id = ? AND owner_user_id = ?`,
+    [Number(brandId), Number(ownerUserId)],
+  )[0] || null;
+}
+
+function findBrandById(brandId) {
+  return getBrandsBySql(
+    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+     FROM brands WHERE id = ?`,
+    [Number(brandId)],
+  )[0] || null;
+}
+
+function hydrateBrandContent(brands) {
+  if (!brands.length) return;
+  const brandMap = new Map(brands.map((brand) => [brand.id, brand]));
+  const ids = brands.map((brand) => brand.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const analysisMap = new Map();
+  const analysisRows = db.prepare(`
+    SELECT id, brand_id, name, timestamp, position
+    FROM analyses
+    WHERE brand_id IN (${placeholders})
+    ORDER BY brand_id DESC, position ASC
+  `).all(...ids);
+
+  for (const row of analysisRows) {
+    const brand = brandMap.get(row.brand_id);
+    if (!brand) continue;
+    const analysis = {
+      id: row.id,
+      name: row.name,
+      timestamp: row.timestamp,
+      trendSnapshot: [],
+    };
+    brand.analyses.push(analysis);
+    analysisMap.set(row.id, analysis);
+  }
+
+  const trendRows = db.prepare(`
+    SELECT row_id, trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json
+    FROM trends
+    WHERE brand_id IN (${placeholders})
+    ORDER BY brand_id DESC, scope ASC, analysis_id ASC, bucket_key ASC, position ASC
+  `).all(...ids);
+
+  for (const row of trendRows) {
+    const trend = {
+      id: row.trend_id,
+      bucketKey: row.bucket_key,
+      bucketTitle: row.bucket_title,
+      bucketDescription: row.bucket_description,
+      rank: row.rank,
+      title: row.title,
+      category: row.category,
+      summary: row.summary,
+      score: row.score,
+      tags: safeParseArray(row.tags_json),
+      reason: row.reason,
+      customPrompt: row.custom_prompt || "",
+      systemPrompt: row.system_prompt || "",
+      ideas: readIdeasForTrendRow(row.row_id),
+    };
+
+    if (row.scope === "current") {
+      const brand = brandMap.get(row.brand_id);
+      if (brand) groupTrendRows([trend], brand.trends);
+      continue;
+    }
+
+    const analysis = analysisMap.get(row.analysis_id);
+    if (analysis) groupTrendRows([trend], analysis.trendSnapshot);
+  }
+}
+
+function insertBrand(input) {
+  return runTransaction(() => {
+    const brandId = input.id ?? allocateCounter("nextBrandId", 1);
+    db.prepare(`
+      INSERT INTO brands (id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      brandId,
+      input.ownerUserId,
+      input.name,
+      input.industry,
+      input.audience,
+      input.description,
+      input.product,
+      input.goal,
+      input.knowledgeBase || "",
+      JSON.stringify(input.logo || {}),
+      JSON.stringify(Array.isArray(input.assetTags) ? input.assetTags : []),
+    );
+    return findBrandById(brandId);
+  });
+}
+
+function updateBrandCore(brand) {
+  db.prepare(`
+    UPDATE brands SET
+      name = ?,
+      industry = ?,
+      audience = ?,
+      description = ?,
+      product = ?,
+      goal = ?,
+      knowledge_base = ?,
+      logo_json = ?,
+      asset_tags_json = ?
+    WHERE id = ? AND owner_user_id = ?
+  `).run(
+    brand.name,
+    brand.industry,
+    brand.audience,
+    brand.description,
+    brand.product,
+    brand.goal,
+    brand.knowledgeBase || "",
+    JSON.stringify(brand.logo || {}),
+    JSON.stringify(Array.isArray(brand.assetTags) ? brand.assetTags : []),
+    brand.id,
+    brand.ownerUserId,
+  );
+}
+
+function updateBrand(brand) {
+  updateBrandCore(brand);
+  return findBrandById(brand.id);
+}
+
+function replaceBrandContent(brand) {
+  db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(brand.id);
+  db.prepare("DELETE FROM trends WHERE brand_id = ?").run(brand.id);
+  db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(brand.id);
+  insertBrandContent(brand);
+}
+
+function upsertBrandFull(brand) {
+  return runTransaction(() => {
+    updateBrandCore(brand);
+    replaceBrandContent(brand);
+    return findBrandById(brand.id);
+  });
+}
+
+function deleteBrandById(brandId) {
+  db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
+  db.prepare("DELETE FROM trends WHERE brand_id = ?").run(Number(brandId));
+  db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(Number(brandId));
+  db.prepare("DELETE FROM brands WHERE id = ?").run(Number(brandId));
+}
+
+function insertBrandContent(brand) {
+  for (const [analysisPosition, analysis] of (brand.analyses || []).entries()) {
+    db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, position) VALUES (?, ?, ?, ?, ?)").run(
+      analysis.id,
+      brand.id,
+      analysis.name,
+      analysis.timestamp,
+      analysisPosition,
+    );
+    insertTrendBuckets(brand.id, analysis.id, "snapshot", analysis.trendSnapshot || []);
+  }
+  insertTrendBuckets(brand.id, null, "current", brand.trends || []);
+}
+
+function insertTrendBuckets(brandId, analysisId, scope, buckets) {
+  const insertTrend = db.prepare(`
+    INSERT INTO trends (
+      trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertIdea = db.prepare(`
+    INSERT INTO ideas (trend_row_id, idea_index, title, summary, angle, brand_fit, audience, hook, tags_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const [trendPosition, trend] of flattenTrendBuckets(buckets).entries()) {
+    const trendResult = insertTrend.run(
+      trend.id,
+      brandId,
+      analysisId,
+      scope,
+      trend.bucketKey || "global",
+      trend.bucketTitle || "全网热点指数",
+      trend.bucketDescription || "从跨平台高讨论度内容里筛选可被品牌借势的热点方向。",
+      trend.rank,
+      trend.title,
+      trend.category,
+      trend.summary,
+      trend.score,
+      trend.reason,
+      trend.customPrompt || "",
+      trend.systemPrompt || "",
+      JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
+      trendPosition,
+    );
+    for (const [ideaIndex, idea] of (trend.ideas || []).entries()) {
+      insertIdea.run(
+        trendResult.lastInsertRowid,
+        ideaIndex,
+        idea.title,
+        idea.summary,
+        idea.angle,
+        idea.brandFit,
+        idea.audience,
+        idea.hook,
+        JSON.stringify(Array.isArray(idea.tags) ? idea.tags : []),
+      );
+    }
+  }
+}
+
+function allocateAnalysisAndTrendBase() {
+  return runTransaction(() => {
+    const analysisId = allocateCounter("nextAnalysisId", 9001);
+    const trendBase = allocateCounter("nextTrendId", 100);
+    db.prepare(`
+      INSERT INTO counters (name, value) VALUES ('nextTrendId', ?)
+      ON CONFLICT(name) DO UPDATE SET value = excluded.value
+    `).run(trendBase + 300);
+    return { analysisId, trendBase };
+  });
+}
+
+module.exports = {
+  listBrandsByOwner,
+  findBrandByOwner,
+  findBrandById,
+  insertBrand,
+  updateBrand,
+  upsertBrandFull,
+  deleteBrandById,
+  allocateAnalysisAndTrendBase,
+};

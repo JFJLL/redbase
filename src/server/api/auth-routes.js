@@ -1,6 +1,16 @@
 const { bindRouteScope } = require("./route-scope");
 const { hashPassword, verifyAndMigratePassword } = require("../auth/passwords");
 const { setSessionCookie, clearSessionCookie } = require("../auth/cookies");
+const {
+  findUserByPhone,
+  findUserBySessionToken,
+  phoneExists,
+  updateUserPassword,
+  upsertVerificationCode,
+  createUserWithSession,
+  createSessionForUser,
+  deleteSession,
+} = require("../db/repositories/auth-repository");
 
 async function handleAuthRoutes(context, req, res, pathname) {
   const {
@@ -126,13 +136,8 @@ async function handleAuthRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const storeState = await readStore();
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    storeState.verificationCodes[payload.phone] = {
-      code,
-      expiresAt: Date.now() + 5 * 60 * 1000,
-    };
-    await writeStore(storeState);
+    upsertVerificationCode(payload.phone, code, Date.now() + 5 * 60 * 1000);
     json(res, 200, {
       message: "验证码已生成，可直接用于当前环境注册。",
       demoCode: code,
@@ -158,14 +163,13 @@ async function handleAuthRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const storeState = await readStore();
-    if (storeState.users.some((user) => user.phone === phone)) {
+    if (phoneExists(phone)) {
       badRequest(res, "该手机号已注册");
       return true;
     }
 
+    const token = randomToken();
     const user = {
-      id: storeState.nextUserId++,
       name,
       phone,
       password: await hashPassword(password),
@@ -174,21 +178,12 @@ async function handleAuthRoutes(context, req, res, pathname) {
       credits: accountType === "yimei" ? 50 : 5,
       createdAt: new Date().toISOString(),
     };
-    storeState.users.push(user);
-    delete storeState.verificationCodes[phone];
+    const savedUser = createUserWithSession({ user, token });
 
-    const token = randomToken();
-    storeState.sessions.push({
-      token,
-      userId: user.id,
-      createdAt: new Date().toISOString(),
-    });
-
-    await writeStore(storeState);
-    req.__redbaseApiUser = buildApiUserLog(user);
+    req.__redbaseApiUser = buildApiUserLog(savedUser);
     setSessionCookie(res, token);
     json(res, 201, {
-      user: sanitizeUser(user),
+      user: sanitizeUser(savedUser),
     });
     return true;
   }
@@ -196,32 +191,29 @@ async function handleAuthRoutes(context, req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/auth/login") {
     const payload = await collectBody(req);
     const { phone, password } = payload;
-    const storeState = await readStore();
-    const user = storeState.users.find((item) => item.phone === phone);
+    const user = findUserByPhone(phone);
     const verified = await verifyAndMigratePassword(user, password);
     if (!verified.ok) {
       unauthorized(res, "手机号或密码错误");
       return true;
     }
+    if (verified.migrated) {
+      updateUserPassword(user.id, user.password);
+    }
 
     const token = randomToken();
-    storeState.sessions.push({
-      token,
-      userId: user.id,
-      createdAt: new Date().toISOString(),
-    });
-    await writeStore(storeState);
-    req.__redbaseApiUser = buildApiUserLog(user);
+    const savedUser = createSessionForUser(user.id, token);
+    req.__redbaseApiUser = buildApiUserLog(savedUser);
     setSessionCookie(res, token);
     json(res, 200, {
-      user: sanitizeUser(user),
+      user: sanitizeUser(savedUser),
     });
     return true;
   }
 
   if (req.method === "GET" && pathname === "/api/session") {
-    const storeState = await readStore();
-    const user = getAuthenticatedUser(storeState, req);
+    const token = getSessionToken(req);
+    const user = token ? findUserBySessionToken(token) : null;
     if (!user) {
       unauthorized(res, "登录状态已失效");
       return true;
@@ -231,11 +223,9 @@ async function handleAuthRoutes(context, req, res, pathname) {
   }
 
   if (req.method === "POST" && pathname === "/api/auth/logout") {
-    const storeState = await readStore();
     const token = getSessionToken(req);
     if (token) {
-      storeState.sessions = storeState.sessions.filter((session) => session.token !== token);
-      await writeStore(storeState);
+      deleteSession(token);
     }
     clearSessionCookie(res);
     json(res, 200, { ok: true });
