@@ -1166,7 +1166,7 @@ function openBrandDeleteModal(brand) {
   }
   if (hint) {
     hint.textContent = generationCount
-      ? `当前品牌有 ${generationCount} 条历史生成记录；勾选后会同步删除对应数据库记录和本地生成图片文件。`
+      ? `当前品牌有 ${generationCount} 条历史生成记录；勾选后会同步删除对应数据库记录和图片文件。`
       : "当前品牌没有可删除的历史生成记录。";
   }
   modal?.classList.add("is-open");
@@ -2070,7 +2070,7 @@ async function loadGenerationHistory() {
 async function deleteGenerationHistoryItem(generationId) {
   const item = state.generationHistory.find((generation) => Number(generation.id) === Number(generationId));
   if (!item) return;
-  if (!confirm(`确定删除「${item.cardTitle || item.ideaTitle || "这条生成内容"}」吗？相关本地图片文件也会一起删除。`)) return;
+  if (!confirm(`确定删除「${item.cardTitle || item.ideaTitle || "这条生成内容"}」吗？删除后将无法找回。`)) return;
   try {
     await request(`/api/history/${generationId}`, { method: "DELETE" });
     state.generationHistory = state.generationHistory.filter((generation) => Number(generation.id) !== Number(generationId));

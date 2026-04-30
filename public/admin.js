@@ -170,7 +170,7 @@ async function deleteGeneration(generationId) {
   const message = [
     `确定删除「${item.cardTitle || item.ideaTitle || "这条生成内容"}」吗？`,
     `用户：${item.user?.name || "-"} ${item.user?.phone || ""}`,
-    "对应数据库记录和本地生成图片文件会一起删除，额度流水会保留但不再包含生成内容详情。",
+    "对应数据库记录和图片文件会一起删除，额度流水会保留但不再包含生成内容详情。",
   ].join("\n");
   if (!confirm(message)) return;
   try {
