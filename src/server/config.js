@@ -45,6 +45,9 @@ const DEFAULT_APP_CONFIG = {
   admin: {
     phones: [],
   },
+  cors: {
+    origins: [],
+  },
 };
 
 function deepMerge(base, override) {
@@ -100,6 +103,14 @@ function loadAppConfig() {
         .filter(Boolean)
         .concat(Array.isArray(merged.admin?.phones) ? merged.admin.phones.map((phone) => String(phone || "").trim()).filter(Boolean) : [])
         .filter((phone, index, all) => all.indexOf(phone) === index),
+    },
+    cors: {
+      origins: String(process.env.CORS_ORIGINS || "")
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+        .concat(Array.isArray(merged.cors?.origins) ? merged.cors.origins.map((origin) => String(origin || "").trim()).filter(Boolean) : [])
+        .filter((origin, index, all) => all.indexOf(origin) === index),
     },
   };
 }

@@ -3,6 +3,7 @@ const { HOST, PORT, loadAppConfig } = require("./config");
 const { ensureStore, readStore, writeStore } = require("./store");
 const { createAiServices } = require("./ai");
 const { createApiHandler, json } = require("./api");
+const { applyCorsHeaders, handleCorsPreflight } = require("./cors");
 const { serveStatic } = require("./static");
 
 async function start() {
@@ -13,6 +14,8 @@ async function start() {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    applyCorsHeaders(req, res, appConfig);
+    if (handleCorsPreflight(req, res, appConfig)) return;
 
     try {
       const handled = await handleApi(req, res, url.pathname);
@@ -28,7 +31,7 @@ async function start() {
         json(res, 400, { error: error.message });
         return;
       }
-      json(res, 500, { error: String(error.message || "Internal server error") });
+      json(res, 500, { error: "Internal server error" });
     }
   });
 

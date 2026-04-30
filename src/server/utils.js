@@ -24,7 +24,7 @@ function joinUrl(baseUrl, suffix) {
 
 function assertConfigured(value, label) {
   if (!String(value || "").trim()) {
-    throw new Error(`${label} 未配置，请先填写 config.local.json。`);
+    throw new Error(`${label} 未配置，请通过环境变量配置，例如 TEXT_API_KEY 或 IMAGE_API_KEY。`);
   }
 }
 

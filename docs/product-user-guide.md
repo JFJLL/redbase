@@ -43,29 +43,39 @@ npm install
 
 ### 2.2 配置模型服务
 
-复制配置示例：
+生产和本地运行都优先使用环境变量，不要把真实 API Key 写入仓库文件。
 
-```bash
-copy config.local.example.json config.local.json
+PowerShell 示例：
+
+```powershell
+$env:TEXT_API_STYLE = "google"
+$env:TEXT_MODEL = "gemini-3.1-flash-lite-preview"
+$env:TEXT_BASE_URL = "https://api.im-red-magic.cn"
+$env:TEXT_API_KEY = "<your-text-api-key>"
+$env:IMAGE_API_KEY = "<your-image-api-key>"
+$env:ADMIN_PHONES = "13800000000"
+npm start
 ```
 
-在 `config.local.json` 中填写模型服务配置：
+常用环境变量：
 
-- `textProvider.apiKey`：文本模型 API Key
-- `imageProvider.apiKey`：图片模型 API Key
-- `admin.phones`：允许进入管理后台的管理员手机号列表
+- `TEXT_API_STYLE`：文本模型接口类型，默认 `google`
+- `TEXT_MODEL`：文本模型名，默认 `gemini-3.1-flash-lite-preview`
+- `TEXT_BASE_URL`：Google 风格文本接口地址
+- `TEXT_OPENAI_BASE_URL`：OpenAI 兼容接口地址
+- `TEXT_ANTHROPIC_BASE_URL`：Anthropic 兼容接口地址
+- `TEXT_API_KEY`：文本模型 API Key
+- `TEXT_SEARCH_ENABLED`：是否启用搜索，默认 `true`
+- `IMAGE_BASE_URL`：图片生成接口地址
+- `IMAGE_EDIT_BASE_URL`：图片编辑接口地址
+- `IMAGE_UPLOAD_BASE_URL`：图片上传接口地址
+- `IMAGE_MODEL`：图片模型名，默认 `gpt-image-2`
+- `IMAGE_API_KEY`：图片模型 API Key
+- `IMAGE_ASPECT_RATIO`、`IMAGE_RESOLUTION`、`IMAGE_QUALITY`、`IMAGE_COUNT`：图片参数
+- `ADMIN_PHONES`：允许进入管理后台的管理员手机号，多个用英文逗号分隔
+- `CORS_ORIGINS`：允许跨域访问的前端来源，多个用英文逗号分隔；同源本地访问不需要配置
 
-示例：
-
-```json
-{
-  "admin": {
-    "phones": ["13800000000"]
-  }
-}
-```
-
-如果配置了 `admin.phones`，只有列表中的手机号可以进入管理后台。修改 `config.local.json` 后需要重启服务才能生效。
+如果配置了 `ADMIN_PHONES`，只有列表中的手机号可以进入管理后台。修改环境变量后需要重启服务才能生效。
 
 ### 2.3 启动服务
 
@@ -320,14 +330,11 @@ http://127.0.0.1:3023/admin
 
 ### 7.1 管理员权限
 
-管理员手机号在 `config.local.json` 中配置：
+管理员手机号通过 `ADMIN_PHONES` 环境变量配置：
 
-```json
-{
-  "admin": {
-    "phones": ["13800000000"]
-  }
-}
+```powershell
+$env:ADMIN_PHONES = "13800000000,13900000000"
+npm start
 ```
 
 修改配置后必须重启服务。
@@ -427,7 +434,7 @@ data/redbase.sqlite
 
 ### 9.1 修改管理员手机号后为什么没有生效？
 
-`config.local.json` 只在服务启动时读取。修改后需要重启服务。
+环境变量只在服务启动时读取。修改后需要重启服务。
 
 如果使用 PowerShell 启动：
 
@@ -488,4 +495,3 @@ Get-NetTCPConnection -LocalPort 3023 -State Listen
 9. 生成朋友圈图、公众号长图或小红书组图
 10. 在历史生成中回看和复用内容
 11. 管理员在后台查看额度消耗并按需加额度
-

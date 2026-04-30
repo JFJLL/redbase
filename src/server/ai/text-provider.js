@@ -1,7 +1,5 @@
 const http = require("http");
 const https = require("https");
-const { spawn } = require("child_process");
-const { ROOT } = require("../config");
 const { joinUrl, assertConfigured, parseJsonFromModelText, withRetries } = require("../utils");
 
 function fetchJson(url, options = {}) {
@@ -59,95 +57,45 @@ function fetchJson(url, options = {}) {
   });
 }
 
-function fetchJsonViaPython(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const script = [
-      "import base64, json, sys, requests",
-      "sys.stdout.reconfigure(encoding='utf-8')",
-      "try:",
-      "    payload = json.loads(base64.b64decode(sys.stdin.read()).decode('utf-8'))",
-      "    session = requests.Session()",
-      "    session.trust_env = False",
-      "    body = payload.get('body')",
-      "    if isinstance(body, str):",
-      "        body = body.encode('utf-8')",
-      "    response = session.request(",
-      "        method=payload.get('method', 'GET'),",
-      "        url=payload['url'],",
-      "        headers=payload.get('headers') or {},",
-      "        data=body,",
-      "        timeout=payload.get('timeout', 60),",
-      "    )",
-      "    print(json.dumps({'ok': True, 'status': response.status_code, 'text': response.text}, ensure_ascii=False))",
-      "except Exception as exc:",
-      "    print(json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False))",
-    ].join("\n");
+async function fetchJsonNative(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutMs = Number(options.timeoutMs || 180000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-    const child = spawn("python", ["-X", "utf8", "-c", script], {
-      cwd: ROOT,
-      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
+  try {
+    const response = await fetch(url, {
+      method: options.method || "GET",
+      headers: options.headers || {},
+      body: options.body || undefined,
+      signal: controller.signal,
     });
+    const raw = await response.text();
+    let data = null;
+    try {
+      data = raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      data = null;
+    }
 
-    let stdout = "";
-    let stderr = "";
+    if (!response.ok) {
+      const message = data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.status}`;
+      const httpError = new Error(message);
+      httpError.statusCode = response.status;
+      httpError.url = url;
+      httpError.rawBody = raw;
+      httpError.payload = data;
+      throw httpError;
+    }
 
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `Python request failed with code ${code}`));
-        return;
-      }
-
-      let payload = null;
-      try {
-        payload = JSON.parse(stdout);
-      } catch (error) {
-        reject(new Error(`Python request returned invalid JSON: ${stdout}`));
-        return;
-      }
-
-      if (!payload.ok) {
-        reject(new Error(payload.error || "Python request failed"));
-        return;
-      }
-
-      let data = null;
-      try {
-        data = payload.text ? JSON.parse(payload.text) : null;
-      } catch (error) {
-        data = null;
-      }
-
-      if (payload.status < 200 || payload.status >= 300) {
-        const message = data?.error?.message || data?.error || data?.message || payload.text || `HTTP ${payload.status}`;
-        reject(new Error(message));
-        return;
-      }
-
-      resolve(data);
-    });
-
-    child.stdin.end(
-      Buffer.from(
-        JSON.stringify({
-          url,
-          method: options.method || "GET",
-          headers: options.headers || {},
-          body: options.body || null,
-          timeout: 90,
-        }),
-        "utf8",
-      ).toString("base64"),
-    );
-  });
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Request timeout: ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extractTextFromOpenAIResponse(payload) {
@@ -182,7 +130,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
   if (provider.apiStyle === "google") {
     const data = await withRetries(
       () =>
-        fetchJsonViaPython(joinUrl(provider.baseUrl, `/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`), {
+        fetchJsonNative(joinUrl(provider.baseUrl, `/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -260,7 +208,7 @@ function buildTextProviderEndpoint(appConfig) {
 
 module.exports = {
   fetchJson,
-  fetchJsonViaPython,
+  fetchJsonNative,
   extractTextFromOpenAIResponse,
   extractTextFromAnthropicResponse,
   extractTextFromGoogleResponse,
