@@ -6,6 +6,43 @@ const IMAGE_JOB_POLL_INTERVAL_MS = 5000;
 const MAX_SELECTED_PRODUCT_IMAGES = 10;
 const MAX_SELECTED_PRODUCT_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_SINGLE_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_TREND_BUCKETS = [
+  {
+    key: "xhs",
+    title: "小红书热点话题",
+    description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
+  },
+  {
+    key: "news",
+    title: "新闻热点趋势",
+    description: "从近期新闻、行业动态和消费趋势中找到可被品牌内容化的机会。",
+  },
+  {
+    key: "social",
+    title: "社会热点趋势",
+    description: "从大众情绪、生活方式变化、社会议题和公共讨论中找到适合品牌表达的切口。",
+  },
+  {
+    key: "traffic",
+    title: "流量热点趋势",
+    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
+  },
+  {
+    key: "track",
+    title: "赛道热点趋势",
+    description: "聚焦品牌所属行业、品类、竞品内容和消费决策链路里的增长机会。",
+  },
+  {
+    key: "crowd",
+    title: "人群热点趋势",
+    description: "聚焦目标受众正在关注的身份标签、生活场景、消费焦虑、兴趣圈层和内容需求。",
+  },
+];
+const DEFAULT_TREND_MODE = DEFAULT_TREND_BUCKETS[0].key;
+const LEGACY_TREND_BUCKET_KEYS = {
+  global: "xhs",
+  industry: "track",
+};
 
 const state = {
   currentPage: "landing",
@@ -14,7 +51,7 @@ const state = {
   generationHistory: [],
   selectedBrandId: null,
   selectedTrendId: null,
-  selectedTrendMode: "global",
+  selectedTrendMode: DEFAULT_TREND_MODE,
   loading: false,
   currentUser: null,
   sessionToken: localStorage.getItem(STORAGE_KEY) || "",
@@ -833,8 +870,8 @@ function bindAnalysisButton() {
       });
       updateCurrentUser(result.user);
       replaceBrand(result.brand);
-      state.selectedTrendMode = result.brand.trends[0]?.key ?? "global";
-      state.selectedTrendId = result.brand.trends[0]?.items?.[0]?.id ?? null;
+      state.selectedTrendMode = firstTrendBucket(result.brand)?.key ?? DEFAULT_TREND_MODE;
+      state.selectedTrendId = firstTrendBucket(result.brand)?.items?.[0]?.id ?? null;
       renderAll();
     } catch (error) {
       alert(formatTrendAnalysisError(error));
@@ -999,8 +1036,8 @@ async function loadBrands() {
         state.selectedBrandId = state.brands[0].id;
       }
       const currentBrand = getSelectedBrand();
-      if (!(currentBrand?.trends || []).some((bucket) => bucket.key === state.selectedTrendMode)) {
-        state.selectedTrendMode = currentBrand?.trends?.[0]?.key ?? "global";
+      if (!getTrendBucketsForBrand(currentBrand).some((bucket) => bucket.key === state.selectedTrendMode)) {
+        state.selectedTrendMode = firstTrendBucket(currentBrand)?.key ?? DEFAULT_TREND_MODE;
       }
       state.selectedTrendId = getCurrentTrendBucket(currentBrand)?.items?.[0]?.id ?? null;
     } else {
@@ -1052,6 +1089,43 @@ function cloneTrendBucket(bucket) {
   };
 }
 
+function normalizeTrendBucketKey(key) {
+  const value = String(key || "");
+  return LEGACY_TREND_BUCKET_KEYS[value] || value;
+}
+
+function getDefaultTrendBucket(key) {
+  return DEFAULT_TREND_BUCKETS.find((bucket) => bucket.key === normalizeTrendBucketKey(key)) || null;
+}
+
+function getTrendBucketsForBrand(brand) {
+  const bucketsByKey = new Map(
+    DEFAULT_TREND_BUCKETS.map((bucket) => [
+      bucket.key,
+      {
+        ...bucket,
+        items: [],
+      },
+    ]),
+  );
+
+  for (const bucket of brand?.trends || []) {
+    const key = normalizeTrendBucketKey(bucket.key);
+    const base = bucketsByKey.get(key);
+    if (!base) continue;
+    bucketsByKey.set(key, {
+      ...base,
+      items: Array.isArray(bucket.items) ? bucket.items : [],
+    });
+  }
+
+  return DEFAULT_TREND_BUCKETS.map((bucket) => bucketsByKey.get(bucket.key));
+}
+
+function firstTrendBucket(brand) {
+  return getTrendBucketsForBrand(brand)[0] || null;
+}
+
 function restoreAnalysisSnapshot(analysisId) {
   const brand = getSelectedBrand();
   if (!brand) return;
@@ -1075,8 +1149,8 @@ function restoreAnalysisSnapshot(analysisId) {
     };
   });
 
-  state.selectedTrendMode = analysis.trendSnapshot[0]?.key ?? "global";
-  state.selectedTrendId = analysis.trendSnapshot[0]?.items?.[0]?.id ?? null;
+  state.selectedTrendMode = firstTrendBucket(getSelectedBrand())?.key ?? DEFAULT_TREND_MODE;
+  state.selectedTrendId = firstTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
   renderAll();
   switchTab("trends");
 }
@@ -1123,7 +1197,7 @@ function getSelectedBrand() {
 function getSelectedTrend() {
   const brand = getSelectedBrand();
   if (!brand) return null;
-  for (const bucket of brand.trends || []) {
+  for (const bucket of getTrendBucketsForBrand(brand)) {
     const found = (bucket.items || []).find((item) => item.id === state.selectedTrendId);
     if (found) return found;
   }
@@ -1132,7 +1206,8 @@ function getSelectedTrend() {
 
 function getCurrentTrendBucket(brand = getSelectedBrand()) {
   if (!brand) return null;
-  return (brand.trends || []).find((bucket) => bucket.key === state.selectedTrendMode) ?? brand.trends?.[0] ?? null;
+  const buckets = getTrendBucketsForBrand(brand);
+  return buckets.find((bucket) => bucket.key === state.selectedTrendMode) ?? buckets[0] ?? null;
 }
 
 function renderAll() {
@@ -1195,8 +1270,8 @@ function renderBrands() {
     const selectedBrandId = Number(button.dataset.brandId);
     const nextTab = button.dataset.brandAction || "brands";
     state.selectedBrandId = selectedBrandId;
-    state.selectedTrendMode = getSelectedBrand().trends?.[0]?.key ?? "global";
-    state.selectedTrendId = getSelectedBrand().trends?.[0]?.items?.[0]?.id ?? null;
+    state.selectedTrendMode = firstTrendBucket(getSelectedBrand())?.key ?? DEFAULT_TREND_MODE;
+    state.selectedTrendId = firstTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
     switchTab(nextTab);
     renderAll();
   };
@@ -1217,8 +1292,8 @@ function renderBrandChips() {
   root.querySelectorAll("[data-chip-brand]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedBrandId = Number(button.dataset.chipBrand);
-      state.selectedTrendMode = getSelectedBrand().trends?.[0]?.key ?? "global";
-      state.selectedTrendId = getSelectedBrand().trends?.[0]?.items?.[0]?.id ?? null;
+      state.selectedTrendMode = firstTrendBucket(getSelectedBrand())?.key ?? DEFAULT_TREND_MODE;
+      state.selectedTrendId = firstTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
       renderAll();
     });
   });
@@ -1228,14 +1303,17 @@ function renderTrendModeTabs() {
   const root = document.getElementById("trendModeTabs");
   if (!root) return;
   const brand = getSelectedBrand();
-  const buckets = brand?.trends || [];
+  const buckets = brand ? getTrendBucketsForBrand(brand) : DEFAULT_TREND_BUCKETS;
   root.innerHTML = buckets
     .map(
-      (bucket) => `
+      (bucket) => {
+        const label = getDefaultTrendBucket(bucket.key)?.title || bucket.title;
+        return `
         <button class="trend-mode-tab ${bucket.key === state.selectedTrendMode ? "is-active" : ""}" data-trend-mode="${escapeHtml(bucket.key)}" type="button">
-          ${escapeHtml(bucket.title)}
+          ${escapeHtml(label)}
         </button>
-      `,
+      `;
+      },
     )
     .join("");
 
@@ -1297,7 +1375,7 @@ function renderAnalysisSummary() {
     return;
   }
 
-  root.textContent = `${brand.name} 的热点趋势分析已就绪。当前已拆成三种可借势方式：全网热点指数、品类热点指数、新闻热点趋势。每一种都会给出前 10 个热点，帮助你从不同层级判断该怎么蹭热点。`;
+  root.textContent = `${brand.name} 的热点趋势分析已就绪。当前已拆成多个可借势维度，每一种都会给出前 10 个热点，帮助你从不同层级判断该怎么蹭热点。`;
 }
 
 function renderTrends() {
@@ -1313,8 +1391,8 @@ function renderTrends() {
   root.innerHTML = `
     <article class="trend-card">
       <div>
-        <h3>${escapeHtml(bucket.title)}</h3>
-        <p>${escapeHtml(bucket.description)}</p>
+        <h3>${escapeHtml(getDefaultTrendBucket(bucket.key)?.title || bucket.title)}</h3>
+        <p>${escapeHtml(getDefaultTrendBucket(bucket.key)?.description || bucket.description)}</p>
       </div>
     </article>
   ` + bucket.items
@@ -1732,12 +1810,22 @@ function renderIdeaProductUpload(ideaIndex) {
   return `
     <div class="idea-product-upload">
       <div class="idea-product-upload-top idea-product-control-row">
-        <div class="idea-product-actions idea-product-actions-top">
-          <label class="idea-product-check">
-            <input data-use-product-image="${ideaIndex}" type="checkbox" ${selectedCount ? "" : "disabled"} ${checked ? "checked" : ""} />
-            使用这些产品图生成图片
-          </label>
-          ${selectedCount ? `<button class="idea-product-clear" data-clear-product-image="${ideaIndex}" type="button">清除当前选择</button>` : ""}
+        <div class="idea-product-summary">
+          <div>
+            <div class="idea-product-upload-title">产品图参考</div>
+            <div class="idea-product-file ${selectedCount ? "has-file" : ""}" data-product-file="${ideaIndex}">
+              ${
+                selectedCount
+                  ? escapeHtml(
+                      checked
+                        ? `已选择 ${selectedCount} 张：${formatImageName(fileLabel, 46)}，生图时会作为主体参考`
+                        : `已选择 ${selectedCount} 张：${formatImageName(fileLabel, 46)}`,
+                    )
+                  : "未选择产品图"
+              }
+            </div>
+            <div class="idea-product-file">最多 ${MAX_SELECTED_PRODUCT_IMAGES} 张，共 ${formatFileSize(MAX_SELECTED_PRODUCT_IMAGE_BYTES)}；当前 ${selectedCount} 张，约 ${formatFileSize(getSelectionTotalBytes(selectedImages))}</div>
+          </div>
         </div>
         <div class="idea-product-button-stack">
           <label class="idea-upload-button">
@@ -1747,22 +1835,12 @@ function renderIdeaProductUpload(ideaIndex) {
           <button class="idea-library-button" data-open-product-library="${ideaIndex}" type="button">选择已上传图片</button>
         </div>
       </div>
-      <div class="idea-product-summary">
-        <div>
-          <div class="idea-product-upload-title">产品图参考</div>
-          <div class="idea-product-file ${selectedCount ? "has-file" : ""}" data-product-file="${ideaIndex}">
-            ${
-              selectedCount
-                ? escapeHtml(
-                    checked
-                      ? `已选择 ${selectedCount} 张：${formatImageName(fileLabel, 46)}，生图时会作为主体参考`
-                      : `已选择 ${selectedCount} 张：${formatImageName(fileLabel, 46)}`,
-                  )
-                : "未选择产品图"
-            }
-          </div>
-          <div class="idea-product-file">最多 ${MAX_SELECTED_PRODUCT_IMAGES} 张，共 ${formatFileSize(MAX_SELECTED_PRODUCT_IMAGE_BYTES)}；当前 ${selectedCount} 张，约 ${formatFileSize(getSelectionTotalBytes(selectedImages))}</div>
-        </div>
+      <div class="idea-product-actions idea-product-actions-bottom">
+        <label class="idea-product-check">
+          <input data-use-product-image="${ideaIndex}" type="checkbox" ${selectedCount ? "" : "disabled"} ${checked ? "checked" : ""} />
+          使用这些产品图生成图片
+        </label>
+        ${selectedCount ? `<button class="idea-product-clear" data-clear-product-image="${ideaIndex}" type="button">清除当前选择</button>` : ""}
       </div>
       ${selectedPreview}
     </div>
@@ -1896,7 +1974,7 @@ function renderGenerationHistory() {
               <div class="history-generate-ref">${escapeHtml(item.brandName)} · ${escapeHtml(item.trendTitle)}</div>
               <div class="history-generate-ref">${escapeHtml(item.ideaTitle)}</div>
             </div>
-            ${getGenerationPrimaryImageUrl(item) ? `<button class="secondary-btn small-btn" data-open-history-generation="${item.id}" type="button">查看 / 改图</button>` : ""}
+            ${getGenerationPrimaryImageUrl(item) ? `<button class="secondary-btn small-btn history-edit-button" data-open-history-generation="${item.id}" type="button">改图</button>` : ""}
           </div>
           ${contentHtml}
           ${previewHtml ? `<button class="history-preview-button" data-open-history-generation="${item.id}" type="button">${previewHtml}</button>` : ""}

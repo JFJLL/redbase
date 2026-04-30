@@ -2377,7 +2377,7 @@ function buildWechatLongImagePack({ brand, trend, idea }) {
     ],
     positioning: normalizeChineseCopy(positioningTemplate()),
     cta: normalizeChineseCopy(ctaTemplate()),
-    prompt: normalizeChineseCopy(`为微信公众号文章生成一张竖版长图，主题围绕“${idea.title}”，热点背景是“${trend.title}”，品牌为${brand.name}。画面需要兼顾观点表达和品牌质感，结构上适合公众号长图阅读：顶部标题区、中段3个核心观点模块、底部轻CTA区。品牌资料：${brand.knowledgeBase || "暂无额外资料"}。需要体现${idea.brandFit}，风格沉稳、专业、可阅读。`),
+    prompt: normalizeChineseCopy(`为微信公众号文章生成一张真正的竖版长图，主题围绕“${idea.title}”，热点背景是“${trend.title}”，品牌为${brand.name}。长图需要适合微信文章内嵌或朋友圈转发阅读，整体长度至少相当于 3 个手机屏幕的纵向阅读内容，不要做成单屏海报、单张封面或小红书封面。版式不要套固定模板，请根据选题内容自由组织为连续阅读的长图，可以是观点解析、故事叙述、清单总结、步骤拆解、对比说明、场景展开或案例化表达。画面需要有自然的阅读节奏：开头能抓住主题，中段有足够信息展开，结尾有总结、行动建议、轻 CTA 或品牌落点；但不要强行做成固定的“三段式/三栏/三模块”。信息层级要清楚，段落之间有呼吸感和视觉分隔，留白充足。文字不要密密麻麻，不要生成大段小字，适合用短标题、短句、编号、引用、图标化信息块或少量关键句来呈现。品牌资料：${brand.knowledgeBase || "暂无额外资料"}。需要自然体现${idea.brandFit}，整体风格沉稳、专业、清晰、有公众号内容质感，避免强广告感、促销感和复杂杂乱排版。`),
     previewUrl: "",
   };
 }
@@ -2387,22 +2387,22 @@ function buildXhsCarouselPack({ brand, trend, idea }) {
   const seed = `${brand.name}|${trend.title}|${idea.title}|carousel`;
   const slideCopySets = [
     [
-      `先把“${trend.title}”转成一个能被用户马上理解的问题，让封面有点击理由。`,
-      `把${idea.audience}在这个议题里的真实状态讲出来，少讲概念，多讲具体感受。`,
-      `用${brand.name}的产品、审美或方法补上解决路径，让品牌出现得自然。`,
-      `用一个轻问题收口，引导收藏、评论或继续了解，而不是硬性转化。`,
+      `先把“${trend.title}”转成一个用户会想点开的真实问题，让封面有明确点击理由。`,
+      `继续展开${idea.audience}在这个议题里的具体感受、困扰或期待，少讲概念，多讲生活细节。`,
+      `根据选题选择方法、对比、清单、测评或场景故事，把${idea.brandFit}讲得具体可感。`,
+      `用一个收藏理由、总结观点或轻互动收口，让用户觉得这组图值得保存或转发。`,
     ],
     [
-      `封面先给观点：为什么这个趋势和你有关，而不只是行业里的一阵风。`,
-      `第二页拆场景，让用户看到自己正在经历的困扰、期待或消费判断。`,
-      `第三页讲品牌如何介入，把${idea.brandFit}讲成可感知的内容价值。`,
-      `最后给出可执行的小建议，让整组图有保存价值和互动理由。`,
+      `封面先给观点：为什么这个趋势和用户有关，而不只是行业里的一阵风。`,
+      `中间页可以拆痛点、拆误区、拆步骤，也可以做前后对比，让用户看到自己的真实处境。`,
+      `继续补充一个更具体的内容价值点，让${brand.name}的出现自然服务于选题，而不是突然卖点植入。`,
+      `最后给出可执行的小建议、清单总结或一句轻提问，让整组图有保存价值和互动理由。`,
     ],
     [
-      `开头用一句更有情绪的判断抓住注意力，避免把热点讲成报告。`,
-      `中段把用户场景展开，突出${brand.audience || idea.audience}真正关心的细节。`,
-      `再把${brand.name}放进画面和文案里，强调它解决问题的方式。`,
-      `结尾保留一点讨论空间，让用户愿意留言补充自己的经验。`,
+      `开头用一句更有情绪或反差感的判断抓住注意力，避免把热点讲成报告。`,
+      `中间把用户场景展开，也可以用清单、教程、测评、故事或对比来承接。`,
+      `再让${brand.name}自然进入内容关系里，强调它能带来的具体体验、方法或审美判断。`,
+      `结尾保留一点讨论空间，形成评论、收藏或继续阅读的理由。`,
     ],
   ];
   const slideCopies = pickVariant(`${seed}|copies`, slideCopySets);
@@ -2410,58 +2410,58 @@ function buildXhsCarouselPack({ brand, trend, idea }) {
     {
       pageLabel: "第 1 张",
       title: normalizeChineseCopy(pickVariant(`${seed}|s1`, [
-        () => `${trend.title}为什么值得做`,
-        () => `这个趋势，${brand.name}可以这样切入`,
-        () => `${idea.title}，先从这个问题讲起`,
+        () => `${trend.title}为什么和你有关`,
+        () => `${idea.title}，先看这个切口`,
+        () => `这个问题，很多人都忽略了`,
       ])()),
       copy: normalizeChineseCopy(slideCopies[0]),
-      prompt: normalizeChineseCopy(`生成小红书组图第1页，作为封面页，突出“${idea.title}”，副标题带出热点“${trend.title}”，品牌${brand.name}调性明显，适合高点击封面。`),
+      prompt: normalizeChineseCopy(`生成一套适合小红书发布的 4 页组图中的第1页，围绕“${idea.title}”，结合热点“${trend.title}”和品牌${brand.name}。第1页需要像真实小红书笔记封面，有明确点击理由和强钩子，但不要像广告海报或品牌PPT。可以用问题、反差、情绪共鸣、避坑提醒、清单标题或趋势判断来组织封面。画面要适合滑动阅读的开场，文字短、层级清楚，品牌露出自然，不要促销感。`),
     },
     {
       pageLabel: "第 2 张",
       title: normalizeChineseCopy(pickVariant(`${seed}|s2`, [
-        () => "用户场景拆解",
-        () => "真正触发收藏的是这个场景",
-        () => "先让用户看到自己",
+        () => "先把场景说具体",
+        () => "真正触发共鸣的是这里",
+        () => "很多人卡在这一步",
       ])()),
       copy: normalizeChineseCopy(slideCopies[1]),
-      prompt: normalizeChineseCopy(`生成小红书组图第2页，聚焦用户场景，围绕${idea.audience}的真实生活或消费场景，画面要有代入感。`),
+      prompt: normalizeChineseCopy(`生成小红书 4 页组图中的第2页，承接第1页继续展开“${idea.title}”。这一页不要固定成某一种模板，可以根据选题选择用户场景、痛点拆解、误区提醒、前后对比、步骤教程、测评观察或故事化表达。重点是让${idea.audience}看到自己的真实生活、消费判断或情绪状态，画面有代入感，文字简洁，信息不要堆满。`),
     },
     {
       pageLabel: "第 3 张",
       title: normalizeChineseCopy(pickVariant(`${seed}|s3`, [
-        () => "品牌解决方案",
-        () => "品牌价值要讲到具体处",
-        () => "从场景回到解决方案",
+        () => "把方法讲到具体处",
+        () => "这里才是关键细节",
+        () => "给一个可参考的做法",
       ])()),
       copy: normalizeChineseCopy(slideCopies[2]),
-      prompt: normalizeChineseCopy(`生成小红书组图第3页，解释${brand.name}如何解决这个热点场景中的问题，强调${idea.brandFit}。`),
+      prompt: normalizeChineseCopy(`生成小红书 4 页组图中的第3页，继续展开具体价值。不要固定成品牌解决方案页，可以根据内容选择方法清单、细节放大、对比说明、体验测评、趋势解读或案例化表达。需要自然体现${brand.name}与选题的关系，重点表现${idea.brandFit}，但不要硬广，不要把画面做成促销海报。`),
     },
     {
       pageLabel: "第 4 张",
       title: normalizeChineseCopy(pickVariant(`${seed}|s4`, [
-        () => "可以直接带走的行动建议",
-        () => "最后留一个互动入口",
-        () => "收藏前，先记住这一点",
+        () => "最后给你一个总结",
+        () => "这页适合收藏",
+        () => "可以从这里开始试试",
       ])()),
       copy: normalizeChineseCopy(slideCopies[3]),
-      prompt: normalizeChineseCopy(`生成小红书组图第4页，作为结尾页，包含行动建议和轻互动CTA，风格统一、便于用户保存。`),
+      prompt: normalizeChineseCopy(`生成小红书 4 页组图中的第4页，作为整组内容的自然收尾。可以做收藏清单、总结观点、行动建议、轻互动提问、品牌落点或下一步建议，但不要固定成强CTA。画面要和前3页风格统一，适合用户保存、评论或转发；文字短、有重点，品牌${brand.name}自然露出，避免广告感和复杂排版。`),
     },
   ].map((slide, index) => ({
     ...slide,
     previewUrl: "",
   }));
   const captionTemplate = pickVariant(`${seed}|caption`, [
-    () => `这组图把“${trend.title}”拆成4页：先给观点，再讲用户场景，接着落到${brand.name}的切入方式，最后用轻互动收口。适合做成一篇完整的小红书笔记。`,
-    () => `不是简单追热点，而是把“${idea.title}”做成一套可连续阅读的组图：有封面钩子，有场景共鸣，也有${brand.name}的具体表达。`,
-    () => `围绕“${trend.title}”，这套组图更适合走收藏型内容路线：第一页吸引点击，中间两页建立信任，最后一页引导互动。`,
-    () => `如果要让${brand.name}自然进入“${trend.title}”这个话题，可以用这4页完成从趋势判断到品牌价值的过渡。`,
+    () => `这组图不是简单追“${trend.title}”，而是把它转成一套能连续阅读的小红书笔记：有点击理由，有具体场景，也有值得收藏的内容价值。`,
+    () => `围绕“${idea.title}”，这套组图可以根据内容自由选择清单、故事、对比、教程或总结结构，让${brand.name}自然进入用户真正关心的语境。`,
+    () => `这套组图适合做成更真实的小红书内容：封面先抓注意力，中间把价值讲具体，最后给用户一个保存、评论或继续了解的理由。`,
+    () => `如果要让${brand.name}自然进入“${trend.title}”这个话题，重点不是硬露出，而是先把用户愿意看的内容讲完整。`,
   ]);
   const publishCaptionTemplate = pickVariant(`${seed}|publish`, [
-    () => `把“${trend.title}”做成小红书，不一定要堆信息。更好的方式是先给用户一个进入理由，再把场景、品牌价值和行动建议拆开讲。`,
-    () => `这套组图适合用来讲“${idea.title}”：封面负责抓注意力，正文负责让用户觉得有用，最后一页负责把互动留下来。`,
-    () => `${brand.name}这个选题可以做得更轻一点：不急着卖产品，先把用户为什么需要、品牌为什么适合讲清楚。`,
-    () => `围绕“${trend.title}”做内容，重点是把热点翻译成用户能保存、能转发、能评论的4页结构。`,
+    () => `把“${trend.title}”做成小红书，不一定要套固定模板。更好的方式是先给用户一个进入理由，再用适合选题的结构把价值讲清楚。`,
+    () => `这套组图适合用来讲“${idea.title}”：可以是清单、教程、对比、故事或总结，关键是让每一页都有继续滑下去的理由。`,
+    () => `${brand.name}这个选题可以做得更轻一点：不急着卖产品，先把用户为什么需要、内容为什么值得看讲清楚。`,
+    () => `围绕“${trend.title}”做内容，重点是把热点翻译成用户能保存、能转发、能评论的4页连续图文。`,
   ]);
 
   return {

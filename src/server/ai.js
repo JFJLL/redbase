@@ -284,20 +284,74 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
 }
 
-function buildTrendAnalysisSystemPrompt() {
+const TREND_BUCKET_META = [
+  {
+    key: "xhs",
+    title: "小红书热点话题",
+    description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
+    promptDescription: "聚焦小红书站内高讨论、高收藏、高互动、易被笔记化的话题方向。",
+  },
+  {
+    key: "news",
+    title: "新闻热点趋势",
+    description: "从近期新闻、行业动态和消费趋势中找到可被品牌内容化的机会。",
+    promptDescription: "聚焦近期新闻、行业动态、消费趋势中可内容化的机会。",
+  },
+  {
+    key: "social",
+    title: "社会热点趋势",
+    description: "从大众情绪、生活方式变化、社会议题和公共讨论中找到适合品牌表达的切口。",
+    promptDescription: "聚焦大众情绪、生活方式变化、社会议题、节日节点和公共讨论中适合品牌表达的切口。",
+  },
+  {
+    key: "traffic",
+    title: "流量热点趋势",
+    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
+    promptDescription: "聚焦小红书站内正在被大量模仿、搜索、转发或评论的内容形式、标题结构、场景表达和爆款笔记套路。",
+  },
+  {
+    key: "track",
+    title: "赛道热点趋势",
+    description: "聚焦品牌所属行业、品类、竞品内容和消费决策链路里的增长机会。",
+    promptDescription: "聚焦品牌所属行业、品类、竞品内容和消费决策链路里的增长机会。",
+  },
+  {
+    key: "crowd",
+    title: "人群热点趋势",
+    description: "聚焦目标受众正在关注的身份标签、生活场景、消费焦虑、兴趣圈层和内容需求。",
+    promptDescription: "聚焦目标受众正在关注的身份标签、生活场景、消费焦虑、兴趣圈层和内容需求。",
+  },
+];
+
+const TREND_BUCKET_GROUPS = [
+  TREND_BUCKET_META.slice(0, 3),
+  TREND_BUCKET_META.slice(3, 6),
+];
+
+function formatBucketKeys(bucketMeta) {
+  return bucketMeta.map((bucket) => bucket.key).join("、");
+}
+
+function formatBucketTitles(bucketMeta) {
+  return bucketMeta.map((bucket) => bucket.title).join("、");
+}
+
+function buildTrendAnalysisSystemPrompt(bucketMeta = TREND_BUCKET_META) {
+  const bucketLines = bucketMeta.map((bucket) => `${bucket.key} 标题为${bucket.title}，${bucket.promptDescription}`);
   return [
     "你是资深小红书内容运营策略顾问，擅长品牌定位、热点适配判断与内容选题策划。",
-    "你的任务是根据品牌档案，分 3 个维度输出适合该品牌借势的小红书热点趋势，并给出可执行内容选题。",
+    `你的任务是根据品牌档案，围绕小红书平台上的真实内容语境，分 ${bucketMeta.length} 个维度输出适合该品牌借势的热点趋势，并给出可执行内容选题。`,
+    "所有趋势都要优先判断其在小红书上的讨论价值、内容扩散潜力、用户搜索/收藏/互动意愿和品牌适配度，不要写成泛泛的全网热点报告。",
     "请只输出 JSON，不要输出 Markdown，不要补充解释。",
     'JSON 顶层结构必须是：{"trendBuckets":[...]}。',
-    "trendBuckets 必须输出 3 个对象，key 分别是 global、industry、news。",
-    "global 标题为全网热点指数，聚焦跨平台高讨论度内容方向。",
-    "industry 标题为品类热点指数，聚焦品牌所属行业或品类内部高意图内容方向。",
-    "news 标题为新闻热点趋势，聚焦近期新闻、行业动态、社会议题和消费趋势中可内容化的机会。",
+    `trendBuckets 必须输出 ${bucketMeta.length} 个对象，key 分别是 ${formatBucketKeys(bucketMeta)}。`,
+    ...bucketLines,
     "每个 bucket 必须包含：key, title, description, items。",
     "每个 items 必须输出 10 条 trend。",
     "每条 trend 必须包含：title, category, summary, score, tags, reason, ideas。",
-    "score 必须是 0 到 100 的整数。",
+    "score 必须是 0 到 100 的整数，代表热度指数。",
+    "热度指数评分标准：90-100 为爆发级热点，站内讨论强、内容供给增长快、品牌借势窗口短；80-89 为高潜热点，搜索/互动趋势明显，适合快速布局；70-79 为稳定热点，有持续内容需求，适合做系列化内容；60-69 为长尾热点，适合垂直人群或细分场景；60 以下为弱热点，除非品牌强相关，否则不建议优先选择。",
+    "评分时综合考虑：小红书站内讨论度、搜索意图、互动/收藏潜力、内容可复制性、目标人群相关性、品牌自然植入度和近期时效性。不要编造具体播放量、搜索量、排名或机构数据。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
     "ideas 必须是 2 条，每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags。",
     "所有字段都用中文输出，允许品牌名保留原文。",
@@ -327,17 +381,17 @@ function compactBrandForPrompt(brand, mode = "standard") {
   };
 }
 
-function buildTrendAnalysisUserPrompt(brand, options = {}) {
+function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = TREND_BUCKET_META) {
   const promptBrand = compactBrandForPrompt(brand, options.minimal ? "minimal" : "standard");
   const strictLines = options.strict
     ? [
-        "重要：必须返回 trendBuckets，且 global、industry、news 三个 bucket 的 items 都不能为空。",
+        `重要：必须返回 trendBuckets，且 ${formatBucketKeys(bucketMeta)} ${bucketMeta.length} 个 bucket 的 items 都不能为空。`,
         "如果搜索结果不足，请基于可验证的趋势方向表达，不要编造具体机构、日期或数据。",
         "只返回 JSON 对象，不要解释失败原因，不要输出自然语言说明。",
       ]
     : [];
   return [
-    "请基于以下品牌信息，按全网热点指数、品类热点指数、新闻热点趋势 3 个维度生成热点趋势与选题。",
+    `请基于以下品牌信息，围绕小红书平台的热点话题与内容机会，按 ${bucketMeta.length} 个维度生成热点趋势与选题。`,
     "",
     `品牌名称：${promptBrand.name}`,
     `行业：${promptBrand.industry}`,
@@ -349,11 +403,13 @@ function buildTrendAnalysisUserPrompt(brand, options = {}) {
     `品牌资产标签：${(promptBrand.assetTags || []).join("、") || "暂无"}`,
     "",
     "要求：",
-    "1. 每个维度都输出 10 条趋势，共 30 条。",
-    "2. 趋势名称要像真实内容方向，而不是宏观行业报告标题。",
-    "3. 每条趋势都要解释为什么适合该品牌，不要泛泛而谈。",
-    "4. 选题要能直接给运营同学使用，避免空泛文案。",
-    "5. 如果涉及新闻热点，请表达为可验证的趋势或议题方向，不要编造具体机构、日期或数据。",
+    `1. 每个维度都输出 10 条趋势，共 ${bucketMeta.length * 10} 条。`,
+    `2. ${bucketMeta.length} 个维度依次为：${formatBucketTitles(bucketMeta)}。`,
+    "3. 趋势名称要像真实小红书内容方向，而不是宏观行业报告标题。",
+    "4. 每条趋势都要解释为什么适合该品牌，尤其说明它和品牌、人群、内容场景之间的自然连接。",
+    "5. score 要严格按热度指数评分标准给出，不要所有趋势都给高分；优先把 80 分以上留给真正具备快速借势价值的趋势。",
+    "6. 选题要能直接给运营同学使用，标题、角度、钩子都要有小红书笔记感，避免空泛文案。",
+    "7. 如果涉及新闻、社会议题或近期热点，请表达为可验证的趋势或议题方向，不要编造具体机构、日期、排名或数据。",
     ...strictLines,
   ].join("\n");
 }
@@ -467,42 +523,37 @@ function normalizeRawIdea(idea) {
   };
 }
 
-function normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId) {
-  const bucketMeta = [
-    ["global", "全网热点指数", "从跨平台高讨论度内容里筛选可被品牌借势的热点方向。"],
-    ["industry", "品类热点指数", "聚焦品牌所属行业或品类内部的高意图内容方向。"],
-    ["news", "新闻热点趋势", "从近期新闻、行业动态和社会议题中找到可被品牌内容化的机会。"],
-  ];
-  const sourceBuckets = coerceTrendBuckets(rawBuckets);
+function normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta = TREND_BUCKET_META) {
+  const sourceBuckets = coerceTrendBuckets(rawBuckets, bucketMeta);
   if (!sourceBuckets.length && rawTrends) {
-    sourceBuckets.push({ key: "global", items: rawTrends });
+    sourceBuckets.push({ key: bucketMeta[0]?.key || "bucket-1", items: rawTrends });
   }
   const bucketsByKey = new Map();
   sourceBuckets.forEach((bucket, index) => {
-    const fallbackKey = bucketMeta[index]?.[0] || `bucket-${index + 1}`;
+    const fallbackKey = bucketMeta[index]?.key || `bucket-${index + 1}`;
     const key = String(bucket?.key || bucket?.type || bucket?.name || fallbackKey);
     bucketsByKey.set(key, bucket);
-    if (bucketMeta[index] && !bucketsByKey.has(bucketMeta[index][0])) {
-      bucketsByKey.set(bucketMeta[index][0], bucket);
+    if (bucketMeta[index] && !bucketsByKey.has(bucketMeta[index].key)) {
+      bucketsByKey.set(bucketMeta[index].key, bucket);
     }
   });
 
-  return bucketMeta.map(([key, fallbackTitle, fallbackDescription], bucketIndex) => {
-    const bucket = bucketsByKey.get(key) || {};
+  return bucketMeta.map((meta, bucketIndex) => {
+    const bucket = bucketsByKey.get(meta.key) || {};
 
     return {
-      key,
-      title: String(bucket?.title || fallbackTitle),
-      description: String(bucket?.description || fallbackDescription),
+      key: meta.key,
+      title: meta.title,
+      description: meta.description,
       items: normalizeTrendSet(bucket?.items || bucket?.trends || bucket?.hotspots || bucket?.list, brand, baseId + bucketIndex * 100),
     };
   });
 }
 
-function coerceTrendBuckets(rawBuckets) {
+function coerceTrendBuckets(rawBuckets, bucketMeta = TREND_BUCKET_META) {
   if (Array.isArray(rawBuckets)) return rawBuckets;
   if (!rawBuckets || typeof rawBuckets !== "object") return [];
-  const expectedKeys = ["global", "industry", "news"];
+  const expectedKeys = bucketMeta.map((bucket) => bucket.key);
   if (expectedKeys.some((key) => rawBuckets[key])) {
     return expectedKeys.filter((key) => rawBuckets[key]).map((key) => {
       const value = rawBuckets[key];
@@ -521,16 +572,26 @@ function unwrapTrendModelResult(result) {
   return { rawBuckets: source, rawTrends };
 }
 
-function hasUsableTrendBuckets(trendBuckets) {
-  const requiredKeys = new Set(["global", "industry", "news"]);
+function hasUsableTrendBuckets(trendBuckets, bucketMeta = TREND_BUCKET_META) {
+  const requiredKeys = new Set(bucketMeta.map((bucket) => bucket.key));
   return (
     Array.isArray(trendBuckets) &&
-    trendBuckets.length === 3 &&
+    trendBuckets.length === bucketMeta.length &&
     trendBuckets.every((bucket) => requiredKeys.has(bucket.key) && Array.isArray(bucket.items) && bucket.items.length > 0)
   );
 }
 
 async function generateAiTrendSet(appConfig, brand, baseId) {
+  const allBuckets = [];
+  for (let groupIndex = 0; groupIndex < TREND_BUCKET_GROUPS.length; groupIndex += 1) {
+    const bucketMeta = TREND_BUCKET_GROUPS[groupIndex];
+    const groupBuckets = await generateTrendBucketGroup(appConfig, brand, baseId + groupIndex * 1000, bucketMeta, groupIndex + 1);
+    allBuckets.push(...groupBuckets);
+  }
+  return allBuckets;
+}
+
+async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, groupNumber) {
   const searchEnabled = Boolean(appConfig.textProvider.searchEnabled);
   const attempts = [
     { useSearch: searchEnabled, strict: false, minimal: false, label: "search-loose" },
@@ -544,10 +605,12 @@ async function generateAiTrendSet(appConfig, brand, baseId) {
       const userPrompt = buildTrendAnalysisUserPrompt(brand, {
         strict: attempt.strict,
         minimal: attempt.minimal,
-      });
+      }, bucketMeta);
       console.log("[trend-analysis] calling text model", {
         brandId: brand.id,
         brandName: brand.name,
+        group: groupNumber,
+        bucketKeys: bucketMeta.map((bucket) => bucket.key),
         attempt: attempt.label,
         useSearch: attempt.useSearch,
         userPromptLength: userPrompt.length,
@@ -556,19 +619,21 @@ async function generateAiTrendSet(appConfig, brand, baseId) {
         knowledgeBaseLength: String(brand.knowledgeBase || "").length,
       });
       const result = await callTextModelJson(appConfig, {
-        systemPrompt: buildTrendAnalysisSystemPrompt(),
+        systemPrompt: buildTrendAnalysisSystemPrompt(bucketMeta),
         userPrompt,
         useSearch: attempt.useSearch,
       });
       const { rawBuckets, rawTrends } = unwrapTrendModelResult(result);
-      const trendBuckets = normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId);
-      if (hasUsableTrendBuckets(trendBuckets)) {
+      const trendBuckets = normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta);
+      if (hasUsableTrendBuckets(trendBuckets, bucketMeta)) {
         return trendBuckets;
       }
-      lastError = new Error("文本模型返回了 JSON，但没有完整的三类可用趋势 items。");
+      lastError = new Error(`文本模型返回了 JSON，但没有完整的第 ${groupNumber} 组三类可用趋势 items。`);
       console.warn("[trend-analysis] text model returned empty trends", {
         brandId: brand.id,
         brandName: brand.name,
+        group: groupNumber,
+        bucketKeys: bucketMeta.map((bucket) => bucket.key),
         attempt: attempt.label,
         useSearch: attempt.useSearch,
         resultKeys: result && typeof result === "object" ? Object.keys(result) : [],
@@ -579,6 +644,8 @@ async function generateAiTrendSet(appConfig, brand, baseId) {
       console.warn("[trend-analysis] text model attempt failed", {
         brandId: brand.id,
         brandName: brand.name,
+        group: groupNumber,
+        bucketKeys: bucketMeta.map((bucket) => bucket.key),
         attempt: attempt.label,
         useSearch: attempt.useSearch,
         message: error?.message || "unknown error",
@@ -589,6 +656,8 @@ async function generateAiTrendSet(appConfig, brand, baseId) {
   console.warn("[trend-analysis] failed without fallback", {
     brandId: brand.id,
     brandName: brand.name,
+    group: groupNumber,
+    bucketKeys: bucketMeta.map((bucket) => bucket.key),
     reason: lastError?.message || "empty model result",
   });
   throw new Error("本次分析未能获取到可用热点，请稍后重试。");
@@ -621,25 +690,25 @@ async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt) {
 function buildImageConceptMetadata({ brand, trend, idea }) {
   const seed = `${brand.name}|${trend.title}|${idea.title}|${idea.angle || ""}`;
   const captionTemplate = pickVariant(seed, [
-    () => `这个选题可以换个角度看：${trend.title}不只是一个热点，它更像是${brand.name}和用户沟通的一次入口。把${idea.brandFit}落到具体场景里，比单纯追话题更有记忆点。`,
-    () => `如果要把“${trend.title}”做得不生硬，我会先从${idea.audience}真正关心的细节切入，再让${brand.name}自然出现。重点不是喊口号，而是把${idea.summary}讲得可感知。`,
-    () => `${idea.hook || trend.title} 这条内容适合做成一张有情绪、有信息密度的朋友圈图：前半段抓住${trend.title}的讨论点，后半段落到${brand.name}能提供的具体价值。`,
-    () => `比起把${trend.title}做成泛泛的热点解读，我更想把它拆成一个能被收藏的品牌内容：有场景、有观点，也能看出${brand.name}的审美和解决问题的方式。`,
+    () => `最近看到“${trend.title}”这个话题，突然想到一个很具体的场景：${idea.summary}。如果把它放到日常里，${brand.name}能提供的价值其实会更自然地被看见。`,
+    () => `有时候不需要把热点讲得很大，真正打动人的反而是一个细节。比如${idea.audience}正在关心的这件事，${idea.brandFit}就可以用很轻的方式说出来。`,
+    () => `${idea.hook || trend.title} 这句话挺适合发朋友圈，不是为了追热点，而是把一个最近大家都有感的情绪，落到${brand.name}能陪伴或解决的真实场景里。`,
+    () => `今天想从“${trend.title}”换个角度聊聊：好的内容不一定要很用力，能让人想到自己的生活、愿意停下来多看一眼，就已经很有价值了。`,
   ]);
   const visualTemplate = pickVariant(`${seed}|visual`, [
-    () => `${brand.name}品牌质感与“${trend.title}”场景化封面`,
-    () => `围绕“${idea.title}”的生活方式视觉主图`,
-    () => `${trend.title}趋势下的${brand.industry || "品牌"}内容海报`,
-    () => `${brand.name}内容选题的高点击朋友圈封面`,
+    () => `${brand.name}朋友圈生活方式分享图`,
+    () => `围绕“${idea.title}”的朋友圈日常场景图`,
+    () => `${trend.title}话题下的自然分享视觉`,
+    () => `${brand.name}轻种草朋友圈配图`,
   ]);
 
   return {
-    title: normalizeChineseCopy(`${brand.name} 选题配图`),
+    title: normalizeChineseCopy(`${brand.name} 朋友圈图`),
     caption: normalizeChineseCopy(captionTemplate()),
     visualDirection: normalizeChineseCopy(visualTemplate()),
-    style: String(brand.industry || "").toLowerCase().includes("beauty") ? "clean beauty editorial" : "lifestyle commercial poster",
-    composition: "竖版3:4，小红书封面构图，主体居中，标题留出顶部区域",
-    prompt: normalizeChineseCopy(`为品牌${brand.name}生成一张小红书封面图，围绕“${idea.title}”这个内容选题，结合热点“${trend.title}”。画面需体现${idea.brandFit}，面向${idea.audience}，整体风格强调${(brand.assetTags || []).join("、")}，适合小红书高点击封面，画面干净、高级、有品牌感。参考品牌资料：${brand.knowledgeBase || "暂无额外资料"}。`),
+    style: String(brand.industry || "").toLowerCase().includes("beauty") ? "clean lifestyle snapshot" : "natural lifestyle social post",
+    composition: "朋友圈配图构图，画面像真实生活分享或轻度品牌种草，不做强海报排版，主体自然入镜，留白适中",
+    prompt: normalizeChineseCopy(`为品牌${brand.name}生成一张适合微信朋友圈发布的配图，围绕“${idea.title}”这个内容选题，结合话题“${trend.title}”。画面要像真实朋友圈里的生活方式分享图，而不是小红书封面、广告海报或电商详情图。请把${idea.brandFit}融入一个${idea.audience}容易共鸣的日常场景中，整体自然、松弛、有真实感，有轻微品牌质感但不要过度营销。风格可参考${(brand.assetTags || []).join("、") || "品牌调性"}，画面干净、有生活温度，适合搭配一段朋友圈文案发布。不要堆砌大标题、夸张促销文字或复杂信息模块。参考品牌资料：${brand.knowledgeBase || "暂无额外资料"}。`),
   };
 }
 

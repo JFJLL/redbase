@@ -5,3 +5,4 @@ logs/
 data/
 node_modules/
 *.log
+.workflow/
