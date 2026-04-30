@@ -40,6 +40,65 @@ function findCreditEventById(creditEventId) {
   return mapCreditEventRow(db.prepare("SELECT * FROM credit_events WHERE id = ?").get(Number(creditEventId)));
 }
 
+function findRefundForCreditEvent(creditEventId, userId) {
+  return mapCreditEventRow(db.prepare(`
+    SELECT *
+    FROM credit_events
+    WHERE user_id = ?
+      AND credit_delta > 0
+      AND CAST(json_extract(payload_json, '$.refundForCreditEventId') AS INTEGER) = ?
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1
+  `).get(Number(userId), Number(creditEventId)));
+}
+
+function refundCreditEventIfNeeded({ creditEventId, userId, reason }) {
+  return runTransaction(() => {
+    const originalEvent = findCreditEventById(creditEventId);
+    if (!originalEvent || Number(originalEvent.userId) !== Number(userId) || Number(originalEvent.creditDelta || 0) >= 0) {
+      return { refunded: false, originalEvent: originalEvent || null, refundEvent: null, user: findUserById(userId) };
+    }
+
+    const existingRefund = findRefundForCreditEvent(originalEvent.id, userId);
+    if (existingRefund) {
+      return { refunded: false, originalEvent, refundEvent: existingRefund, user: findUserById(userId) };
+    }
+
+    const refundAmount = Math.abs(Number(originalEvent.creditDelta || originalEvent.creditCost || 0));
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+      return { refunded: false, originalEvent, refundEvent: null, user: findUserById(userId) };
+    }
+
+    const user = findUserById(userId);
+    if (!user) {
+      return { refunded: false, originalEvent, refundEvent: null, user: null };
+    }
+
+    updateUserCredits(user.id, Number(user.credits || 0) + refundAmount);
+    const refundEvent = insertCreditEvent({
+      userId: user.id,
+      actionType: `${originalEvent.actionType}Refund`,
+      actionLabel: `${originalEvent.actionLabel || "积分扣除"}退款`,
+      creditDelta: refundAmount,
+      creditCost: 0,
+      brandId: originalEvent.brandId,
+      brandName: originalEvent.brandName,
+      trendId: originalEvent.trendId,
+      trendTitle: originalEvent.trendTitle,
+      ideaTitle: originalEvent.ideaTitle,
+      generationId: originalEvent.generationId,
+      channelLabel: originalEvent.channelLabel,
+      summary: `图片任务失败，自动退还 ${refundAmount} 积分`,
+      payload: {
+        refundForCreditEventId: originalEvent.id,
+        refundReason: String(reason || "image job failed").slice(0, 500),
+        refundedAt: new Date().toISOString(),
+      },
+    });
+    return { refunded: true, originalEvent, refundEvent, user: findUserById(user.id) };
+  });
+}
+
 function findGenerationForCreditEvent(creditEventId, userId) {
   return db.prepare(`
     SELECT generation_id AS generationId
@@ -152,6 +211,8 @@ function deleteUserCascadeRows(userId) {
 module.exports = {
   insertCreditEvent,
   findCreditEventById,
+  findRefundForCreditEvent,
+  refundCreditEventIfNeeded,
   findGenerationForCreditEvent,
   updateCreditEventGeneration,
   updateCreditEventEditResult,

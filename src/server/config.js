@@ -26,8 +26,8 @@ const DEFAULT_APP_CONFIG = {
     apiStyle: "google",
     model: "gemini-3.1-flash-lite-preview",
     baseUrl: "https://api.im-red-magic.cn",
-    openaiBaseUrl: "http://120.24.86.32:3000/v1",
-    anthropicBaseUrl: "http://120.24.86.32:3000/anthropic",
+    openaiBaseUrl: "",
+    anthropicBaseUrl: "",
     apiKey: "",
     searchEnabled: true,
   },
@@ -50,6 +50,7 @@ const DEFAULT_APP_CONFIG = {
   },
   security: {
     assetSigningSecret: "",
+    cookieSecure: false,
   },
 };
 
@@ -67,6 +68,14 @@ function deepMerge(base, override) {
     result[key] = value;
   }
   return result;
+}
+
+function parseBooleanConfig(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
 }
 
 function loadAppConfig() {
@@ -117,6 +126,10 @@ function loadAppConfig() {
     },
     security: {
       assetSigningSecret: String(process.env.ASSET_SIGNING_SECRET || merged.security?.assetSigningSecret || "").trim(),
+      cookieSecure: parseBooleanConfig(
+        process.env.COOKIE_SECURE,
+        parseBooleanConfig(merged.security?.cookieSecure, process.env.NODE_ENV === "production"),
+      ),
     },
   };
 }

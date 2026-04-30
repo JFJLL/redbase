@@ -8,6 +8,7 @@ const {
   updateCreditEventGeneration,
   updateCreditEventEditResult,
   attachGenerationToLatestCreditEvent,
+  refundCreditEventIfNeeded,
 } = require("../db/repositories/admin-repository");
 const { findBrandByOwner } = require("../db/repositories/brand-repository");
 const { findGenerationByOwner, insertGeneration, upsertGeneration } = require("../db/repositories/generation-repository");
@@ -45,6 +46,34 @@ function spendUserCredits(user, cost) {
   updateUserCredits(user.id, nextCredits);
   user.credits = nextCredits;
   return findUserById(user.id) || user;
+}
+
+function refundFailedImageJobCredits(user, job) {
+  const context = job?.generationContext;
+  if (job?.status !== "failed" || !context?.creditEventId || context.refundCreditEventId) {
+    return { job, user };
+  }
+
+  const refundResult = refundCreditEventIfNeeded({
+    creditEventId: context.creditEventId,
+    userId: user.id,
+    reason: job.error || "image job failed",
+  });
+  if (!refundResult.refundEvent) {
+    return { job, user: refundResult.user || user };
+  }
+
+  return {
+    job: {
+      ...job,
+      generationContext: {
+        ...context,
+        refundCreditEventId: refundResult.refundEvent.id,
+        refundedAt: refundResult.refundEvent.createdAt,
+      },
+    },
+    user: refundResult.user || user,
+  };
 }
 
 function createSqlGenerationRecord(userId, brand, trend, idea, type, channelLabel, payload) {
@@ -401,6 +430,9 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       };
       imageJobs.set(job.id, resolved);
     }
+    const refundResult = refundFailedImageJobCredits(user, resolved);
+    resolved = refundResult.job;
+    const responseUser = refundResult.user;
     upsertImageJob(user.id, resolved);
     if (resolved.status === "completed" && resolved.generationContext && !resolved.generationId) {
       if (resolved.generationContext.type === "imageEdit") {
@@ -433,7 +465,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         }
       }
     }
-    json(res, 200, buildImageJobResponse(resolved));
+    const response = buildImageJobResponse(resolved);
+    if (resolved.status === "failed" && responseUser?.id === user.id) {
+      response.user = sanitizeUser(responseUser);
+    }
+    json(res, 200, response);
     return true;
   }
 

@@ -55,6 +55,7 @@ $env:TEXT_API_KEY = "<your-text-api-key>"
 $env:IMAGE_API_KEY = "<your-image-api-key>"
 $env:ADMIN_PHONES = "13800000000"
 $env:ASSET_SIGNING_SECRET = "<long-random-string>"
+$env:COOKIE_SECURE = "false"
 npm start
 ```
 
@@ -76,8 +77,9 @@ npm start
 - `ADMIN_PHONES`：允许进入管理后台的管理员手机号，多个用英文逗号分隔
 - `CORS_ORIGINS`：允许跨域访问的前端来源，多个用英文逗号分隔；同源本地访问不需要配置
 - `ASSET_SIGNING_SECRET`：图片/资产签名 URL 的 HMAC 密钥；生产环境建议配置长随机字符串，未配置时会使用进程内临时密钥
+- `COOKIE_SECURE`：是否给 session Cookie 添加 `Secure`；生产环境默认启用，本地 HTTP 开发可显式设为 `false`
 
-如果配置了 `ADMIN_PHONES`，只有列表中的手机号可以进入管理后台。修改环境变量后需要重启服务才能生效。
+只有 `ADMIN_PHONES` 或 `config.local.json` 中显式配置的手机号可以进入管理后台。未配置管理员手机号时，不会按账号类型自动授予管理权限。修改环境变量后需要重启服务才能生效。
 
 ### 2.3 启动服务
 

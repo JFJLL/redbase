@@ -40,6 +40,7 @@ $env:TEXT_API_KEY = "<your-text-api-key>"
 $env:IMAGE_API_KEY = "<your-image-api-key>"
 $env:ADMIN_PHONES = "13800000000"
 $env:ASSET_SIGNING_SECRET = "<long-random-string>"
+$env:COOKIE_SECURE = "false"
 npm start
 ```
 
@@ -61,6 +62,9 @@ npm start
 - `ADMIN_PHONES`：管理员手机号，多个用英文逗号分隔
 - `CORS_ORIGINS`：允许跨域访问的前端来源，多个用英文逗号分隔；同源本地访问不需要配置
 - `ASSET_SIGNING_SECRET`：图片/资产签名 URL 的 HMAC 密钥；生产环境建议配置长随机字符串，未配置时会使用进程内临时密钥
+- `COOKIE_SECURE`：是否给 session Cookie 添加 `Secure`；`NODE_ENV=production` 时默认启用，本地 HTTP 开发可设为 `false`
+
+管理员后台只信任 `ADMIN_PHONES` / `config.local.json` 中显式配置的手机号。未配置管理员手机号时，不会再按账号类型自动授予管理权限。
 
 趋势分析默认会先尝试 `google_search`，失败时自动降级为纯模型生成，避免主流程卡死。
 
@@ -111,7 +115,7 @@ Remove-Item Env:RUN_REAL_AI
 ## 架构说明
 
 - 配置入口：`src/server/config.js`，真实密钥优先来自环境变量。
-- 鉴权：`src/server/auth/cookies.js` 设置 HttpOnly Cookie；服务端通过 `src/server/api/sql-auth.js` 和用户/session 仓库校验登录态。
+- 鉴权：`src/server/auth/cookies.js` 设置 HttpOnly Cookie；生产环境可通过 `COOKIE_SECURE`/`NODE_ENV=production` 添加 `Secure`；服务端通过 `src/server/api/sql-auth.js` 和用户/session 仓库校验登录态。
 - 数据层：`src/server/db/repositories/` 提供用户、品牌、趋势、历史、产品图、图片任务和积分流水的直接 SQL 操作；`snapshot-store` 主要保留给迁移和管理后台总览兼容读取。
 - AI 调用：文本模型走 Node 原生 `fetch`，图片任务持久化到 `image_jobs` 表并在轮询时落历史生成记录。
 - 静态前端：`public/app.js` 是主编排入口，公共配置、状态、DOM 工具和 API 客户端已拆到 `public/js/`。

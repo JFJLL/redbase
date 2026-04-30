@@ -33,21 +33,25 @@ function appendSetCookie(res, value) {
   res.setHeader("Set-Cookie", [...values, value]);
 }
 
-function setSessionCookie(res, token) {
-  const encoded = encodeURIComponent(String(token || ""));
-  appendSetCookie(
-    res,
-    `${SESSION_COOKIE_NAME}=${encoded}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`,
-  );
+function buildSessionCookie(value, maxAge, options = {}) {
+  const attributes = [`${SESSION_COOKIE_NAME}=${value}`, "HttpOnly", "Path=/", "SameSite=Lax", `Max-Age=${maxAge}`];
+  if (options.secure) attributes.push("Secure");
+  return attributes.join("; ");
 }
 
-function clearSessionCookie(res) {
-  appendSetCookie(res, `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+function setSessionCookie(res, token, options = {}) {
+  const encoded = encodeURIComponent(String(token || ""));
+  appendSetCookie(res, buildSessionCookie(encoded, SESSION_COOKIE_MAX_AGE_SECONDS, options));
+}
+
+function clearSessionCookie(res, options = {}) {
+  appendSetCookie(res, buildSessionCookie("", 0, options));
 }
 
 module.exports = {
   SESSION_COOKIE_NAME,
   getCookieSessionToken,
+  buildSessionCookie,
   setSessionCookie,
   clearSessionCookie,
 };

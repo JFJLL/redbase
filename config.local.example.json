@@ -3,6 +3,8 @@
     "apiStyle": "google",
     "model": "gemini-3.1-flash-lite-preview",
     "baseUrl": "https://api.im-red-magic.cn",
+    "openaiBaseUrl": "",
+    "anthropicBaseUrl": "",
     "apiKey": "",
     "searchEnabled": true
   },
@@ -21,6 +23,7 @@
     "phones": []
   },
   "security": {
-    "assetSigningSecret": ""
+    "assetSigningSecret": "",
+    "cookieSecure": false
   }
 }

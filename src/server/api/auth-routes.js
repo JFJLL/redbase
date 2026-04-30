@@ -181,7 +181,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
     const savedUser = createUserWithSession({ user, token });
 
     req.__redbaseApiUser = buildApiUserLog(savedUser);
-    setSessionCookie(res, token);
+    setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
     json(res, 201, {
       user: sanitizeUser(savedUser),
     });
@@ -204,7 +204,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
     const token = randomToken();
     const savedUser = createSessionForUser(user.id, token);
     req.__redbaseApiUser = buildApiUserLog(savedUser);
-    setSessionCookie(res, token);
+    setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
     json(res, 200, {
       user: sanitizeUser(savedUser),
     });
@@ -227,7 +227,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
     if (token) {
       deleteSession(token);
     }
-    clearSessionCookie(res);
+    clearSessionCookie(res, { secure: appConfig.security.cookieSecure });
     json(res, 200, { ok: true });
     return true;
   }

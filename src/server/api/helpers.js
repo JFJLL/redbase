@@ -921,7 +921,7 @@ function isAdminUser(user, appConfig) {
   if (configuredPhones.length) {
     return configuredPhones.includes(String(user.phone || "").trim());
   }
-  return user.accountType === "yimei";
+  return false;
 }
 
 function getConfiguredAdminPhones(appConfig) {
@@ -936,9 +936,7 @@ function findTrendItem(brand, trendId) {
     if (Array.isArray(bucket.items)) {
       const found = bucket.items.find((item) => item.id === trendId);
       if (found) return found;
-      continue;
     }
-    if (bucket.id === trendId) return bucket;
   }
   return null;
 }

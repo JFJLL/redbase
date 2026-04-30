@@ -11,8 +11,13 @@ const {
 } = require("../utils");
 const helpers = require("./helpers");
 
+const routeScopeCache = new WeakMap();
+
 function bindRouteScope(context) {
-  return {
+  if (context && typeof context === "object" && routeScopeCache.has(context)) {
+    return routeScopeCache.get(context);
+  }
+  const scope = {
     ...context,
     fsp,
     randomToken,
@@ -25,6 +30,10 @@ function bindRouteScope(context) {
     formatTimestamp,
     ...helpers,
   };
+  if (context && typeof context === "object") {
+    routeScopeCache.set(context, scope);
+  }
+  return scope;
 }
 
 module.exports = {
