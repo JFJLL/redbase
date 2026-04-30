@@ -107,11 +107,16 @@ function bindEvents() {
   });
   document.getElementById("creditForm").addEventListener("submit", submitCreditForm);
   document.getElementById("adminUserRows").addEventListener("click", handleUserRowAction);
+  document.getElementById("generationList").addEventListener("click", handleGenerationListAction);
 
   const modal = document.getElementById("generationModal");
   document.getElementById("closeGenerationModal").addEventListener("click", closeGenerationModal);
   modal.addEventListener("click", (event) => {
     if (event.target === modal) closeGenerationModal();
+    const deleteButton = event.target.closest("[data-delete-generation]");
+    if (deleteButton && modal.contains(deleteButton)) {
+      deleteGeneration(Number(deleteButton.dataset.deleteGeneration));
+    }
   });
 }
 
@@ -144,6 +149,37 @@ async function handleUserRowAction(event) {
     renderAll();
   } catch (error) {
     alert(error.message);
+  }
+}
+
+function handleGenerationListAction(event) {
+  const detailButton = event.target.closest("[data-generation-id]");
+  if (detailButton) {
+    openGenerationModal(Number(detailButton.dataset.generationId));
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-generation]");
+  if (deleteButton) {
+    deleteGeneration(Number(deleteButton.dataset.deleteGeneration));
+  }
+}
+
+async function deleteGeneration(generationId) {
+  const item = (state.overview?.generations || []).find((generation) => Number(generation.id) === Number(generationId));
+  if (!item) return;
+  const message = [
+    `确定删除「${item.cardTitle || item.ideaTitle || "这条生成内容"}」吗？`,
+    `用户：${item.user?.name || "-"} ${item.user?.phone || ""}`,
+    "对应数据库记录和本地生成图片文件会一起删除，额度流水会保留但不再包含生成内容详情。",
+  ].join("\n");
+  if (!confirm(message)) return;
+  try {
+    const result = await request(`/api/admin/generations/${generationId}`, { method: "DELETE" });
+    state.overview = result.overview;
+    closeGenerationModal();
+    renderAll();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
   }
 }
 
@@ -373,16 +409,16 @@ function renderGenerationList() {
               ${escapeHtml(item.user?.name || "-")} · ${escapeHtml(item.brandName)} · ${formatDate(item.createdAt)}
             </div>
             <div class="generation-copy">${escapeHtml(item.summary || item.ideaTitle || "")}</div>
-            <button class="link-btn" data-generation-id="${item.id}" type="button">查看内容详情</button>
+            <div class="generation-actions">
+              <button class="link-btn" data-generation-id="${item.id}" type="button">查看内容详情</button>
+              <button class="danger-btn small-action" data-delete-generation="${item.id}" type="button">删除</button>
+            </div>
           </div>
         </article>
       `;
     })
     .join("");
 
-  root.querySelectorAll("[data-generation-id]").forEach((button) => {
-    button.addEventListener("click", () => openGenerationModal(Number(button.dataset.generationId)));
-  });
 }
 
 function openGenerationModal(id) {
@@ -411,6 +447,7 @@ function renderGenerationDetail(item) {
         <p><strong>趋势：</strong>${escapeHtml(item.trendTitle)}</p>
         <p><strong>选题：</strong>${escapeHtml(item.ideaTitle)}</p>
         <p><strong>时间：</strong>${formatDate(item.createdAt)}</p>
+        <button class="danger-btn small-action" data-delete-generation="${item.id}" type="button">删除这条生成内容</button>
       </section>
       <section class="detail-block">
         <h3>消耗</h3>

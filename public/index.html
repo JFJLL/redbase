@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260430-xhs-carousel-queue2" />
+    <link rel="stylesheet" href="./styles.css?v=20260430-history-actions" />
   </head>
   <body>
     <div class="page page-landing is-active" data-page="landing">
@@ -334,9 +334,9 @@
       <div class="modal-panel">
         <div class="modal-head">
           <div>
-            <div class="modal-kicker">品牌资产录入</div>
-            <h2>新增品牌</h2>
-            <p>填写品牌信息，帮助 AI 更好地理解你的需求</p>
+            <div class="modal-kicker" id="brandModalKicker">品牌资产录入</div>
+            <h2 id="brandModalTitle">新增品牌</h2>
+            <p id="brandModalDescription">填写品牌信息，帮助 AI 更好地理解你的需求</p>
           </div>
           <button class="modal-close" id="closeBrandModal" type="button">×</button>
         </div>
@@ -393,9 +393,36 @@
 
           <div class="form-actions">
             <button class="secondary-btn" id="cancelBrandModal" type="button">取消</button>
-            <button class="primary-btn" type="submit">创建品牌</button>
+            <button class="primary-btn" id="brandSubmitButton" type="submit">创建品牌</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div class="modal-mask" id="brandDeleteModal">
+      <div class="modal-panel brand-delete-modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">删除品牌档案</div>
+            <h2 id="brandDeleteTitle">删除品牌</h2>
+            <p id="brandDeleteDescription">删除后该品牌档案、趋势分析和内容选题会被移除。</p>
+          </div>
+          <button class="modal-close" id="closeBrandDeleteModal" type="button">×</button>
+        </div>
+
+        <div class="brand-delete-body">
+          <label class="brand-delete-option">
+            <input id="deleteBrandGenerations" type="checkbox" />
+            <span>
+              <strong>同时删除该品牌的历史生成记录</strong>
+              <small id="deleteBrandGenerationsHint">会同步删除对应数据库记录和本地生成图片文件。</small>
+            </span>
+          </label>
+          <div class="form-actions">
+            <button class="secondary-btn" id="cancelBrandDeleteModal" type="button">取消</button>
+            <button class="primary-btn danger-primary-btn" id="confirmBrandDelete" type="button">确认删除</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -440,6 +467,6 @@
       </div>
     </div>
 
-    <script src="./app.js?v=20260430-xhs-carousel-queue2"></script>
+    <script src="./app.js?v=20260430-history-actions"></script>
   </body>
 </html>

@@ -259,6 +259,27 @@ function createApiHandler({ appConfig, store, ai }) {
       return true;
     }
 
+    const adminGenerationMatch = pathname.match(/^\/api\/admin\/generations\/(\d+)$/);
+    if (req.method === "DELETE" && adminGenerationMatch) {
+      const storeState = await readStore();
+      const adminUser = requireAdmin(storeState, req, res, appConfig);
+      if (!adminUser) return true;
+      const generation = (storeState.generations || []).find((item) => item.id === Number(adminGenerationMatch[1]));
+      if (!generation) {
+        notFound(res);
+        return true;
+      }
+
+      await deleteGenerationCascade(storeState, generation, imageJobs);
+      await writeStore(storeState);
+      json(res, 200, {
+        ok: true,
+        deletedGenerationId: generation.id,
+        overview: buildAdminOverview(storeState),
+      });
+      return true;
+    }
+
     if (req.method === "POST" && pathname === "/api/auth/logout") {
       const storeState = await readStore();
       const token = getSessionToken(req);
@@ -289,6 +310,26 @@ function createApiHandler({ appConfig, store, ai }) {
           .filter((item) => item.ownerUserId === user.id)
           .filter(isRenderableGeneration)
           .map(sanitizeGeneration),
+      });
+      return true;
+    }
+
+    const historyGenerationMatch = pathname.match(/^\/api\/history\/(\d+)$/);
+    if (req.method === "DELETE" && historyGenerationMatch) {
+      const storeState = await readStore();
+      const user = requireAuth(storeState, req, res);
+      if (!user) return true;
+      const generation = findOwnedGeneration(storeState, user, Number(historyGenerationMatch[1]));
+      if (!generation) {
+        notFound(res);
+        return true;
+      }
+
+      await deleteGenerationCascade(storeState, generation, imageJobs);
+      await writeStore(storeState);
+      json(res, 200, {
+        ok: true,
+        deletedGenerationId: generation.id,
       });
       return true;
     }
@@ -476,6 +517,99 @@ function createApiHandler({ appConfig, store, ai }) {
         return true;
       }
       json(res, 200, { brand: sanitizeBrand(brand) });
+      return true;
+    }
+
+    if (req.method === "PUT" && brandMatch) {
+      const storeState = await readStore();
+      const user = requireAuth(storeState, req, res);
+      if (!user) return true;
+      const brand = storeState.brands.find((item) => item.id === Number(brandMatch[1]) && item.ownerUserId === user.id);
+      if (!brand) {
+        notFound(res);
+        return true;
+      }
+
+      const payload = await collectBody(req);
+      const required = ["name", "industry", "audience", "description", "product", "goal"];
+      const missing = required.find((key) => !payload[key]);
+      if (missing) {
+        badRequest(res, `Missing field: ${missing}`);
+        return true;
+      }
+
+      const assetTags = createBrandAssetTags(payload);
+      const profileSize = getTrendAnalysisBrandProfileSize({
+        ...payload,
+        knowledgeBase: payload.knowledgeBase || "",
+        assetTags,
+      });
+      if (profileSize.total > MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS) {
+        badRequest(
+          res,
+          `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品/服务或品牌资料库后再保存品牌档案。`,
+        );
+        return true;
+      }
+
+      const previousLogoPath = brand.logo?.storedPath || "";
+      brand.name = payload.name;
+      brand.industry = payload.industry;
+      brand.audience = payload.audience;
+      brand.description = payload.description;
+      brand.product = payload.product;
+      brand.goal = payload.goal;
+      brand.knowledgeBase = payload.knowledgeBase || "";
+      brand.assetTags = assetTags;
+
+      if (payload.logoDataUrl) {
+        try {
+          brand.logo = await saveBrandLogo(user, brand, {
+            dataUrl: payload.logoDataUrl,
+            name: payload.logoName || "brand-logo",
+          });
+          if (previousLogoPath) {
+            await removeStoredFileIfExists(resolveStoredAssetPath(previousLogoPath));
+          }
+        } catch (error) {
+          if (error?.code === "PAYLOAD_TOO_LARGE") throw error;
+          badRequest(res, error.message || "品牌 Logo 上传失败");
+          return true;
+        }
+      }
+
+      await writeStore(storeState);
+      json(res, 200, { brand: sanitizeBrand(brand) });
+      return true;
+    }
+
+    if (req.method === "DELETE" && brandMatch) {
+      const storeState = await readStore();
+      const user = requireAuth(storeState, req, res);
+      if (!user) return true;
+      const brand = storeState.brands.find((item) => item.id === Number(brandMatch[1]) && item.ownerUserId === user.id);
+      if (!brand) {
+        notFound(res);
+        return true;
+      }
+      const payload = await collectBody(req);
+      const deleteGenerations = Boolean(payload.deleteGenerations);
+      const deletedGenerationIds = [];
+      if (deleteGenerations) {
+        const brandGenerations = (storeState.generations || []).filter(
+          (generation) => generation.ownerUserId === user.id && generation.brandId === brand.id,
+        );
+        for (const generation of brandGenerations) {
+          deletedGenerationIds.push(generation.id);
+          await deleteGenerationCascade(storeState, generation, imageJobs);
+        }
+      }
+      if (brand.logo?.storedPath) {
+        await removeStoredFileIfExists(resolveStoredAssetPath(brand.logo.storedPath));
+      }
+      storeState.brands = storeState.brands.filter((item) => item.id !== brand.id);
+      await writeStore(storeState);
+      json(res, 200, { ok: true, deletedGenerationIds });
       return true;
     }
 
@@ -1626,6 +1760,9 @@ async function deleteUserCascade(storeState, targetUser) {
       await removeStoredFileIfExists(resolveStoredAssetPath(brand.logo.storedPath));
     }
   }
+  for (const generation of (storeState.generations || []).filter((item) => item.ownerUserId === userId)) {
+    await removeGenerationLocalFiles(generation);
+  }
   const productImages = (storeState.productImages || []).filter((image) => image.ownerUserId === userId);
   for (const image of productImages) {
     try {
@@ -1646,6 +1783,82 @@ async function deleteUserCascade(storeState, targetUser) {
   storeState.imageJobs = (storeState.imageJobs || []).filter((job) => job.ownerUserId !== userId);
   if (targetUser.phone && storeState.verificationCodes) {
     delete storeState.verificationCodes[targetUser.phone];
+  }
+}
+
+async function deleteGenerationCascade(storeState, generation, liveImageJobs) {
+  const generationId = Number(generation?.id || 0);
+  if (!Number.isFinite(generationId) || generationId <= 0) return;
+  await removeGenerationLocalFiles(generation);
+  const contentUrls = collectGenerationContentUrls(generation);
+
+  storeState.generations = (storeState.generations || []).filter((item) => item.id !== generationId);
+  storeState.imageJobs = (storeState.imageJobs || []).filter((job) => {
+    const shouldDelete =
+      Number(job.generationId) === generationId ||
+      Number(job.generationContext?.sourceGenerationId) === generationId ||
+      contentUrls.has(String(job.imageUrl || ""));
+    if (shouldDelete && job.id && liveImageJobs?.delete) {
+      liveImageJobs.delete(job.id);
+    }
+    return !shouldDelete;
+  });
+
+  for (const event of storeState.creditEvents || []) {
+    if (Number(event.generationId) !== generationId) continue;
+    event.generationId = null;
+    event.payload = {
+      deletedGenerationId: generationId,
+      deletedAt: new Date().toISOString(),
+    };
+  }
+}
+
+async function removeGenerationLocalFiles(generation) {
+  const storedPaths = collectGenerationStoredPaths(generation);
+  for (const storedPath of storedPaths) {
+    try {
+      await removeStoredFileIfExists(resolveStoredAssetPath(storedPath));
+    } catch (error) {
+      console.warn("[generated-image] failed to remove generated file", {
+        generationId: generation?.id,
+        storedPath,
+        error: error.message,
+      });
+    }
+  }
+}
+
+function collectGenerationStoredPaths(generation) {
+  const paths = new Set();
+  collectObjectValues(generation?.payload, (value, key) => {
+    if (key === "storedPath" && typeof value === "string" && value) {
+      paths.add(value);
+    }
+  });
+  return paths;
+}
+
+function collectGenerationContentUrls(generation) {
+  const urls = new Set();
+  collectObjectValues(generation?.payload, (value, key) => {
+    if ((key === "imageUrl" || key === "previewUrl" || key === "originalImageUrl" || key === "sourceImageUrl" || key === "originalUrl") && typeof value === "string" && value) {
+      urls.add(value);
+    }
+  });
+  if (generation?.previewUrl) urls.add(generation.previewUrl);
+  return urls;
+}
+
+function collectObjectValues(value, visit) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectObjectValues(item, visit));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    visit(child, key);
+    collectObjectValues(child, visit);
   }
 }
 

@@ -461,6 +461,14 @@ tr:last-child td {
   line-height: 1.65;
 }
 
+.generation-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .link-btn {
   border: 0;
   background: none;

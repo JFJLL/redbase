@@ -682,6 +682,15 @@ button {
   gap: 16px;
 }
 
+.history-generate-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
 .history-generate-meta {
   display: flex;
   gap: 10px;
@@ -718,7 +727,7 @@ button {
   text-align: left;
 }
 
-.history-generate-top .history-edit-button {
+.history-generate-top .history-action-button {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -735,7 +744,7 @@ button {
   white-space: nowrap;
 }
 
-.history-generate-top .history-edit-button:hover {
+.history-generate-top .history-action-button:hover {
   background: #d84444;
   color: #fff;
   border-color: #d84444;
@@ -815,6 +824,70 @@ button {
   display: flex;
   gap: 14px;
   flex-wrap: wrap;
+}
+
+.brand-actions .secondary-btn {
+  min-height: 42px;
+}
+
+.danger-btn {
+  border-color: rgba(198, 44, 54, 0.18) !important;
+  color: #b72e3a !important;
+  background: rgba(255, 250, 250, 0.92) !important;
+}
+
+.danger-btn:hover {
+  border-color: rgba(198, 44, 54, 0.34) !important;
+  background: rgba(255, 242, 242, 0.98) !important;
+}
+
+.danger-primary-btn {
+  background: linear-gradient(135deg, #d94148, #b72e3a) !important;
+  color: #fff !important;
+  box-shadow: 0 16px 34px rgba(183, 46, 58, 0.22) !important;
+}
+
+.brand-delete-modal-panel {
+  max-width: 560px;
+}
+
+.brand-delete-body {
+  display: grid;
+  gap: 18px;
+}
+
+.brand-delete-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  border: 1px solid rgba(216, 68, 68, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 248, 248, 0.88);
+  color: #4c4244;
+}
+
+.brand-delete-option input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  accent-color: #d84444;
+}
+
+.brand-delete-option span {
+  display: grid;
+  gap: 6px;
+}
+
+.brand-delete-option strong {
+  color: #2c2225;
+  font-size: 0.98rem;
+}
+
+.brand-delete-option small {
+  color: #887174;
+  line-height: 1.55;
 }
 
 .brand-chip-row {
@@ -2733,7 +2806,7 @@ textarea {
     flex-direction: column;
   }
 
-  .history-generate-top .history-edit-button {
+  .history-generate-top .history-action-button {
     width: fit-content;
   }
 

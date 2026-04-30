@@ -67,6 +67,8 @@ const state = {
   sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
   resumingImageTasks: false,
 };
+let openBrandEditor = () => {};
+let pendingBrandDeleteId = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -143,6 +145,7 @@ async function init() {
   bindSidebarTabs();
   bindTabJump();
   bindBrandModal();
+  bindBrandDeleteModal();
   bindImageModal();
   bindProductImageLibraryModal();
   bindAuthModal();
@@ -554,14 +557,54 @@ function bindBrandModal() {
   const logoInput = document.getElementById("brandLogoInput");
   const logoPreview = document.getElementById("brandLogoPreview");
   const logoUploadText = document.getElementById("brandLogoUploadText");
+  const modalKicker = document.getElementById("brandModalKicker");
+  const modalTitle = document.getElementById("brandModalTitle");
+  const modalDescription = document.getElementById("brandModalDescription");
+  const submitButton = document.getElementById("brandSubmitButton");
   let pendingLogo = null;
+  let editingBrandId = null;
 
-  const open = () => modal.classList.add("is-open");
+  const setLogoPreview = (brand = null) => {
+    if (!logoPreview) return;
+    if (brand?.logo?.url) {
+      logoPreview.innerHTML = `
+        <span>当前 Logo：${escapeHtml(formatImageName(brand.logo.originalName || "品牌 Logo", 38))}</span>
+        <img src="${authenticatedImageSrc(brand.logo.url)}" alt="${escapeHtml(brand.logo.originalName || "品牌 Logo")}" />
+      `;
+      return;
+    }
+    logoPreview.textContent = "可选上传，后续生图时可作为产品 Logo 使用。";
+  };
+  const setBrandModalMode = (brand = null) => {
+    editingBrandId = brand?.id || null;
+    pendingLogo = null;
+    form.reset();
+    if (logoInput) logoInput.value = "";
+    if (modalKicker) modalKicker.textContent = editingBrandId ? "品牌资产维护" : "品牌资产录入";
+    if (modalTitle) modalTitle.textContent = editingBrandId ? "编辑品牌" : "新增品牌";
+    if (modalDescription) modalDescription.textContent = editingBrandId ? "更新品牌定位、产品信息和资料库，后续 AI 分析会使用最新内容。" : "填写品牌信息，帮助 AI 更好地理解你的需求";
+    if (submitButton) submitButton.textContent = editingBrandId ? "保存修改" : "创建品牌";
+    if (logoUploadText) logoUploadText.textContent = brand?.logo ? "更换 Logo" : "选择 Logo 图片";
+    setLogoPreview(brand);
+    if (!brand) return;
+    form.elements.name.value = brand.name || "";
+    form.elements.industry.value = brand.industry || "";
+    form.elements.audience.value = brand.audience || "";
+    form.elements.description.value = brand.description || "";
+    form.elements.product.value = brand.product || "";
+    form.elements.knowledgeBase.value = brand.knowledgeBase || "";
+    form.elements.goal.value = brand.goal || "";
+  };
+  const open = (brand = null) => {
+    setBrandModalMode(brand);
+    modal.classList.add("is-open");
+  };
+  openBrandEditor = open;
   const close = () => {
     modal.classList.remove("is-open");
   };
 
-  openBtn.addEventListener("click", open);
+  openBtn.addEventListener("click", () => open());
   closeBtn.addEventListener("click", close);
   cancelBtn.addEventListener("click", close);
   modal.addEventListener("click", (event) => {
@@ -571,8 +614,8 @@ function bindBrandModal() {
     const file = logoInput.files?.[0];
     if (!file) {
       pendingLogo = null;
-      if (logoPreview) logoPreview.textContent = "可选上传，后续生图时可作为产品 Logo 使用。";
-      if (logoUploadText) logoUploadText.textContent = "选择 Logo 图片";
+      setLogoPreview(state.brands.find((brand) => brand.id === editingBrandId));
+      if (logoUploadText) logoUploadText.textContent = editingBrandId ? "更换 Logo" : "选择 Logo 图片";
       return;
     }
     if (!validateSingleReferenceFile(file, "品牌 Logo")) {
@@ -605,7 +648,7 @@ function bindBrandModal() {
     const profileSize = getBrandProfileInputSize(payload);
     if (profileSize.total > MAX_BRAND_PROFILE_CHARS) {
       alert(
-        `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品介绍或品牌资料库后再创建。`,
+        `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品介绍或品牌资料库后再保存。`,
       );
       return;
     }
@@ -616,16 +659,21 @@ function bindBrandModal() {
 
     try {
       setBusy(true);
-      const result = await request("/api/brands", {
-        method: "POST",
+      const result = await request(editingBrandId ? `/api/brands/${editingBrandId}` : "/api/brands", {
+        method: editingBrandId ? "PUT" : "POST",
         body: JSON.stringify(payload),
       });
-      state.brands.unshift(result.brand);
-      state.selectedBrandId = result.brand.id;
-      state.selectedTrendId = null;
+      if (editingBrandId) {
+        replaceBrand(result.brand);
+      } else {
+        state.brands.unshift(result.brand);
+        state.selectedBrandId = result.brand.id;
+        state.selectedTrendId = null;
+      }
       form.reset();
       pendingLogo = null;
-      if (logoPreview) logoPreview.textContent = "可选上传，后续生图时可作为产品 Logo 使用。";
+      editingBrandId = null;
+      setLogoPreview();
       if (logoUploadText) logoUploadText.textContent = "选择 Logo 图片";
       close();
       renderAll();
@@ -643,6 +691,28 @@ function getBrandProfileInputSize(payload) {
   return {
     total: fields.reduce((sum, key) => sum + String(payload?.[key] || "").trim().length, 0),
   };
+}
+
+function bindBrandDeleteModal() {
+  const modal = document.getElementById("brandDeleteModal");
+  const closeBtn = document.getElementById("closeBrandDeleteModal");
+  const cancelBtn = document.getElementById("cancelBrandDeleteModal");
+  const confirmBtn = document.getElementById("confirmBrandDelete");
+  const checkbox = document.getElementById("deleteBrandGenerations");
+  const close = () => {
+    pendingBrandDeleteId = null;
+    modal?.classList.remove("is-open");
+  };
+  closeBtn?.addEventListener("click", close);
+  cancelBtn?.addEventListener("click", close);
+  modal?.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+  confirmBtn?.addEventListener("click", async () => {
+    if (!pendingBrandDeleteId) return;
+    await confirmDeleteBrand(pendingBrandDeleteId, Boolean(checkbox?.checked));
+    close();
+  });
 }
 
 function bindImageModal() {
@@ -1072,6 +1142,62 @@ function replaceBrand(nextBrand) {
   state.brands = state.brands.map((brand) => (brand.id === nextBrand.id ? nextBrand : brand));
 }
 
+async function deleteBrand(brandId) {
+  const brand = state.brands.find((item) => item.id === brandId);
+  if (!brand) return;
+  openBrandDeleteModal(brand);
+}
+
+function openBrandDeleteModal(brand) {
+  const modal = document.getElementById("brandDeleteModal");
+  const title = document.getElementById("brandDeleteTitle");
+  const description = document.getElementById("brandDeleteDescription");
+  const checkbox = document.getElementById("deleteBrandGenerations");
+  const hint = document.getElementById("deleteBrandGenerationsHint");
+  const generationCount = state.generationHistory.filter((item) => Number(item.brandId) === Number(brand.id)).length;
+  pendingBrandDeleteId = brand.id;
+  if (title) title.textContent = `删除「${brand.name}」`;
+  if (description) {
+    description.textContent = "删除后该品牌档案、趋势分析和内容选题会被移除；历史生成记录默认保留。";
+  }
+  if (checkbox) {
+    checkbox.checked = false;
+    checkbox.disabled = generationCount === 0;
+  }
+  if (hint) {
+    hint.textContent = generationCount
+      ? `当前品牌有 ${generationCount} 条历史生成记录；勾选后会同步删除对应数据库记录和本地生成图片文件。`
+      : "当前品牌没有可删除的历史生成记录。";
+  }
+  modal?.classList.add("is-open");
+}
+
+async function confirmDeleteBrand(brandId, deleteGenerations) {
+  try {
+    setBusy(true);
+    const result = await request(`/api/brands/${brandId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ deleteGenerations }),
+    });
+    state.brands = state.brands.filter((item) => item.id !== brandId);
+    if (Array.isArray(result.deletedGenerationIds) && result.deletedGenerationIds.length) {
+      const deletedIds = new Set(result.deletedGenerationIds.map(Number));
+      state.generationHistory = state.generationHistory.filter((item) => !deletedIds.has(Number(item.id)));
+    }
+    if (state.selectedBrandId === brandId) {
+      state.selectedBrandId = state.brands[0]?.id ?? null;
+      const nextBrand = getSelectedBrand();
+      state.selectedTrendMode = firstTrendBucket(nextBrand)?.key ?? DEFAULT_TREND_MODE;
+      state.selectedTrendId = firstTrendBucket(nextBrand)?.items?.[0]?.id ?? null;
+    }
+    renderAll();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function replaceTrend(brandId, nextTrend) {
   state.brands = state.brands.map((brand) => {
     if (brand.id !== brandId) return brand;
@@ -1273,6 +1399,8 @@ function renderBrands() {
           <div class="brand-actions">
             <button class="primary-btn small-btn" data-brand-action="trends" data-brand-id="${brand.id}" type="button">AI趋势分析</button>
             <button class="secondary-btn" data-brand-action="ideas" data-brand-id="${brand.id}" type="button">查看内容选题</button>
+            <button class="secondary-btn" data-brand-edit="${brand.id}" type="button">编辑</button>
+            <button class="secondary-btn danger-btn" data-brand-delete="${brand.id}" type="button">删除</button>
           </div>
         </article>
       `,
@@ -1280,6 +1408,19 @@ function renderBrands() {
     .join("");
 
   root.onclick = (event) => {
+    const editButton = event.target.closest("[data-brand-edit]");
+    if (editButton && root.contains(editButton)) {
+      const brand = state.brands.find((item) => item.id === Number(editButton.dataset.brandEdit));
+      if (brand) openBrandEditor(brand);
+      return;
+    }
+
+    const deleteButton = event.target.closest("[data-brand-delete]");
+    if (deleteButton && root.contains(deleteButton)) {
+      deleteBrand(Number(deleteButton.dataset.brandDelete));
+      return;
+    }
+
     const button = event.target.closest("[data-brand-id]");
     if (!button || !root.contains(button)) return;
 
@@ -1926,6 +2067,19 @@ async function loadGenerationHistory() {
   renderGenerationHistory();
 }
 
+async function deleteGenerationHistoryItem(generationId) {
+  const item = state.generationHistory.find((generation) => Number(generation.id) === Number(generationId));
+  if (!item) return;
+  if (!confirm(`确定删除「${item.cardTitle || item.ideaTitle || "这条生成内容"}」吗？相关本地图片文件也会一起删除。`)) return;
+  try {
+    await request(`/api/history/${generationId}`, { method: "DELETE" });
+    state.generationHistory = state.generationHistory.filter((generation) => Number(generation.id) !== Number(generationId));
+    renderGenerationHistory();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  }
+}
+
 function renderGenerationHistory() {
   const root = document.getElementById("generationHistoryList");
   if (!root) return;
@@ -1990,7 +2144,10 @@ function renderGenerationHistory() {
               <div class="history-generate-ref">${escapeHtml(item.brandName)} · ${escapeHtml(item.trendTitle)}</div>
               <div class="history-generate-ref">${escapeHtml(item.ideaTitle)}</div>
             </div>
-            ${getGenerationPrimaryImageUrl(item) ? `<button class="secondary-btn small-btn history-edit-button" data-open-history-generation="${item.id}" type="button">改图</button>` : ""}
+            <div class="history-generate-actions">
+              ${getGenerationPrimaryImageUrl(item) ? `<button class="secondary-btn small-btn history-action-button" data-open-history-generation="${item.id}" type="button">改图</button>` : ""}
+              <button class="secondary-btn small-btn history-action-button" data-delete-history-generation="${item.id}" type="button">删除</button>
+            </div>
           </div>
           ${contentHtml}
           ${previewHtml ? `<button class="history-preview-button" data-open-history-generation="${item.id}" type="button">${previewHtml}</button>` : ""}
@@ -2001,6 +2158,9 @@ function renderGenerationHistory() {
 
   root.querySelectorAll("[data-open-history-generation]").forEach((button) => {
     button.addEventListener("click", () => openHistoryGeneration(Number(button.dataset.openHistoryGeneration)));
+  });
+  root.querySelectorAll("[data-delete-history-generation]").forEach((button) => {
+    button.addEventListener("click", () => deleteGenerationHistoryItem(Number(button.dataset.deleteHistoryGeneration)));
   });
 }
 
@@ -2504,6 +2664,8 @@ function buildLocalXhsCarouselPack(brand, trend, idea) {
 }
 
 function renderXhsCarouselDraft(imageResult, pack, stateFlags = {}) {
+  const remainingSlideCount = pack.slides.filter((slide) => !hasXhsCarouselSlideImage(slide)).length;
+  const generateAllCost = Math.max(remainingSlideCount, 1);
   imageResult.innerHTML = `
     <div class="carousel-draft-shell">
       <div class="asset-header-card">
@@ -2577,8 +2739,8 @@ function renderXhsCarouselDraft(imageResult, pack, stateFlags = {}) {
           .join("")}
       </div>
       <div class="carousel-floating-actions">
-        <button class="primary-btn carousel-generate-all-btn" data-generate-carousel-all type="button" ${stateFlags.isGeneratingAll ? "disabled" : ""}>
-          ${stateFlags.isGeneratingAll ? "生图中" : "一键生图"}
+        <button class="primary-btn carousel-generate-all-btn" data-generate-carousel-all type="button" ${stateFlags.isGeneratingAll || remainingSlideCount === 0 ? "disabled" : ""}>
+          ${remainingSlideCount === 0 ? "已全部生成" : stateFlags.isGeneratingAll ? "生图中" : `一键生图 ${generateAllCost} 积分`}
         </button>
       </div>
     </div>
@@ -2824,6 +2986,12 @@ async function generateXhsCarousel(ideaIndex) {
       const allButton = imageResult.querySelector("[data-generate-carousel-all]");
       allButton?.addEventListener("click", () => {
         syncXhsCarouselPromptInputs(imageResult, pack);
+        const remainingSlideCount = pack.slides.filter((slide) => !hasXhsCarouselSlideImage(slide) && !slide.isGenerating && !slide.isQueued).length;
+        if (remainingSlideCount === 0) return;
+        if (Number(state.currentUser?.credits || 0) < remainingSlideCount) {
+          alert(`积分不足，一键生成剩余 ${remainingSlideCount} 张需要 ${remainingSlideCount} 积分，当前剩余 ${Number(state.currentUser?.credits || 0)} 积分。`);
+          return;
+        }
         flags.isGeneratingAll = true;
         for (let index = 0; index < pack.slides.length; index += 1) {
           enqueueGenerateSlide(index);
