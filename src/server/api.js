@@ -22,6 +22,7 @@ const CREDIT_COSTS = {
   momentsImage: 1,
   wechatImage: 1,
   xhsCarousel: 4,
+  xhsCarouselSlide: 1,
   imageEdit: 1,
   styleImage: 1,
 };
@@ -31,6 +32,7 @@ const MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PRODUCT_IMAGE_SELECTION_COUNT = 10;
 const MAX_PRODUCT_IMAGE_SELECTION_BYTES = 30 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
+const MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS = 5000;
 const PRODUCT_IMAGE_MIME_EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -416,6 +418,20 @@ function createApiHandler({ appConfig, store, ai }) {
         return true;
       }
 
+      const assetTags = createBrandAssetTags(payload);
+      const profileSize = getTrendAnalysisBrandProfileSize({
+        ...payload,
+        knowledgeBase: payload.knowledgeBase || "",
+        assetTags,
+      });
+      if (profileSize.total > MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS) {
+        badRequest(
+          res,
+          `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品/服务或品牌资料库后再创建品牌档案。`,
+        );
+        return true;
+      }
+
       const brand = {
         id: storeState.nextBrandId++,
         ownerUserId: user.id,
@@ -427,7 +443,7 @@ function createApiHandler({ appConfig, store, ai }) {
         goal: payload.goal,
         knowledgeBase: payload.knowledgeBase || "",
         logo: null,
-        assetTags: createBrandAssetTags(payload),
+        assetTags,
         analyses: [],
         trends: [],
       };
@@ -526,6 +542,15 @@ function createApiHandler({ appConfig, store, ai }) {
       const brand = storeState.brands.find((item) => item.id === Number(analysisMatch[1]) && item.ownerUserId === user.id);
       if (!brand) {
         notFound(res);
+        return true;
+      }
+
+      const profileSize = getTrendAnalysisBrandProfileSize(brand);
+      if (profileSize.total > MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS) {
+        badRequest(
+          res,
+          `当前品牌档案共 ${profileSize.total} 字，超过热点分析上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品/服务或品牌资料库后再开始热点分析。`,
+        );
         return true;
       }
 
@@ -776,6 +801,7 @@ function createApiHandler({ appConfig, store, ai }) {
       const payload = await collectBody(req);
       const sourceImageUrl = String(payload.imageUrl || "").trim();
       const editPrompt = String(payload.prompt || "").trim();
+      const sourceSlideIndex = payload.slideIndex === "" || payload.slideIndex == null ? null : Number(payload.slideIndex);
       if (!editPrompt) {
         badRequest(res, "请填写改图提示词。");
         return true;
@@ -825,6 +851,7 @@ function createApiHandler({ appConfig, store, ai }) {
           aspectRatio: payload.aspectRatio || "",
           sourceGenerationId: sourceGeneration?.id ?? null,
           parentEditId: payload.parentEditId || "",
+          sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
         },
       });
       job.generationContext = {
@@ -838,6 +865,7 @@ function createApiHandler({ appConfig, store, ai }) {
         editPrompt,
         title: String(payload.title || "改图结果").slice(0, 120),
         aspectRatio: String(payload.aspectRatio || ""),
+        sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
       };
       upsertImageJobRecord(storeState, user.id, job);
       await writeStore(storeState);
@@ -958,6 +986,35 @@ function createApiHandler({ appConfig, store, ai }) {
       return true;
     }
 
+    const xhsCarouselPreviewMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/xhs-carousel\/preview$/);
+    if (req.method === "POST" && xhsCarouselPreviewMatch) {
+      const storeState = await readStore();
+      const user = requireAuth(storeState, req, res);
+      if (!user) return true;
+
+      const brand = storeState.brands.find((item) => item.id === Number(xhsCarouselPreviewMatch[1]) && item.ownerUserId === user.id);
+      if (!brand) {
+        badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
+        return true;
+      }
+      const trend = findTrendItem(brand, Number(xhsCarouselPreviewMatch[2]));
+      if (!trend) {
+        badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
+        return true;
+      }
+      const idea = trend.ideas[Number(xhsCarouselPreviewMatch[3])];
+      if (!idea) {
+        badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
+        return true;
+      }
+
+      json(res, 200, {
+        carouselPack: buildXhsCarouselPack({ brand, trend, idea }),
+        user: sanitizeUser(user),
+      });
+      return true;
+    }
+
     const xhsCarouselMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/xhs-carousel$/);
     if (req.method === "POST" && xhsCarouselMatch) {
       const requestStartedAt = Date.now();
@@ -997,54 +1054,58 @@ function createApiHandler({ appConfig, store, ai }) {
       });
       if (!hasEnoughCredits(user, CREDIT_COSTS.xhsCarousel, res)) return true;
       const carouselPack = buildXhsCarouselPack({ brand, trend, idea });
-      const slideJobs = [];
-      for (const [slideIndex, slide] of carouselPack.slides.entries()) {
-        console.log("[image-job] creating carousel slide job", {
-          elapsedMs: Date.now() - requestStartedAt,
-          userId: user.id,
-          brandId: brand.id,
-          trendId: trend.id,
-          ideaIndex: Number(xhsCarouselMatch[3]),
-          slideIndex,
-          pageLabel: slide.pageLabel,
-          hasProductImage: productImages.length > 0,
-          productImageCount: productImages.length,
-        });
-        const job = await createImageJob({
-          brand,
-          trend,
-          idea,
-          productImages,
-          logoImage,
-          metadata: {
-            title: `${carouselPack.title} ${slide.pageLabel}`,
-            visualDirection: slide.title,
-            style: "xiaohongshu carousel cover page",
-            composition: `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
-            prompt: slide.prompt,
+      const slideJobRecords = await Promise.all(
+        carouselPack.slides.map(async (slide, slideIndex) => {
+          console.log("[image-job] creating carousel slide job", {
+            elapsedMs: Date.now() - requestStartedAt,
+            userId: user.id,
+            brandId: brand.id,
+            trendId: trend.id,
+            ideaIndex: Number(xhsCarouselMatch[3]),
             slideIndex,
             pageLabel: slide.pageLabel,
-            copy: slide.copy,
-          },
-        });
-        job.generationContext = {
-          type: "xhsCarouselSlide",
-          userId: user.id,
-          brandId: brand.id,
-          trendId: trend.id,
-          ideaIndex: Number(xhsCarouselMatch[3]),
-          slideIndex,
-        };
-        console.log("[image-job] api created carousel slide job", {
-          elapsedMs: Date.now() - requestStartedAt,
-          jobId: job.id,
-          userId: user.id,
-          slideIndex,
-        });
-        slideJobs.push({
-          slideIndex,
-          jobId: job.id,
-        });
+            hasProductImage: productImages.length > 0,
+            productImageCount: productImages.length,
+          });
+          const job = await createImageJob({
+            brand,
+            trend,
+            idea,
+            productImages,
+            logoImage,
+            metadata: {
+              title: `${carouselPack.title} ${slide.pageLabel}`,
+              visualDirection: slide.title,
+              style: "xiaohongshu carousel cover page",
+              composition: `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
+              prompt: slide.prompt,
+              slideIndex,
+              pageLabel: slide.pageLabel,
+              copy: slide.copy,
+            },
+          });
+          job.generationContext = {
+            type: "xhsCarouselSlide",
+            userId: user.id,
+            brandId: brand.id,
+            trendId: trend.id,
+            ideaIndex: Number(xhsCarouselMatch[3]),
+            slideIndex,
+          };
+          console.log("[image-job] api created carousel slide job", {
+            elapsedMs: Date.now() - requestStartedAt,
+            jobId: job.id,
+            userId: user.id,
+            slideIndex,
+          });
+          return { slideIndex, job };
+        }),
+      );
+      const slideJobs = slideJobRecords.map(({ slideIndex, job }) => ({
+        slideIndex,
+        jobId: job.id,
+      }));
+      for (const { job } of slideJobRecords) {
         upsertImageJobRecord(storeState, user.id, job);
       }
       spendCredits(user, CREDIT_COSTS.xhsCarousel);
@@ -1084,6 +1145,119 @@ function createApiHandler({ appConfig, store, ai }) {
       json(res, 200, {
         carouselPack,
         slideJobs,
+        creditEventId: creditEvent.id,
+        user: sanitizeUser(user),
+      });
+      return true;
+    }
+
+    const xhsCarouselSlideMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/xhs-carousel\/slides\/(\d+)$/);
+    if (req.method === "POST" && xhsCarouselSlideMatch) {
+      const requestStartedAt = Date.now();
+      const slideIndex = Number(xhsCarouselSlideMatch[4]);
+      const storeState = await readStore();
+      const user = requireAuth(storeState, req, res);
+      if (!user) return true;
+      if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > 3) {
+        badRequest(res, "小红书组图页码无效。");
+        return true;
+      }
+
+      const brand = storeState.brands.find((item) => item.id === Number(xhsCarouselSlideMatch[1]) && item.ownerUserId === user.id);
+      if (!brand) {
+        badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
+        return true;
+      }
+      const trend = findTrendItem(brand, Number(xhsCarouselSlideMatch[2]));
+      if (!trend) {
+        badRequest(res, "当前选题关联的趋势已失效，请重新进入该品牌的内容选题页后再试。");
+        return true;
+      }
+      const ideaIndex = Number(xhsCarouselSlideMatch[3]);
+      const idea = trend.ideas[ideaIndex];
+      if (!idea) {
+        badRequest(res, "当前选题不存在，请重新生成或刷新页面后再试。");
+        return true;
+      }
+
+      const payload = await collectBody(req);
+      const defaultPack = buildXhsCarouselPack({ brand, trend, idea });
+      const incomingPack = payload.carouselPack && typeof payload.carouselPack === "object" ? payload.carouselPack : {};
+      const incomingSlides = Array.isArray(incomingPack.slides) ? incomingPack.slides : [];
+      const slide = normalizeXhsCarouselSlideForJob(payload.slide || incomingSlides[slideIndex], defaultPack.slides[slideIndex], slideIndex);
+      if (!slide.prompt) {
+        badRequest(res, "请先填写当前页的生图 Prompt。");
+        return true;
+      }
+
+      const productImages = await resolveProductImageInputs(storeState, user, payload.productImages || payload.productImage);
+      const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
+      if (!hasEnoughCredits(user, CREDIT_COSTS.xhsCarouselSlide, res)) return true;
+
+      console.log("[image-job] creating carousel single slide job", {
+        elapsedMs: Date.now() - requestStartedAt,
+        userId: user.id,
+        brandId: brand.id,
+        trendId: trend.id,
+        ideaIndex,
+        slideIndex,
+        pageLabel: slide.pageLabel,
+        hasProductImage: productImages.length > 0,
+        productImageCount: productImages.length,
+      });
+      const job = await createImageJob({
+        brand,
+        trend,
+        idea,
+        productImages,
+        logoImage,
+        metadata: {
+          title: `${incomingPack.title || defaultPack.title} ${slide.pageLabel}`,
+          visualDirection: slide.visualDirection,
+          style: slide.style,
+          composition: slide.composition,
+          prompt: slide.prompt,
+          slideIndex,
+          pageLabel: slide.pageLabel,
+          copy: slide.copy,
+        },
+      });
+      job.generationContext = {
+        type: "xhsCarouselSlide",
+        userId: user.id,
+        brandId: brand.id,
+        trendId: trend.id,
+        ideaIndex,
+        slideIndex,
+      };
+      spendCredits(user, CREDIT_COSTS.xhsCarouselSlide);
+      const creditEvent = recordCreditEvent(storeState, {
+        user,
+        actionType: "xhsCarousel",
+        actionLabel: "小红书组图单张生成",
+        creditDelta: -CREDIT_COSTS.xhsCarouselSlide,
+        creditCost: CREDIT_COSTS.xhsCarouselSlide,
+        brand,
+        trend,
+        idea,
+        channelLabel: "小红书组图",
+        summary: `${slide.pageLabel} · ${slide.title}`,
+        payload: {
+          slideIndex,
+          pageLabel: slide.pageLabel,
+          referenceImageUsed: productImages.length > 0,
+          referenceImageCount: productImages.length,
+          logoUsed: Boolean(logoImage),
+        },
+      });
+      job.generationContext.creditEventId = creditEvent.id;
+      upsertImageJobRecord(storeState, user.id, job);
+      await writeStore(storeState);
+      json(res, 202, {
+        slideJob: {
+          slideIndex,
+          jobId: job.id,
+        },
         creditEventId: creditEvent.id,
         user: sanitizeUser(user),
       });
@@ -1363,6 +1537,22 @@ function findOwnedGeneration(storeState, user, generationId) {
   return (storeState.generations || []).find((item) => item.id === numericId && item.ownerUserId === user.id) || null;
 }
 
+function getTrendAnalysisBrandProfileSize(brand) {
+  const fields = [
+    brand?.name,
+    brand?.industry,
+    brand?.audience,
+    brand?.description,
+    brand?.product,
+    brand?.goal,
+    brand?.knowledgeBase,
+    ...(Array.isArray(brand?.assetTags) ? brand.assetTags : []),
+  ];
+  return {
+    total: fields.reduce((sum, value) => sum + String(value || "").trim().length, 0),
+  };
+}
+
 async function appendImageEditToGeneration(storeState, userId, job) {
   const generationId = Number(job?.generationContext?.sourceGenerationId || 0);
   if (!Number.isFinite(generationId) || generationId <= 0) return null;
@@ -1379,6 +1569,7 @@ async function appendImageEditToGeneration(storeState, userId, job) {
     parentEditId: job.generationContext.parentEditId || "",
     prompt: job.generationContext.editPrompt || job.metadata?.editPrompt || job.metadata?.prompt || "",
     sourceImageUrl: job.generationContext.sourceImageUrl || job.metadata?.originalImageUrl || "",
+    sourceSlideIndex: Number.isInteger(job.generationContext.sourceSlideIndex) ? job.generationContext.sourceSlideIndex : null,
     imageUrl: job.imageUrl || "",
     previewUrl: job.imageUrl || "",
     title: job.generationContext.title || job.metadata?.title || "改图结果",
@@ -2475,6 +2666,35 @@ function buildXhsCarouselPack({ brand, trend, idea }) {
     publishCaption: normalizeChineseCopy(publishCaptionTemplate()),
     caption: normalizeChineseCopy(captionTemplate()),
     slides,
+  };
+}
+
+function normalizeXhsCarouselSlideForJob(input, fallback, slideIndex) {
+  const source = input && typeof input === "object" ? input : {};
+  const base = fallback && typeof fallback === "object" ? fallback : {};
+  const pageLabel = String(source.pageLabel || base.pageLabel || `第 ${slideIndex + 1} 张`).slice(0, 24);
+  const title = normalizeChineseCopy(String(source.title || base.title || pageLabel).slice(0, 120));
+  const copy = normalizeChineseCopy(String(source.copy || base.copy || "").slice(0, 500));
+  const visualDirection = normalizeChineseCopy(String(source.visualDirection || base.visualDirection || title).slice(0, 300));
+  const style = String(source.style || base.style || "xiaohongshu carousel cover page").slice(0, 160);
+  const composition = normalizeChineseCopy(
+    String(
+      source.composition ||
+        base.composition ||
+        `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
+    ).slice(0, 500),
+  );
+  const prompt = normalizeChineseCopy(String(source.prompt || base.prompt || "").trim());
+  return {
+    ...base,
+    ...source,
+    pageLabel,
+    title,
+    copy,
+    visualDirection,
+    style,
+    composition,
+    prompt,
   };
 }
 

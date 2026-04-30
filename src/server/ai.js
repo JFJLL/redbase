@@ -215,9 +215,10 @@ function extractTextFromGoogleResponse(payload) {
   return parts.map((item) => item?.text || "").filter(Boolean).join("\n");
 }
 
-async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false }) {
+async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7 }) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
+  const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.7;
 
   if (provider.apiStyle === "google") {
     const data = await withRetries(
@@ -232,7 +233,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: [{ role: "user", parts: [{ text: userPrompt }] }],
             ...(useSearch && provider.searchEnabled ? { tools: [{ google_search: {} }] } : {}),
-            generationConfig: { temperature: 0.7 },
+            generationConfig: { temperature: modelTemperature },
           }),
         }),
       { retries: 3, delayMs: 1200 },
@@ -254,6 +255,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
             model: provider.model,
             system: systemPrompt,
             max_tokens: 4096,
+            temperature: modelTemperature,
             messages: [{ role: "user", content: userPrompt }],
           }),
         }),
@@ -272,7 +274,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
         },
         body: JSON.stringify({
           model: provider.model,
-          temperature: 0.7,
+          temperature: modelTemperature,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -321,11 +323,6 @@ const TREND_BUCKET_META = [
     description: "聚焦目标受众正在关注的身份标签、生活场景、消费焦虑、兴趣圈层和内容需求。",
     promptDescription: "聚焦目标受众正在关注的身份标签、生活场景、消费焦虑、兴趣圈层和内容需求。",
   },
-];
-
-const TREND_BUCKET_GROUPS = [
-  TREND_BUCKET_META.slice(0, 3),
-  TREND_BUCKET_META.slice(3, 6),
 ];
 
 function formatBucketKeys(bucketMeta) {
@@ -382,7 +379,7 @@ function compactBrandForPrompt(brand, mode = "standard") {
 }
 
 function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = TREND_BUCKET_META) {
-  const promptBrand = compactBrandForPrompt(brand, options.minimal ? "minimal" : "standard");
+  const promptBrand = options.minimal ? compactBrandForPrompt(brand, "minimal") : brand;
   const strictLines = options.strict
     ? [
         `重要：必须返回 trendBuckets，且 ${formatBucketKeys(bucketMeta)} ${bucketMeta.length} 个 bucket 的 items 都不能为空。`,
@@ -497,12 +494,12 @@ function normalizeRawTrend(trend) {
   return {
     ...trend,
     title: trend.title || trend.name || trend.topic || trend.keyword || "",
-    category: trend.category || trend.type || trend.bucket || trend.dimension || "",
-    summary: trend.summary || trend.description || trend.desc || trend.insight || trend.content || "",
-    score: trend.score ?? trend.heat ?? trend.heatScore ?? trend.index ?? trend.popularity,
+    category: trend.category || trend.type || trend.bucket || trend.dimension || trend.scene || trend.tag || "",
+    summary: trend.summary || trend.description || trend.desc || trend.insight || trend.content || trend.overview || trend.explanation || "",
+    score: trend.score ?? trend.heat ?? trend.heatScore ?? trend.index ?? trend.popularity ?? trend.hotScore ?? trend.hotIndex,
     tags: trend.tags || trend.tagList || trend.hashtags || [],
-    reason: trend.reason || trend.fitReason || trend.brandReason || trend.why || trend.rationale || "",
-    ideas: trend.ideas || trend.contentIdeas || trend.topics || trend.topicIdeas || trend.suggestions || [],
+    reason: trend.reason || trend.fitReason || trend.brandReason || trend.why || trend.rationale || trend.brandFitReason || trend.suitability || "",
+    ideas: trend.ideas || trend.contentIdeas || trend.topics || trend.topicIdeas || trend.suggestions || trend.ideaList || trend.angles || [],
   };
 }
 
@@ -523,6 +520,64 @@ function normalizeRawIdea(idea) {
   };
 }
 
+function normalizeTrendBucketKey(value, bucketMeta = TREND_BUCKET_META) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const compact = text.toLowerCase().replace(/[\s_\-\/|:：、，,]+/g, "");
+  const aliasMap = new Map([
+    ["global", "xhs"],
+    ["xiaohongshu", "xhs"],
+    ["xhs", "xhs"],
+    ["redbook", "xhs"],
+    ["littleredbook", "xhs"],
+    ["小红书", "xhs"],
+    ["小红书热点", "xhs"],
+    ["小红书热点话题", "xhs"],
+    ["站内热点", "xhs"],
+    ["news", "news"],
+    ["新闻", "news"],
+    ["新闻热点", "news"],
+    ["新闻热点趋势", "news"],
+    ["消费趋势", "news"],
+    ["新闻热点消费趋势趋势", "news"],
+    ["social", "social"],
+    ["society", "social"],
+    ["社会", "social"],
+    ["社会热点", "social"],
+    ["社会热点趋势", "social"],
+    ["大众情绪", "social"],
+    ["社会热点大众情绪趋势", "social"],
+    ["traffic", "traffic"],
+    ["flow", "traffic"],
+    ["流量", "traffic"],
+    ["流量热点", "traffic"],
+    ["流量热点趋势", "traffic"],
+    ["爆款套路", "traffic"],
+    ["track", "track"],
+    ["industry", "track"],
+    ["category", "track"],
+    ["赛道", "track"],
+    ["赛道热点", "track"],
+    ["赛道热点趋势", "track"],
+    ["品类热点", "track"],
+    ["品类热点指数", "track"],
+    ["crowd", "crowd"],
+    ["audience", "crowd"],
+    ["user", "crowd"],
+    ["people", "crowd"],
+    ["人群", "crowd"],
+    ["人群热点", "crowd"],
+    ["人群热点趋势", "crowd"],
+  ]);
+  if (aliasMap.has(compact)) return aliasMap.get(compact);
+  const matched = bucketMeta.find((bucket) => compact === bucket.key || compact === bucket.title.toLowerCase().replace(/[\s_\-\/|:：、，,]+/g, ""));
+  return matched?.key || text;
+}
+
+function getBucketItems(bucket) {
+  return bucket?.items || bucket?.trends || bucket?.hotspots || bucket?.list || bucket?.data || bucket?.children || bucket?.results;
+}
+
 function normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta = TREND_BUCKET_META) {
   const sourceBuckets = coerceTrendBuckets(rawBuckets, bucketMeta);
   if (!sourceBuckets.length && rawTrends) {
@@ -531,7 +586,8 @@ function normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta 
   const bucketsByKey = new Map();
   sourceBuckets.forEach((bucket, index) => {
     const fallbackKey = bucketMeta[index]?.key || `bucket-${index + 1}`;
-    const key = String(bucket?.key || bucket?.type || bucket?.name || fallbackKey);
+    const rawKey = bucket?.key || bucket?.type || bucket?.name || bucket?.title || bucket?.dimension || bucket?.category || fallbackKey;
+    const key = normalizeTrendBucketKey(rawKey, bucketMeta);
     bucketsByKey.set(key, bucket);
     if (bucketMeta[index] && !bucketsByKey.has(bucketMeta[index].key)) {
       bucketsByKey.set(bucketMeta[index].key, bucket);
@@ -545,7 +601,7 @@ function normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta 
       key: meta.key,
       title: meta.title,
       description: meta.description,
-      items: normalizeTrendSet(bucket?.items || bucket?.trends || bucket?.hotspots || bucket?.list, brand, baseId + bucketIndex * 100),
+      items: normalizeTrendSet(getBucketItems(bucket), brand, baseId + bucketIndex * 100),
     };
   });
 }
@@ -554,21 +610,35 @@ function coerceTrendBuckets(rawBuckets, bucketMeta = TREND_BUCKET_META) {
   if (Array.isArray(rawBuckets)) return rawBuckets;
   if (!rawBuckets || typeof rawBuckets !== "object") return [];
   const expectedKeys = bucketMeta.map((bucket) => bucket.key);
-  if (expectedKeys.some((key) => rawBuckets[key])) {
-    return expectedKeys.filter((key) => rawBuckets[key]).map((key) => {
-      const value = rawBuckets[key];
-      return value && typeof value === "object" && !Array.isArray(value) ? { key, ...value } : { key, items: value };
-    });
+  const entries = Object.entries(rawBuckets);
+  if (entries.some(([key]) => expectedKeys.includes(normalizeTrendBucketKey(key, bucketMeta)))) {
+    return entries
+      .filter(([key]) => expectedKeys.includes(normalizeTrendBucketKey(key, bucketMeta)))
+      .map(([key, value]) => {
+        const normalizedKey = normalizeTrendBucketKey(key, bucketMeta);
+        return value && typeof value === "object" && !Array.isArray(value) ? { key: normalizedKey, ...value } : { key: normalizedKey, items: value };
+      });
   }
-  return Object.entries(rawBuckets).map(([key, value]) =>
+  return entries.map(([key, value]) =>
     value && typeof value === "object" && !Array.isArray(value) ? { key, ...value } : { key, items: value },
   );
 }
 
 function unwrapTrendModelResult(result) {
   if (Array.isArray(result)) return { rawBuckets: result, rawTrends: null };
-  const source = result?.trendBuckets || result?.buckets || result?.trend_buckets || result?.data?.trendBuckets || result?.result?.trendBuckets;
-  const rawTrends = result?.trends || result?.items || result?.hotspots || result?.data?.trends || null;
+  const source =
+    result?.trendBuckets ||
+    result?.buckets ||
+    result?.trend_buckets ||
+    result?.trendBucket ||
+    result?.hotspotBuckets ||
+    result?.data?.trendBuckets ||
+    result?.data?.buckets ||
+    result?.data?.trend_buckets ||
+    result?.result?.trendBuckets ||
+    result?.result?.buckets ||
+    result?.result?.trend_buckets;
+  const rawTrends = result?.trends || result?.items || result?.hotspots || result?.list || result?.data?.trends || result?.result?.trends || null;
   return { rawBuckets: source, rawTrends };
 }
 
@@ -577,21 +647,21 @@ function hasUsableTrendBuckets(trendBuckets, bucketMeta = TREND_BUCKET_META) {
   return (
     Array.isArray(trendBuckets) &&
     trendBuckets.length === bucketMeta.length &&
-    trendBuckets.every((bucket) => requiredKeys.has(bucket.key) && Array.isArray(bucket.items) && bucket.items.length > 0)
+    trendBuckets.every(
+      (bucket) =>
+        requiredKeys.has(bucket.key) &&
+        Array.isArray(bucket.items) &&
+        bucket.items.length === 10 &&
+        bucket.items.every((trend) => Array.isArray(trend.ideas) && trend.ideas.length === 2),
+    )
   );
 }
 
 async function generateAiTrendSet(appConfig, brand, baseId) {
-  const allBuckets = [];
-  for (let groupIndex = 0; groupIndex < TREND_BUCKET_GROUPS.length; groupIndex += 1) {
-    const bucketMeta = TREND_BUCKET_GROUPS[groupIndex];
-    const groupBuckets = await generateTrendBucketGroup(appConfig, brand, baseId + groupIndex * 1000, bucketMeta, groupIndex + 1);
-    allBuckets.push(...groupBuckets);
-  }
-  return allBuckets;
+  return generateTrendBucketGroup(appConfig, brand, baseId, TREND_BUCKET_META);
 }
 
-async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, groupNumber) {
+async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta) {
   const searchEnabled = Boolean(appConfig.textProvider.searchEnabled);
   const attempts = [
     { useSearch: searchEnabled, strict: false, minimal: false, label: "search-loose" },
@@ -609,7 +679,6 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, gr
       console.log("[trend-analysis] calling text model", {
         brandId: brand.id,
         brandName: brand.name,
-        group: groupNumber,
         bucketKeys: bucketMeta.map((bucket) => bucket.key),
         attempt: attempt.label,
         useSearch: attempt.useSearch,
@@ -622,17 +691,17 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, gr
         systemPrompt: buildTrendAnalysisSystemPrompt(bucketMeta),
         userPrompt,
         useSearch: attempt.useSearch,
+        temperature: 0.3,
       });
       const { rawBuckets, rawTrends } = unwrapTrendModelResult(result);
       const trendBuckets = normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta);
       if (hasUsableTrendBuckets(trendBuckets, bucketMeta)) {
         return trendBuckets;
       }
-      lastError = new Error(`文本模型返回了 JSON，但没有完整的第 ${groupNumber} 组三类可用趋势 items。`);
+      lastError = new Error("文本模型返回了 JSON，但没有完整的六类可用趋势 items。");
       console.warn("[trend-analysis] text model returned empty trends", {
         brandId: brand.id,
         brandName: brand.name,
-        group: groupNumber,
         bucketKeys: bucketMeta.map((bucket) => bucket.key),
         attempt: attempt.label,
         useSearch: attempt.useSearch,
@@ -644,7 +713,6 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, gr
       console.warn("[trend-analysis] text model attempt failed", {
         brandId: brand.id,
         brandName: brand.name,
-        group: groupNumber,
         bucketKeys: bucketMeta.map((bucket) => bucket.key),
         attempt: attempt.label,
         useSearch: attempt.useSearch,
@@ -656,7 +724,6 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, gr
   console.warn("[trend-analysis] failed without fallback", {
     brandId: brand.id,
     brandName: brand.name,
-    group: groupNumber,
     bucketKeys: bucketMeta.map((bucket) => bucket.key),
     reason: lastError?.message || "empty model result",
   });

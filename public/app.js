@@ -3,9 +3,11 @@ const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
 const PENDING_IMAGE_TASKS_KEY = "redbase.pendingImageTasks";
 const IMAGE_JOB_MAX_WAIT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_POLL_INTERVAL_MS = 5000;
+const IMAGE_TASK_MAX_CONCURRENCY = 30;
 const MAX_SELECTED_PRODUCT_IMAGES = 10;
 const MAX_SELECTED_PRODUCT_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_SINGLE_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_BRAND_PROFILE_CHARS = 5000;
 const DEFAULT_TREND_BUCKETS = [
   {
     key: "xhs",
@@ -600,6 +602,13 @@ function bindBrandModal() {
     event.preventDefault();
     const formData = new FormData(form);
     const payload = Object.fromEntries(formData.entries());
+    const profileSize = getBrandProfileInputSize(payload);
+    if (profileSize.total > MAX_BRAND_PROFILE_CHARS) {
+      alert(
+        `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品介绍或品牌资料库后再创建。`,
+      );
+      return;
+    }
     if (pendingLogo) {
       payload.logoName = pendingLogo.name;
       payload.logoDataUrl = pendingLogo.dataUrl;
@@ -627,6 +636,13 @@ function bindBrandModal() {
       setBusy(false);
     }
   });
+}
+
+function getBrandProfileInputSize(payload) {
+  const fields = ["name", "industry", "audience", "description", "product", "goal", "knowledgeBase"];
+  return {
+    total: fields.reduce((sum, key) => sum + String(payload?.[key] || "").trim().length, 0),
+  };
 }
 
 function bindImageModal() {
@@ -1835,6 +1851,7 @@ function renderIdeaProductUpload(ideaIndex) {
           <button class="idea-library-button" data-open-product-library="${ideaIndex}" type="button">选择已上传图片</button>
         </div>
       </div>
+      ${selectedPreview}
       <div class="idea-product-actions idea-product-actions-bottom">
         <label class="idea-product-check">
           <input data-use-product-image="${ideaIndex}" type="checkbox" ${selectedCount ? "" : "disabled"} ${checked ? "checked" : ""} />
@@ -1842,7 +1859,6 @@ function renderIdeaProductUpload(ideaIndex) {
         </label>
         ${selectedCount ? `<button class="idea-product-clear" data-clear-product-image="${ideaIndex}" type="button">清除当前选择</button>` : ""}
       </div>
-      ${selectedPreview}
     </div>
   `;
 }
@@ -1994,10 +2010,14 @@ function getGenerationPrimaryImageUrl(item) {
   return slides.find((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))?.imageUrl || slides[0]?.previewUrl || "";
 }
 
-function openHistoryGeneration(generationId) {
+function openHistoryGeneration(generationId, selectedSlideIndex = 0) {
   const item = state.generationHistory.find((generation) => Number(generation.id) === Number(generationId));
   if (!item) return;
   const payload = item.payload || {};
+  if (item.type === "xhsCarousel" && Array.isArray(payload.slides) && payload.slides.length) {
+    openCarouselHistoryGeneration(item, selectedSlideIndex);
+    return;
+  }
   const imageUrl = getGenerationPrimaryImageUrl(item);
   if (!imageUrl) return;
   const editHistory = Array.isArray(payload.editHistory) ? payload.editHistory : [];
@@ -2040,6 +2060,70 @@ function openHistoryGeneration(generationId) {
   bindImageEditActions(imageResult);
 }
 
+function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
+  const payload = item.payload || {};
+  const slides = Array.isArray(payload.slides) ? payload.slides : [];
+  const safeIndex = Math.min(Math.max(Number(selectedSlideIndex) || 0, 0), Math.max(slides.length - 1, 0));
+  const selectedSlide = slides[safeIndex] || {};
+  const imageUrl = selectedSlide.imageUrl || selectedSlide.previewUrl;
+  if (!imageUrl) return;
+  const editHistory = Array.isArray(payload.editHistory) ? payload.editHistory : [];
+  const imageResult = openAssetModal({
+    kicker: "历史组图",
+    title: item.cardTitle || "小红书组图",
+    description: "选择任意一张组图继续追加提示词改图，并保留每次改图记录。",
+    loadingTitle: "正在打开历史组图...",
+    loadingCopy: "正在整理组图图片和改图记录。",
+  });
+  imageResult.innerHTML = `
+    <div class="asset-header-card">
+      <h3>${escapeHtml(item.cardTitle || "小红书组图")}</h3>
+      <p><strong>生成类型：</strong>${escapeHtml(item.channelLabel || "")}</p>
+      <p><strong>来源选题：</strong>${escapeHtml(item.ideaTitle || "")}</p>
+    </div>
+    <div class="history-carousel-picker">
+      ${slides
+        .map((slide, index) => {
+          const url = slide.imageUrl || slide.previewUrl;
+          return `
+            <button class="history-carousel-thumb ${index === safeIndex ? "is-active" : ""}" data-history-slide-index="${index}" type="button">
+              ${url ? `<img src="${authenticatedImageSrc(url)}" alt="${escapeHtml(slide.title || `第 ${index + 1} 张`)}" />` : ""}
+              <span>${escapeHtml(slide.pageLabel || `第 ${index + 1} 张`)}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+    <div class="asset-grid">
+      <div class="image-preview-card">
+        <img src="${authenticatedImageSrc(imageUrl)}" alt="${escapeHtml(selectedSlide.title || item.cardTitle || "小红书组图")}" />
+      </div>
+      <div class="image-meta-card">
+        <h3>${escapeHtml(selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`)} · ${escapeHtml(selectedSlide.title || item.cardTitle || "小红书组图")}</h3>
+        <div class="image-meta-item">
+          <span>原始 Prompt</span>
+          <div class="image-prompt">${escapeHtml(selectedSlide.prompt || payload.prompt || payload.publishCaption || "")}</div>
+        </div>
+        ${renderImageEditPanel({
+          imageUrl,
+          title: `${selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`} · ${selectedSlide.title || item.cardTitle || "改图结果"}`,
+          aspectRatio: selectedSlide.aspectRatio || payload.aspectRatio || "3:4",
+          generationId: item.id,
+          slideIndex: safeIndex,
+        })}
+      </div>
+    </div>
+    <div class="image-edit-history-block">
+      <h3>图片修改历史</h3>
+      ${renderImageEditHistory(editHistory, item)}
+    </div>
+  `;
+  imageResult.querySelectorAll("[data-history-slide-index]").forEach((button) => {
+    button.addEventListener("click", () => openHistoryGeneration(item.id, Number(button.dataset.historySlideIndex)));
+  });
+  bindImageEditActions(imageResult);
+}
+
 function renderImageEditHistory(editHistory, generation) {
   if (!editHistory.length) {
     return `<div class="idea-copy">还没有改图记录。</div>`;
@@ -2054,6 +2138,7 @@ function renderImageEditHistory(editHistory, generation) {
               <div>
                 <div class="history-generate-meta">
                   <span class="brand-tag">改图</span>
+                  ${entry.sourceSlideIndex != null ? `<span class="brand-tag">第 ${Number(entry.sourceSlideIndex) + 1} 张</span>` : ""}
                   <span class="panel-subtitle">${escapeHtml(new Date(entry.completedAt || entry.createdAt || Date.now()).toLocaleString("zh-CN", { hour12: false }))}</span>
                 </div>
                 <h3>${escapeHtml(entry.title || "改图结果")}</h3>
@@ -2067,6 +2152,7 @@ function renderImageEditHistory(editHistory, generation) {
                   aspectRatio: entry.aspectRatio || generation.payload?.aspectRatio || "",
                   generationId: generation.id,
                   parentEditId: entry.id,
+                  slideIndex: entry.sourceSlideIndex,
                 })}
               </div>
             </article>
@@ -2088,11 +2174,12 @@ function openAssetModal({ kicker, title, description, loadingTitle, loadingCopy 
   return imageResult;
 }
 
-function renderImageEditPanel({ imageUrl, title, aspectRatio, generationId, parentEditId }) {
+function renderImageEditPanel({ imageUrl, title, aspectRatio, generationId, parentEditId, slideIndex }) {
   const safeUrl = safeImageSrc(imageUrl);
   if (!safeUrl) return "";
+  const slideValue = slideIndex == null ? "" : String(slideIndex);
   return `
-    <form class="asset-edit-form" data-edit-image-url="${escapeHtml(safeUrl)}" data-edit-title="${escapeHtml(title || "改图结果")}" data-edit-aspect-ratio="${escapeHtml(aspectRatio || "")}" data-edit-generation-id="${escapeHtml(generationId || "")}" data-edit-parent-id="${escapeHtml(parentEditId || "")}">
+    <form class="asset-edit-form" data-edit-image-url="${escapeHtml(safeUrl)}" data-edit-title="${escapeHtml(title || "改图结果")}" data-edit-aspect-ratio="${escapeHtml(aspectRatio || "")}" data-edit-generation-id="${escapeHtml(generationId || "")}" data-edit-parent-id="${escapeHtml(parentEditId || "")}" data-edit-slide-index="${escapeHtml(slideValue)}">
       <label>
         <span>追加提示词改图</span>
         <textarea data-edit-prompt rows="3" placeholder="例如：把背景改成暖色木质桌面，保留产品主体和构图。"></textarea>
@@ -2128,6 +2215,7 @@ function bindImageEditActions(root) {
             aspectRatio: form.dataset.editAspectRatio,
             generationId: form.dataset.editGenerationId,
             parentEditId: form.dataset.editParentId,
+            slideIndex: form.dataset.editSlideIndex,
           }),
         });
         updateCurrentUser(result.user);
@@ -2143,7 +2231,7 @@ function bindImageEditActions(root) {
         if (status) status.textContent = "改图完成，可继续追加提示词。";
         if (form.dataset.editGenerationId) {
           await loadGenerationHistory();
-          openHistoryGeneration(Number(form.dataset.editGenerationId));
+          openHistoryGeneration(Number(form.dataset.editGenerationId), Number(form.dataset.editSlideIndex || 0));
         }
       } catch (error) {
         if (status) status.textContent = `改图失败：${error.message}`;
@@ -2320,95 +2408,437 @@ async function generateWechatLongImage(ideaIndex) {
   }
 }
 
-async function generateXhsCarousel(ideaIndex) {
-  const brand = getSelectedBrand();
-  const trend = getSelectedTrend();
-  if (!brand || !trend) return;
-  let pendingTaskId = "";
+function enrichXhsCarouselSlides(pack) {
+  const slides = Array.isArray(pack?.slides) ? pack.slides.slice(0, 4) : [];
+  return slides.map((slide, index) => ({
+    ...slide,
+    pageLabel: slide.pageLabel || `第 ${index + 1} 张`,
+    visualDirection: slide.visualDirection || slide.title || `第 ${index + 1} 张视觉方向`,
+    style: slide.style || "xiaohongshu carousel cover page",
+    composition: slide.composition || `小红书组图${index + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性。`,
+    prompt: slide.prompt || "",
+    isGenerating: false,
+    error: "",
+  }));
+}
 
-  const imageResult = openAssetModal({
-    kicker: "AI 小红书组图",
-    title: "小红书组图内容包",
-    description: "自动输出发布标题、发布文案和 4 张组图视觉方案。",
-    loadingTitle: "AI 正在生成小红书组图包...",
-    loadingCopy: "正在组织标题、文案结构和 4 张组图页面的视觉方案。",
+function syncXhsCarouselPromptInputs(root, pack) {
+  root.querySelectorAll("[data-carousel-prompt]").forEach((textarea) => {
+    const slideIndex = Number(textarea.dataset.carouselPrompt);
+    if (pack.slides[slideIndex]) {
+      pack.slides[slideIndex].prompt = textarea.value.trim();
+    }
   });
+}
 
-  try {
-    const result = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel`, {
-      method: "POST",
-      body: JSON.stringify({
-        productImages: getSelectedProductImages(ideaIndex),
-        useBrandLogo: isBrandLogoEnabled(ideaIndex),
-      }),
-    });
-    updateCurrentUser(result.user);
-    const pack = result.carouselPack;
-    if (!Array.isArray(result.slideJobs) || !result.slideJobs.length) {
-      throw new Error("小红书组图任务创建失败");
-    }
-    pendingTaskId = `xhs:${brand.id}:${trend.id}:${ideaIndex}:${result.creditEventId || Date.now()}`;
-    addPendingImageTask({
-      id: pendingTaskId,
-      type: "xhsCarousel",
-      brandId: brand.id,
-      trendId: trend.id,
-      ideaIndex,
-      carouselPack: pack,
-      slideJobs: result.slideJobs,
-      creditEventId: result.creditEventId,
-    });
-    imageResult.innerHTML = `<div class="image-meta-card"><h3>AI 正在生成小红书组图...</h3><div class="idea-copy">已提交 ${result.slideJobs.length} 张组图的生图任务，正在等待外部生图服务返回结果。</div></div>`;
-    const generatedSlides = [];
-    for (const slideJob of result.slideJobs) {
-      imageResult.innerHTML = `<div class="image-meta-card"><h3>AI 正在生成小红书组图...</h3><div class="idea-copy">正在生成第 ${slideJob.slideIndex + 1}/${result.slideJobs.length} 张，请稍等。</div></div>`;
-      const imageConcept = await pollImageJob(slideJob.jobId);
-      generatedSlides[slideJob.slideIndex] = {
-        ...(pack.slides[slideJob.slideIndex] || {}),
-        previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
-        imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
-        model: imageConcept.model,
-      };
-      updatePendingImageTask(pendingTaskId, { carouselPack: { ...pack, slides: generatedSlides } });
-    }
-    pack.slides = generatedSlides;
-    const completeResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/complete`, {
-      method: "POST",
-      body: JSON.stringify({ carouselPack: pack, creditEventId: result.creditEventId }),
-    });
-    updateCurrentUser(completeResult.user);
-    if (completeResult.generation) {
-      state.generationHistory.unshift(completeResult.generation);
-      renderGenerationHistory();
-    }
-    removePendingImageTask(pendingTaskId);
-    imageResult.innerHTML = `
+function hasXhsCarouselSlideImage(slide) {
+  return Boolean(safeImageSrc(slide?.imageUrl || slide?.previewUrl));
+}
+
+function getXhsCarouselSlideStatus(slide, hasImage) {
+  if (slide.error) return slide.error;
+  if (slide.isEditing) return "改图中";
+  if (slide.editQueued) return "改图排队中";
+  if (slide.isGenerating) return "生图中";
+  if (slide.isQueued) return "排队中";
+  return hasImage ? "已生成" : `${slide.pageLabel}待生成`;
+}
+
+function buildLocalXhsCarouselPack(brand, trend, idea) {
+  const title = idea?.title || "小红书组图";
+  const trendTitle = trend?.title || "热点趋势";
+  const brandName = brand?.name || "品牌";
+  const audience = idea?.audience || brand?.audience || "目标用户";
+  const brandFit = idea?.brandFit || brand?.knowledgeBase || "品牌价值";
+  const slideCopies = [
+    `先把“${trendTitle}”转成一个用户会想点开的真实问题，让封面有明确点击理由。`,
+    `继续展开${audience}在这个议题里的具体感受、困扰或期待，少讲概念，多讲生活细节。`,
+    `根据选题选择方法、对比、清单、测评或场景故事，把${brandFit}讲得具体可感。`,
+    `用一个收藏理由、总结观点或轻互动收口，让用户觉得这组图值得保存或转发。`,
+  ];
+  const slides = [
+    {
+      pageLabel: "第 1 张",
+      title: `${trendTitle}为什么和你有关`,
+      visualDirection: `${title}的小红书封面开场`,
+      style: "natural lifestyle social post",
+      composition: "封面页要有明确钩子和真实生活氛围，标题短而清楚，主体自然入镜，避免广告海报感。",
+      copy: slideCopies[0],
+      prompt: `生成一套适合小红书发布的 4 页组图中的第1页，围绕“${title}”，结合热点“${trendTitle}”和品牌${brandName}。第1页需要像真实小红书笔记封面，有明确点击理由和强钩子，但不要像广告海报或品牌PPT。可以用问题、反差、情绪共鸣、避坑提醒、清单标题或趋势判断来组织封面。画面要适合滑动阅读的开场，文字短、层级清楚，品牌露出自然，不要促销感。`,
+    },
+    {
+      pageLabel: "第 2 张",
+      title: "先把场景说具体",
+      visualDirection: `${audience}的真实场景展开`,
+      style: "clean xiaohongshu editorial layout",
+      composition: "第二页承接封面，画面更偏场景、痛点或步骤拆解，信息分区清晰，文字不要堆满。",
+      copy: slideCopies[1],
+      prompt: `生成小红书 4 页组图中的第2页，承接第1页继续展开“${title}”。这一页不要固定成某一种模板，可以根据选题选择用户场景、痛点拆解、误区提醒、前后对比、步骤教程、测评观察或故事化表达。重点是让${audience}看到自己的真实生活、消费判断或情绪状态，画面有代入感，文字简洁，信息不要堆满。`,
+    },
+    {
+      pageLabel: "第 3 张",
+      title: "把方法讲到具体处",
+      visualDirection: `${brandName}与选题价值的自然结合`,
+      style: "warm practical content card",
+      composition: "第三页突出方法、清单、对比或细节放大，品牌出现要服务内容，不要硬广。",
+      copy: slideCopies[2],
+      prompt: `生成小红书 4 页组图中的第3页，继续展开具体价值。不要固定成品牌解决方案页，可以根据内容选择方法清单、细节放大、对比说明、体验测评、趋势解读或案例化表达。需要自然体现${brandName}与选题的关系，重点表现${brandFit}，但不要硬广，不要把画面做成促销海报。`,
+    },
+    {
+      pageLabel: "第 4 张",
+      title: "最后给你一个总结",
+      visualDirection: "适合收藏和互动的组图收尾",
+      style: "cohesive xiaohongshu closing page",
+      composition: "最后一页与前三页风格统一，用总结、收藏清单或轻互动收口，留白充足。",
+      copy: slideCopies[3],
+      prompt: `生成小红书 4 页组图中的第4页，作为整组内容的自然收尾。可以做收藏清单、总结观点、行动建议、轻互动提问、品牌落点或下一步建议，但不要固定成强CTA。画面要和前3页风格统一，适合用户保存、评论或转发；文字短、有重点，品牌${brandName}自然露出，避免广告感和复杂排版。`,
+    },
+  ];
+  return {
+    title: `${title}｜小红书组图方案`,
+    publishTitle: `${title}：适合${brandName}的一套组图结构`,
+    publishCaption: `这套组图适合用来讲“${title}”：封面先给进入理由，中间把场景和价值讲具体，最后给用户一个保存、评论或继续了解的理由。`,
+    caption: `围绕“${trendTitle}”，这套组图把热点转成更真实的小红书连续图文，让${brandName}自然进入用户关心的语境。`,
+    slides,
+  };
+}
+
+function renderXhsCarouselDraft(imageResult, pack, stateFlags = {}) {
+  imageResult.innerHTML = `
+    <div class="carousel-draft-shell">
       <div class="asset-header-card">
         <h3>${escapeHtml(pack.title)}</h3>
         <p><strong>发布标题：</strong>${escapeHtml(pack.publishTitle)}</p>
         <p><strong>发布文案：</strong>${escapeHtml(pack.publishCaption)}</p>
         <p><strong>组图说明：</strong>${escapeHtml(pack.caption)}</p>
       </div>
-      <div class="carousel-grid">
+      <div class="carousel-draft-list">
         ${pack.slides
-          .map(
-            (slide) => `
-              <article class="carousel-slide-card">
-                <img src="${authenticatedImageSrc(slide.previewUrl)}" alt="${escapeHtml(slide.title)}" />
-                <h3>${escapeHtml(slide.pageLabel)} · ${escapeHtml(slide.title)}</h3>
-                <p>${escapeHtml(slide.copy)}</p>
-                <div class="image-meta-item">
-                  <span>画面 Prompt</span>
-                  <div class="image-prompt">${escapeHtml(slide.prompt)}</div>
+          .map((slide, index) => {
+            const imageUrl = slide.imageUrl || slide.previewUrl;
+            const hasImage = hasXhsCarouselSlideImage(slide);
+            const busy = slide.isGenerating || slide.isQueued || slide.isEditing || slide.editQueued;
+            return `
+              <article class="carousel-draft-slide ${hasImage ? "has-image" : ""}" data-carousel-slide="${index}">
+                <div class="carousel-draft-preview">
+                  ${
+                    hasImage
+                      ? `<img src="${authenticatedImageSrc(imageUrl)}" alt="${escapeHtml(slide.title)}" />`
+                      : `<button class="primary-btn carousel-start-btn" data-generate-carousel-slide="${index}" type="button" ${busy || stateFlags.isGeneratingAll ? "disabled" : ""}>${slide.isGenerating ? "生图中" : slide.isQueued ? "排队中" : "开始生图"}</button>`
+                  }
+                  <div class="carousel-slide-status">
+                    ${escapeHtml(getXhsCarouselSlideStatus(slide, hasImage))}
+                  </div>
+                </div>
+                <div class="image-meta-card carousel-draft-meta">
+                  <h3>${escapeHtml(slide.pageLabel)} · ${escapeHtml(slide.title)}</h3>
+                  <div class="image-meta-item">
+                    <span>视觉方向</span>
+                    <div>${escapeHtml(slide.visualDirection)}</div>
+                  </div>
+                  <div class="image-meta-item">
+                    <span>风格</span>
+                    <div>${escapeHtml(slide.style)}</div>
+                  </div>
+                  <div class="image-meta-item">
+                    <span>构图建议</span>
+                    <div>${escapeHtml(slide.composition)}</div>
+                  </div>
+                  <label class="image-meta-item">
+                    <span>生图 Prompt</span>
+                    <textarea class="carousel-prompt-input" data-carousel-prompt="${index}" rows="6">${escapeHtml(slide.prompt)}</textarea>
+                  </label>
+                  ${
+                    hasImage
+                      ? `
+                        <div class="carousel-slide-edit">
+                          ${
+                            slide.editOpen
+                              ? `
+                                <label>
+                                  <span>改图提示词</span>
+                                  <textarea class="carousel-edit-input" data-carousel-edit-prompt="${index}" rows="3" placeholder="例如：保留产品和构图，把背景改成更明亮的办公室晨光。">${escapeHtml(slide.editPrompt || "")}</textarea>
+                                </label>
+                                <div class="carousel-edit-actions">
+                                  <button class="primary-btn small-btn" data-carousel-edit-confirm="${index}" type="button" ${busy ? "disabled" : ""}>确认</button>
+                                  <button class="secondary-btn small-btn" data-carousel-edit-cancel="${index}" type="button">取消</button>
+                                </div>
+                              `
+                              : `<button class="secondary-btn small-btn carousel-edit-toggle" data-carousel-edit-open="${index}" type="button" ${busy ? "disabled" : ""}>改图</button>`
+                          }
+                        </div>
+                      `
+                      : ""
+                  }
                 </div>
               </article>
-            `,
-          )
+            `;
+          })
           .join("")}
       </div>
-    `;
+      <div class="carousel-floating-actions">
+        <button class="primary-btn carousel-generate-all-btn" data-generate-carousel-all type="button" ${stateFlags.isGeneratingAll ? "disabled" : ""}>
+          ${stateFlags.isGeneratingAll ? "生图中" : "一键生图"}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function generateXhsCarousel(ideaIndex) {
+  const brand = getSelectedBrand();
+  const trend = getSelectedTrend();
+  if (!brand || !trend) return;
+
+  const imageResult = openAssetModal({
+    kicker: "AI 小红书组图",
+    title: "小红书组图内容包",
+    description: "先检查并编辑每张图的生图 Prompt，再选择单张或一键生成四张图。",
+    loadingTitle: "正在准备小红书组图方案...",
+    loadingCopy: "正在整理 4 张组图页面的视觉方向、风格、构图建议和 Prompt。",
+  });
+
+  try {
+    const idea = trend.ideas?.[ideaIndex];
+    if (!idea) throw new Error("当前选题不存在，请重新生成或刷新页面后再试。");
+    const previewPack = buildLocalXhsCarouselPack(brand, trend, idea);
+    const pack = {
+      ...previewPack,
+      slides: enrichXhsCarouselSlides(previewPack),
+    };
+    const flags = {
+      isGeneratingAll: false,
+      completed: false,
+      creditEventId: null,
+    };
+    const taskQueue = [];
+    let activeTaskCount = 0;
+    let activeGenerateTaskCount = 0;
+    let imageJobSubmissionChain = Promise.resolve();
+    let renderAndBind = () => {};
+
+    const completeIfReady = async () => {
+      if (flags.completed || !pack.slides.every(hasXhsCarouselSlideImage)) return;
+      const completeResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/complete`, {
+        method: "POST",
+        body: JSON.stringify({ carouselPack: pack, creditEventId: flags.creditEventId }),
+      });
+      updateCurrentUser(completeResult.user);
+      if (completeResult.generation && !state.generationHistory.some((item) => item.id === completeResult.generation.id)) {
+        state.generationHistory.unshift(completeResult.generation);
+        renderGenerationHistory();
+      }
+      flags.completed = true;
+      showToast("小红书组图已全部生成并写入历史生成。");
+    };
+
+    const getNextRunnableTaskIndex = () => {
+      if (activeTaskCount >= IMAGE_TASK_MAX_CONCURRENCY || !taskQueue.length) return -1;
+      const nextGenerateIndex = taskQueue.findIndex((task) => task.type === "generate");
+      if (nextGenerateIndex >= 0) return nextGenerateIndex;
+      if (activeGenerateTaskCount > 0) return -1;
+      return 0;
+    };
+
+    const runImageJobSubmission = (submit) => {
+      const pending = imageJobSubmissionChain.catch(() => {});
+      imageJobSubmissionChain = pending.then(submit);
+      return imageJobSubmissionChain;
+    };
+
+    const pumpImageTaskQueue = () => {
+      let taskIndex = getNextRunnableTaskIndex();
+      while (taskIndex >= 0) {
+        const [task] = taskQueue.splice(taskIndex, 1);
+        activeTaskCount += 1;
+        if (task.type === "generate") activeGenerateTaskCount += 1;
+        task.run()
+          .catch((error) => {
+            console.warn(error.message);
+          })
+          .finally(async () => {
+            activeTaskCount -= 1;
+            if (task.type === "generate") activeGenerateTaskCount -= 1;
+            if (!taskQueue.length && activeTaskCount === 0) {
+              flags.isGeneratingAll = false;
+              await completeIfReady().catch((error) => showToast(`小红书组图写入历史失败：${error.message}`));
+            }
+            renderAndBind();
+            pumpImageTaskQueue();
+          });
+        taskIndex = getNextRunnableTaskIndex();
+      }
+    };
+
+    const enqueueImageTask = (type, run) => {
+      taskQueue.push({ type, run });
+      pumpImageTaskQueue();
+      renderAndBind();
+    };
+
+    const enqueueGenerateSlide = (slideIndex) => {
+      const slide = pack.slides[slideIndex];
+      if (!slide || hasXhsCarouselSlideImage(slide) || slide.isGenerating || slide.isQueued) return;
+      syncXhsCarouselPromptInputs(imageResult, pack);
+      if (!String(slide.prompt || "").trim()) {
+        slide.error = "请先填写当前页的生图 Prompt。";
+        renderAndBind();
+        return;
+      }
+      slide.isQueued = true;
+      slide.error = "";
+      enqueueImageTask("generate", () => runGenerateSlide(slideIndex));
+    };
+
+    const runGenerateSlide = async (slideIndex) => {
+      const slide = pack.slides[slideIndex];
+      if (!slide || hasXhsCarouselSlideImage(slide)) return;
+      slide.isQueued = false;
+      slide.isGenerating = true;
+      renderAndBind();
+      try {
+        const result = await runImageJobSubmission(() =>
+          request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/slides/${slideIndex}`, {
+            method: "POST",
+            body: JSON.stringify({
+              carouselPack: pack,
+              slide,
+              productImages: getSelectedProductImages(ideaIndex),
+              useBrandLogo: isBrandLogoEnabled(ideaIndex),
+            }),
+          }),
+        );
+        updateCurrentUser(result.user);
+        flags.creditEventId = result.creditEventId || flags.creditEventId;
+        if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
+        const imageConcept = await pollImageJob(result.slideJob.jobId);
+        pack.slides[slideIndex] = {
+          ...pack.slides[slideIndex],
+          previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
+          imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
+          model: imageConcept.model,
+          isGenerating: false,
+          isQueued: false,
+          error: "",
+        };
+      } catch (error) {
+        slide.isGenerating = false;
+        slide.isQueued = false;
+        slide.error = `生成失败：${error.message}`;
+      }
+    };
+
+    const enqueueEditSlide = (slideIndex) => {
+      const slide = pack.slides[slideIndex];
+      if (!slide || !hasXhsCarouselSlideImage(slide) || slide.isEditing || slide.editQueued) return;
+      const prompt = String(slide.editPrompt || "").trim();
+      if (!prompt) {
+        slide.error = "请先填写改图提示词。";
+        renderAndBind();
+        return;
+      }
+      slide.editQueued = true;
+      slide.editOpen = false;
+      slide.error = "";
+      enqueueImageTask("edit", () => runEditSlide(slideIndex, prompt));
+    };
+
+    const runEditSlide = async (slideIndex, prompt) => {
+      const slide = pack.slides[slideIndex];
+      if (!slide || !hasXhsCarouselSlideImage(slide)) return;
+      slide.editQueued = false;
+      slide.isEditing = true;
+      renderAndBind();
+      try {
+        const result = await runImageJobSubmission(() =>
+          request("/api/image-edits", {
+            method: "POST",
+            body: JSON.stringify({
+              imageUrl: slide.imageUrl || slide.previewUrl,
+              prompt,
+              title: slide.title || pack.title,
+              aspectRatio: "3:4",
+            }),
+          }),
+        );
+        updateCurrentUser(result.user);
+        if (!result.jobId) throw new Error("改图任务创建失败");
+        const imageConcept = await pollImageJob(result.jobId);
+        pack.slides[slideIndex] = {
+          ...pack.slides[slideIndex],
+          previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
+          imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
+          model: imageConcept.model,
+          isEditing: false,
+          editQueued: false,
+          editPrompt: "",
+          error: "",
+        };
+      } catch (error) {
+        slide.isEditing = false;
+        slide.editQueued = false;
+        slide.editOpen = true;
+        slide.error = `改图失败：${error.message}`;
+      }
+    };
+
+    const bindDraftActions = () => {
+      imageResult.querySelectorAll("[data-carousel-prompt]").forEach((textarea) => {
+        textarea.addEventListener("input", () => {
+          const slideIndex = Number(textarea.dataset.carouselPrompt);
+          if (pack.slides[slideIndex]) pack.slides[slideIndex].prompt = textarea.value;
+        });
+      });
+      imageResult.querySelectorAll("[data-carousel-edit-prompt]").forEach((textarea) => {
+        textarea.addEventListener("input", () => {
+          const slideIndex = Number(textarea.dataset.carouselEditPrompt);
+          if (pack.slides[slideIndex]) pack.slides[slideIndex].editPrompt = textarea.value;
+        });
+      });
+      imageResult.querySelectorAll("[data-generate-carousel-slide]").forEach((button) => {
+        button.addEventListener("click", () => enqueueGenerateSlide(Number(button.dataset.generateCarouselSlide)));
+      });
+      imageResult.querySelectorAll("[data-carousel-edit-open]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const slide = pack.slides[Number(button.dataset.carouselEditOpen)];
+          if (!slide) return;
+          syncXhsCarouselPromptInputs(imageResult, pack);
+          slide.editOpen = true;
+          slide.error = "";
+          renderAndBind();
+        });
+      });
+      imageResult.querySelectorAll("[data-carousel-edit-cancel]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const slide = pack.slides[Number(button.dataset.carouselEditCancel)];
+          if (!slide) return;
+          slide.editOpen = false;
+          slide.editPrompt = "";
+          slide.error = "";
+          renderAndBind();
+        });
+      });
+      imageResult.querySelectorAll("[data-carousel-edit-confirm]").forEach((button) => {
+        button.addEventListener("click", () => enqueueEditSlide(Number(button.dataset.carouselEditConfirm)));
+      });
+      const allButton = imageResult.querySelector("[data-generate-carousel-all]");
+      allButton?.addEventListener("click", () => {
+        syncXhsCarouselPromptInputs(imageResult, pack);
+        flags.isGeneratingAll = true;
+        for (let index = 0; index < pack.slides.length; index += 1) {
+          enqueueGenerateSlide(index);
+        }
+        renderAndBind();
+      });
+    };
+
+    renderAndBind = () => {
+      renderXhsCarouselDraft(imageResult, pack, flags);
+      bindDraftActions();
+    };
+
+    renderAndBind();
   } catch (error) {
-    if (pendingTaskId) removePendingImageTask(pendingTaskId);
     imageResult.innerHTML = `<div class="image-meta-card"><h3>生成失败</h3><div class="idea-copy">${escapeHtml(error.message)}</div></div>`;
   }
 }
