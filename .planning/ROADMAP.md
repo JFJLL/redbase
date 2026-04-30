@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 7  
-**Overall status:** Follow-up review hardening phase complete; test coverage phase next
+**Current phase:** Complete  
+**Overall status:** Follow-up review hardening complete
 
 ## Progress Summary
 
@@ -15,6 +15,7 @@
 | 5 | Frontend Split And Layout | Complete | 2/2 |
 | 6 | Hardening, Docs, Release Readiness | Complete | 2/2 |
 | 7 | Review Hardening Quick Wins | Complete | 1/1 |
+| 8 | Review Regression Tests | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -134,6 +135,19 @@
 - [x] `npm run check`, API smoke, and real browser login pass.
 
 ## Backlog
+
+## Phase 8: Review Regression Tests
+
+**Goal:** Add focused automated regression coverage for the post-review hardening behavior.
+
+**Directory:** `.planning/phases/phase-08-review-regression-tests/`
+
+**Plans:**
+- [x] `08-01-PLAN.md` - Add review regression tests
+
+**Exit criteria:**
+- [x] `npm test` covers core Phase 7 hardening behavior.
+- [x] `npm test`, `npm run check`, API smoke, and real browser login pass.
 
 - Add automated integration tests for auth/session/image signing once route modules stabilize.
 - Add rate limiting for auth endpoints.

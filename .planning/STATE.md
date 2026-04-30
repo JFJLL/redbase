@@ -2,17 +2,17 @@
 
 **Updated:** 2026-05-01  
 **Status:** active  
-**Current phase:** 7 complete  
-**Current phase name:** Review Hardening Quick Wins  
-**Progress:** 88%
+**Current phase:** complete  
+**Current phase name:** Review Regression Tests  
+**Progress:** 100%
 
 ## Position
 
-The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing.
+The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes.
 
 ## Next Action
 
-Commit Phase 7, then open a follow-up test coverage phase for focused regression tests around the changed hardening behavior.
+No remaining planned phase. Next action is optional review of the generated commits or a follow-up milestone for deeper integration tests.
 
 ## Active Decisions
 

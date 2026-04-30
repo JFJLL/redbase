@@ -50,7 +50,6 @@ const DEFAULT_APP_CONFIG = {
   },
   security: {
     assetSigningSecret: "",
-    cookieSecure: false,
   },
 };
 
