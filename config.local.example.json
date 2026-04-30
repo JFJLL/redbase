@@ -1,0 +1,23 @@
+{
+  "textProvider": {
+    "apiStyle": "google",
+    "model": "gemini-3.1-flash-lite-preview",
+    "baseUrl": "https://api.im-red-magic.cn",
+    "apiKey": "",
+    "searchEnabled": true
+  },
+  "imageProvider": {
+    "baseUrl": "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
+    "editBaseUrl": "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
+    "uploadBaseUrl": "https://api.wavespeed.ai/api/v3/media/upload/binary",
+    "model": "gpt-image-2",
+    "apiKey": "",
+    "aspectRatio": "3:4",
+    "resolution": "2k",
+    "quality": "medium",
+    "imageCount": 1
+  },
+  "admin": {
+    "phones": []
+  }
+}

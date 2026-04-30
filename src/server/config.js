@@ -1,0 +1,118 @@
+const fs = require("fs");
+const path = require("path");
+
+const ROOT = path.resolve(__dirname, "..", "..");
+const PUBLIC_DIR = path.join(ROOT, "public");
+const DATA_DIR = path.join(ROOT, "data");
+const DB_FILE = path.join(DATA_DIR, "redbase.sqlite");
+const CONFIG_FILE = path.join(ROOT, "config.local.json");
+const HOST = "127.0.0.1";
+const PORT = Number(process.env.PORT || 3013);
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+};
+
+const DEFAULT_APP_CONFIG = {
+  textProvider: {
+    apiStyle: "google",
+    model: "gemini-3.1-flash-lite-preview",
+    baseUrl: "https://api.im-red-magic.cn",
+    openaiBaseUrl: "http://120.24.86.32:3000/v1",
+    anthropicBaseUrl: "http://120.24.86.32:3000/anthropic",
+    apiKey: "",
+    searchEnabled: true,
+  },
+  imageProvider: {
+    baseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
+    editBaseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
+    uploadBaseUrl: "https://api.wavespeed.ai/api/v3/media/upload/binary",
+    model: "gpt-image-2",
+    apiKey: "",
+    aspectRatio: "3:4",
+    resolution: "2k",
+    quality: "medium",
+    imageCount: 1,
+  },
+  admin: {
+    phones: [],
+  },
+};
+
+function deepMerge(base, override) {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return structuredClone(base);
+  }
+
+  const result = Array.isArray(base) ? [...base] : { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && base && typeof base[key] === "object") {
+      result[key] = deepMerge(base[key], value);
+      continue;
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+function loadAppConfig() {
+  let localConfig = {};
+
+  if (fs.existsSync(CONFIG_FILE)) {
+    localConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+  }
+
+  const merged = deepMerge(DEFAULT_APP_CONFIG, localConfig);
+
+  return {
+    textProvider: {
+      apiStyle: String(process.env.TEXT_API_STYLE || merged.textProvider.apiStyle || "google").trim(),
+      model: String(process.env.TEXT_MODEL || merged.textProvider.model || "").trim(),
+      baseUrl: String(process.env.TEXT_BASE_URL || merged.textProvider.baseUrl || "").trim(),
+      openaiBaseUrl: String(process.env.TEXT_OPENAI_BASE_URL || merged.textProvider.openaiBaseUrl || "").trim(),
+      anthropicBaseUrl: String(process.env.TEXT_ANTHROPIC_BASE_URL || merged.textProvider.anthropicBaseUrl || "").trim(),
+      apiKey: String(process.env.TEXT_API_KEY || merged.textProvider.apiKey || "").trim(),
+      searchEnabled: String(process.env.TEXT_SEARCH_ENABLED || merged.textProvider.searchEnabled || "true").trim() !== "false",
+    },
+    imageProvider: {
+      baseUrl: String(process.env.IMAGE_BASE_URL || merged.imageProvider.baseUrl || "").trim(),
+      editBaseUrl: String(process.env.IMAGE_EDIT_BASE_URL || merged.imageProvider.editBaseUrl || "").trim(),
+      uploadBaseUrl: String(process.env.IMAGE_UPLOAD_BASE_URL || merged.imageProvider.uploadBaseUrl || "").trim(),
+      model: String(process.env.IMAGE_MODEL || merged.imageProvider.model || "").trim(),
+      apiKey: String(process.env.IMAGE_API_KEY || merged.imageProvider.apiKey || "").trim(),
+      aspectRatio: String(process.env.IMAGE_ASPECT_RATIO || merged.imageProvider.aspectRatio || "3:4").trim(),
+      resolution: String(process.env.IMAGE_RESOLUTION || merged.imageProvider.resolution || "2k").trim(),
+      quality: String(process.env.IMAGE_QUALITY || merged.imageProvider.quality || "medium").trim(),
+      imageCount: Number(process.env.IMAGE_COUNT || merged.imageProvider.imageCount || 1),
+    },
+    admin: {
+      phones: String(process.env.ADMIN_PHONES || "")
+        .split(",")
+        .map((phone) => phone.trim())
+        .filter(Boolean)
+        .concat(Array.isArray(merged.admin?.phones) ? merged.admin.phones.map((phone) => String(phone || "").trim()).filter(Boolean) : [])
+        .filter((phone, index, all) => all.indexOf(phone) === index),
+    },
+  };
+}
+
+module.exports = {
+  ROOT,
+  PUBLIC_DIR,
+  DATA_DIR,
+  DB_FILE,
+  CONFIG_FILE,
+  HOST,
+  PORT,
+  MIME_TYPES,
+  DEFAULT_APP_CONFIG,
+  loadAppConfig,
+};

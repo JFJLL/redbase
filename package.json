@@ -1,0 +1,12 @@
+{
+  "name": "redbase-fullstack",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check src/server/index.js && node --check src/server/config.js && node --check src/server/utils.js && node --check src/server/store.js && node --check src/server/ai.js && node --check src/server/api.js && node --check src/server/static.js && node --check public/app.js && node --check public/admin.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  }
+}

@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RedBase</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css?v=20260429-logo-style-history-edit" />
+  </head>
+  <body>
+    <div class="page page-landing is-active" data-page="landing">
+      <header class="landing-header">
+        <div class="logo-wrap">
+          <div class="logo-icon" aria-hidden="true">
+            <img class="logo-image" src="./assets/redbase-logo.png?v=20260428-transparent" alt="RedBase logo" />
+          </div>
+        </div>
+        <button class="header-login" data-auth-open="login">登录 / 注册</button>
+      </header>
+
+      <main class="landing-main">
+        <div class="hero-badge">AI 驱动的小红书内容运营工具</div>
+        <h1 class="hero-title">
+          RedBase
+          <span>让品牌精准踩中每一个热点</span>
+        </h1>
+        <p class="hero-description">
+          上传品牌档案，AI 自动分析全网热点趋势，为你的小红书账号生成最契合的内容选题。
+          从趋势洞察到选题落地，一站式解决运营难题。
+        </p>
+
+        <div class="hero-actions">
+          <button class="primary-btn" data-auth-open="register">免费使用</button>
+          <button class="secondary-btn">了解更多</button>
+        </div>
+
+        <section class="landing-section">
+          <h2 class="section-title">三步打造爆款内容</h2>
+          <p class="section-subtitle">从品牌档案到内容选题，AI 全程辅助运营决策</p>
+
+          <div class="landing-card-grid">
+            <article class="landing-card">
+              <div class="card-icon card-icon-pink">⌘</div>
+              <div class="card-image image-brand"></div>
+              <h3>品牌档案</h3>
+              <p>上传品牌介绍、产品信息和运营目标，建立完整品牌档案，为 AI 分析提供精准输入。</p>
+              <button class="card-link" data-auth-open="register" data-dashboard-tab="brands">上传品牌信息</button>
+            </article>
+
+            <article class="landing-card">
+              <div class="card-icon card-icon-orange">↗</div>
+              <div class="card-image image-trend"></div>
+              <h3>热点洞察</h3>
+              <p>AI 自动扫描全网热点，结合品牌特征筛选出最适合借势的十大趋势、热度指数和关键词。</p>
+              <button class="card-link" data-auth-open="register" data-dashboard-tab="trends">AI 分析热点</button>
+            </article>
+
+            <article class="landing-card">
+              <div class="card-icon card-icon-green">◌</div>
+              <div class="card-image image-idea"></div>
+              <h3>选题生成</h3>
+              <p>基于品牌资产和热点趋势，AI 自动生成小红书风格内容选题，包含标题、切入角度和推荐话题。</p>
+              <button class="card-link" data-auth-open="register" data-dashboard-tab="ideas">智能生成选题</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="cta-panel">
+          <h2>开始你的热点运营之旅</h2>
+          <p>告别选题焦虑，让 AI 成为你的内容运营助手，精准把握每一个流量机会。</p>
+          <button class="primary-btn" data-auth-open="register">免费注册使用</button>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-mask" id="authModal">
+      <div class="modal-panel auth-modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">账户访问</div>
+            <h2>欢迎来到 RedBase</h2>
+            <p>先完成手机号注册或登录，再进入你的品牌增长工作台。</p>
+          </div>
+          <button class="modal-close" id="closeAuthModal" type="button">×</button>
+        </div>
+
+        <div class="auth-shell">
+          <div class="auth-brand-panel">
+            <div class="logo-wrap logo-wrap-vertical">
+              <div class="logo-icon logo-icon-large" aria-hidden="true">
+                <img class="logo-image" src="./assets/redbase-logo.png?v=20260428-transparent" alt="RedBase logo" />
+              </div>
+              <div>
+                <div class="sidebar-subtitle">内容趋势与品牌运营系统</div>
+              </div>
+            </div>
+            <h3>让热点服务于品牌，而不是让品牌被热点牵着走。</h3>
+            <p>注册后你就可以创建品牌档案、生成热点分析、产出内容选题，并一键获取视觉方案。</p>
+          </div>
+
+          <div class="auth-form-panel">
+            <div class="auth-tab-row">
+              <button class="auth-tab is-active" data-auth-tab="register" type="button">手机号注册</button>
+              <button class="auth-tab" data-auth-tab="login" type="button">手机号登录</button>
+            </div>
+
+            <form class="auth-form auth-form-active" id="registerForm">
+              <label>
+                <span>账号类型</span>
+                <select name="accountType" id="accountTypeSelect" required>
+                  <option value="customer">客户</option>
+                  <option value="yimei">易美</option>
+                </select>
+              </label>
+
+              <label class="is-hidden" id="departmentField">
+                <span>请选择部门</span>
+                <select name="department" id="departmentSelect">
+                  <option value="">请选择部门</option>
+                  <option value="客户一部">客户一部</option>
+                  <option value="客户二部">客户二部</option>
+                  <option value="客户三部">客户三部</option>
+                  <option value="客户四部">客户四部</option>
+                  <option value="客户五部">客户五部</option>
+                  <option value="其他">其他</option>
+                </select>
+              </label>
+
+              <label>
+                <span>手机号</span>
+                <input name="phone" placeholder="请输入手机号" required />
+              </label>
+
+              <label>
+                <span>昵称</span>
+                <input name="name" placeholder="请输入你的昵称" required />
+              </label>
+
+              <label>
+                <span>登录密码</span>
+                <input name="password" type="password" placeholder="至少 6 位密码" required />
+              </label>
+
+              <button class="primary-btn auth-submit-btn" type="submit">注册并进入工作台</button>
+            </form>
+
+            <form class="auth-form" id="loginForm">
+              <label>
+                <span>手机号</span>
+                <input name="phone" placeholder="请输入手机号" required />
+              </label>
+
+              <label>
+                <span>密码</span>
+                <input name="password" type="password" placeholder="请输入登录密码" required />
+              </label>
+
+              <div class="auth-helper">已注册账号可直接登录。</div>
+              <button class="primary-btn auth-submit-btn" type="submit">登录 RedBase</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page page-dashboard" data-page="dashboard">
+      <aside class="sidebar">
+        <div>
+          <div class="sidebar-logo">
+            <div class="logo-icon" aria-hidden="true">
+              <img class="logo-image" src="./assets/redbase-logo.png?v=20260428-transparent" alt="RedBase logo" />
+            </div>
+          </div>
+          <nav class="sidebar-nav">
+            <button class="sidebar-item" data-tab="home"><span class="sidebar-item-icon">首</span><span class="sidebar-item-label">首页</span></button>
+            <button class="sidebar-item is-active" data-tab="brands"><span class="sidebar-item-icon">品</span><span class="sidebar-item-label">品牌档案</span></button>
+            <button class="sidebar-item" data-tab="trends"><span class="sidebar-item-icon">趋</span><span class="sidebar-item-label">趋势分析</span></button>
+            <button class="sidebar-item" data-tab="ideas"><span class="sidebar-item-icon">选</span><span class="sidebar-item-label">内容选题</span></button>
+            <button class="sidebar-item" data-tab="history"><span class="sidebar-item-icon">历</span><span class="sidebar-item-label">历史生成</span></button>
+          </nav>
+        </div>
+
+        <div class="sidebar-footer">
+          <button class="sidebar-toggle" id="sidebarToggleButton" type="button" title="收起侧边栏">
+            <span class="sidebar-toggle-icon">‹</span>
+            <span class="sidebar-toggle-label">收起侧边栏</span>
+          </button>
+          <div class="user-info">
+            <div class="user-avatar" id="userAvatar">R</div>
+            <div>
+              <div class="user-name" id="userName">RedBase User</div>
+              <div class="user-email" id="userPhone">未登录</div>
+            </div>
+          </div>
+          <button class="logout-btn" id="logoutButton" type="button">退出登录</button>
+        </div>
+      </aside>
+
+      <main class="content-area">
+        <section class="tab-panel" data-tab-panel="home">
+          <div class="home-shell">
+            <h1 class="panel-title">RedBase</h1>
+            <p class="panel-subtitle">围绕品牌资产、热点分析和内容选题打造一站式小红书运营工作台。</p>
+            <div class="home-card-grid">
+              <article class="home-card">
+                <h3>品牌档案</h3>
+                <p>沉淀品牌定位、产品卖点、目标受众和运营目标，为 AI 建立清晰上下文。</p>
+                <button class="inline-link" data-tab-jump="brands">去管理品牌</button>
+              </article>
+              <article class="home-card">
+                <h3>趋势分析</h3>
+                <p>从全网热点中筛选最适配品牌的趋势机会，输出热度、标签和适配理由。</p>
+                <button class="inline-link" data-tab-jump="trends">去看趋势</button>
+              </article>
+              <article class="home-card">
+                <h3>内容选题</h3>
+                <p>把品牌资产和热点趋势结合起来，生成可执行的小红书内容方向。</p>
+                <button class="inline-link" data-tab-jump="ideas">去看选题</button>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel is-active" data-tab-panel="brands">
+          <header class="panel-header">
+            <div>
+              <div class="panel-icon-title">
+                <span class="panel-icon">⌘</span>
+                <h1 class="panel-title">品牌档案</h1>
+              </div>
+              <p class="panel-subtitle">管理你的品牌信息，为 AI 分析提供输入</p>
+            </div>
+            <div class="header-actions">
+              <button class="header-avatar" type="button">👩🏻</button>
+              <button class="primary-btn small-btn" id="openBrandModal" type="button">新增品牌</button>
+            </div>
+          </header>
+
+          <div class="brand-list" id="brandList"></div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="trends">
+          <header class="panel-header">
+            <div>
+              <div class="panel-icon-title">
+                <span class="panel-icon panel-icon-orange">↗</span>
+                <h1 class="panel-title">热点趋势分析</h1>
+              </div>
+              <p class="panel-subtitle">选择品牌，AI 分析全网十大热点趋势</p>
+            </div>
+            <button class="header-avatar" type="button">👩🏻</button>
+          </header>
+
+          <div class="brand-chip-row" id="trendBrandChips"></div>
+          <div class="trend-mode-row" id="trendModeTabs"></div>
+
+          <div class="trend-screen">
+            <div class="trend-left-panel">
+              <button class="primary-btn wide-btn cost-button" id="runTrendAnalysis" type="button">
+                <span>开始 AI 热点分析</span>
+                <small>消耗 1 积分</small>
+              </button>
+
+              <section class="history-block">
+                <h3>历史分析</h3>
+                <div id="historyList"></div>
+              </section>
+            </div>
+
+            <div class="trend-right-panel">
+              <div class="analysis-tip" id="analysisSummary"></div>
+              <div class="trend-cards" id="trendList"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="ideas">
+          <header class="panel-header">
+            <div>
+              <div class="panel-icon-title">
+                <span class="panel-icon panel-icon-green">◌</span>
+                <h1 class="panel-title">内容选题</h1>
+              </div>
+              <p class="panel-subtitle">结合品牌资产和热点趋势，生成更适合品牌的小红书内容</p>
+            </div>
+            <button class="header-avatar" type="button">👩🏻</button>
+          </header>
+
+          <div class="idea-context-card" id="ideaContext"></div>
+          <div class="idea-prompt-card" id="ideaPromptCard">
+            <div class="idea-prompt-header">
+              <div>
+                <h3>自定义补充提示词</h3>
+                <p class="idea-copy">在系统提示词的基础上追加你的要求，例如内容语气、强调卖点、限制风格或指定人群。</p>
+              </div>
+              <button class="primary-btn small-btn cost-button" id="regenerateIdeasButton" type="button">
+                <span>重新生成选题</span>
+                <small>1 积分</small>
+              </button>
+            </div>
+            <textarea
+              id="customIdeaPrompt"
+              rows="4"
+              placeholder="例如：希望选题更偏高端质感，强调女性独居场景，标题更克制，不要太营销化。"
+            ></textarea>
+            <div class="idea-prompt-meta" id="ideaPromptMeta">当前使用默认系统提示词生成。</div>
+          </div>
+          <div class="idea-cards" id="ideaList"></div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="history">
+          <header class="panel-header">
+            <div>
+              <div class="panel-icon-title">
+                <span class="panel-icon">◍</span>
+                <h1 class="panel-title">历史生成</h1>
+              </div>
+              <p class="panel-subtitle">查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。</p>
+            </div>
+            <button class="header-avatar" type="button">👩🏻</button>
+          </header>
+
+          <div class="history-generate-list" id="generationHistoryList"></div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-mask" id="brandModal">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">品牌资产录入</div>
+            <h2>新增品牌</h2>
+            <p>填写品牌信息，帮助 AI 更好地理解你的需求</p>
+          </div>
+          <button class="modal-close" id="closeBrandModal" type="button">×</button>
+        </div>
+
+        <form class="brand-form" id="brandForm">
+          <div class="form-row">
+            <label>
+              <span>品牌名称</span>
+              <input name="name" placeholder="请输入品牌名称" required />
+            </label>
+            <label>
+              <span>行业分类</span>
+              <input name="industry" placeholder="如：美妆、食品、科技" required />
+            </label>
+          </div>
+
+          <label>
+            <span>目标受众</span>
+            <input name="audience" placeholder="如：25-35岁都市女性，注重生活品质" required />
+          </label>
+
+          <label>
+            <span>品牌介绍</span>
+            <textarea name="description" rows="4" placeholder="描述品牌定位、品牌故事、核心价值等" required></textarea>
+          </label>
+
+          <label>
+            <span>产品介绍</span>
+            <textarea name="product" rows="4" placeholder="描述主要产品/服务、卖点、使用场景等" required></textarea>
+          </label>
+
+          <label>
+            <span>品牌资料库</span>
+            <textarea
+              name="knowledgeBase"
+              rows="4"
+              placeholder="补充品牌故事、成分说明、视觉风格、核心卖点、竞品差异、适用场景等，供内容生成和生图参考。"
+            ></textarea>
+          </label>
+
+          <div class="brand-logo-field">
+            <div class="field-label">品牌 Logo</div>
+            <label class="brand-logo-upload-button">
+              <input id="brandLogoInput" type="file" accept="image/*" />
+              <span id="brandLogoUploadText">选择 Logo 图片</span>
+            </label>
+            <div class="brand-logo-preview" id="brandLogoPreview">可选上传，后续生图时可作为产品 Logo 使用。</div>
+          </div>
+
+          <label>
+            <span>运营目标</span>
+            <textarea name="goal" rows="4" placeholder="描述小红书账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等" required></textarea>
+          </label>
+
+          <div class="form-actions">
+            <button class="secondary-btn" id="cancelBrandModal" type="button">取消</button>
+            <button class="primary-btn" type="submit">创建品牌</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-mask" id="imageModal">
+      <div class="modal-panel image-modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker" id="assetModalKicker">AI 图片生成</div>
+            <h2 id="assetModalTitle">内容配图方案</h2>
+            <p id="assetModalDescription">根据当前选题自动生成封面图方向，可继续用于真实生图服务对接</p>
+          </div>
+          <button class="modal-close" id="closeImageModal" type="button">×</button>
+        </div>
+
+        <div class="image-result-shell" id="imageResult"></div>
+      </div>
+    </div>
+
+    <div class="modal-mask" id="productImageLibraryModal">
+      <div class="modal-panel product-library-modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">产品图参考</div>
+            <h2>选择已上传图片</h2>
+            <p id="productImageLibraryDescription">选择一张或多张历史产品图作为当前选题的参考图</p>
+          </div>
+          <button class="modal-close" id="closeProductImageLibraryModal" type="button">×</button>
+        </div>
+
+        <div class="product-library-toolbar">
+          <div class="product-library-sort-label">排序方式</div>
+          <div class="product-library-sort-buttons">
+            <button data-product-library-sort="recentUsed" type="button">最近使用</button>
+            <button data-product-library-sort="recentUploaded" type="button">最近上传</button>
+          </div>
+        </div>
+
+        <div class="product-library-grid" id="productImageLibraryGrid"></div>
+        <div class="product-library-footer">
+          <button class="primary-btn small-btn" id="finishProductImageLibraryModal" type="button">完成选择</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./app.js?v=20260429-logo-style-history-edit"></script>
+  </body>
+</html>
