@@ -1,0 +1,29 @@
+import { DEFAULT_TREND_MODE, SIDEBAR_COLLAPSED_KEY } from "./config.js";
+
+export const state = {
+  currentPage: "landing",
+  currentTab: "brands",
+  brands: [],
+  generationHistory: [],
+  selectedBrandId: null,
+  selectedTrendId: null,
+  selectedTrendMode: DEFAULT_TREND_MODE,
+  loading: false,
+  currentUser: null,
+  sessionToken: "",
+  productImages: {},
+  productImageLibrary: [],
+  productImagePickerIdeaIndex: null,
+  productImageLibrarySort: "recentUsed",
+  brandLogoUsage: {},
+  editingIdeas: {},
+  styleReferences: {},
+  sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
+  resumingImageTasks: false,
+};
+
+export const mutableRefs = {
+  openBrandEditor: () => {},
+  pendingBrandDeleteId: null,
+};
+

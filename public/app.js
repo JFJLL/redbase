@@ -1,136 +1,32 @@
-const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
-const PENDING_IMAGE_TASKS_KEY = "redbase.pendingImageTasks";
-const IMAGE_JOB_MAX_WAIT_MS = 10 * 60 * 1000;
-const IMAGE_JOB_POLL_INTERVAL_MS = 5000;
-const IMAGE_TASK_MAX_CONCURRENCY = 30;
-const MAX_SELECTED_PRODUCT_IMAGES = 10;
-const MAX_SELECTED_PRODUCT_IMAGE_BYTES = 30 * 1024 * 1024;
-const MAX_SINGLE_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_BRAND_PROFILE_CHARS = 5000;
-const DEFAULT_TREND_BUCKETS = [
-  {
-    key: "xhs",
-    title: "小红书热点话题",
-    description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
-  },
-  {
-    key: "news",
-    title: "新闻热点趋势",
-    description: "从近期新闻、行业动态和消费趋势中找到可被品牌内容化的机会。",
-  },
-  {
-    key: "social",
-    title: "社会热点趋势",
-    description: "从大众情绪、生活方式变化、社会议题和公共讨论中找到适合品牌表达的切口。",
-  },
-  {
-    key: "traffic",
-    title: "流量热点趋势",
-    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
-  },
-  {
-    key: "track",
-    title: "赛道热点趋势",
-    description: "聚焦品牌所属行业、品类、竞品内容和消费决策链路里的增长机会。",
-  },
-  {
-    key: "crowd",
-    title: "人群热点趋势",
-    description: "聚焦目标受众正在关注的身份标签、生活场景、消费焦虑、兴趣圈层和内容需求。",
-  },
-];
-const DEFAULT_TREND_MODE = DEFAULT_TREND_BUCKETS[0].key;
-const LEGACY_TREND_BUCKET_KEYS = {
-  global: "xhs",
-  industry: "track",
-};
+import {
+  DEFAULT_TREND_BUCKETS,
+  DEFAULT_TREND_MODE,
+  IMAGE_TASK_MAX_CONCURRENCY,
+  LEGACY_TREND_BUCKET_KEYS,
+  MAX_BRAND_PROFILE_CHARS,
+  MAX_SELECTED_PRODUCT_IMAGES,
+  MAX_SELECTED_PRODUCT_IMAGE_BYTES,
+  MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  PENDING_IMAGE_TASKS_KEY,
+  SIDEBAR_COLLAPSED_KEY,
+} from "./js/config.js";
+import { state } from "./js/state.js";
+import { configureApiClient, pollImageJob, request } from "./js/api-client.js";
+import {
+  authenticatedImageSrc,
+  escapeHtml,
+  fileToDataUrl,
+  formatFileSize,
+  formatImageName,
+  productImageSrc,
+  safeImageSrc,
+  showToast,
+} from "./js/dom-utils.js";
 
-const state = {
-  currentPage: "landing",
-  currentTab: "brands",
-  brands: [],
-  generationHistory: [],
-  selectedBrandId: null,
-  selectedTrendId: null,
-  selectedTrendMode: DEFAULT_TREND_MODE,
-  loading: false,
-  currentUser: null,
-  sessionToken: "",
-  productImages: {},
-  productImageLibrary: [],
-  productImagePickerIdeaIndex: null,
-  productImageLibrarySort: "recentUsed",
-  brandLogoUsage: {},
-  editingIdeas: {},
-  styleReferences: {},
-  sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
-  resumingImageTasks: false,
-};
+configureApiClient({ onUnauthorized: clearSession });
+
 let openBrandEditor = () => {};
 let pendingBrandDeleteId = null;
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function safeImageSrc(value) {
-  const src = String(value || "");
-  if (src.startsWith("data:image/") || src.startsWith("http://") || src.startsWith("https://") || src.startsWith("/")) {
-    return src;
-  }
-  return "";
-}
-
-function authenticatedImageSrc(value) {
-  return safeImageSrc(value);
-}
-
-function productImageSrc(image) {
-  return authenticatedImageSrc(image?.url);
-}
-
-async function request(url, options = {}) {
-  const headers = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  };
-
-  const response = await fetch(url, {
-    headers,
-    credentials: "same-origin",
-    ...options,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (response.status === 401) {
-      clearSession();
-    }
-    throw new Error(payload.error || "Request failed");
-  }
-  return payload;
-}
-
-async function pollImageJob(jobId, maxWaitMs = IMAGE_JOB_MAX_WAIT_MS, delayMs = IMAGE_JOB_POLL_INTERVAL_MS) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < maxWaitMs) {
-    const result = await request(`/api/image-jobs/${jobId}`);
-    if (result.status === "completed") {
-      return result.imageConcept;
-    }
-    if (result.status === "failed") {
-      throw new Error(result.error || "图片生成失败");
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  throw new Error(`图片生成时间超过 ${Math.round(maxWaitMs / 60000)} 分钟，请稍后再试。`);
-}
 
 async function init() {
   bindLandingEntry();
@@ -146,15 +42,6 @@ async function init() {
   bindIdeaPromptActions();
   bindLogout();
   await restoreSession();
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }
 
 async function uploadProductImage(file) {
@@ -295,13 +182,6 @@ function isProductImageSelectedForIdea(ideaIndex, imageId) {
   return getProductSelection(ideaIndex).images.some((image) => Number(image.id) === Number(imageId));
 }
 
-function formatFileSize(bytes) {
-  const value = Number(bytes || 0);
-  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
-  if (value >= 1024) return `${Math.round(value / 1024)}KB`;
-  return `${value}B`;
-}
-
 function getImageSizeBytes(image) {
   return Number(image?.sizeBytes || image?.file?.size || image?.size || 0);
 }
@@ -347,31 +227,6 @@ function validateSingleReferenceFile(file, label) {
     return false;
   }
   return true;
-}
-
-function formatImageName(name, maxLength = 32) {
-  const text = String(name || "产品图");
-  if (text.length <= maxLength) return text;
-  const extMatch = text.match(/(\.[a-z0-9]{2,5})$/i);
-  const ext = extMatch?.[1] || "";
-  const headLength = Math.max(10, maxLength - ext.length - 10);
-  return `${text.slice(0, headLength)}...${text.slice(-6 - ext.length)}`;
-}
-
-function showToast(message) {
-  let toast = document.getElementById("appToast");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.id = "appToast";
-    toast.className = "app-toast";
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.classList.add("is-visible");
-  window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => {
-    toast.classList.remove("is-visible");
-  }, 2600);
 }
 
 function readPendingImageTasks() {
