@@ -184,15 +184,25 @@ flowchart TD
 
 #### 数据层
 
-- MySQL / PostgreSQL：主业务数据
-- Redis：缓存与会话
-- 对象存储：截图、导出文件、附件
-- 日志系统：审计与问题排查
+当前本地版本使用 SQLite：
+
+- `data/redbase.sqlite`：主业务数据
+- `src/server/db/repositories/`：直接 SQL 仓库，覆盖用户、会话、品牌、趋势、选题、历史生成、产品图、图片任务和积分流水
+- `src/server/db/snapshot-store.js`：迁移和兼容读取层，不作为普通请求写路径
+- `data/uploads/`：品牌 Logo、产品图和生成图的本地文件
+- HTTP 日志：请求日志用于问题排查，敏感字段会做基础脱敏
+
+生产环境如需横向扩展，可再迁移到 PostgreSQL/MySQL 和对象存储，但业务边界应保持仓库层接口稳定。
 
 #### 异步任务层
 
-- 消息队列
-- 后台 Worker
+当前图片生成采用轻量任务表 + 轮询：
+
+- `image_jobs` 表保存图片任务状态、Provider 返回 URL、生成上下文和错误信息
+- 前端轮询 `/api/image-jobs/:id`
+- 任务完成后服务端保存本地图片并写入 `generations`
+
+后续如果图片任务量增大，可把 `image_jobs` 升级为队列 + Worker，但前端协议可以保持不变。
 
 适用场景：
 

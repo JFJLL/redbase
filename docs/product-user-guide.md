@@ -138,6 +138,8 @@ http://127.0.0.1:3013/api/health
 
 同一个账号可以同时登录用户工作台和管理后台，两个页面不会互相顶掉登录状态。
 
+登录状态由服务端 HttpOnly Cookie 保存，前端不会把 session token 放到 URL 或 localStorage。普通 API 请求会自动携带同源 Cookie；历史图片、品牌 Logo 和产品图等受保护资源通过短时签名 URL 访问。
+
 ## 4. 用户工作台使用流程
 
 ### 4.1 创建品牌档案
@@ -431,6 +433,37 @@ data/redbase.sqlite
 - 额度流水
 
 如果需要迁移或备份数据，优先备份该 SQLite 文件。
+
+### 8.1 数据访问实现
+
+当前主要业务写路径通过 `src/server/db/repositories/` 直接操作 SQLite 行，覆盖用户、会话、品牌、趋势、选题、历史生成、产品图、图片任务和积分流水。管理后台总览仍保留兼容读取，用于聚合展示；普通用户 CRUD、趋势、图片任务、产品图和积分流水不再通过整库快照写回。
+
+### 8.2 维护烟测
+
+基础代码检查：
+
+```bash
+npm run check
+```
+
+运行中的本地服务可以执行 API 烟测：
+
+```bash
+npm run smoke:api
+```
+
+默认烟测会完成健康检查、Cookie 登录、品牌创建/删除和产品图上传/删除，不调用真实 AI 服务。如果要验证真实趋势分析链路：
+
+```powershell
+$env:RUN_REAL_AI = "1"
+npm run smoke:api
+Remove-Item Env:RUN_REAL_AI
+```
+
+烟测变量：
+
+- `SMOKE_BASE_URL`：服务地址，默认 `http://127.0.0.1:3013`
+- `SMOKE_PHONE` / `SMOKE_PASSWORD`：登录账号，默认本地种子账号
 
 ## 9. 常见问题
 

@@ -9,6 +9,9 @@
 - 一键生图走真实图片服务
 - 数据持久化到 `data/redbase.sqlite`
 - 后端已拆到 `src/server/*`
+- 浏览器会话使用 HttpOnly Cookie；普通 API 不再通过 URL 传 session token
+- 受保护图片/资产 URL 使用短时签名
+- 主要业务写路径已迁移到 SQLite 仓库操作，避免每个请求全量读写数据库
 
 ## 目录
 
@@ -85,3 +88,30 @@ http://127.0.0.1:3013
 ```bash
 npm run check
 ```
+
+运行中的本地服务可以执行无依赖 API 烟测：
+
+```bash
+npm run smoke:api
+```
+
+默认烟测只覆盖健康检查、Cookie 登录、品牌 CRUD 和产品图上传/删除，不消耗 AI 额度。如果需要验证真实趋势 API：
+
+```powershell
+$env:RUN_REAL_AI = "1"
+npm run smoke:api
+Remove-Item Env:RUN_REAL_AI
+```
+
+可选变量：
+
+- `SMOKE_BASE_URL`：默认 `http://127.0.0.1:3013`
+- `SMOKE_PHONE` / `SMOKE_PASSWORD`：默认使用本地种子账号 `13800000000` / `123456`
+
+## 架构说明
+
+- 配置入口：`src/server/config.js`，真实密钥优先来自环境变量。
+- 鉴权：`src/server/auth/cookies.js` 设置 HttpOnly Cookie；服务端通过 `src/server/api/sql-auth.js` 和用户/session 仓库校验登录态。
+- 数据层：`src/server/db/repositories/` 提供用户、品牌、趋势、历史、产品图、图片任务和积分流水的直接 SQL 操作；`snapshot-store` 主要保留给迁移和管理后台总览兼容读取。
+- AI 调用：文本模型走 Node 原生 `fetch`，图片任务持久化到 `image_jobs` 表并在轮询时落历史生成记录。
+- 静态前端：`public/app.js` 是主编排入口，公共配置、状态、DOM 工具和 API 客户端已拆到 `public/js/`。
