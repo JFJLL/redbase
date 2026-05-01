@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 14
-**Overall status:** Automated test coverage complete
+**Current phase:** 15
+**Overall status:** Helper facade split complete
 
 ## Progress Summary
 
@@ -22,6 +22,7 @@
 | 12 | Helper Snapshot Cleanup And Tests | Complete | 1/1 |
 | 13 | History Generation Search | Complete | 1/1 |
 | 14 | Automated Test Coverage | Complete | 1/1 |
+| 15 | Helper Facade Split | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -233,6 +234,21 @@
 - [x] At least 2 repositories have test coverage.
 - [x] At least 1 route has test coverage.
 - [x] Tests use in-memory SQLite and do not depend on local production data.
+- [x] `npm run check`, `npm test`, API smoke, real browser login, and review pass.
+
+## Phase 15: Helper Facade Split
+
+**Goal:** Split the oversized `src/server/api/helpers.js` into responsibility-focused modules while preserving route compatibility.
+
+**Directory:** `.planning/phases/phase-15-helper-facade-split/`
+
+**Plans:**
+- [x] `15-01-PLAN.md` - Split helpers into focused modules behind facade
+
+**Exit criteria:**
+- [x] `helpers.js` is reduced to a small facade.
+- [x] HTTP utilities, credits, domain helpers, admin views, content templates, and image storage helpers live in focused modules.
+- [x] Existing route-scope helper names remain compatible.
 - [x] `npm run check`, `npm test`, API smoke, real browser login, and review pass.
 
 ## Phase 8: Review Regression Tests
