@@ -2,17 +2,17 @@
 
 **Updated:** 2026-05-02  
 **Status:** active  
-**Current phase:** 13 complete
-**Current phase name:** History Generation Search
+**Current phase:** 14 complete
+**Current phase name:** Automated Test Coverage
 **Progress:** 100%
 
 ## Position
 
-The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous. Phase 11 hardened admin overview data access, removed password selection from overview queries, centralized repository row mappers, restored SQL user deletion file cleanup, and passed GSD code review. Phase 12 removed unused snapshot-era helper exports, stopped passing unused snapshot store APIs through route context, added focused review regression tests, and passed GSD code review. Phase 13 added SQL-backed history generation search/filtering plus frontend controls, focused tests, API validation, and real browser login verification.
+The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous. Phase 11 hardened admin overview data access, removed password selection from overview queries, centralized repository row mappers, restored SQL user deletion file cleanup, and passed GSD code review. Phase 12 removed unused snapshot-era helper exports, stopped passing unused snapshot store APIs through route context, added focused review regression tests, and passed GSD code review. Phase 13 added SQL-backed history generation search/filtering plus frontend controls, focused tests, API validation, and real browser login verification. Phase 14 added focused automated coverage for credit accounting, refund idempotency, repository scoping/search, and history route auth/filtering.
 
 ## Next Action
 
-Continue with the next requested feature-improvement phase after committing Phase 13.
+Continue with the next requested feature-improvement phase after committing Phase 14.
 
 ## Active Decisions
 

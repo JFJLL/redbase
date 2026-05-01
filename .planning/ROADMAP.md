@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 13
-**Overall status:** History generation search and filters complete
+**Current phase:** 14
+**Overall status:** Automated test coverage complete
 
 ## Progress Summary
 
@@ -21,6 +21,7 @@
 | 11 | Admin Overview Hardening | Complete | 1/1 |
 | 12 | Helper Snapshot Cleanup And Tests | Complete | 1/1 |
 | 13 | History Generation Search | Complete | 1/1 |
+| 14 | Automated Test Coverage | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -217,6 +218,22 @@
 - [x] History page filters reload the list without requiring a full page refresh.
 - [x] Empty filters preserve the original unfiltered history behavior.
 - [x] `npm run check`, focused tests, API smoke, real browser login/API validation, and GSD code review pass.
+
+## Phase 14: Automated Test Coverage
+
+**Goal:** Add focused automated tests for credit accounting, repositories, and API route behavior.
+
+**Directory:** `.planning/phases/phase-14-automated-test-coverage/`
+
+**Plans:**
+- [x] `14-01-PLAN.md` - Add focused automated coverage
+
+**Exit criteria:**
+- [x] Credit system has at least 5 focused test cases.
+- [x] At least 2 repositories have test coverage.
+- [x] At least 1 route has test coverage.
+- [x] Tests use in-memory SQLite and do not depend on local production data.
+- [x] `npm run check`, `npm test`, API smoke, real browser login, and review pass.
 
 ## Phase 8: Review Regression Tests
 
