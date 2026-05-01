@@ -3,10 +3,35 @@ const { requireSqlAuth } = require("./sql-auth");
 const { listBrandsByOwner } = require("../db/repositories/brand-repository");
 const {
   listGenerationsByOwner,
+  searchGenerations,
   findGenerationByOwner,
   findGenerationById,
   deleteGenerationRows,
 } = require("../db/repositories/generation-repository");
+
+const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "styleImage", "imageEdit"]);
+
+function normalizeDateBoundary(value, mode) {
+  const input = String(value || "").trim();
+  if (!input) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    return mode === "to" ? `${input}T23:59:59.999Z` : `${input}T00:00:00.000Z`;
+  }
+  return input;
+}
+
+function buildHistoryFilters(req) {
+  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  const type = String(url.searchParams.get("type") || "").trim();
+  const filters = {
+    q: String(url.searchParams.get("q") || "").trim() || undefined,
+    brandId: url.searchParams.get("brandId") || undefined,
+    type: GENERATION_HISTORY_TYPES.has(type) ? type : undefined,
+    from: normalizeDateBoundary(url.searchParams.get("from"), "from"),
+    to: normalizeDateBoundary(url.searchParams.get("to"), "to"),
+  };
+  return Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
+}
 
 async function handleHistoryRoutes(context, req, res, pathname) {
   const {
@@ -36,8 +61,12 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/history") {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
+    const filters = buildHistoryFilters(req);
+    const generations = Object.keys(filters).length
+      ? searchGenerations(user.id, filters)
+      : listGenerationsByOwner(user.id);
     json(res, 200, {
-      generations: listGenerationsByOwner(user.id)
+      generations: generations
         .filter(isRenderableGeneration)
         .map((generation) => sanitizeGeneration(generation, appConfig)),
     });
@@ -106,4 +135,5 @@ async function handleHistoryRoutes(context, req, res, pathname) {
 
 module.exports = {
   handleHistoryRoutes,
+  buildHistoryFilters,
 };

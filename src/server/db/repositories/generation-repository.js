@@ -18,6 +18,51 @@ function listGenerationsByOwner(ownerUserId) {
   `).all(Number(ownerUserId)).map(mapGenerationRow);
 }
 
+function normalizeSearchFilters(filters = {}) {
+  return {
+    brandId: filters.brandId ? Number(filters.brandId) : undefined,
+    type: filters.type ? String(filters.type).trim() : undefined,
+    q: filters.q ? String(filters.q).trim() : undefined,
+    from: filters.from ? String(filters.from).trim() : undefined,
+    to: filters.to ? String(filters.to).trim() : undefined,
+  };
+}
+
+function searchGenerations(ownerUserId, filters = {}) {
+  const normalized = normalizeSearchFilters(filters);
+  let sql = `
+    SELECT ${GENERATION_COLUMNS}
+    FROM generations
+    WHERE owner_user_id = ?
+  `;
+  const params = [Number(ownerUserId)];
+
+  if (Number.isFinite(normalized.brandId)) {
+    sql += " AND brand_id = ?";
+    params.push(normalized.brandId);
+  }
+  if (normalized.type) {
+    sql += " AND type = ?";
+    params.push(normalized.type);
+  }
+  if (normalized.q) {
+    sql += " AND (card_title LIKE ? OR summary LIKE ? OR trend_title LIKE ? OR brand_name LIKE ? OR idea_title LIKE ?)";
+    const q = `%${normalized.q}%`;
+    params.push(q, q, q, q, q);
+  }
+  if (normalized.from) {
+    sql += " AND created_at >= ?";
+    params.push(normalized.from);
+  }
+  if (normalized.to) {
+    sql += " AND created_at <= ?";
+    params.push(normalized.to);
+  }
+
+  sql += " ORDER BY created_at DESC, id DESC";
+  return db.prepare(sql).all(...params).map(mapGenerationRow);
+}
+
 function listAllGenerations() {
   return db.prepare(`
     SELECT ${GENERATION_COLUMNS}
@@ -100,6 +145,7 @@ function deleteGenerationRows(generationId) {
 
 module.exports = {
   listGenerationsByOwner,
+  searchGenerations,
   listAllGenerations,
   findGenerationByOwner,
   findGenerationById,

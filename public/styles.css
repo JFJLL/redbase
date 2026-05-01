@@ -661,6 +661,36 @@ button {
   gap: 24px;
 }
 
+.history-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(140px, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.history-filter-panel label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #6f687a;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.history-filter-panel input,
+.history-filter-panel select {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  border: 1px solid rgba(18, 16, 17, 0.12);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #201b25;
+  font: inherit;
+}
+
 .brand-card {
   padding: 30px;
 }
@@ -3370,6 +3400,10 @@ textarea {
   .brand-list,
   .history-generate-list {
     grid-template-columns: 1fr !important;
+  }
+
+  .history-filter-panel {
+    grid-template-columns: 1fr;
   }
 
   .brand-card,

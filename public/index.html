@@ -325,6 +325,39 @@
             <button class="header-avatar" type="button">👩🏻</button>
           </header>
 
+          <section class="history-filter-panel" aria-label="历史生成筛选">
+            <label class="history-filter-search">
+              <span>搜索</span>
+              <input id="historySearchInput" type="search" placeholder="搜索标题、摘要、品牌或趋势" />
+            </label>
+            <label>
+              <span>品牌</span>
+              <select id="historyBrandFilter">
+                <option value="">全部品牌</option>
+              </select>
+            </label>
+            <label>
+              <span>类型</span>
+              <select id="historyTypeFilter">
+                <option value="">全部类型</option>
+                <option value="moments">朋友圈图文</option>
+                <option value="wechat">公众号长图</option>
+                <option value="xhsCarousel">小红书组图</option>
+                <option value="styleImage">一键风格化</option>
+                <option value="imageEdit">历史改图</option>
+              </select>
+            </label>
+            <label>
+              <span>开始日期</span>
+              <input id="historyFromFilter" type="date" />
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input id="historyToFilter" type="date" />
+            </label>
+            <button class="secondary-btn small-btn" id="resetHistoryFilters" type="button">重置</button>
+          </section>
+
           <div class="history-generate-list" id="generationHistoryList"></div>
         </section>
       </main>

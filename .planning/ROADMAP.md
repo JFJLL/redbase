@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 12  
-**Overall status:** Helper snapshot cleanup and tests complete
+**Current phase:** 13
+**Overall status:** History generation search and filters complete
 
 ## Progress Summary
 
@@ -20,6 +20,7 @@
 | 10 | Runtime Readability Cleanups | Complete | 1/1 |
 | 11 | Admin Overview Hardening | Complete | 1/1 |
 | 12 | Helper Snapshot Cleanup And Tests | Complete | 1/1 |
+| 13 | History Generation Search | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -200,6 +201,22 @@
 - [x] Health route only destructures the helpers it uses.
 - [x] Tests cover signed asset verification, row mapper conversion, and old auth helper exposure.
 - [x] `npm run check`, `npm test`, API smoke, real browser login/API validation, and GSD code review pass.
+
+## Phase 13: History Generation Search
+
+**Goal:** Add searchable, filterable history generation browsing without changing generation creation or asset access behavior.
+
+**Directory:** `.planning/phases/phase-13-history-generation-search/`
+
+**Plans:**
+- [x] `13-01-PLAN.md` - Add history search and filters
+
+**Exit criteria:**
+- [x] `/api/history?q=...` searches card title, summary, trend title, idea title, and brand name.
+- [x] `/api/history?brandId=...`, `/api/history?type=...`, and date range filters narrow results through SQL.
+- [x] History page filters reload the list without requiring a full page refresh.
+- [x] Empty filters preserve the original unfiltered history behavior.
+- [x] `npm run check`, focused tests, API smoke, real browser login/API validation, and GSD code review pass.
 
 ## Phase 8: Review Regression Tests
 

@@ -5,6 +5,13 @@ export const state = {
   currentTab: "brands",
   brands: [],
   generationHistory: [],
+  generationHistoryFilters: {
+    q: "",
+    brandId: "",
+    type: "",
+    from: "",
+    to: "",
+  },
   selectedBrandId: null,
   selectedTrendId: null,
   selectedTrendMode: DEFAULT_TREND_MODE,
@@ -26,4 +33,3 @@ export const mutableRefs = {
   openBrandEditor: () => {},
   pendingBrandDeleteId: null,
 };
-

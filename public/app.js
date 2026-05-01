@@ -27,6 +27,15 @@ configureApiClient({ onUnauthorized: clearSession });
 
 let openBrandEditor = () => {};
 let pendingBrandDeleteId = null;
+let historyFilterTimer = null;
+
+const HISTORY_TYPE_LABELS = new Map([
+  ["moments", "朋友圈图文"],
+  ["wechat", "公众号长图"],
+  ["xhsCarousel", "小红书组图"],
+  ["styleImage", "一键风格化"],
+  ["imageEdit", "历史改图"],
+]);
 
 async function init() {
   bindLandingEntry();
@@ -40,6 +49,7 @@ async function init() {
   bindAuthModal();
   bindAnalysisButton();
   bindIdeaPromptActions();
+  bindHistoryFilters();
   bindLogout();
   await restoreSession();
 }
@@ -1901,9 +1911,70 @@ function getSelectedProductImages(ideaIndex) {
 
 async function loadGenerationHistory() {
   if (!state.sessionToken) return;
-  const result = await request("/api/history");
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(state.generationHistoryFilters)) {
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  const result = await request(query ? `/api/history?${query}` : "/api/history");
   state.generationHistory = result.generations;
   renderGenerationHistory();
+}
+
+function bindHistoryFilters() {
+  const controls = [
+    ["historySearchInput", "q", "input"],
+    ["historyBrandFilter", "brandId", "change"],
+    ["historyTypeFilter", "type", "change"],
+    ["historyFromFilter", "from", "change"],
+    ["historyToFilter", "to", "change"],
+  ];
+  controls.forEach(([id, key, eventName]) => {
+    const control = document.getElementById(id);
+    if (!control) return;
+    control.addEventListener(eventName, () => {
+      state.generationHistoryFilters[key] = control.value;
+      scheduleGenerationHistoryLoad(eventName === "input");
+    });
+  });
+
+  document.getElementById("resetHistoryFilters")?.addEventListener("click", () => {
+    state.generationHistoryFilters = { q: "", brandId: "", type: "", from: "", to: "" };
+    renderGenerationHistoryFilters();
+    loadGenerationHistory().catch((error) => alert(`加载历史失败：${error.message}`));
+  });
+}
+
+function scheduleGenerationHistoryLoad(useDelay) {
+  if (historyFilterTimer) window.clearTimeout(historyFilterTimer);
+  const delay = useDelay ? 280 : 0;
+  historyFilterTimer = window.setTimeout(() => {
+    loadGenerationHistory().catch((error) => alert(`加载历史失败：${error.message}`));
+  }, delay);
+}
+
+function renderGenerationHistoryFilters() {
+  const filters = state.generationHistoryFilters;
+  const search = document.getElementById("historySearchInput");
+  const brandSelect = document.getElementById("historyBrandFilter");
+  const typeSelect = document.getElementById("historyTypeFilter");
+  const from = document.getElementById("historyFromFilter");
+  const to = document.getElementById("historyToFilter");
+  if (search) search.value = filters.q;
+  if (typeSelect) typeSelect.value = filters.type;
+  if (from) from.value = filters.from;
+  if (to) to.value = filters.to;
+  if (brandSelect) {
+    const current = filters.brandId;
+    brandSelect.innerHTML = `
+      <option value="">全部品牌</option>
+      ${state.brands.map((brand) => `<option value="${brand.id}">${escapeHtml(brand.name)}</option>`).join("")}
+    `;
+    brandSelect.value = state.brands.some((brand) => String(brand.id) === String(current)) ? current : "";
+    if (brandSelect.value !== current) {
+      state.generationHistoryFilters.brandId = "";
+    }
+  }
 }
 
 async function deleteGenerationHistoryItem(generationId) {
@@ -1922,9 +1993,11 @@ async function deleteGenerationHistoryItem(generationId) {
 function renderGenerationHistory() {
   const root = document.getElementById("generationHistoryList");
   if (!root) return;
+  renderGenerationHistoryFilters();
 
   if (!state.generationHistory.length) {
-    root.innerHTML = `<article class="brand-card"><div class="brand-description">你还没有任何生成记录。去内容选题页生成朋友圈图、公众号长图或小红书组图后，这里会自动沉淀下来。</div></article>`;
+    const hasFilters = Object.values(state.generationHistoryFilters).some(Boolean);
+    root.innerHTML = `<article class="brand-card"><div class="brand-description">${hasFilters ? "没有找到符合筛选条件的历史生成记录。" : "你还没有任何生成记录。去内容选题页生成朋友圈图、公众号长图或小红书组图后，这里会自动沉淀下来。"}</div></article>`;
     return;
   }
 
@@ -1976,6 +2049,7 @@ function renderGenerationHistory() {
             <div>
               <div class="history-generate-meta">
                 <span class="brand-tag">${escapeHtml(item.channelLabel)}</span>
+                <span class="brand-tag">${escapeHtml(HISTORY_TYPE_LABELS.get(item.type) || item.type)}</span>
                 <span class="panel-subtitle">${escapeHtml(new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false }))}</span>
                 ${editHistory.length ? `<span class="brand-tag">已改图 ${editHistory.length} 次</span>` : ""}
               </div>
