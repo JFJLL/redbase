@@ -992,66 +992,78 @@ function buildAdminOverview(storeState, appConfig) {
   const usersById = new Map((storeState.users || []).map((user) => [user.id, user]));
   const events = [...(storeState.creditEvents || [])].sort(sortByCreatedAtDesc);
   const generationEventsById = new Map(events.filter((event) => event.generationId != null).map((event) => [event.generationId, event]));
-  const metricsByUser = new Map(
-    (storeState.users || []).map((user) => [
-      user.id,
-      {
-        ...sanitizeUser(user),
-        createdAt: user.createdAt,
-        currentCredits: Number(user.credits || 0),
-        brandCount: 0,
-        generationCount: 0,
-        consumedTokens: 0,
-        generationTokens: 0,
-        grantedTokens: 0,
-        lastActiveAt: "",
-      },
-    ]),
-  );
-
-  for (const brand of storeState.brands || []) {
-    const metrics = metricsByUser.get(brand.ownerUserId);
-    if (metrics) metrics.brandCount += 1;
-  }
-
-  for (const generation of storeState.generations || []) {
-    const metrics = metricsByUser.get(generation.ownerUserId);
-    if (!metrics) continue;
-    metrics.generationCount += 1;
-    metrics.generationTokens += getGenerationTokenCost(generation, generationEventsById.get(generation.id));
-    metrics.lastActiveAt = maxDate(metrics.lastActiveAt, generation.createdAt);
-  }
 
   let totalConsumedTokens = 0;
   let totalGrantedTokens = 0;
-  for (const event of events) {
-    const metrics = metricsByUser.get(event.userId);
-    const cost = getCreditEventCost(event);
-    if (Number(event.creditDelta || 0) < 0) {
-      totalConsumedTokens += cost;
-      if (metrics) metrics.consumedTokens += cost;
+  const hasPrecomputedMetrics = Array.isArray(storeState.userMetrics);
+  const metricsByUser = new Map(
+    hasPrecomputedMetrics
+      ? storeState.userMetrics.map((metrics) => [metrics.id, metrics])
+      : (storeState.users || []).map((user) => [
+          user.id,
+          {
+            ...sanitizeUser(user),
+            createdAt: user.createdAt,
+            currentCredits: Number(user.credits || 0),
+            brandCount: 0,
+            generationCount: 0,
+            consumedTokens: 0,
+            generationTokens: 0,
+            grantedTokens: 0,
+            lastActiveAt: "",
+          },
+        ]),
+  );
+
+  if (!hasPrecomputedMetrics) {
+    for (const brand of storeState.brands || []) {
+      const metrics = metricsByUser.get(brand.ownerUserId);
+      if (metrics) metrics.brandCount += 1;
     }
-    if (Number(event.creditDelta || 0) > 0) {
-      totalGrantedTokens += Number(event.creditDelta || 0);
-      if (metrics) metrics.grantedTokens += Number(event.creditDelta || 0);
+
+    for (const generation of storeState.generations || []) {
+      const metrics = metricsByUser.get(generation.ownerUserId);
+      if (!metrics) continue;
+      metrics.generationCount += 1;
+      metrics.generationTokens += getGenerationTokenCost(generation, generationEventsById.get(generation.id));
+      metrics.lastActiveAt = maxDate(metrics.lastActiveAt, generation.createdAt);
     }
-    if (metrics) metrics.lastActiveAt = maxDate(metrics.lastActiveAt, event.createdAt);
+
+    for (const event of events) {
+      const metrics = metricsByUser.get(event.userId);
+      const cost = getCreditEventCost(event);
+      if (Number(event.creditDelta || 0) < 0) {
+        totalConsumedTokens += cost;
+        if (metrics) metrics.consumedTokens += cost;
+      }
+      if (Number(event.creditDelta || 0) > 0) {
+        totalGrantedTokens += Number(event.creditDelta || 0);
+        if (metrics) metrics.grantedTokens += Number(event.creditDelta || 0);
+      }
+      if (metrics) metrics.lastActiveAt = maxDate(metrics.lastActiveAt, event.createdAt);
+    }
+  } else {
+    totalConsumedTokens = Number(storeState.statsOverride?.totalConsumedTokens || 0);
+    totalGrantedTokens = Number(storeState.statsOverride?.totalGrantedTokens || 0);
   }
 
   const generations = [...(storeState.generations || [])]
     .sort(sortByCreatedAtDesc)
     .map((generation) => buildAdminGenerationView(generation, usersById, generationEventsById.get(generation.id), appConfig));
-  const brands = [...(storeState.brands || [])].sort(sortByCreatedAtDesc).map((brand) => buildAdminBrandView(brand, usersById));
+  const brands = Array.isArray(storeState.brandViews)
+    ? storeState.brandViews
+    : [...(storeState.brands || [])].sort(sortByCreatedAtDesc).map((brand) => buildAdminBrandView(brand, usersById));
+  const stats = storeState.statsOverride || {
+    userCount: storeState.users.length,
+    brandCount: storeState.brands.length,
+    generationCount: storeState.generations.length,
+    totalConsumedTokens,
+    totalGrantedTokens,
+    currentCreditsTotal: (storeState.users || []).reduce((sum, user) => sum + Number(user.credits || 0), 0),
+  };
 
   return {
-    stats: {
-      userCount: storeState.users.length,
-      brandCount: storeState.brands.length,
-      generationCount: storeState.generations.length,
-      totalConsumedTokens,
-      totalGrantedTokens,
-      currentCreditsTotal: (storeState.users || []).reduce((sum, user) => sum + Number(user.credits || 0), 0),
-    },
+    stats,
     users: [...metricsByUser.values()].sort((a, b) => b.consumedTokens - a.consumedTokens || b.generationCount - a.generationCount),
     brands,
     usageEvents: events.slice(0, 500).map((event) => sanitizeCreditEvent(event, usersById)),

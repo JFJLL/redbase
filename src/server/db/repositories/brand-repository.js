@@ -1,33 +1,14 @@
 const { getDbProxy } = require("../connection");
 const {
-  normalizeBrandLogo,
   groupTrendRows,
   flattenTrendBuckets,
   safeParseArray,
-  safeParseObject,
 } = require("../snapshot-utils");
 const { readIdeasForTrendRow } = require("../legacy-readers");
 const { allocateCounter, runTransaction } = require("./core-repository");
+const { mapBrandRow } = require("./row-mappers");
 
 const db = getDbProxy();
-
-function mapBrandRow(row) {
-  return {
-    id: row.id,
-    ownerUserId: row.owner_user_id,
-    name: row.name,
-    industry: row.industry,
-    audience: row.audience,
-    description: row.description,
-    product: row.product,
-    goal: row.goal,
-    knowledgeBase: row.knowledge_base,
-    logo: normalizeBrandLogo(safeParseObject(row.logo_json)),
-    assetTags: safeParseArray(row.asset_tags_json),
-    analyses: [],
-    trends: [],
-  };
-}
 
 function getBrandsBySql(sql, params = []) {
   const brands = db.prepare(sql).all(...params).map(mapBrandRow);
@@ -201,10 +182,12 @@ function upsertBrandFull(brand) {
 }
 
 function deleteBrandById(brandId) {
-  db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
-  db.prepare("DELETE FROM trends WHERE brand_id = ?").run(Number(brandId));
-  db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(Number(brandId));
-  db.prepare("DELETE FROM brands WHERE id = ?").run(Number(brandId));
+  return runTransaction(() => {
+    db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
+    db.prepare("DELETE FROM trends WHERE brand_id = ?").run(Number(brandId));
+    db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(Number(brandId));
+    db.prepare("DELETE FROM brands WHERE id = ?").run(Number(brandId));
+  });
 }
 
 function insertBrandContent(brand) {

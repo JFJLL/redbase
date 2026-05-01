@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 10  
-**Overall status:** Runtime readability follow-up complete
+**Current phase:** 11  
+**Overall status:** Admin overview hardening complete
 
 ## Progress Summary
 
@@ -18,6 +18,7 @@
 | 8 | Review Regression Tests | Complete | 1/1 |
 | 9 | Admin Overview SQL | Complete | 1/1 |
 | 10 | Runtime Readability Cleanups | Complete | 1/1 |
+| 11 | Admin Overview Hardening | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -165,6 +166,23 @@
 - [x] Verification-code magic numbers and registration initial credits are named constants.
 - [x] Runtime logs use asynchronous file appends.
 - [x] `npm run check`, `npm test`, API smoke, and real browser login pass.
+
+## Phase 11: Admin Overview Hardening
+
+**Goal:** Address admin overview security/performance and repository mapping findings from the third review report.
+
+**Directory:** `.planning/phases/phase-11-admin-overview-hardening/`
+
+**Plans:**
+- [x] `11-01-PLAN.md` - Harden admin overview data access
+
+**Exit criteria:**
+- [x] Admin overview does not query password hashes.
+- [x] Admin overview uses aggregate SQL plus bounded detail rows instead of loading all detail records.
+- [x] Brand/generation row mapping is centralized in `row-mappers.js`.
+- [x] Brand deletion is transactional.
+- [x] Admin user deletion removes stored files before SQL row deletion.
+- [x] `npm run check`, `npm test`, API smoke, real browser login, and GSD code review pass.
 
 ## Phase 8: Review Regression Tests
 

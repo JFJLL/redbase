@@ -1,6 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { findUserById, findUserBySessionToken } = require("../db/repositories/auth-repository");
-const { addCredits, deleteUserCascadeRows, readAdminOverviewStore } = require("../db/repositories/admin-repository");
+const { addCredits, deleteUserCascadeRows, readAdminOverviewStore, readUserDeletionAssets } = require("../db/repositories/admin-repository");
 const { findGenerationById, deleteGenerationRows } = require("../db/repositories/generation-repository");
 
 async function handleAdminRoutes(context, req, res, pathname) {
@@ -8,6 +8,9 @@ async function handleAdminRoutes(context, req, res, pathname) {
     appConfig,
     sanitizeUser,
     removeGenerationLocalFiles,
+    resolveStoredProductImagePath,
+    resolveStoredAssetPath,
+    removeStoredFileIfExists,
     collectBody,
     getSessionToken,
     buildApiUserLog,
@@ -89,6 +92,16 @@ async function handleAdminRoutes(context, req, res, pathname) {
       return true;
     }
 
+    const deletionAssets = readUserDeletionAssets(targetUser.id);
+    for (const generation of deletionAssets.generations) {
+      await removeGenerationLocalFiles(generation);
+    }
+    for (const storedPath of deletionAssets.brandLogoStoredPaths) {
+      await removeStoredFileIfExists(resolveStoredAssetPath(storedPath));
+    }
+    for (const productImage of deletionAssets.productImages) {
+      await removeStoredFileIfExists(resolveStoredProductImagePath(productImage));
+    }
     deleteUserCascadeRows(targetUser.id);
     json(res, 200, {
       ok: true,

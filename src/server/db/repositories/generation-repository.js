@@ -1,28 +1,8 @@
 const { getDbProxy } = require("../connection");
-const { safeParseObject } = require("../snapshot-utils");
 const { allocateCounter, runTransaction } = require("./core-repository");
+const { mapGenerationRow } = require("./row-mappers");
 
 const db = getDbProxy();
-
-function mapGenerationRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    ownerUserId: row.owner_user_id,
-    type: row.type,
-    channelLabel: row.channel_label,
-    brandId: row.brand_id,
-    brandName: row.brand_name,
-    trendId: row.trend_id,
-    trendTitle: row.trend_title,
-    ideaTitle: row.idea_title,
-    cardTitle: row.card_title,
-    createdAt: row.created_at,
-    previewUrl: row.preview_url,
-    summary: row.summary,
-    payload: safeParseObject(row.payload_json),
-  };
-}
 
 const GENERATION_COLUMNS = `
   id, owner_user_id, type, channel_label, brand_id, brand_name, trend_id, trend_title, idea_title,

@@ -1,4 +1,4 @@
-const { safeParseObject } = require("../snapshot-utils");
+const { normalizeBrandLogo, safeParseArray, safeParseObject } = require("../snapshot-utils");
 
 function mapUserRow(row) {
   if (!row) return null;
@@ -47,8 +47,49 @@ function mapCreditEventRow(row) {
   };
 }
 
+function mapBrandRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    name: row.name,
+    industry: row.industry,
+    audience: row.audience,
+    description: row.description,
+    product: row.product,
+    goal: row.goal,
+    knowledgeBase: row.knowledge_base,
+    logo: normalizeBrandLogo(safeParseObject(row.logo_json)),
+    assetTags: safeParseArray(row.asset_tags_json),
+    analyses: [],
+    trends: [],
+  };
+}
+
+function mapGenerationRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    type: row.type,
+    channelLabel: row.channel_label,
+    brandId: row.brand_id,
+    brandName: row.brand_name,
+    trendId: row.trend_id,
+    trendTitle: row.trend_title,
+    ideaTitle: row.idea_title,
+    cardTitle: row.card_title,
+    createdAt: row.created_at,
+    previewUrl: row.preview_url,
+    summary: row.summary,
+    payload: safeParseObject(row.payload_json),
+  };
+}
+
 module.exports = {
   mapUserRow,
   mapSessionRow,
   mapCreditEventRow,
+  mapBrandRow,
+  mapGenerationRow,
 };

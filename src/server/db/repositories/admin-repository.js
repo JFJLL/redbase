@@ -1,11 +1,21 @@
 const { getDbProxy } = require("../connection");
+const { safeParseArray, safeParseObject } = require("../snapshot-utils");
 const { allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
-const { listAllBrands } = require("./brand-repository");
-const { listAllGenerations } = require("./generation-repository");
-const { mapCreditEventRow, mapUserRow } = require("./row-mappers");
+const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
 
 const db = getDbProxy();
+const ADMIN_OVERVIEW_LIMITS = {
+  users: 500,
+  brands: 300,
+  generations: 300,
+  creditEvents: 500,
+};
+const CREDIT_EVENT_COLUMNS = `
+  id, user_id, action_type, action_label, credit_delta, credit_cost, created_at,
+  admin_user_id, admin_user_name, brand_id, brand_name, trend_id, trend_title, idea_title,
+  generation_id, channel_label, summary, payload_json
+`;
 
 function insertCreditEvent(input) {
   const id = input.id ?? allocateCounter("nextCreditEventId", 1);
@@ -35,41 +45,251 @@ function insertCreditEvent(input) {
     input.summary || "",
     JSON.stringify(input.payload || {}),
   );
-  return mapCreditEventRow(db.prepare("SELECT * FROM credit_events WHERE id = ?").get(id));
+  return mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(id));
 }
 
 function findCreditEventById(creditEventId) {
-  return mapCreditEventRow(db.prepare("SELECT * FROM credit_events WHERE id = ?").get(Number(creditEventId)));
+  return mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(Number(creditEventId)));
 }
 
 function listAllUsers() {
   return db.prepare(`
-    SELECT id, name, phone, password, account_type, department, credits, created_at
+    SELECT id, name, phone, account_type, department, credits, created_at
     FROM users
     ORDER BY id ASC
   `).all().map(mapUserRow);
 }
 
+function listAdminUsersByIds(userIds) {
+  const ids = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return db.prepare(`
+    SELECT id, name, phone, account_type, department, credits, created_at
+    FROM users
+    WHERE id IN (${placeholders})
+  `).all(...ids).map(mapUserRow);
+}
+
 function listAllCreditEvents() {
   return db.prepare(`
-    SELECT *
+    SELECT ${CREDIT_EVENT_COLUMNS}
     FROM credit_events
     ORDER BY created_at DESC, id DESC
   `).all().map(mapCreditEventRow);
 }
 
-function readAdminOverviewStore() {
+function readAdminOverviewStats() {
+  const row = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM users) AS user_count,
+      (SELECT COUNT(*) FROM brands) AS brand_count,
+      (SELECT COUNT(*) FROM generations) AS generation_count,
+      (SELECT COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) FROM credit_events) AS total_consumed_tokens,
+      (SELECT COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) FROM credit_events) AS total_granted_tokens,
+      (SELECT COALESCE(SUM(credits), 0) FROM users) AS current_credits_total
+  `).get();
   return {
-    users: listAllUsers(),
-    brands: listAllBrands(),
-    generations: listAllGenerations(),
-    creditEvents: listAllCreditEvents(),
+    userCount: Number(row?.user_count || 0),
+    brandCount: Number(row?.brand_count || 0),
+    generationCount: Number(row?.generation_count || 0),
+    totalConsumedTokens: Number(row?.total_consumed_tokens || 0),
+    totalGrantedTokens: Number(row?.total_granted_tokens || 0),
+    currentCreditsTotal: Number(row?.current_credits_total || 0),
   };
+}
+
+function listAdminUserMetrics(limit = ADMIN_OVERVIEW_LIMITS.users) {
+  return db.prepare(`
+    WITH brand_counts AS (
+      SELECT owner_user_id, COUNT(*) AS brand_count
+      FROM brands
+      GROUP BY owner_user_id
+    ),
+    generation_counts AS (
+      SELECT owner_user_id, COUNT(*) AS generation_count, MAX(created_at) AS last_generation_at
+      FROM generations
+      GROUP BY owner_user_id
+    ),
+    credit_totals AS (
+      SELECT
+        user_id,
+        COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) AS consumed_tokens,
+        COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) AS granted_tokens,
+        MAX(created_at) AS last_credit_at
+      FROM credit_events
+      GROUP BY user_id
+    ),
+    generation_credit_totals AS (
+      SELECT
+        user_id,
+        COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) AS generation_tokens
+      FROM credit_events
+      WHERE generation_id IS NOT NULL
+      GROUP BY user_id
+    )
+    SELECT
+      u.id, u.name, u.phone, u.account_type, u.department, u.credits, u.created_at,
+      COALESCE(b.brand_count, 0) AS brand_count,
+      COALESCE(g.generation_count, 0) AS generation_count,
+      COALESCE(c.consumed_tokens, 0) AS consumed_tokens,
+      COALESCE(gc.generation_tokens, 0) AS generation_tokens,
+      COALESCE(c.granted_tokens, 0) AS granted_tokens,
+      MAX(COALESCE(g.last_generation_at, ''), COALESCE(c.last_credit_at, '')) AS last_active_at
+    FROM users u
+    LEFT JOIN brand_counts b ON b.owner_user_id = u.id
+    LEFT JOIN generation_counts g ON g.owner_user_id = u.id
+    LEFT JOIN credit_totals c ON c.user_id = u.id
+    LEFT JOIN generation_credit_totals gc ON gc.user_id = u.id
+    ORDER BY consumed_tokens DESC, generation_count DESC, u.id ASC
+    LIMIT ?
+  `).all(Number(limit)).map((row) => ({
+    id: row.id,
+    name: row.name,
+    phone: row.phone,
+    accountType: row.account_type || "customer",
+    department: row.department || "",
+    credits: Number(row.credits || 0),
+    createdAt: row.created_at,
+    currentCredits: Number(row.credits || 0),
+    brandCount: Number(row.brand_count || 0),
+    generationCount: Number(row.generation_count || 0),
+    consumedTokens: Number(row.consumed_tokens || 0),
+    generationTokens: Number(row.generation_tokens || 0),
+    grantedTokens: Number(row.granted_tokens || 0),
+    lastActiveAt: row.last_active_at || "",
+  }));
+}
+
+function listAdminBrandViews(limit = ADMIN_OVERVIEW_LIMITS.brands) {
+  return db.prepare(`
+    SELECT
+      b.id, b.owner_user_id, b.name, b.industry, b.audience, b.description, b.product, b.goal,
+      b.knowledge_base, b.logo_json, b.asset_tags_json,
+      u.id AS user_id, u.name AS user_name, u.phone AS user_phone, u.account_type AS user_account_type, u.department AS user_department,
+      (SELECT COUNT(*) FROM analyses a WHERE a.brand_id = b.id) AS analysis_count,
+      (SELECT COUNT(*) FROM trends t WHERE t.brand_id = b.id AND t.scope = 'current') AS trend_count
+    FROM brands b
+    LEFT JOIN users u ON u.id = b.owner_user_id
+    ORDER BY b.id DESC
+    LIMIT ?
+  `).all(Number(limit)).map((row) => {
+    const logo = safeParseObject(row.logo_json);
+    return {
+      id: row.id,
+      ownerUserId: row.owner_user_id,
+      name: row.name || "",
+      industry: row.industry || "",
+      audience: row.audience || "",
+      description: row.description || "",
+      product: row.product || "",
+      goal: row.goal || "",
+      knowledgeBase: row.knowledge_base || "",
+      assetTags: safeParseArray(row.asset_tags_json),
+      logoName: logo.originalName || "",
+      hasLogo: Boolean(logo.storedPath),
+      analysisCount: Number(row.analysis_count || 0),
+      trendCount: Number(row.trend_count || 0),
+      createdAt: "",
+      user: row.user_id
+        ? {
+            id: row.user_id,
+            name: row.user_name,
+            phone: row.user_phone,
+            accountType: row.user_account_type || "customer",
+            department: row.user_department || "",
+          }
+        : null,
+    };
+  });
+}
+
+function listAdminGenerations(limit = ADMIN_OVERVIEW_LIMITS.generations) {
+  return db.prepare(`
+    SELECT id, owner_user_id, type, channel_label, brand_id, brand_name, trend_id, trend_title, idea_title,
+      card_title, created_at, preview_url, summary, payload_json
+    FROM generations
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).all(Number(limit)).map(mapGenerationRow);
+}
+
+function listCreditEventsForGenerationIds(generationIds) {
+  const ids = [...new Set(generationIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return db.prepare(`
+    SELECT ${CREDIT_EVENT_COLUMNS}
+    FROM credit_events
+    WHERE generation_id IN (${placeholders})
+    ORDER BY created_at DESC, id DESC
+  `).all(...ids).map(mapCreditEventRow);
+}
+
+function listRecentCreditEvents(limit = ADMIN_OVERVIEW_LIMITS.creditEvents) {
+  return db.prepare(`
+    SELECT ${CREDIT_EVENT_COLUMNS}
+    FROM credit_events
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).all(Number(limit)).map(mapCreditEventRow);
+}
+
+function readAdminOverviewStore() {
+  const userMetrics = listAdminUserMetrics();
+  const brandViews = listAdminBrandViews();
+  const generations = listAdminGenerations();
+  const recentCreditEvents = listRecentCreditEvents();
+  const generationCreditEvents = listCreditEventsForGenerationIds(generations.map((generation) => generation.id));
+  const creditEventsById = new Map([...recentCreditEvents, ...generationCreditEvents].map((event) => [event.id, event]));
+  const creditEvents = [...creditEventsById.values()];
+  const users = listAdminUsersByIds([
+    ...userMetrics.map((user) => user.id),
+    ...brandViews.map((brand) => brand.ownerUserId),
+    ...generations.map((generation) => generation.ownerUserId),
+    ...creditEvents.flatMap((event) => [event.userId, event.adminUserId]),
+  ]);
+  return {
+    statsOverride: readAdminOverviewStats(),
+    userMetrics,
+    users,
+    brandViews,
+    brands: [],
+    generations,
+    creditEvents,
+  };
+}
+
+function readUserDeletionAssets(userId) {
+  const numericUserId = Number(userId);
+  const brandLogoStoredPaths = db.prepare(`
+    SELECT logo_json
+    FROM brands
+    WHERE owner_user_id = ?
+  `).all(numericUserId)
+    .map((row) => safeParseObject(row.logo_json).storedPath)
+    .filter(Boolean);
+  const generations = db.prepare(`
+    SELECT id, owner_user_id, type, channel_label, brand_id, brand_name, trend_id, trend_title, idea_title,
+      card_title, created_at, preview_url, summary, payload_json
+    FROM generations
+    WHERE owner_user_id = ?
+  `).all(numericUserId).map(mapGenerationRow);
+  const productImages = db.prepare(`
+    SELECT id, owner_user_id, stored_path
+    FROM product_images
+    WHERE owner_user_id = ?
+  `).all(numericUserId).map((row) => ({
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    storedPath: row.stored_path,
+  }));
+  return { brandLogoStoredPaths, generations, productImages };
 }
 
 function findRefundForCreditEvent(creditEventId, userId) {
   return mapCreditEventRow(db.prepare(`
-    SELECT *
+    SELECT ${CREDIT_EVENT_COLUMNS}
     FROM credit_events
     WHERE user_id = ?
       AND credit_delta > 0
@@ -179,7 +399,7 @@ function updateCreditEventEditResult(creditEventId, editEntry, sourceGenerationI
 
 function attachGenerationToLatestCreditEvent({ user, actionType, brand, trend, idea, generation, generationPayload }) {
   const event = db.prepare(`
-    SELECT *
+    SELECT ${CREDIT_EVENT_COLUMNS}
     FROM credit_events
     WHERE user_id = ?
       AND action_type = ?
@@ -239,8 +459,14 @@ module.exports = {
   insertCreditEvent,
   findCreditEventById,
   listAllUsers,
+  listAdminUsersByIds,
   listAllCreditEvents,
+  readAdminOverviewStats,
+  listAdminUserMetrics,
+  listAdminBrandViews,
+  listAdminGenerations,
   readAdminOverviewStore,
+  readUserDeletionAssets,
   findRefundForCreditEvent,
   refundCreditEventIfNeeded,
   findGenerationForCreditEvent,

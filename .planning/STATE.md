@@ -1,18 +1,18 @@
 # Redbase Refactor State
 
-**Updated:** 2026-05-01  
+**Updated:** 2026-05-02  
 **Status:** active  
-**Current phase:** 10 complete  
-**Current phase name:** Runtime Readability Cleanups  
+**Current phase:** 11 complete  
+**Current phase name:** Admin Overview Hardening  
 **Progress:** 100%
 
 ## Position
 
-The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous.
+The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous. Phase 11 hardened admin overview data access, removed password selection from overview queries, centralized repository row mappers, restored SQL user deletion file cleanup, and passed GSD code review.
 
 ## Next Action
 
-Review remaining deferred items before starting another follow-up milestone.
+Continue with helper/snapshot cleanup and test coverage follow-up items from the third review report.
 
 ## Active Decisions
 
