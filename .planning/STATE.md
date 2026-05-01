@@ -2,17 +2,17 @@
 
 **Updated:** 2026-05-02  
 **Status:** active  
-**Current phase:** 11 complete  
-**Current phase name:** Admin Overview Hardening  
+**Current phase:** 12 complete  
+**Current phase name:** Helper Snapshot Cleanup And Tests  
 **Progress:** 100%
 
 ## Position
 
-The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous. Phase 11 hardened admin overview data access, removed password selection from overview queries, centralized repository row mappers, restored SQL user deletion file cleanup, and passed GSD code review.
+The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous. Phase 11 hardened admin overview data access, removed password selection from overview queries, centralized repository row mappers, restored SQL user deletion file cleanup, and passed GSD code review. Phase 12 removed unused snapshot-era helper exports, stopped passing unused snapshot store APIs through route context, added focused review regression tests, and passed GSD code review.
 
 ## Next Action
 
-Continue with helper/snapshot cleanup and test coverage follow-up items from the third review report.
+Continue with any remaining deferred production-hardening items not required for the current testing-stage follow-up.
 
 ## Active Decisions
 

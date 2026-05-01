@@ -20,7 +20,6 @@ const routeHandlers = [
 ];
 
 function createApiHandler({ appConfig, store, ai }) {
-  const { readStore, writeStore } = store;
   const {
     imageJobs,
     generateAiTrendSet,
@@ -32,8 +31,6 @@ function createApiHandler({ appConfig, store, ai }) {
 
   const context = {
     appConfig,
-    readStore,
-    writeStore,
     imageJobs,
     generateAiTrendSet,
     regenerateTrendIdeas,

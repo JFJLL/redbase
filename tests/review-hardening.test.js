@@ -2,9 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { buildSessionCookie } = require("../src/server/auth/cookies");
+const { signAssetUrl, verifySignedAssetRequest } = require("../src/server/assets/signed-urls");
 const { DEFAULT_APP_CONFIG, loadAppConfig } = require("../src/server/config");
-const { isAdminUser, findTrendItem } = require("../src/server/api/helpers");
+const helpers = require("../src/server/api/helpers");
+const { isAdminUser, findTrendItem } = helpers;
 const { bindRouteScope } = require("../src/server/api/route-scope");
+const { mapUserRow, mapBrandRow, mapGenerationRow } = require("../src/server/db/repositories/row-mappers");
 
 test("compatible text provider defaults do not expose infrastructure URLs", () => {
   assert.equal(DEFAULT_APP_CONFIG.textProvider.openaiBaseUrl, "");
@@ -61,4 +64,87 @@ test("route scope binding is cached by context object", () => {
   const context = { appConfig: { security: {} } };
   assert.equal(bindRouteScope(context), bindRouteScope(context));
   assert.notEqual(bindRouteScope(context), bindRouteScope({ appConfig: { security: {} } }));
+});
+
+test("signed asset URLs verify, reject tampering, and reject expiry", () => {
+  const appConfig = { security: { assetSigningSecret: "test-secret" } };
+  const signed = signAssetUrl(appConfig, "/api/generated-images/12/file?variant=preview", { ttlMs: 60_000 });
+  assert.match(signed, /assetExpires=/);
+  assert.match(signed, /assetSignature=/);
+  assert.equal(verifySignedAssetRequest(appConfig, { url: signed, headers: { host: "localhost" } }), true);
+
+  const tampered = signed.replace("/12/", "/13/");
+  assert.equal(verifySignedAssetRequest(appConfig, { url: tampered, headers: { host: "localhost" } }), false);
+
+  const expired = signAssetUrl(appConfig, "/api/product-images/7/file", { ttlMs: -1 });
+  assert.equal(verifySignedAssetRequest(appConfig, { url: expired, headers: { host: "localhost" } }), false);
+});
+
+test("repository row mappers centralize snake case to camel case conversion", () => {
+  const user = mapUserRow({
+    id: 1,
+    name: "Ada",
+    phone: "13800000000",
+    account_type: "customer",
+    department: null,
+    credits: 8,
+    created_at: "2026-05-01T00:00:00.000Z",
+  });
+  assert.deepEqual(user, {
+    id: 1,
+    name: "Ada",
+    phone: "13800000000",
+    password: undefined,
+    accountType: "customer",
+    department: "",
+    credits: 8,
+    createdAt: "2026-05-01T00:00:00.000Z",
+  });
+
+  const brand = mapBrandRow({
+    id: 3,
+    owner_user_id: 1,
+    name: "Redbase",
+    industry: "retail",
+    audience: "operators",
+    description: "desc",
+    product: "suite",
+    goal: "growth",
+    knowledge_base: "kb",
+    logo_json: JSON.stringify({ storedPath: "uploads/logo.png" }),
+    asset_tags_json: JSON.stringify(["a", "b"]),
+  });
+  assert.equal(brand.ownerUserId, 1);
+  assert.equal(brand.logo.storedPath, "uploads/logo.png");
+  assert.deepEqual(brand.assetTags, ["a", "b"]);
+
+  const generation = mapGenerationRow({
+    id: 4,
+    owner_user_id: 1,
+    type: "moments",
+    channel_label: "朋友圈",
+    brand_id: 3,
+    brand_name: "Redbase",
+    trend_id: 9,
+    trend_title: "Trend",
+    idea_title: "Idea",
+    card_title: "Card",
+    created_at: "2026-05-01T00:00:00.000Z",
+    preview_url: "/api/generated-images/4/file",
+    summary: "summary",
+    payload_json: JSON.stringify({ title: "payload" }),
+  });
+  assert.equal(generation.ownerUserId, 1);
+  assert.equal(generation.channelLabel, "朋友圈");
+  assert.deepEqual(generation.payload, { title: "payload" });
+});
+
+test("snapshot auth helpers are no longer exposed through route scope", () => {
+  const scope = bindRouteScope({ appConfig: { security: {} } });
+  assert.equal(Object.hasOwn(helpers, "getAuthenticatedUser"), false);
+  assert.equal(Object.hasOwn(helpers, "requireAuth"), false);
+  assert.equal(Object.hasOwn(helpers, "requireAdmin"), false);
+  assert.equal(Object.hasOwn(scope, "getAuthenticatedUser"), false);
+  assert.equal(Object.hasOwn(scope, "requireAuth"), false);
+  assert.equal(Object.hasOwn(scope, "requireAdmin"), false);
 });

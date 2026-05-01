@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 11  
-**Overall status:** Admin overview hardening complete
+**Current phase:** 12  
+**Overall status:** Helper snapshot cleanup and tests complete
 
 ## Progress Summary
 
@@ -19,6 +19,7 @@
 | 9 | Admin Overview SQL | Complete | 1/1 |
 | 10 | Runtime Readability Cleanups | Complete | 1/1 |
 | 11 | Admin Overview Hardening | Complete | 1/1 |
+| 12 | Helper Snapshot Cleanup And Tests | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -183,6 +184,22 @@
 - [x] Brand deletion is transactional.
 - [x] Admin user deletion removes stored files before SQL row deletion.
 - [x] `npm run check`, `npm test`, API smoke, real browser login, and GSD code review pass.
+
+## Phase 12: Helper Snapshot Cleanup And Tests
+
+**Goal:** Remove unused snapshot-era helper exports and add focused regression coverage for the remaining third-review findings.
+
+**Directory:** `.planning/phases/phase-12-helper-snapshot-cleanup-tests/`
+
+**Plans:**
+- [x] `12-01-PLAN.md` - Clean helpers and add review coverage
+
+**Exit criteria:**
+- [x] Snapshot-era mutation/auth helpers are no longer exported from `helpers.js` or route scope.
+- [x] API route context no longer passes unused `readStore`/`writeStore`.
+- [x] Health route only destructures the helpers it uses.
+- [x] Tests cover signed asset verification, row mapper conversion, and old auth helper exposure.
+- [x] `npm run check`, `npm test`, API smoke, real browser login/API validation, and GSD code review pass.
 
 ## Phase 8: Review Regression Tests
 

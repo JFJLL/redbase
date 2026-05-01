@@ -47,66 +47,6 @@ function hasEnoughCredits(user, cost, res) {
   return true;
 }
 
-function spendCredits(user, cost) {
-  user.credits = Number(user.credits || 0) - cost;
-}
-
-function recordCreditEvent(storeState, options) {
-  storeState.creditEvents = Array.isArray(storeState.creditEvents) ? storeState.creditEvents : [];
-  const event = {
-    id: Number(storeState.nextCreditEventId || 1),
-    userId: options.user.id,
-    actionType: options.actionType,
-    actionLabel: options.actionLabel,
-    creditDelta: Number(options.creditDelta || 0),
-    creditCost: Number(options.creditCost || 0),
-    createdAt: new Date().toISOString(),
-    adminUserId: options.adminUser?.id ?? null,
-    adminUserName: options.adminUser?.name || "",
-    brandId: options.brand?.id ?? null,
-    brandName: options.brand?.name || "",
-    trendId: options.trend?.id ?? null,
-    trendTitle: options.trend?.title || "",
-    ideaTitle: options.idea?.title || "",
-    generationId: options.generationId ?? null,
-    channelLabel: options.channelLabel || "",
-    summary: options.summary || "",
-    payload: options.payload || {},
-  };
-  storeState.nextCreditEventId = event.id + 1;
-  storeState.creditEvents.unshift(event);
-  return event;
-}
-
-function attachGenerationToCreditEvent(storeState, creditEventId, generation, generationPayload) {
-  const numericId = Number(creditEventId);
-  if (!Number.isFinite(numericId)) return null;
-  const event = (storeState.creditEvents || []).find((item) => item.id === numericId);
-  if (!event) return null;
-  event.generationId = generation.id;
-  event.channelLabel = generation.channelLabel || event.channelLabel;
-  event.summary = generation.summary || generation.cardTitle || event.summary;
-  event.payload = {
-    ...(event.payload || {}),
-    generationPayload: generationPayload || generation.payload || {},
-  };
-  return event;
-}
-
-function findGenerationForCreditEvent(storeState, creditEventId, userId) {
-  const numericId = Number(creditEventId);
-  if (!Number.isFinite(numericId)) return null;
-  const event = (storeState.creditEvents || []).find((item) => item.id === numericId && item.userId === userId);
-  if (!event?.generationId) return null;
-  return (storeState.generations || []).find((item) => item.id === event.generationId && item.ownerUserId === userId) || null;
-}
-
-function findOwnedGeneration(storeState, user, generationId) {
-  const numericId = Number(generationId);
-  if (!Number.isFinite(numericId) || numericId <= 0) return null;
-  return (storeState.generations || []).find((item) => item.id === numericId && item.ownerUserId === user.id) || null;
-}
-
 function getTrendAnalysisBrandProfileSize(brand) {
   const fields = [
     brand?.name,
@@ -121,133 +61,6 @@ function getTrendAnalysisBrandProfileSize(brand) {
   return {
     total: fields.reduce((sum, value) => sum + String(value || "").trim().length, 0),
   };
-}
-
-async function appendImageEditToGeneration(storeState, userId, job) {
-  const generationId = Number(job?.generationContext?.sourceGenerationId || 0);
-  if (!Number.isFinite(generationId) || generationId <= 0) return null;
-  const generation = (storeState.generations || []).find((item) => item.id === generationId && item.ownerUserId === userId);
-  if (!generation) return null;
-
-  generation.payload = generation.payload && typeof generation.payload === "object" ? generation.payload : {};
-  generation.payload.editHistory = Array.isArray(generation.payload.editHistory) ? generation.payload.editHistory : [];
-  const existing = generation.payload.editHistory.find((item) => item.id === job.id);
-  if (existing) return existing;
-
-  const editEntry = {
-    id: job.id,
-    parentEditId: job.generationContext.parentEditId || "",
-    prompt: job.generationContext.editPrompt || job.metadata?.editPrompt || job.metadata?.prompt || "",
-    sourceImageUrl: job.generationContext.sourceImageUrl || job.metadata?.originalImageUrl || "",
-    sourceSlideIndex: Number.isInteger(job.generationContext.sourceSlideIndex) ? job.generationContext.sourceSlideIndex : null,
-    imageUrl: job.imageUrl || "",
-    previewUrl: job.imageUrl || "",
-    title: job.generationContext.title || job.metadata?.title || "改图结果",
-    aspectRatio: job.generationContext.aspectRatio || job.metadata?.aspectRatio || "",
-    model: job.model || "",
-    provider: job.provider || "",
-    createdAt: new Date(Number(job.createdAt || Date.now())).toISOString(),
-    completedAt: job.completedAt || new Date().toISOString(),
-  };
-  await persistGeneratedImageReference({
-    ownerUserId: generation.ownerUserId,
-    generationId: generation.id,
-    target: editEntry,
-    remoteUrl: job.imageUrl || "",
-    variant: `edit_${job.id}`,
-    localUrl: buildGeneratedEditImageUrl(generation.id, job.id),
-  });
-  generation.payload.editHistory.unshift(editEntry);
-  return editEntry;
-}
-
-function attachImageEditToCreditEvent(storeState, creditEventId, editEntry, sourceGenerationId) {
-  const numericId = Number(creditEventId);
-  if (!Number.isFinite(numericId)) return null;
-  const event = (storeState.creditEvents || []).find((item) => item.id === numericId);
-  if (!event) return null;
-  event.generationId = Number(sourceGenerationId) || event.generationId;
-  event.payload = {
-    ...(event.payload || {}),
-    editResult: editEntry,
-  };
-  return event;
-}
-
-function attachGenerationToLatestMatchingCreditEvent(storeState, options) {
-  const event = (storeState.creditEvents || []).find(
-    (item) =>
-      item.userId === options.user.id &&
-      item.actionType === options.actionType &&
-      item.generationId == null &&
-      item.brandId === options.brand.id &&
-      item.trendId === options.trend.id &&
-      (!item.ideaTitle || item.ideaTitle === options.idea.title),
-  );
-  if (!event) return null;
-  return attachGenerationToCreditEvent(storeState, event.id, options.generation, options.generationPayload);
-}
-
-async function deleteUserCascade(storeState, targetUser) {
-  const userId = targetUser.id;
-  const userBrands = (storeState.brands || []).filter((brand) => brand.ownerUserId === userId);
-  for (const brand of userBrands) {
-    if (brand.logo?.storedPath) {
-      await removeStoredFileIfExists(resolveStoredAssetPath(brand.logo.storedPath));
-    }
-  }
-  for (const generation of (storeState.generations || []).filter((item) => item.ownerUserId === userId)) {
-    await removeGenerationLocalFiles(generation);
-  }
-  const productImages = (storeState.productImages || []).filter((image) => image.ownerUserId === userId);
-  for (const image of productImages) {
-    try {
-      await fsp.unlink(resolveStoredProductImagePath(image));
-    } catch (error) {
-      if (error?.code !== "ENOENT") {
-        console.warn("[admin] failed to remove user product image", { userId, imageId: image.id, error: error.message });
-      }
-    }
-  }
-
-  storeState.users = (storeState.users || []).filter((user) => user.id !== userId);
-  storeState.sessions = (storeState.sessions || []).filter((session) => session.userId !== userId);
-  storeState.brands = (storeState.brands || []).filter((brand) => brand.ownerUserId !== userId);
-  storeState.generations = (storeState.generations || []).filter((generation) => generation.ownerUserId !== userId);
-  storeState.creditEvents = (storeState.creditEvents || []).filter((event) => event.userId !== userId);
-  storeState.productImages = (storeState.productImages || []).filter((image) => image.ownerUserId !== userId);
-  storeState.imageJobs = (storeState.imageJobs || []).filter((job) => job.ownerUserId !== userId);
-  if (targetUser.phone && storeState.verificationCodes) {
-    delete storeState.verificationCodes[targetUser.phone];
-  }
-}
-
-async function deleteGenerationCascade(storeState, generation, liveImageJobs) {
-  const generationId = Number(generation?.id || 0);
-  if (!Number.isFinite(generationId) || generationId <= 0) return;
-  await removeGenerationLocalFiles(generation);
-  const contentUrls = collectGenerationContentUrls(generation);
-
-  storeState.generations = (storeState.generations || []).filter((item) => item.id !== generationId);
-  storeState.imageJobs = (storeState.imageJobs || []).filter((job) => {
-    const shouldDelete =
-      Number(job.generationId) === generationId ||
-      Number(job.generationContext?.sourceGenerationId) === generationId ||
-      contentUrls.has(String(job.imageUrl || ""));
-    if (shouldDelete && job.id && liveImageJobs?.delete) {
-      liveImageJobs.delete(job.id);
-    }
-    return !shouldDelete;
-  });
-
-  for (const event of storeState.creditEvents || []) {
-    if (Number(event.generationId) !== generationId) continue;
-    event.generationId = null;
-    event.payload = {
-      deletedGenerationId: generationId,
-      deletedAt: new Date().toISOString(),
-    };
-  }
 }
 
 async function removeGenerationLocalFiles(generation) {
@@ -298,40 +111,6 @@ function collectObjectValues(value, visit) {
   }
 }
 
-function findOwnedImageJob(storeState, user, jobId) {
-  return (storeState.imageJobs || []).find((job) => job.id === jobId && job.ownerUserId === user.id) || null;
-}
-
-function upsertImageJobRecord(storeState, userId, job) {
-  if (!job?.id) return null;
-  storeState.imageJobs = Array.isArray(storeState.imageJobs) ? storeState.imageJobs : [];
-  const nowIso = new Date().toISOString();
-  const record = {
-    id: job.id,
-    ownerUserId: userId,
-    status: job.status || "pending",
-    provider: job.provider || "wavespeed",
-    providerMode: job.providerMode || "",
-    providerResultUrl: job.providerResultUrl || "",
-    model: job.model || "",
-    metadata: job.metadata && typeof job.metadata === "object" ? job.metadata : {},
-    generationContext: job.generationContext && typeof job.generationContext === "object" ? job.generationContext : null,
-    imageUrl: job.imageUrl || "",
-    error: job.error || "",
-    generationId: job.generationId ?? null,
-    createdAt: Number(job.createdAt || Date.now()),
-    updatedAt: nowIso,
-    completedAt: job.status === "completed" ? job.completedAt || nowIso : job.completedAt || "",
-  };
-  const index = storeState.imageJobs.findIndex((item) => item.id === record.id);
-  if (index >= 0) {
-    storeState.imageJobs[index] = record;
-  } else {
-    storeState.imageJobs.unshift(record);
-  }
-  return record;
-}
-
 function normalizeProductImage(input) {
   if (!input || typeof input !== "object") return null;
   const dataUrl = String(input.dataUrl || "");
@@ -342,50 +121,6 @@ function normalizeProductImage(input) {
     dataUrl,
     sizeBytes: estimateDataUrlBytes(dataUrl),
   };
-}
-
-async function resolveProductImageInput(storeState, user, input) {
-  const imageId = Number(input?.id || input?.productImageId || 0);
-  if (Number.isFinite(imageId) && imageId > 0) {
-    const image = findOwnedProductImage(storeState, user, imageId);
-    if (!image) return null;
-    const buffer = await fsp.readFile(resolveStoredProductImagePath(image));
-    image.lastUsedAt = new Date().toISOString();
-    return {
-      id: image.id,
-      name: image.originalName,
-      dataUrl: `data:${image.mimeType};base64,${buffer.toString("base64")}`,
-      sizeBytes: Number(image.sizeBytes || buffer.length),
-    };
-  }
-  return normalizeProductImage(input);
-}
-
-async function resolveProductImageInputs(storeState, user, input, options = {}) {
-  const rawImages = Array.isArray(input) ? input : input ? [input] : [];
-  const maxCount = Number(options.maxCount || MAX_PRODUCT_IMAGE_SELECTION_COUNT);
-  const maxTotalBytes = Number(options.maxTotalBytes || MAX_PRODUCT_IMAGE_SELECTION_BYTES);
-  const label = String(options.label || "产品参考图");
-  if (rawImages.length > maxCount) {
-    throw Object.assign(new Error(`${label}最多选择 ${maxCount} 张。请删除已有图片后重新上传或选择。`), {
-      code: "IMAGE_LIMIT_EXCEEDED",
-    });
-  }
-  const resolved = [];
-  let totalBytes = 0;
-  for (const rawImage of rawImages) {
-    const image = await resolveProductImageInput(storeState, user, rawImage);
-    if (!image) continue;
-    totalBytes += Number(image.sizeBytes || estimateDataUrlBytes(image.dataUrl) || 0);
-    if (totalBytes > maxTotalBytes) {
-      throw Object.assign(
-        new Error(`${label}总大小最多 ${formatBytes(maxTotalBytes)}。请压缩图片或删除已有图片后重新上传。`),
-        { code: "IMAGE_LIMIT_EXCEEDED" },
-      );
-    }
-    resolved.push(image);
-  }
-  return resolved;
 }
 
 async function resolveBrandLogoImage(brand) {
@@ -426,47 +161,6 @@ async function saveBrandLogo(user, brand, payload) {
   };
 }
 
-async function saveProductImage(storeState, user, payload) {
-  const parsed = parseProductImageDataUrl(payload?.dataUrl);
-  if (parsed.buffer.length > MAX_PRODUCT_IMAGE_BYTES) {
-    const maxMb = Math.round(MAX_PRODUCT_IMAGE_BYTES / 1024 / 1024);
-    throw Object.assign(new Error(`产品图过大，请上传 ${maxMb}MB 以内的图片。`), { code: "PAYLOAD_TOO_LARGE" });
-  }
-
-  const sha256 = crypto.createHash("sha256").update(parsed.buffer).digest("hex");
-  storeState.productImages = Array.isArray(storeState.productImages) ? storeState.productImages : [];
-  const duplicate = storeState.productImages.find((image) => image.ownerUserId === user.id && image.sha256 === sha256 && !image.deletedAt);
-  if (duplicate) {
-    return { image: duplicate, duplicate: true };
-  }
-
-  const imageId = storeState.nextProductImageId++;
-  const now = new Date();
-  const year = String(now.getFullYear());
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const ext = PRODUCT_IMAGE_MIME_EXTENSIONS[parsed.mimeType];
-  const fileName = `pi_${imageId}_${randomId().slice(0, 12)}.${ext}`;
-  const storedPath = path.join("uploads", "product-images", "users", String(user.id), year, month, fileName);
-  const absolutePath = path.join(DATA_DIR, storedPath);
-  await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fsp.writeFile(absolutePath, parsed.buffer);
-
-  const image = {
-    id: imageId,
-    ownerUserId: user.id,
-    originalName: sanitizeFileName(payload?.name || "product-image"),
-    storedPath,
-    mimeType: parsed.mimeType,
-    sizeBytes: parsed.buffer.length,
-    sha256,
-    createdAt: now.toISOString(),
-    lastUsedAt: "",
-    deletedAt: "",
-  };
-  storeState.productImages.unshift(image);
-  return { image, duplicate: false };
-}
-
 function parseProductImageDataUrl(dataUrl) {
   const match = String(dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match) {
@@ -499,10 +193,6 @@ function formatBytes(bytes) {
 function sanitizeFileName(value) {
   const name = String(value || "product-image").replace(/[\\/:*?"<>|]/g, "_").trim();
   return (name || "product-image").slice(0, 120);
-}
-
-function findOwnedProductImage(storeState, user, imageId) {
-  return (storeState.productImages || []).find((image) => image.id === imageId && image.ownerUserId === user.id && !image.deletedAt) || null;
 }
 
 function resolveStoredProductImagePath(image) {
@@ -885,37 +575,6 @@ function truncateLogString(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-function getAuthenticatedUser(storeState, req) {
-  const token = getSessionToken(req);
-  if (!token) return null;
-  const session = storeState.sessions.find((item) => item.token === token);
-  if (!session) return null;
-  const user = storeState.users.find((item) => item.id === session.userId) || null;
-  if (user && req) {
-    req.__redbaseApiUser = buildApiUserLog(user);
-  }
-  return user;
-}
-
-function requireAuth(storeState, req, res) {
-  const user = getAuthenticatedUser(storeState, req);
-  if (!user) {
-    unauthorized(res, "请先登录");
-    return null;
-  }
-  return user;
-}
-
-function requireAdmin(storeState, req, res, appConfig) {
-  const user = requireAuth(storeState, req, res);
-  if (!user) return null;
-  if (!isAdminUser(user, appConfig)) {
-    forbidden(res, "当前账号没有管理后台权限");
-    return null;
-  }
-  return user;
-}
-
 function isAdminUser(user, appConfig) {
   const configuredPhones = getConfiguredAdminPhones(appConfig);
   if (configuredPhones.length) {
@@ -952,34 +611,6 @@ function cloneTrendBuckets(trends) {
     description: bucket.description,
     items: Array.isArray(bucket.items) ? bucket.items.map(sanitizeTrend) : [],
   }));
-}
-
-function createGenerationRecord(storeState, userId, brand, trend, idea, type, channelLabel, payload) {
-  const summaryByType = {
-    moments: payload.caption || payload.visualDirection || "",
-    wechat: payload.publishTitle || payload.intro || "",
-    xhsCarousel: payload.publishCaption || payload.caption || "",
-    styleImage: payload.stylePrompt || payload.visualDirection || "",
-  };
-  const record = {
-    id: storeState.nextGenerationId++,
-    ownerUserId: userId,
-    type,
-    channelLabel,
-    brandId: brand.id,
-    brandName: brand.name,
-    trendId: trend.id,
-    trendTitle: trend.title,
-    ideaTitle: idea.title,
-    cardTitle: payload.title,
-    createdAt: new Date().toISOString(),
-    previewUrl: payload.previewUrl || payload.imageUrl || payload.slides?.[0]?.previewUrl || "",
-    summary: summaryByType[type] || "",
-    payload,
-  };
-  storeState.generations = Array.isArray(storeState.generations) ? storeState.generations : [];
-  storeState.generations.unshift(record);
-  return record;
 }
 
 function isRenderableGeneration(item) {
@@ -1455,34 +1086,18 @@ module.exports = {
   MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS,
   PRODUCT_IMAGE_MIME_EXTENSIONS,
   hasEnoughCredits,
-  spendCredits,
-  recordCreditEvent,
-  attachGenerationToCreditEvent,
-  findGenerationForCreditEvent,
-  findOwnedGeneration,
   getTrendAnalysisBrandProfileSize,
-  appendImageEditToGeneration,
-  attachImageEditToCreditEvent,
-  attachGenerationToLatestMatchingCreditEvent,
-  deleteUserCascade,
-  deleteGenerationCascade,
   removeGenerationLocalFiles,
   collectGenerationStoredPaths,
   collectGenerationContentUrls,
   collectObjectValues,
-  findOwnedImageJob,
-  upsertImageJobRecord,
   normalizeProductImage,
-  resolveProductImageInput,
-  resolveProductImageInputs,
   resolveBrandLogoImage,
   saveBrandLogo,
-  saveProductImage,
   parseProductImageDataUrl,
   estimateDataUrlBytes,
   formatBytes,
   sanitizeFileName,
-  findOwnedProductImage,
   resolveStoredProductImagePath,
   resolveStoredAssetPath,
   removeStoredFileIfExists,
@@ -1512,15 +1127,11 @@ module.exports = {
   buildApiUserLog,
   maskPhone,
   truncateLogString,
-  getAuthenticatedUser,
-  requireAuth,
-  requireAdmin,
   isAdminUser,
   getConfiguredAdminPhones,
   findTrendItem,
   normalizeEditableText,
   cloneTrendBuckets,
-  createGenerationRecord,
   isRenderableGeneration,
   buildAdminOverview,
   buildAdminBrandView,
