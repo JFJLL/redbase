@@ -2,17 +2,17 @@
 
 **Updated:** 2026-05-01  
 **Status:** active  
-**Current phase:** 9 complete  
-**Current phase name:** Admin Overview SQL  
+**Current phase:** 10 complete  
+**Current phase name:** Runtime Readability Cleanups  
 **Progress:** 100%
 
 ## Position
 
-The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads.
+The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads. Phase 10 reduced route-scope destructuring, named auth constants, and made runtime log appends asynchronous.
 
 ## Next Action
 
-Commit Phase 9, then start the next follow-up improvement phase for low-risk readability/runtime cleanups.
+Review remaining deferred items before starting another follow-up milestone.
 
 ## Active Decisions
 

@@ -358,9 +358,9 @@ function appendRuntimeLog(method, line, date = new Date()) {
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     const day = formatLogDate(date);
-    fs.appendFileSync(path.join(LOG_DIR, `redbase-${day}.log`), `${line}\n`, "utf8");
+    fs.appendFile(path.join(LOG_DIR, `redbase-${day}.log`), `${line}\n`, "utf8", () => {});
     if (method === "warn" || method === "error") {
-      fs.appendFileSync(path.join(LOG_DIR, `redbase-error-${day}.log`), `${line}\n`, "utf8");
+      fs.appendFile(path.join(LOG_DIR, `redbase-error-${day}.log`), `${line}\n`, "utf8", () => {});
     }
   } catch (error) {
     // Logging must never break the request path.

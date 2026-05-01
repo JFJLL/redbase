@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 9  
-**Overall status:** Admin overview SQL follow-up complete
+**Current phase:** 10  
+**Overall status:** Runtime readability follow-up complete
 
 ## Progress Summary
 
@@ -17,6 +17,7 @@
 | 7 | Review Hardening Quick Wins | Complete | 1/1 |
 | 8 | Review Regression Tests | Complete | 1/1 |
 | 9 | Admin Overview SQL | Complete | 1/1 |
+| 10 | Runtime Readability Cleanups | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -148,6 +149,21 @@
 
 **Exit criteria:**
 - [x] `/api/admin/overview` does not call `readStore()`.
+- [x] `npm run check`, `npm test`, API smoke, and real browser login pass.
+
+## Phase 10: Runtime Readability Cleanups
+
+**Goal:** Apply low-risk readability and runtime cleanup items from the follow-up review.
+
+**Directory:** `.planning/phases/phase-10-runtime-readability-cleanups/`
+
+**Plans:**
+- [x] `10-01-PLAN.md` - Runtime and route readability cleanups
+
+**Exit criteria:**
+- [x] Reviewed route modules only destructure helpers they use.
+- [x] Verification-code magic numbers and registration initial credits are named constants.
+- [x] Runtime logs use asynchronous file appends.
 - [x] `npm run check`, `npm test`, API smoke, and real browser login pass.
 
 ## Phase 8: Review Regression Tests
