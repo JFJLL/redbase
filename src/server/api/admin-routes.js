@@ -1,6 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { findUserById, findUserBySessionToken } = require("../db/repositories/auth-repository");
-const { addCredits, deleteUserCascadeRows } = require("../db/repositories/admin-repository");
+const { addCredits, deleteUserCascadeRows, readAdminOverviewStore } = require("../db/repositories/admin-repository");
 const { findGenerationById, deleteGenerationRows } = require("../db/repositories/generation-repository");
 
 async function handleAdminRoutes(context, req, res, pathname) {
@@ -138,8 +138,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/admin/overview") {
     const adminUser = requireAdminFromSql();
     if (!adminUser) return true;
-    const storeState = await readStore();
-    json(res, 200, buildAdminOverview(storeState, appConfig));
+    json(res, 200, buildAdminOverview(readAdminOverviewStore(), appConfig));
     return true;
   }
 
@@ -167,10 +166,9 @@ async function handleAdminRoutes(context, req, res, pathname) {
       adminUser,
       note: String(payload.note || "").trim(),
     });
-    const storeState = await readStore();
     json(res, 200, {
       user: sanitizeUser(updatedUser),
-      overview: buildAdminOverview(storeState, appConfig),
+      overview: buildAdminOverview(readAdminOverviewStore(), appConfig),
     });
     return true;
   }
@@ -192,11 +190,10 @@ async function handleAdminRoutes(context, req, res, pathname) {
     }
 
     deleteUserCascadeRows(targetUser.id);
-    const storeState = await readStore();
     json(res, 200, {
       ok: true,
       deletedUserId: targetUser.id,
-      overview: buildAdminOverview(storeState, appConfig),
+      overview: buildAdminOverview(readAdminOverviewStore(), appConfig),
     });
     return true;
   }
@@ -213,11 +210,10 @@ async function handleAdminRoutes(context, req, res, pathname) {
 
     await removeGenerationLocalFiles(generation);
     deleteGenerationRows(generation.id);
-    const storeState = await readStore();
     json(res, 200, {
       ok: true,
       deletedGenerationId: generation.id,
-      overview: buildAdminOverview(storeState, appConfig),
+      overview: buildAdminOverview(readAdminOverviewStore(), appConfig),
     });
     return true;
   }

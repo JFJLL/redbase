@@ -43,6 +43,14 @@ function listBrandsByOwner(ownerUserId) {
   );
 }
 
+function listAllBrands() {
+  return getBrandsBySql(`
+    SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+    FROM brands
+    ORDER BY id DESC
+  `);
+}
+
 function findBrandByOwner(brandId, ownerUserId) {
   return getBrandsBySql(
     `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
@@ -274,6 +282,7 @@ function allocateAnalysisAndTrendBase() {
 
 module.exports = {
   listBrandsByOwner,
+  listAllBrands,
   findBrandByOwner,
   findBrandById,
   insertBrand,

@@ -2,17 +2,17 @@
 
 **Updated:** 2026-05-01  
 **Status:** active  
-**Current phase:** complete  
-**Current phase name:** Review Regression Tests  
+**Current phase:** 9 complete  
+**Current phase name:** Admin Overview SQL  
 **Progress:** 100%
 
 ## Position
 
-The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes.
+The original six refactor phases are complete. Phase 7 addressed actionable review hardening findings from `.workflow/.scratchpad/review-code-20260430/review-report.md` while preserving the temporary demo verification-code behavior requested for testing. Phase 8 added focused regression coverage for those hardening changes. Phase 9 moved the admin overview request path away from full snapshot-store reads.
 
 ## Next Action
 
-No remaining planned phase. Next action is optional review of the generated commits or a follow-up milestone for deeper integration tests.
+Commit Phase 9, then start the next follow-up improvement phase for low-risk readability/runtime cleanups.
 
 ## Active Decisions
 

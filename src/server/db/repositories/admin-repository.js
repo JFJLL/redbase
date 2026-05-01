@@ -1,7 +1,9 @@
 const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
-const { mapCreditEventRow } = require("./row-mappers");
+const { listAllBrands } = require("./brand-repository");
+const { listAllGenerations } = require("./generation-repository");
+const { mapCreditEventRow, mapUserRow } = require("./row-mappers");
 
 const db = getDbProxy();
 
@@ -38,6 +40,31 @@ function insertCreditEvent(input) {
 
 function findCreditEventById(creditEventId) {
   return mapCreditEventRow(db.prepare("SELECT * FROM credit_events WHERE id = ?").get(Number(creditEventId)));
+}
+
+function listAllUsers() {
+  return db.prepare(`
+    SELECT id, name, phone, password, account_type, department, credits, created_at
+    FROM users
+    ORDER BY id ASC
+  `).all().map(mapUserRow);
+}
+
+function listAllCreditEvents() {
+  return db.prepare(`
+    SELECT *
+    FROM credit_events
+    ORDER BY created_at DESC, id DESC
+  `).all().map(mapCreditEventRow);
+}
+
+function readAdminOverviewStore() {
+  return {
+    users: listAllUsers(),
+    brands: listAllBrands(),
+    generations: listAllGenerations(),
+    creditEvents: listAllCreditEvents(),
+  };
 }
 
 function findRefundForCreditEvent(creditEventId, userId) {
@@ -211,6 +238,9 @@ function deleteUserCascadeRows(userId) {
 module.exports = {
   insertCreditEvent,
   findCreditEventById,
+  listAllUsers,
+  listAllCreditEvents,
+  readAdminOverviewStore,
   findRefundForCreditEvent,
   refundCreditEventIfNeeded,
   findGenerationForCreditEvent,

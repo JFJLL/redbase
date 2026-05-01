@@ -38,6 +38,14 @@ function listGenerationsByOwner(ownerUserId) {
   `).all(Number(ownerUserId)).map(mapGenerationRow);
 }
 
+function listAllGenerations() {
+  return db.prepare(`
+    SELECT ${GENERATION_COLUMNS}
+    FROM generations
+    ORDER BY created_at DESC, id DESC
+  `).all().map(mapGenerationRow);
+}
+
 function findGenerationByOwner(generationId, ownerUserId) {
   return mapGenerationRow(db.prepare(`
     SELECT ${GENERATION_COLUMNS}
@@ -112,6 +120,7 @@ function deleteGenerationRows(generationId) {
 
 module.exports = {
   listGenerationsByOwner,
+  listAllGenerations,
   findGenerationByOwner,
   findGenerationById,
   upsertGeneration,

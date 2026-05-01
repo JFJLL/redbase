@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** Complete  
-**Overall status:** Follow-up review hardening complete
+**Current phase:** 9  
+**Overall status:** Admin overview SQL follow-up complete
 
 ## Progress Summary
 
@@ -16,6 +16,7 @@
 | 6 | Hardening, Docs, Release Readiness | Complete | 2/2 |
 | 7 | Review Hardening Quick Wins | Complete | 1/1 |
 | 8 | Review Regression Tests | Complete | 1/1 |
+| 9 | Admin Overview SQL | Complete | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -135,6 +136,19 @@
 - [x] `npm run check`, API smoke, and real browser login pass.
 
 ## Backlog
+
+## Phase 9: Admin Overview SQL
+
+**Goal:** Move the remaining admin overview request path off full snapshot-store reads.
+
+**Directory:** `.planning/phases/phase-09-admin-overview-sql/`
+
+**Plans:**
+- [x] `09-01-PLAN.md` - Move admin overview to SQL repositories
+
+**Exit criteria:**
+- [x] `/api/admin/overview` does not call `readStore()`.
+- [x] `npm run check`, `npm test`, API smoke, and real browser login pass.
 
 ## Phase 8: Review Regression Tests
 
