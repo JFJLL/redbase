@@ -380,7 +380,10 @@ function renderSidebarState() {
   const label = toggleButton.querySelector(".sidebar-toggle-label");
   const icon = toggleButton.querySelector(".sidebar-toggle-icon");
   if (label) label.textContent = state.sidebarCollapsed ? "展开侧边栏" : "收起侧边栏";
-  if (icon) icon.textContent = state.sidebarCollapsed ? "›" : "‹";
+  if (icon) {
+    icon.textContent = state.sidebarCollapsed ? "›" : "‹";
+    icon.dataset.icon = icon.textContent;
+  }
 }
 
 function bindLandingEntry() {
@@ -1247,7 +1250,6 @@ function renderBrands() {
           </div>
           <div class="brand-actions">
             <button class="primary-btn small-btn" data-brand-action="trends" data-brand-id="${brand.id}" type="button">AI趋势分析</button>
-            <button class="secondary-btn" data-brand-action="ideas" data-brand-id="${brand.id}" type="button">查看内容选题</button>
             <button class="secondary-btn" data-brand-edit="${brand.id}" type="button">编辑</button>
             <button class="secondary-btn danger-btn" data-brand-delete="${brand.id}" type="button">删除</button>
           </div>
@@ -2049,7 +2051,7 @@ function renderGenerationHistory() {
 
       if (item.type === "moments") {
         contentHtml = `
-          <div class="history-generate-copy"><strong>朋友圈文案：</strong>${escapeHtml(payload.caption || "")}</div>
+          <div class="history-generate-copy"><strong>朋友圈文案：</strong>${escapeHtml(getDisplayMomentsCaption(item, payload))}</div>
           <div class="history-generate-copy"><strong>视觉方向：</strong>${escapeHtml(payload.visualDirection || "")}</div>
         `;
       } else if (item.type === "wechat") {
@@ -2061,6 +2063,11 @@ function renderGenerationHistory() {
         contentHtml = `
           <div class="history-generate-copy"><strong>风格化提示词：</strong>${escapeHtml(payload.stylePrompt || payload.prompt || "")}</div>
           <div class="history-generate-copy"><strong>用途：</strong>公众号封面、节日祝福海报或运营视觉</div>
+        `;
+      } else if (item.type === "xhsCarousel") {
+        contentHtml = `
+          <div class="history-generate-copy"><strong>发布标题：</strong>${escapeHtml(getDisplayXhsPublishTitle(item, payload))}</div>
+          <div class="history-generate-copy"><strong>发布文案：</strong>${escapeHtml(getDisplayXhsPublishCaption(item, payload))}</div>
         `;
       } else {
         contentHtml = `
@@ -2123,6 +2130,63 @@ function getGenerationPrimaryImageUrl(item) {
   return slides.find((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))?.imageUrl || slides[0]?.previewUrl || "";
 }
 
+function isInternalXhsCopy(value) {
+  return /适合.*组图结构|这套组图适合|先把|封面先|继续展开|根据选题|收藏理由|明确点击理由|真实问题|进入理由|组图可以|热点翻译成|自然进入用户/.test(String(value || ""));
+}
+
+function cleanXhsTitle(value) {
+  return String(value || "")
+    .replace(/｜小红书组图方案/g, "")
+    .replace(/：适合[^：。]*组图结构/g, "")
+    .replace(/:适合[^:。]*组图结构/g, "")
+    .trim();
+}
+
+function getDisplayXhsPublishTitle(item, payload) {
+  const rawTitle = payload.publishTitle || payload.title || item.cardTitle || item.ideaTitle || "";
+  const cleanedTitle = cleanXhsTitle(rawTitle);
+  if (cleanedTitle && !isInternalXhsCopy(cleanedTitle)) return cleanedTitle;
+  const baseTitle = cleanXhsTitle(item.ideaTitle || payload.title || item.cardTitle || "今天也想好好开始");
+  return `${baseTitle}，从一杯${item.brandName || "好牛奶"}开始`;
+}
+
+function getDisplayXhsPublishCaption(item, payload) {
+  const rawCaption = payload.publishCaption || payload.caption || "";
+  if (rawCaption && !isInternalXhsCopy(rawCaption)) return rawCaption;
+  const brandName = item.brandName || "这一杯";
+  return `以前总觉得早晨要很精致才算仪式感。后来发现，能认真吃早餐、慢慢喝完一杯牛奶，就已经是在好好照顾自己。今天也从${brandName}开始，给身体和心情一点稳定的能量。`;
+}
+
+function renderHistoryDetailParagraph(label, value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return `<p><strong>${escapeHtml(label)}：</strong>${escapeHtml(text)}</p>`;
+}
+
+function isInternalMomentsCaption(value) {
+  return /这句话挺适合发朋友圈|不是为了追热点|落到.*真实场景|真正打动人的反而是|换个角度聊聊|好的内容不一定|能提供的价值其实/.test(String(value || ""));
+}
+
+function getDisplayMomentsCaption(item, payload) {
+  const rawCaption = payload.caption || "";
+  if (rawCaption && !isInternalMomentsCaption(rawCaption)) return rawCaption;
+  const brandName = item.brandName || "这一杯";
+  return `早上的时间总是不够用，但还是想把自己照顾好一点。今天从一杯${brandName}开始，慢慢把状态找回来。`;
+}
+
+function renderHistoryAssetCopyDetails(item, payload) {
+  if (item.type === "moments") {
+    return renderHistoryDetailParagraph("朋友圈文案", getDisplayMomentsCaption(item, payload));
+  }
+  if (item.type === "wechat") {
+    return `
+      ${renderHistoryDetailParagraph("发布标题", payload.publishTitle)}
+      ${renderHistoryDetailParagraph("文章导语", payload.intro)}
+    `;
+  }
+  return "";
+}
+
 function openHistoryGeneration(generationId, selectedSlideIndex = 0) {
   const item = state.generationHistory.find((generation) => Number(generation.id) === Number(generationId));
   if (!item) return;
@@ -2146,6 +2210,7 @@ function openHistoryGeneration(generationId, selectedSlideIndex = 0) {
       <h3>${escapeHtml(item.cardTitle || "历史图片")}</h3>
       <p><strong>生成类型：</strong>${escapeHtml(item.channelLabel || "")}</p>
       <p><strong>来源选题：</strong>${escapeHtml(item.ideaTitle || "")}</p>
+      ${renderHistoryAssetCopyDetails(item, payload)}
     </div>
     <div class="asset-grid">
       <div class="image-preview-card">
@@ -2193,6 +2258,8 @@ function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
       <h3>${escapeHtml(item.cardTitle || "小红书组图")}</h3>
       <p><strong>生成类型：</strong>${escapeHtml(item.channelLabel || "")}</p>
       <p><strong>来源选题：</strong>${escapeHtml(item.ideaTitle || "")}</p>
+      ${renderHistoryDetailParagraph("发布标题", getDisplayXhsPublishTitle(item, payload))}
+      ${renderHistoryDetailParagraph("发布文案", getDisplayXhsPublishCaption(item, payload))}
     </div>
     <div class="history-carousel-picker">
       ${slides
@@ -2563,11 +2630,12 @@ function buildLocalXhsCarouselPack(brand, trend, idea) {
   const brandName = brand?.name || "品牌";
   const audience = idea?.audience || brand?.audience || "目标用户";
   const brandFit = idea?.brandFit || brand?.knowledgeBase || "品牌价值";
+  const publishTopic = title.replace(/｜/g, "，");
   const slideCopies = [
-    `先把“${trendTitle}”转成一个用户会想点开的真实问题，让封面有明确点击理由。`,
-    `继续展开${audience}在这个议题里的具体感受、困扰或期待，少讲概念，多讲生活细节。`,
-    `根据选题选择方法、对比、清单、测评或场景故事，把${brandFit}讲得具体可感。`,
-    `用一个收藏理由、总结观点或轻互动收口，让用户觉得这组图值得保存或转发。`,
+    `不是自律到满分才叫晨间仪式感。能在出门前认真喝一杯、吃一点，把自己照顾好，就已经是在给一天一个好开头。`,
+    `很多人的早晨都很赶：消息在催、通勤在催、脑子还没醒。越是这种时候，越需要一个不用费力也能稳定下来的小动作。`,
+    `${brandName}适合放进这样的早晨里：口感干净，营养扎实，不需要复杂准备，也能让早餐多一点被认真对待的感觉。`,
+    `把这几分钟留给自己。今天不一定要很完美，但可以从一杯更舒服的早餐开始。`,
   ];
   const slides = [
     {
@@ -2609,9 +2677,9 @@ function buildLocalXhsCarouselPack(brand, trend, idea) {
   ];
   return {
     title: `${title}｜小红书组图方案`,
-    publishTitle: `${title}：适合${brandName}的一套组图结构`,
-    publishCaption: `这套组图适合用来讲“${title}”：封面先给进入理由，中间把场景和价值讲具体，最后给用户一个保存、评论或继续了解的理由。`,
-    caption: `围绕“${trendTitle}”，这套组图把热点转成更真实的小红书连续图文，让${brandName}自然进入用户关心的语境。`,
+    publishTitle: `${publishTopic}，从一杯${brandName}开始`,
+    publishCaption: `以前总觉得早晨要很精致才算仪式感。后来发现，能认真吃早餐、慢慢喝完一杯牛奶，就已经是在好好照顾自己。今天也从${brandName}开始，给身体和心情一点稳定的能量。`,
+    caption: `把早餐认真吃完，把早晨慢慢过好。${brandName}不用把生活变复杂，只是帮你把一天的开始照顾得更稳一点。`,
     slides,
   };
 }

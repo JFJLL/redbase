@@ -7,10 +7,10 @@ const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
 function buildImageConceptMetadata({ brand, trend, idea }) {
   const seed = `${brand.name}|${trend.title}|${idea.title}|${idea.angle || ""}`;
   const captionTemplate = pickVariant(seed, [
-    () => `最近看到“${trend.title}”这个话题，突然想到一个很具体的场景：${idea.summary}。如果把它放到日常里，${brand.name}能提供的价值其实会更自然地被看见。`,
-    () => `有时候不需要把热点讲得很大，真正打动人的反而是一个细节。比如${idea.audience}正在关心的这件事，${idea.brandFit}就可以用很轻的方式说出来。`,
-    () => `${idea.hook || trend.title} 这句话挺适合发朋友圈，不是为了追热点，而是把一个最近大家都有感的情绪，落到${brand.name}能陪伴或解决的真实场景里。`,
-    () => `今天想从“${trend.title}”换个角度聊聊：好的内容不一定要很用力，能让人想到自己的生活、愿意停下来多看一眼，就已经很有价值了。`,
+    () => `早上的时间总是不够用，但还是想把自己照顾好一点。今天从一杯${brand.name}开始，慢慢把状态找回来。`,
+    () => `忙起来以后才发现，真正让人安心的不是多做了多少事，而是那些稳定的小习惯：好好吃早餐，好好喝一杯牛奶，好好开始一天。`,
+    () => `把早餐留给自己，把匆忙留在门外。${brand.name}刚好适合这样的早晨，简单一点，也认真一点。`,
+    () => `今天的精致感，不靠复杂准备。坐下来喝完这一杯，再去面对满满当当的一天。`,
   ]);
   const visualTemplate = pickVariant(`${seed}|visual`, [
     () => `${brand.name}朋友圈生活方式分享图`,

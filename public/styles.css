@@ -579,15 +579,26 @@ button {
 .sidebar-toggle-icon {
   width: 22px;
   height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
+  position: relative;
+  flex: 0 0 auto;
   border-radius: 50%;
   background: #f3e7e2;
   color: #b84043;
   font-family: Arial, sans-serif;
-  font-size: 1.1rem;
-  line-height: 0;
+  font-size: 0;
+  line-height: 1;
+}
+
+.sidebar-toggle-icon::before {
+  content: attr(data-icon);
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 1.05rem;
+  line-height: 1;
 }
 
 .user-avatar,
@@ -659,6 +670,7 @@ button {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
+  align-items: start;
 }
 
 .history-filter-panel {
@@ -2490,13 +2502,16 @@ textarea {
 .page-dashboard.sidebar-collapsed .sidebar-toggle-icon {
   width: 30px;
   height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   background: #f7e8e4;
   color: #b84043;
   border: 1px solid rgba(216, 68, 68, 0.14);
   box-shadow: 0 8px 18px rgba(126, 55, 55, 0.08);
+}
+
+.page-dashboard.sidebar-collapsed .sidebar-toggle-icon::before {
+  font-size: 1.1rem;
 }
 
 .page-dashboard.sidebar-collapsed .user-info {
@@ -3323,10 +3338,18 @@ textarea {
   overflow: hidden;
 }
 
+.brand-card .brand-description {
+  min-height: 150px;
+}
+
 .brand-kb-box {
   max-height: 132px;
   overflow: auto;
   scrollbar-width: thin;
+}
+
+.brand-card .brand-kb-box {
+  min-height: 108px;
 }
 
 .brand-actions {
@@ -3335,7 +3358,9 @@ textarea {
 }
 
 .history-generate-card {
-  min-height: 430px;
+  min-height: 0;
+  max-height: 680px;
+  overflow: hidden;
 }
 
 .history-generate-ref,
@@ -3354,7 +3379,7 @@ textarea {
 }
 
 .history-preview-button {
-  margin-top: auto;
+  margin-top: 0;
 }
 
 .history-generate-preview img {
@@ -3363,7 +3388,7 @@ textarea {
 }
 
 .history-generate-grid {
-  margin-top: auto;
+  margin-top: 0;
 }
 
 @media (max-width: 760px) {
@@ -3423,5 +3448,10 @@ textarea {
   .brand-description,
   .brand-kb-box {
     max-height: none;
+  }
+
+  .brand-card .brand-description,
+  .brand-card .brand-kb-box {
+    min-height: 0;
   }
 }
