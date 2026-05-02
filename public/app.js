@@ -1921,6 +1921,45 @@ async function loadGenerationHistory() {
   renderGenerationHistory();
 }
 
+function normalizeHistoryText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeHistoryDateBoundary(value, mode) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    return mode === "to" ? `${input}T23:59:59.999Z` : `${input}T00:00:00.000Z`;
+  }
+  return input;
+}
+
+function matchesGenerationHistoryFilters(item, filters = state.generationHistoryFilters) {
+  if (!item) return false;
+  if (filters.brandId && String(item.brandId) !== String(filters.brandId)) return false;
+  if (filters.type && item.type !== filters.type) return false;
+
+  const query = normalizeHistoryText(filters.q);
+  if (query) {
+    const haystack = [item.cardTitle, item.summary, item.trendTitle, item.brandName, item.ideaTitle]
+      .map(normalizeHistoryText)
+      .join(" ");
+    if (!haystack.includes(query)) return false;
+  }
+
+  const createdAt = String(item.createdAt || "");
+  const from = normalizeHistoryDateBoundary(filters.from, "from");
+  const to = normalizeHistoryDateBoundary(filters.to, "to");
+  if (from && createdAt < from) return false;
+  if (to && createdAt > to) return false;
+
+  return true;
+}
+
+function getVisibleGenerationHistory() {
+  return state.generationHistory.filter((item) => matchesGenerationHistoryFilters(item));
+}
+
 function bindHistoryFilters() {
   const controls = [
     ["historySearchInput", "q", "input"],
@@ -1994,14 +2033,15 @@ function renderGenerationHistory() {
   const root = document.getElementById("generationHistoryList");
   if (!root) return;
   renderGenerationHistoryFilters();
+  const visibleHistory = getVisibleGenerationHistory();
 
-  if (!state.generationHistory.length) {
+  if (!visibleHistory.length) {
     const hasFilters = Object.values(state.generationHistoryFilters).some(Boolean);
     root.innerHTML = `<article class="brand-card"><div class="brand-description">${hasFilters ? "没有找到符合筛选条件的历史生成记录。" : "你还没有任何生成记录。去内容选题页生成朋友圈图、公众号长图或小红书组图后，这里会自动沉淀下来。"}</div></article>`;
     return;
   }
 
-  root.innerHTML = state.generationHistory
+  root.innerHTML = visibleHistory
     .map((item) => {
       const payload = item.payload || {};
       const editHistory = Array.isArray(payload.editHistory) ? payload.editHistory : [];

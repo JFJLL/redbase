@@ -55,6 +55,16 @@ seedGeneration({
   summary: "另一条",
   createdAt: "2026-05-02T10:00:00.000Z",
 });
+seedGeneration({
+  id: 3,
+  type: "moments",
+  channelLabel: "朋友圈图",
+  brandId: 20,
+  brandName: "Other Brand",
+  cardTitle: "其他品牌标题",
+  summary: "其他摘要",
+  createdAt: "2026-05-03T10:00:00.000Z",
+});
 
 function createReq(url, cookie = "") {
   return {
@@ -94,7 +104,7 @@ test("GET /api/history returns unfiltered history for authenticated user", async
   const handled = await handleHistoryRoutes(context, createReq("/api/history", "redbase_session=route-token"), res, "/api/history");
   assert.equal(handled, true);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body.generations.map((item) => item.id), [2, 1]);
+  assert.deepEqual(res.body.generations.map((item) => item.id), [3, 2, 1]);
 });
 
 test("GET /api/history applies type and keyword filters", async () => {
@@ -102,6 +112,19 @@ test("GET /api/history applies type and keyword filters", async () => {
   const handled = await handleHistoryRoutes(
     context,
     createReq("/api/history?type=moments&q=%E5%85%B3%E9%94%AE", "redbase_session=route-token"),
+    res,
+    "/api/history",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.generations.map((item) => item.id), [1]);
+});
+
+test("GET /api/history combines brand and type filters", async () => {
+  const res = createRes();
+  const handled = await handleHistoryRoutes(
+    context,
+    createReq("/api/history?brandId=10&type=moments", "redbase_session=route-token"),
     res,
     "/api/history",
   );
