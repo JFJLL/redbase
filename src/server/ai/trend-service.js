@@ -12,6 +12,15 @@ const PGY_XHS_TREND_COUNT = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE;
 const TREND_ITEMS_PER_BUCKET = 10;
 const MIN_TREND_ITEMS_PER_BUCKET = 1;
 
+const IDEA_ROUTE_PAIRS = {
+  xhs: ["热点证据解读", "用户场景转化"],
+  traffic: ["爆款形式复用", "互动话题反差"],
+  news: ["信息解释提醒", "生活应用清单"],
+  social: ["情绪共鸣表达", "具体场景行动"],
+  track: ["品类决策科普", "痛点对比避坑"],
+  crowd: ["身份共鸣洞察", "具体场景解决"],
+};
+
 const TREND_BUCKET_META = [
   {
     key: "xhs",
@@ -108,6 +117,20 @@ function formatBucketPromptRules(bucketMeta) {
     .join("\n\n");
 }
 
+function getIdeaRoutePair(bucketMeta) {
+  const [bucket] = normalizePromptBucketMeta(bucketMeta);
+  return IDEA_ROUTE_PAIRS[bucket.key] || ["理性实用路线", "场景共鸣路线"];
+}
+
+function buildIdeaDiversityPrompt(bucketMeta) {
+  const [firstRoute, secondRoute] = getIdeaRoutePair(bucketMeta);
+  return [
+    `同一 trend 下的 2 条 idea 必须是两个明显不同的内容选择：idea[0] 走「${firstRoute}」，idea[1] 走「${secondRoute}」。`,
+    "两条 idea 禁止只做同义改写；title、summary、angle、audience、hook 至少有 3 项明显不同。",
+    "两条 idea 的 contentAssets 必须分别沿用各自路线，不要复用同一套朋友圈文案、小红书文案、组图页标题或公众号导语。",
+  ].join("\n");
+}
+
 function buildRichIdeaRequirementsPrompt() {
   return [
     "每条 idea 都要按“完整内容选题卡”输出，不要写成一句话骨架。",
@@ -141,6 +164,7 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]]) {
     "评分时综合考虑：小红书站内讨论度、搜索意图、互动/收藏潜力、内容可复制性、目标人群相关性、品牌自然植入度和近期时效性。不要编造具体播放量、搜索量、排名或机构数据。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
     "ideas 必须是 2 条，每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
+    buildIdeaDiversityPrompt(selectedBucketMeta),
     buildRichIdeaRequirementsPrompt(),
     "contentAssets 必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
     buildContentAssetsSchemaPrompt(),
@@ -233,7 +257,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     "5. score 要严格按热度指数评分标准给出，不要所有趋势都给高分；优先把 80 分以上留给真正具备快速借势价值的趋势。",
     "6. 选题要能直接给运营同学使用，标题、角度、钩子都要有小红书笔记感，避免空泛文案。",
     buildRichIdeaRequirementsPrompt(),
-    "7. 每条趋势固定生成 2 条 idea，每条 idea 必须同步生成完整 contentAssets，不能只返回选题骨架。",
+    "7. 每条趋势固定生成 2 条 idea，每条 idea 必须同步生成完整 contentAssets，并遵守两条选题差异规则，不能只返回选题骨架或同义改写。",
     "8. contentAssets 要包含内容选题页可直接展示的文案和后续生图需要的中文视觉方向；不要输出 style、composition、prompt，系统会自动生成生图 prompt。",
     "9. 不要输出品牌摘要字段；不要在 contentAssets 里补充品牌档案没有依据的固定行业样例。",
     "10. 如果涉及新闻、社会议题或近期热点，请表达为可验证的趋势或议题方向，不要编造具体机构、日期、排名或数据。",
@@ -242,13 +266,15 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
   ].join("\n");
 }
 
-function buildIdeaRegenerationSystemPrompt() {
+function buildIdeaRegenerationSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]]) {
+  const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   return [
     "你是一名小红书内容策划专家，擅长把品牌资产与热点趋势组合成可执行选题。",
     "请只输出 JSON，不要输出 Markdown，不要补充解释。",
     'JSON 顶层结构必须是：{"ideas":[...]}。',
     "ideas 必须输出 2 条。",
     "每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
+    buildIdeaDiversityPrompt(selectedBucketMeta),
     buildRichIdeaRequirementsPrompt(),
     "contentAssets 必须包含 moments、xhsCarousel、wechatLongImage 三个对象。",
     buildContentAssetsSchemaPrompt(),
@@ -728,10 +754,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
 
 async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt) {
   const systemPrompt = getSystemIdeaPrompt(brand, trend);
+  const selectedBucket = resolveRequestedTrendBucket(trend.bucketKey || trend.bucketTitle || trend.category || "xhs");
   let result;
   try {
     result = await callTextModelJson(appConfig, {
-      systemPrompt: `${buildIdeaRegenerationSystemPrompt()}\n\n以下是默认品牌上下文：\n${systemPrompt}`,
+      systemPrompt: `${buildIdeaRegenerationSystemPrompt([selectedBucket])}\n\n以下是默认品牌上下文：\n${systemPrompt}`,
       userPrompt: buildIdeaRegenerationUserPrompt(brand, trend, customPrompt),
       useSearch: false,
     });

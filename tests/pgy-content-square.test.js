@@ -14,6 +14,7 @@ const {
   redactSensitiveText,
 } = require("../src/server/integrations/pgy-content-square");
 const {
+  buildIdeaRegenerationSystemPrompt,
   buildPgyEvidencePromptBlock,
   buildTrendAnalysisSystemPrompt,
   buildTrendAnalysisUserPrompt,
@@ -226,8 +227,21 @@ test("trend prompts only include the selected bucket rules", () => {
   assert.match(prompt, /bucket 标题：流量热点趋势/);
   assert.match(prompt, /bucket 描述：从小红书站内爆款形式/);
   assert.match(prompt, /只分析内容形式、标题结构、封面表达、组图结构、爆款套路和互动机制/);
+  assert.match(prompt, /idea\[0\] 走「爆款形式复用」/);
+  assert.match(prompt, /idea\[1\] 走「互动话题反差」/);
   assert.doesNotMatch(prompt, /bucket 标题：小红书热点话题/);
   assert.doesNotMatch(prompt, /bucket 标题：新闻热点趋势/);
   assert.doesNotMatch(prompt, /只基于 Pgy 小红书热门证据和品牌档案/);
   assert.doesNotMatch(prompt, /只分析近期事件、行业动态、政策变化、消费新闻/);
+  assert.doesNotMatch(prompt, /idea\[0\] 走「热点证据解读」/);
+});
+
+test("idea regeneration prompts keep two ideas on separate routes", () => {
+  const trackBucket = TREND_BUCKET_META.find((bucket) => bucket.key === "track");
+  const prompt = buildIdeaRegenerationSystemPrompt([trackBucket]);
+
+  assert.match(prompt, /idea\[0\] 走「品类决策科普」/);
+  assert.match(prompt, /idea\[1\] 走「痛点对比避坑」/);
+  assert.match(prompt, /禁止只做同义改写/);
+  assert.doesNotMatch(prompt, /idea\[0\] 走「爆款形式复用」/);
 });
