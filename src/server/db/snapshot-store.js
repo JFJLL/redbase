@@ -5,6 +5,7 @@ const {
   createEmptyStore,
   normalizeStore,
   flattenTrendBuckets,
+  safeParseObject,
 } = require("./snapshot-utils");
 const {
   tableExists,
@@ -132,16 +133,16 @@ async function writeStore(data) {
   const deleteBrandIdeas = db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)");
   const deleteBrandTrends = db.prepare("DELETE FROM trends WHERE brand_id = ?");
   const deleteBrandAnalyses = db.prepare("DELETE FROM analyses WHERE brand_id = ?");
-  const insertAnalysis = db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, position) VALUES (?, ?, ?, ?, ?)");
+  const insertAnalysis = db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, brand_brief_json, position) VALUES (?, ?, ?, ?, ?, ?)");
   const insertTrend = db.prepare(`
     INSERT INTO trends (
-      trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertIdea = db.prepare(`
     INSERT INTO ideas (
-      trend_row_id, idea_index, title, summary, angle, brand_fit, audience, hook, tags_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      trend_row_id, idea_index, title, summary, angle, brand_fit, audience, hook, tags_json, content_assets_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const upsertGeneration = db.prepare(`
     INSERT INTO generations (
@@ -300,11 +301,19 @@ async function writeStore(data) {
 
     const insertBrandContent = (brand) => {
       for (const [analysisPosition, analysis] of (brand.analyses || []).entries()) {
-        insertAnalysis.run(analysis.id, brand.id, analysis.name, analysis.timestamp, analysisPosition);
+        insertAnalysis.run(
+          analysis.id,
+          brand.id,
+          analysis.name,
+          analysis.timestamp,
+          JSON.stringify(safeParseObject(JSON.stringify(analysis.brandBrief || {}))),
+          analysisPosition,
+        );
 
         for (const [trendPosition, trend] of flattenTrendBuckets(analysis.trendSnapshot).entries()) {
           const trendResult = insertTrend.run(
             trend.id,
+            trend.stableKey || "",
             brand.id,
             analysis.id,
             "snapshot",
@@ -334,6 +343,7 @@ async function writeStore(data) {
               idea.audience,
               idea.hook,
               JSON.stringify(Array.isArray(idea.tags) ? idea.tags : []),
+              JSON.stringify(safeParseObject(JSON.stringify(idea.contentAssets || {}))),
             );
           }
         }
@@ -342,6 +352,7 @@ async function writeStore(data) {
       for (const [trendPosition, trend] of flattenTrendBuckets(brand.trends).entries()) {
         const trendResult = insertTrend.run(
           trend.id,
+          trend.stableKey || "",
           brand.id,
           null,
           "current",
@@ -371,6 +382,7 @@ async function writeStore(data) {
             idea.audience,
             idea.hook,
             JSON.stringify(Array.isArray(idea.tags) ? idea.tags : []),
+            JSON.stringify(safeParseObject(JSON.stringify(idea.contentAssets || {}))),
           );
         }
       }

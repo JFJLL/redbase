@@ -6,7 +6,8 @@
     "openaiBaseUrl": "",
     "anthropicBaseUrl": "",
     "apiKey": "",
-    "searchEnabled": true
+    "searchEnabled": true,
+    "maxOutputTokens": 65536
   },
   "imageProvider": {
     "baseUrl": "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
@@ -25,5 +26,19 @@
   "security": {
     "assetSigningSecret": "",
     "cookieSecure": false
+  },
+  "pgy": {
+    "enabled": false,
+    "cookie": "",
+    "cookieFile": "data/token.txt",
+    "userAgent": "",
+    "timeoutMs": 20000,
+    "cacheTtlMs": 600000,
+    "allowSearchFallback": false,
+    "ossEndpoint": "https://oss-cn-beijing.aliyuncs.com",
+    "ossBucket": "",
+    "ossObjectKey": "KOL/token.txt",
+    "ossAccessKeyId": "",
+    "ossAccessKeySecret": ""
   }
 }

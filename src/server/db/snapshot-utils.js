@@ -125,6 +125,7 @@ function normalizeStore(input) {
       id: Number(analysis.id),
       name: String(analysis.name || "").trim(),
       timestamp: String(analysis.timestamp || ""),
+      brandBrief: analysis.brandBrief && typeof analysis.brandBrief === "object" && !Array.isArray(analysis.brandBrief) ? analysis.brandBrief : {},
       trendSnapshot: normalizeTrendBuckets(analysis.trendSnapshot),
     }));
 
@@ -338,6 +339,7 @@ function groupTrendRows(rows, target) {
     }
     bucket.items.push({
       id: trend.id,
+      stableKey: trend.stableKey || "",
       rank: trend.rank,
       title: trend.title,
       category: trend.category,

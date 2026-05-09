@@ -48,7 +48,7 @@ export function formatImageName(name, maxLength = 32) {
   return `${text.slice(0, headLength)}...${text.slice(-6 - ext.length)}`;
 }
 
-export function showToast(message) {
+export function showToast(message, durationMs = 2600) {
   let toast = document.getElementById("appToast");
   if (!toast) {
     toast = document.createElement("div");
@@ -56,15 +56,14 @@ export function showToast(message) {
     toast.className = "app-toast";
     document.body.appendChild(toast);
   }
-  textToast(toast, message);
+  textToast(toast, message, durationMs);
 }
 
-function textToast(toast, message) {
+function textToast(toast, message, durationMs) {
   toast.textContent = message;
   toast.classList.add("is-visible");
   window.clearTimeout(showToast.timer);
   showToast.timer = window.setTimeout(() => {
     toast.classList.remove("is-visible");
-  }, 2600);
+  }, Number(durationMs) || 2600);
 }
-

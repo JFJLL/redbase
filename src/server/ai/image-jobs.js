@@ -1,32 +1,11 @@
-const { randomId, assertConfigured, withRetries, normalizeChineseCopy, pickVariant } = require("../utils");
+const { randomId, assertConfigured, withRetries } = require("../utils");
 const { fetchJson } = require("./text-provider");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
 
 function buildImageConceptMetadata({ brand, trend, idea }) {
-  const seed = `${brand.name}|${trend.title}|${idea.title}|${idea.angle || ""}`;
-  const captionTemplate = pickVariant(seed, [
-    () => `早上的时间总是不够用，但还是想把自己照顾好一点。今天从一杯${brand.name}开始，慢慢把状态找回来。`,
-    () => `忙起来以后才发现，真正让人安心的不是多做了多少事，而是那些稳定的小习惯：好好吃早餐，好好喝一杯牛奶，好好开始一天。`,
-    () => `把早餐留给自己，把匆忙留在门外。${brand.name}刚好适合这样的早晨，简单一点，也认真一点。`,
-    () => `今天的精致感，不靠复杂准备。坐下来喝完这一杯，再去面对满满当当的一天。`,
-  ]);
-  const visualTemplate = pickVariant(`${seed}|visual`, [
-    () => `${brand.name}朋友圈生活方式分享图`,
-    () => `围绕“${idea.title}”的朋友圈日常场景图`,
-    () => `${trend.title}话题下的自然分享视觉`,
-    () => `${brand.name}轻种草朋友圈配图`,
-  ]);
-
-  return {
-    title: normalizeChineseCopy(`${brand.name} 朋友圈图`),
-    caption: normalizeChineseCopy(captionTemplate()),
-    visualDirection: normalizeChineseCopy(visualTemplate()),
-    style: String(brand.industry || "").toLowerCase().includes("beauty") ? "clean lifestyle snapshot" : "natural lifestyle social post",
-    composition: "朋友圈配图构图，画面像真实生活分享或轻度品牌种草，不做强海报排版，主体自然入镜，留白适中",
-    prompt: normalizeChineseCopy(`为品牌${brand.name}生成一张适合微信朋友圈发布的配图，围绕“${idea.title}”这个内容选题，结合话题“${trend.title}”。画面要像真实朋友圈里的生活方式分享图，而不是小红书封面、广告海报或电商详情图。请把${idea.brandFit}融入一个${idea.audience}容易共鸣的日常场景中，整体自然、松弛、有真实感，有轻微品牌质感但不要过度营销。风格可参考${(brand.assetTags || []).join("、") || "品牌调性"}，画面干净、有生活温度，适合搭配一段朋友圈文案发布。不要堆砌大标题、夸张促销文字或复杂信息模块。参考品牌资料：${brand.knowledgeBase || "暂无额外资料"}。`),
-  };
+  throw new Error("朋友圈图文案必须先由 AI 内容服务根据品牌档案生成。");
 }
 
 function extractWavespeedOutput(payload) {

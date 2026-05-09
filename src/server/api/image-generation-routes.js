@@ -10,10 +10,15 @@ const {
   attachGenerationToLatestCreditEvent,
   refundCreditEventIfNeeded,
 } = require("../db/repositories/admin-repository");
-const { findBrandByOwner } = require("../db/repositories/brand-repository");
+const { findBrandByOwner, upsertBrandFull } = require("../db/repositories/brand-repository");
 const { findGenerationByOwner, insertGeneration, upsertGeneration } = require("../db/repositories/generation-repository");
 const { findProductImageByOwner, touchProductImageUsed } = require("../db/repositories/product-image-repository");
 const { findImageJobByOwner, upsertImageJob } = require("../db/repositories/image-job-repository");
+const {
+  buildImageConceptMetadataFromIdea,
+  buildXhsCarouselPackFromIdea,
+  buildWechatLongImagePackFromIdea,
+} = require("../ai/content-service");
 
 function requireRouteUser(req, res, helpers) {
   return requireSqlAuth(req, res, {
@@ -101,6 +106,34 @@ function createSqlGenerationRecord(userId, brand, trend, idea, type, channelLabe
   };
 }
 
+function buildSingleSlideCarouselPayload(job) {
+  const metadata = job?.metadata || {};
+  const context = job?.generationContext || {};
+  const slideIndex = Number.isInteger(context.slideIndex) ? context.slideIndex : Number(metadata.slideIndex || 0);
+  const slide = {
+    pageLabel: metadata.pageLabel || `第 ${slideIndex + 1} 张`,
+    title: metadata.visualDirection || metadata.title || "小红书组图单张",
+    copy: metadata.copy || "",
+    prompt: metadata.prompt || "",
+    visualDirection: metadata.visualDirection || "",
+    style: metadata.style || "",
+    composition: metadata.composition || "",
+    previewUrl: job.imageUrl || "",
+    imageUrl: job.imageUrl || "",
+    model: job.model || "",
+    provider: job.provider || "",
+  };
+  return {
+    title: context.carouselTitle || metadata.title || "小红书组图单张",
+    publishTitle: context.publishTitle || metadata.title || slide.title,
+    publishCaption: context.publishCaption || metadata.copy || "",
+    caption: context.caption || metadata.copy || "",
+    generatedMode: "singleSlide",
+    sourceSlideIndex: slideIndex,
+    slides: [slide],
+  };
+}
+
 function requireIdea({ brand, trendId, ideaIndex, res, badRequest, findTrendItem }) {
   const trend = findTrendItem(brand, Number(trendId));
   if (!trend) {
@@ -122,6 +155,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     createImageJob,
     resolveImageJob,
     buildImageJobResponse,
+    ensureTrendIdeaContentAssets,
     fsp,
     sanitizeUser,
     sanitizeGeneration,
@@ -145,8 +179,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     findTrendItem,
     buildMomentsGenerationPayload,
     buildGeneratedAssetPayload,
-    buildWechatLongImagePack,
-    buildXhsCarouselPack,
     normalizeXhsCarouselSlideForJob,
     json,
     badRequest,
@@ -237,6 +269,19 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     return editEntry;
   }
 
+  function contentAssetsUnavailable(res, error) {
+    badRequest(res, error?.message || "当前选题缺少趋势分析时生成的内容资产，请先重新生成趋势分析。");
+  }
+
+  async function ensureIdeaAssetsForImage(brand, trend, ideaIndex) {
+    if (!ensureTrendIdeaContentAssets) return trend.ideas[Number(ideaIndex)];
+    const result = await ensureTrendIdeaContentAssets(brand, trend, Number(ideaIndex));
+    if (result.filled) {
+      upsertBrandFull(brand);
+    }
+    return result.idea;
+  }
+
   const imageMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/image$/);
   if (req.method === "POST" && imageMatch) {
     const requestStartedAt = Date.now();
@@ -271,13 +316,24 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     if (!hasEnoughCredits(user, CREDIT_COSTS.momentsImage, res)) return true;
+    let metadata;
+    try {
+      metadata = buildImageConceptMetadataFromIdea(idea);
+    } catch (error) {
+      try {
+        metadata = buildImageConceptMetadataFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(imageMatch[3])));
+      } catch (fillError) {
+        contentAssetsUnavailable(res, fillError);
+        return true;
+      }
+    }
     console.log("[image-job] credits checked", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
       currentCredits: user.credits,
     });
 
-    const job = await createImageJob({ brand, trend, idea, productImages, logoImage });
+    const job = await createImageJob({ brand, trend, idea, productImages, logoImage, metadata });
     console.log("[image-job] api created job", {
       jobId: job.id,
       userId: user.id,
@@ -371,10 +427,15 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         const brand = findBrandByOwner(resolved.generationContext.brandId, user.id);
         const trend = findTrendItem(brand, resolved.generationContext.trendId);
         const idea = trend?.ideas?.[resolved.generationContext.ideaIndex];
-        if (brand && trend && idea && resolved.generationContext.type !== "xhsCarouselSlide") {
-          const type = resolved.generationContext.type || "moments";
-          const channelLabel = resolved.generationContext.channelLabel || "朋友圈图";
-          const payload = type === "wechat" ? buildGeneratedAssetPayload(resolved) : buildMomentsGenerationPayload(resolved);
+        if (brand && trend && idea && (resolved.generationContext.type !== "xhsCarouselSlide" || resolved.generationContext.singleSlideOnly)) {
+          const isSingleCarouselSlide = resolved.generationContext.type === "xhsCarouselSlide" && resolved.generationContext.singleSlideOnly;
+          const type = isSingleCarouselSlide ? "xhsCarousel" : resolved.generationContext.type || "moments";
+          const channelLabel = isSingleCarouselSlide ? "小红书组图" : resolved.generationContext.channelLabel || "朋友圈图";
+          const payload = isSingleCarouselSlide
+            ? buildSingleSlideCarouselPayload(resolved)
+            : type === "wechat"
+              ? buildGeneratedAssetPayload(resolved)
+              : buildMomentsGenerationPayload(resolved);
           const generation = createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
           await persistGenerationImages(generation);
           insertGeneration(generation);
@@ -503,7 +564,17 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       productImageCount: productImages.length,
     });
     if (!hasEnoughCredits(user, CREDIT_COSTS.wechatImage, res)) return true;
-    const wechatPack = buildWechatLongImagePack({ brand, trend, idea });
+    let wechatPack;
+    try {
+      wechatPack = buildWechatLongImagePackFromIdea(idea);
+    } catch (error) {
+      try {
+        wechatPack = buildWechatLongImagePackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(wechatLongImageMatch[3])));
+      } catch (fillError) {
+        contentAssetsUnavailable(res, fillError);
+        return true;
+      }
+    }
     console.log("[image-job] creating wechat image job", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
@@ -524,9 +595,9 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       metadata: {
         ...wechatPack,
         aspectRatio: "9:16",
-        visualDirection: wechatPack.positioning,
-        style: "wechat article long image",
-        composition: "9:16 竖版长图，顶部标题区，中段信息摘要区，底部轻CTA区，适合微信公众号阅读",
+        visualDirection: wechatPack.visualDirection,
+        style: wechatPack.style,
+        composition: wechatPack.composition,
       },
     });
     job.generationContext = {
@@ -591,8 +662,19 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     if (!selected) return true;
     const { trend, idea } = selected;
 
+    let carouselPack;
+    try {
+      carouselPack = buildXhsCarouselPackFromIdea(idea);
+    } catch (error) {
+      try {
+        carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(xhsCarouselPreviewMatch[3])));
+      } catch (fillError) {
+        contentAssetsUnavailable(res, fillError);
+        return true;
+      }
+    }
     json(res, 200, {
-      carouselPack: buildXhsCarouselPack({ brand, trend, idea }),
+      carouselPack,
       user: sanitizeUser(user),
     });
     return true;
@@ -628,7 +710,17 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       productImageCount: productImages.length,
     });
     if (!hasEnoughCredits(user, CREDIT_COSTS.xhsCarousel, res)) return true;
-    const carouselPack = buildXhsCarouselPack({ brand, trend, idea });
+    let carouselPack;
+    try {
+      carouselPack = buildXhsCarouselPackFromIdea(idea);
+    } catch (error) {
+      try {
+        carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(xhsCarouselMatch[3])));
+      } catch (fillError) {
+        contentAssetsUnavailable(res, fillError);
+        return true;
+      }
+    }
     const slideJobRecords = await Promise.all(
       carouselPack.slides.map(async (slide, slideIndex) => {
         console.log("[image-job] creating carousel slide job", {
@@ -651,7 +743,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           metadata: {
             title: `${carouselPack.title} ${slide.pageLabel}`,
             visualDirection: slide.title,
-            style: "xiaohongshu carousel cover page",
+            style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
             composition: `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
             prompt: slide.prompt,
             slideIndex,
@@ -747,9 +839,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const { trend, idea } = selected;
 
     const payload = await collectBody(req);
-    const defaultPack = buildXhsCarouselPack({ brand, trend, idea });
     const incomingPack = payload.carouselPack && typeof payload.carouselPack === "object" ? payload.carouselPack : {};
     const incomingSlides = Array.isArray(incomingPack.slides) ? incomingPack.slides : [];
+    let defaultPack = null;
+    if (!incomingSlides[slideIndex] && !payload.slide) {
+      try {
+        defaultPack = buildXhsCarouselPackFromIdea(idea);
+      } catch (error) {
+        try {
+          defaultPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, ideaIndex));
+        } catch (fillError) {
+          contentAssetsUnavailable(res, fillError);
+          return true;
+        }
+      }
+    }
+    defaultPack = defaultPack || { title: "", publishTitle: "", publishCaption: "", caption: "", slides: [] };
     const slide = normalizeXhsCarouselSlideForJob(payload.slide || incomingSlides[slideIndex], defaultPack.slides[slideIndex], slideIndex);
     if (!slide.prompt) {
       badRequest(res, "请先填写当前页的生图 Prompt。");
@@ -790,11 +895,16 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     });
     job.generationContext = {
       type: "xhsCarouselSlide",
+      singleSlideOnly: true,
       userId: user.id,
       brandId: brand.id,
       trendId: trend.id,
       ideaIndex,
       slideIndex,
+      carouselTitle: incomingPack.title || defaultPack.title || "",
+      publishTitle: incomingPack.publishTitle || defaultPack.publishTitle || "",
+      publishCaption: incomingPack.publishCaption || defaultPack.publishCaption || "",
+      caption: incomingPack.caption || defaultPack.caption || "",
     };
     spendUserCredits(user, CREDIT_COSTS.xhsCarouselSlide);
     const creditEvent = createSqlCreditEvent({

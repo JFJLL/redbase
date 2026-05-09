@@ -52,6 +52,10 @@ function normalizeTags(tags, fallbackTags = []) {
 }
 
 function sanitizeIdea(idea, fallbackAudience, fallbackTag) {
+  const contentAssets =
+    idea?.contentAssets && typeof idea.contentAssets === "object" && !Array.isArray(idea.contentAssets)
+      ? idea.contentAssets
+      : {};
   return {
     title: String(idea?.title ?? ""),
     summary: String(idea?.summary ?? ""),
@@ -60,12 +64,14 @@ function sanitizeIdea(idea, fallbackAudience, fallbackTag) {
     audience: String(idea?.audience ?? fallbackAudience ?? ""),
     hook: String(idea?.hook ?? ""),
     tags: normalizeTags(idea?.tags, fallbackTag ? [fallbackTag] : []),
+    contentAssets,
   };
 }
 
 function sanitizeTrend(trend) {
   return {
     id: trend.id,
+    stableKey: trend.stableKey || "",
     rank: trend.rank,
     title: trend.title,
     category: trend.category,
@@ -185,6 +191,7 @@ function sanitizeBrand(brand) {
           id: analysis.id,
           name: analysis.name,
           timestamp: analysis.timestamp,
+          brandBrief: analysis.brandBrief && typeof analysis.brandBrief === "object" && !Array.isArray(analysis.brandBrief) ? analysis.brandBrief : {},
           trendSnapshot: normalizeTrendBuckets(analysis.trendSnapshot),
         }))
       : [],

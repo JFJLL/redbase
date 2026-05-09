@@ -57,7 +57,7 @@ function cloneTrendBuckets(trends) {
 function isRenderableGeneration(item) {
   if (item.type !== "xhsCarousel") return true;
   const slides = Array.isArray(item.payload?.slides) ? item.payload.slides : [];
-  return slides.length === 4 && slides.every((slide) => Boolean(String(slide.imageUrl || slide.previewUrl || "").trim()));
+  return slides.length > 0 && slides.every((slide) => Boolean(String(slide.imageUrl || slide.previewUrl || "").trim()));
 }
 module.exports = {
   MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS,

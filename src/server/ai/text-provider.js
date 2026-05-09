@@ -122,10 +122,26 @@ function extractTextFromGoogleResponse(payload) {
   return parts.map((item) => item?.text || "").filter(Boolean).join("\n");
 }
 
-async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7 }) {
+function buildRetryOptions(options) {
+  return {
+    retries: Number.isFinite(Number(options.retries)) ? Number(options.retries) : 3,
+    delayMs: Number.isFinite(Number(options.delayMs)) ? Number(options.delayMs) : 1200,
+  };
+}
+
+async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7, timeoutMs, retries, delayMs, maxOutputTokens }) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.7;
+  const outputTokenLimit = Number.isFinite(Number(maxOutputTokens))
+    ? Number(maxOutputTokens)
+    : Number.isFinite(Number(provider.maxOutputTokens))
+      ? Number(provider.maxOutputTokens)
+      : null;
+  const requestOptions = {
+    timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
+  };
+  const retryOptions = buildRetryOptions({ retries, delayMs });
 
   if (provider.apiStyle === "google") {
     const data = await withRetries(
@@ -140,10 +156,14 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents: [{ role: "user", parts: [{ text: userPrompt }] }],
             ...(useSearch && provider.searchEnabled ? { tools: [{ google_search: {} }] } : {}),
-            generationConfig: { temperature: modelTemperature },
+            generationConfig: {
+              temperature: modelTemperature,
+              ...(outputTokenLimit ? { maxOutputTokens: outputTokenLimit } : {}),
+            },
           }),
+          ...requestOptions,
         }),
-      { retries: 3, delayMs: 1200 },
+      retryOptions,
     );
     return parseJsonFromModelText(extractTextFromGoogleResponse(data));
   }
@@ -161,12 +181,13 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
           body: JSON.stringify({
             model: provider.model,
             system: systemPrompt,
-            max_tokens: 4096,
+            max_tokens: outputTokenLimit || 4096,
             temperature: modelTemperature,
             messages: [{ role: "user", content: userPrompt }],
           }),
+          ...requestOptions,
         }),
-      { retries: 3, delayMs: 1200 },
+      retryOptions,
     );
     return parseJsonFromModelText(extractTextFromAnthropicResponse(data));
   }
@@ -182,13 +203,15 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
         body: JSON.stringify({
           model: provider.model,
           temperature: modelTemperature,
+          ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
         }),
+        ...requestOptions,
       }),
-    { retries: 3, delayMs: 1200 },
+    retryOptions,
   );
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
 }

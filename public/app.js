@@ -48,6 +48,7 @@ async function init() {
   bindProductImageLibraryModal();
   bindAuthModal();
   bindAnalysisButton();
+  bindXhsCategorySelector();
   bindIdeaPromptActions();
   bindHistoryFilters();
   bindLogout();
@@ -805,6 +806,14 @@ function bindAuthModal() {
   });
 }
 
+function bindXhsCategorySelector() {
+  const select = document.getElementById("xhsCategorySelect");
+  if (!select) return;
+  select.addEventListener("change", () => {
+    state.xhsCategoryPath = select.value;
+  });
+}
+
 function bindAnalysisButton() {
   document.getElementById("runTrendAnalysis").addEventListener("click", async () => {
     const brand = getSelectedBrand();
@@ -812,14 +821,20 @@ function bindAnalysisButton() {
 
     try {
       setBusy(true);
+      const bucketKey = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE;
       const result = await request(`/api/brands/${brand.id}/analyses`, {
         method: "POST",
+        body: JSON.stringify({
+          bucketKey,
+          xhsCategoryPath: bucketKey === "xhs" ? state.xhsCategoryPath || "" : "",
+        }),
       });
       updateCurrentUser(result.user);
       replaceBrand(result.brand);
-      state.selectedTrendMode = firstTrendBucket(result.brand)?.key ?? DEFAULT_TREND_MODE;
-      state.selectedTrendId = firstTrendBucket(result.brand)?.items?.[0]?.id ?? null;
+      state.selectedTrendMode = bucketKey;
+      state.selectedTrendId = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
       renderAll();
+      showTrendAnalysisWarnings(result.warnings);
     } catch (error) {
       alert(formatTrendAnalysisError(error));
     } finally {
@@ -828,18 +843,35 @@ function bindAnalysisButton() {
   });
 }
 
+function showTrendAnalysisWarnings(warnings) {
+  if (!Array.isArray(warnings) || !warnings.length) return;
+  const detail = warnings
+    .map((item) => `${item.bucketTitle || item.bucketKey || "热点维度"} ${Number(item.actual || 0)}/${Number(item.expected || 10)}`)
+    .join("，");
+  showToast(`当前维度未满 10 条：${detail}。已先展示可用结果，可稍后重新生成该维度补齐。`, 10000);
+}
+
 function formatTrendAnalysisError(error) {
   const message = String(error?.message || "");
+  if (message.includes("contentAssets") || message.includes("内容资产")) {
+    return [
+      "当前维度的趋势和选题已经开始生成，但模型没有按结构完整返回内容资产，本次结果未保存。",
+      "",
+      message,
+      "",
+      "请稍后再次点击当前维度的生成按钮。主流程现在只生成当前维度，不会再分批补齐 120 个选题。",
+    ].join("\n");
+  }
   if (message.includes("未返回可用趋势结果") || message.includes("未能获取到可用热点") || message.includes("文本模型暂时不可用")) {
     return [
       "本次分析未能获取到可用热点，请稍后重试。",
       "",
-      "搜索增强已保持开启，系统已尝试宽松解析、严格格式和精简品牌资料三次，但这次仍没有拿到完整可用的热点列表。",
+      "这次没有拿到当前维度可用的趋势、选题和内容资产包。",
       "",
-      "你的品牌资料和积分状态没有损坏，请稍后再次点击「开始 AI 热点分析」。",
+      "你的品牌资料和积分状态没有损坏，请稍后再次点击当前维度的生成按钮。",
     ].join("\n");
   }
-  return message || "AI 热点分析失败，请稍后再次点击「开始 AI 热点分析」重新生成。";
+  return message || "AI 热点分析失败，请稍后再次点击当前维度的生成按钮重新生成。";
 }
 
 function bindIdeaPromptActions() {
@@ -948,12 +980,22 @@ function setAuthTab(tab) {
 
 function setBusy(loading) {
   state.loading = loading;
+  renderTrendAnalysisButton();
+  renderXhsCategorySelector();
+}
+
+function getSelectedTrendBucketLabel() {
+  return getDefaultTrendBucket(state.selectedTrendMode)?.title || "当前维度";
+}
+
+function renderTrendAnalysisButton() {
   const button = document.getElementById("runTrendAnalysis");
   if (button) {
-    button.disabled = loading;
-    button.innerHTML = loading
-      ? "<span>分析中...</span>"
-      : "<span>开始 AI 热点分析</span><small>消耗 1 积分</small>";
+    const label = getSelectedTrendBucketLabel();
+    button.disabled = state.loading;
+    button.innerHTML = state.loading
+      ? `<span>${escapeHtml(label)}生成中...</span>`
+      : `<span>生成${escapeHtml(label)}</span><small>消耗 1 积分</small>`;
   }
 }
 
@@ -983,10 +1025,42 @@ async function loadBrands() {
       state.selectedTrendId = null;
     }
     renderAll();
+    loadXhsCategories();
   } catch (error) {
     throw new Error(`加载失败：${error.message}`);
   } finally {
     setBusy(false);
+  }
+}
+
+async function loadXhsCategories() {
+  if (!state.sessionToken) return;
+  state.xhsCategoryStatus = "loading";
+  state.xhsCategoryError = "";
+  renderXhsCategorySelector();
+  try {
+    applyXhsCategoryResult(await request("/api/trends/xhs/categories"));
+  } catch (error) {
+    applyXhsCategoryResult({ error });
+  }
+  renderXhsCategorySelector();
+}
+
+function applyXhsCategoryResult(result) {
+  if (result?.error) {
+    state.xhsCategories = [];
+    state.xhsCategoryPath = "";
+    state.xhsCategoryStatus = "error";
+    state.xhsCategoryError = result.error.message || "小红书内容类目暂时不可用";
+    return;
+  }
+
+  state.xhsCategories = Array.isArray(result?.items) ? result.items : [];
+  state.xhsCategoryStatus = state.xhsCategories.length ? "ready" : "empty";
+  state.xhsCategoryError = "";
+  const validValues = new Set(flattenXhsCategoryOptions(state.xhsCategories).map((item) => item.value));
+  if (state.xhsCategoryPath && !validValues.has(state.xhsCategoryPath)) {
+    state.xhsCategoryPath = "";
   }
 }
 
@@ -1117,7 +1191,13 @@ function getTrendBucketsForBrand(brand) {
 }
 
 function firstTrendBucket(brand) {
-  return getTrendBucketsForBrand(brand)[0] || null;
+  const buckets = getTrendBucketsForBrand(brand);
+  return buckets.find((bucket) => bucket.items?.length) || buckets[0] || null;
+}
+
+function getAnalysisBucketKey(analysis) {
+  const name = String(analysis?.name || "");
+  return DEFAULT_TREND_BUCKETS.find((bucket) => name.includes(bucket.title))?.key || "";
 }
 
 function restoreAnalysisSnapshot(analysisId) {
@@ -1135,16 +1215,25 @@ function restoreAnalysisSnapshot(analysisId) {
     return;
   }
 
+  const analysisBucketKey = getAnalysisBucketKey(analysis);
+  const trendSnapshot = analysisBucketKey
+    ? analysis.trendSnapshot.filter((bucket) => normalizeTrendBucketKey(bucket.key) === analysisBucketKey)
+    : analysis.trendSnapshot;
+  if (analysisBucketKey && !trendSnapshot.length) {
+    alert("这条历史分析没有当前维度的趋势快照，请重新生成一次该维度分析。");
+    return;
+  }
+
   state.brands = state.brands.map((item) => {
     if (item.id !== brand.id) return item;
     return {
       ...item,
-      trends: analysis.trendSnapshot.map(cloneTrendBucket),
+      trends: trendSnapshot.map(cloneTrendBucket),
     };
   });
 
-  state.selectedTrendMode = firstTrendBucket(getSelectedBrand())?.key ?? DEFAULT_TREND_MODE;
-  state.selectedTrendId = firstTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
+  state.selectedTrendMode = analysisBucketKey || firstTrendBucket(getSelectedBrand())?.key || DEFAULT_TREND_MODE;
+  state.selectedTrendId = getCurrentTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
   renderAll();
   switchTab("trends");
 }
@@ -1204,10 +1293,59 @@ function getCurrentTrendBucket(brand = getSelectedBrand()) {
   return buckets.find((bucket) => bucket.key === state.selectedTrendMode) ?? buckets[0] ?? null;
 }
 
+function flattenXhsCategoryOptions(items, result = [], parentLabels = []) {
+  (items || []).forEach((item) => {
+    const labels = [...parentLabels, item?.label].filter(Boolean);
+    if (item?.value) result.push({ label: labels.join(" / "), value: item.value });
+    if (Array.isArray(item?.children)) flattenXhsCategoryOptions(item.children, result, labels);
+  });
+  return result;
+}
+
+function renderXhsCategoryOptions(items) {
+  return flattenXhsCategoryOptions(items)
+    .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
+    .join("");
+}
+
+function renderXhsCategorySelector() {
+  const select = document.getElementById("xhsCategorySelect");
+  const status = document.getElementById("xhsCategoryStatus");
+  if (!select || !status) return;
+  const wrapper = select.closest(".xhs-category-control");
+  const isXhsBucket = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) === "xhs";
+  if (wrapper) {
+    wrapper.hidden = !isXhsBucket;
+    wrapper.style.display = isXhsBucket ? "" : "none";
+  }
+  if (!isXhsBucket) {
+    select.disabled = true;
+    status.textContent = "";
+    return;
+  }
+
+  select.innerHTML = `<option value="">全部内容类目</option>${renderXhsCategoryOptions(state.xhsCategories)}`;
+  select.value = state.xhsCategoryPath || "";
+  select.disabled = state.loading || state.xhsCategoryStatus !== "ready";
+
+  if (state.xhsCategoryStatus === "loading") {
+    status.textContent = "正在加载类目...";
+  } else if (state.xhsCategoryStatus === "error") {
+    status.textContent = state.xhsCategoryError || "小红书内容类目暂时不可用";
+  } else if (state.xhsCategoryStatus === "empty") {
+    status.textContent = "暂无可选类目";
+  } else {
+    const selectedCategory = flattenXhsCategoryOptions(state.xhsCategories).find((item) => item.value === state.xhsCategoryPath);
+    status.textContent = selectedCategory ? `当前类目：${selectedCategory.label}` : "全部内容类目";
+  }
+}
+
 function renderAll() {
   renderBrands();
   renderBrandChips();
   renderTrendModeTabs();
+  renderTrendAnalysisButton();
+  renderXhsCategorySelector();
   renderHistory();
   renderAnalysisSummary();
   renderTrends();
@@ -1379,11 +1517,18 @@ function renderAnalysisSummary() {
   }
 
   if (!brand.trends.length) {
-    root.textContent = `已为 ${brand.name} 建立品牌档案。下一步点击左侧按钮，基于品牌资产、产品卖点、目标受众和运营目标生成热点趋势。`;
+    root.textContent = `已为 ${brand.name} 建立品牌档案。请选择一个热点维度，点击左侧按钮只生成该维度的 10 条趋势和 20 个完整选题。`;
     return;
   }
 
-  root.textContent = `${brand.name} 的热点趋势分析已就绪。当前已拆成多个可借势维度，每一种都会给出前 10 个热点，帮助你从不同层级判断该怎么蹭热点。`;
+  const bucket = getCurrentTrendBucket(brand);
+  const label = getDefaultTrendBucket(bucket?.key)?.title || bucket?.title || "当前维度";
+  const count = bucket?.items?.length || 0;
+  if (!count) {
+    root.textContent = `${brand.name} 的「${label}」还没有生成。点击左侧按钮后，只会生成这个维度，不会生成其他维度。`;
+    return;
+  }
+  root.textContent = `${brand.name} 的「${label}」已生成 ${count}/10 条趋势，每条趋势下有 2 个完整内容选题。切换到其他维度后可按需单独生成。`;
 }
 
 function renderTrends() {
@@ -1392,7 +1537,16 @@ function renderTrends() {
   const bucket = getCurrentTrendBucket(brand);
 
   if (!brand || !bucket || !bucket.items?.length) {
-    root.innerHTML = "";
+    const fallbackBucket = getDefaultTrendBucket(state.selectedTrendMode) || DEFAULT_TREND_BUCKETS[0];
+    root.innerHTML = `
+      <article class="trend-card">
+        <div>
+          <h3>${escapeHtml(fallbackBucket.title)}</h3>
+          <p>${escapeHtml(fallbackBucket.description)}</p>
+          <p class="analysis-tip">当前维度还没有生成。点击左侧按钮后，将只生成这个维度的 10 条趋势和 20 个完整选题。</p>
+        </div>
+      </article>
+    `;
     return;
   }
 
@@ -1738,6 +1892,36 @@ function renderIdeaContent(idea, index) {
     <div><strong>品牌结合方式：</strong>${escapeHtml(idea.brandFit)}</div>
     <div><strong>面向人群：</strong>${escapeHtml(idea.audience)}</div>
     <div><strong>开头钩子：</strong>${escapeHtml(idea.hook)}</div>
+    ${renderIdeaContentAssets(idea)}
+  `;
+}
+
+function hasCompleteIdeaContentAssets(idea) {
+  const assets = idea?.contentAssets || {};
+  const slides = assets.xhsCarousel?.slides;
+  return Boolean(
+    assets.moments?.caption &&
+      assets.xhsCarousel?.publishTitle &&
+      Array.isArray(slides) &&
+      slides.length === 4 &&
+      assets.wechatLongImage?.intro,
+  );
+}
+
+function renderIdeaContentAssets(idea) {
+  const assets = idea?.contentAssets || {};
+  if (!hasCompleteIdeaContentAssets(idea)) {
+    return `<div class="idea-asset-preview is-incomplete">内容生成不完整，请重新生成趋势分析或重新生成选题。</div>`;
+  }
+  const moments = assets.moments || {};
+  const carousel = assets.xhsCarousel || {};
+  return `
+    <div class="idea-asset-preview">
+      <div><strong>朋友圈标题：</strong>${escapeHtml(moments.title || "")}</div>
+      <div><strong>朋友圈文案：</strong>${escapeHtml(moments.caption || "")}</div>
+      <div><strong>小红书标题：</strong>${escapeHtml(carousel.publishTitle || carousel.title || "")}</div>
+      <div><strong>小红书文案：</strong>${escapeHtml(carousel.publishCaption || carousel.caption || "")}</div>
+    </div>
   `;
 }
 
@@ -2146,15 +2330,13 @@ function getDisplayXhsPublishTitle(item, payload) {
   const rawTitle = payload.publishTitle || payload.title || item.cardTitle || item.ideaTitle || "";
   const cleanedTitle = cleanXhsTitle(rawTitle);
   if (cleanedTitle && !isInternalXhsCopy(cleanedTitle)) return cleanedTitle;
-  const baseTitle = cleanXhsTitle(item.ideaTitle || payload.title || item.cardTitle || "今天也想好好开始");
-  return `${baseTitle}，从一杯${item.brandName || "好牛奶"}开始`;
+  return cleanXhsTitle(item.ideaTitle || payload.title || item.cardTitle || "");
 }
 
 function getDisplayXhsPublishCaption(item, payload) {
   const rawCaption = payload.publishCaption || payload.caption || "";
   if (rawCaption && !isInternalXhsCopy(rawCaption)) return rawCaption;
-  const brandName = item.brandName || "这一杯";
-  return `以前总觉得早晨要很精致才算仪式感。后来发现，能认真吃早餐、慢慢喝完一杯牛奶，就已经是在好好照顾自己。今天也从${brandName}开始，给身体和心情一点稳定的能量。`;
+  return "";
 }
 
 function renderHistoryDetailParagraph(label, value) {
@@ -2170,8 +2352,7 @@ function isInternalMomentsCaption(value) {
 function getDisplayMomentsCaption(item, payload) {
   const rawCaption = payload.caption || "";
   if (rawCaption && !isInternalMomentsCaption(rawCaption)) return rawCaption;
-  const brandName = item.brandName || "这一杯";
-  return `早上的时间总是不够用，但还是想把自己照顾好一点。今天从一杯${brandName}开始，慢慢把状态找回来。`;
+  return "";
 }
 
 function renderHistoryAssetCopyDetails(item, payload) {
@@ -2594,7 +2775,7 @@ function enrichXhsCarouselSlides(pack) {
     ...slide,
     pageLabel: slide.pageLabel || `第 ${index + 1} 张`,
     visualDirection: slide.visualDirection || slide.title || `第 ${index + 1} 张视觉方向`,
-    style: slide.style || "xiaohongshu carousel cover page",
+    style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
     composition: slide.composition || `小红书组图${index + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性。`,
     prompt: slide.prompt || "",
     isGenerating: false,
@@ -2622,66 +2803,6 @@ function getXhsCarouselSlideStatus(slide, hasImage) {
   if (slide.isGenerating) return "生图中";
   if (slide.isQueued) return "排队中";
   return hasImage ? "已生成" : `${slide.pageLabel}待生成`;
-}
-
-function buildLocalXhsCarouselPack(brand, trend, idea) {
-  const title = idea?.title || "小红书组图";
-  const trendTitle = trend?.title || "热点趋势";
-  const brandName = brand?.name || "品牌";
-  const audience = idea?.audience || brand?.audience || "目标用户";
-  const brandFit = idea?.brandFit || brand?.knowledgeBase || "品牌价值";
-  const publishTopic = title.replace(/｜/g, "，");
-  const slideCopies = [
-    `不是自律到满分才叫晨间仪式感。能在出门前认真喝一杯、吃一点，把自己照顾好，就已经是在给一天一个好开头。`,
-    `很多人的早晨都很赶：消息在催、通勤在催、脑子还没醒。越是这种时候，越需要一个不用费力也能稳定下来的小动作。`,
-    `${brandName}适合放进这样的早晨里：口感干净，营养扎实，不需要复杂准备，也能让早餐多一点被认真对待的感觉。`,
-    `把这几分钟留给自己。今天不一定要很完美，但可以从一杯更舒服的早餐开始。`,
-  ];
-  const slides = [
-    {
-      pageLabel: "第 1 张",
-      title: `${trendTitle}为什么和你有关`,
-      visualDirection: `${title}的小红书封面开场`,
-      style: "natural lifestyle social post",
-      composition: "封面页要有明确钩子和真实生活氛围，标题短而清楚，主体自然入镜，避免广告海报感。",
-      copy: slideCopies[0],
-      prompt: `生成一套适合小红书发布的 4 页组图中的第1页，围绕“${title}”，结合热点“${trendTitle}”和品牌${brandName}。第1页需要像真实小红书笔记封面，有明确点击理由和强钩子，但不要像广告海报或品牌PPT。可以用问题、反差、情绪共鸣、避坑提醒、清单标题或趋势判断来组织封面。画面要适合滑动阅读的开场，文字短、层级清楚，品牌露出自然，不要促销感。`,
-    },
-    {
-      pageLabel: "第 2 张",
-      title: "先把场景说具体",
-      visualDirection: `${audience}的真实场景展开`,
-      style: "clean xiaohongshu editorial layout",
-      composition: "第二页承接封面，画面更偏场景、痛点或步骤拆解，信息分区清晰，文字不要堆满。",
-      copy: slideCopies[1],
-      prompt: `生成小红书 4 页组图中的第2页，承接第1页继续展开“${title}”。这一页不要固定成某一种模板，可以根据选题选择用户场景、痛点拆解、误区提醒、前后对比、步骤教程、测评观察或故事化表达。重点是让${audience}看到自己的真实生活、消费判断或情绪状态，画面有代入感，文字简洁，信息不要堆满。`,
-    },
-    {
-      pageLabel: "第 3 张",
-      title: "把方法讲到具体处",
-      visualDirection: `${brandName}与选题价值的自然结合`,
-      style: "warm practical content card",
-      composition: "第三页突出方法、清单、对比或细节放大，品牌出现要服务内容，不要硬广。",
-      copy: slideCopies[2],
-      prompt: `生成小红书 4 页组图中的第3页，继续展开具体价值。不要固定成品牌解决方案页，可以根据内容选择方法清单、细节放大、对比说明、体验测评、趋势解读或案例化表达。需要自然体现${brandName}与选题的关系，重点表现${brandFit}，但不要硬广，不要把画面做成促销海报。`,
-    },
-    {
-      pageLabel: "第 4 张",
-      title: "最后给你一个总结",
-      visualDirection: "适合收藏和互动的组图收尾",
-      style: "cohesive xiaohongshu closing page",
-      composition: "最后一页与前三页风格统一，用总结、收藏清单或轻互动收口，留白充足。",
-      copy: slideCopies[3],
-      prompt: `生成小红书 4 页组图中的第4页，作为整组内容的自然收尾。可以做收藏清单、总结观点、行动建议、轻互动提问、品牌落点或下一步建议，但不要固定成强CTA。画面要和前3页风格统一，适合用户保存、评论或转发；文字短、有重点，品牌${brandName}自然露出，避免广告感和复杂排版。`,
-    },
-  ];
-  return {
-    title: `${title}｜小红书组图方案`,
-    publishTitle: `${publishTopic}，从一杯${brandName}开始`,
-    publishCaption: `以前总觉得早晨要很精致才算仪式感。后来发现，能认真吃早餐、慢慢喝完一杯牛奶，就已经是在好好照顾自己。今天也从${brandName}开始，给身体和心情一点稳定的能量。`,
-    caption: `把早餐认真吃完，把早晨慢慢过好。${brandName}不用把生活变复杂，只是帮你把一天的开始照顾得更稳一点。`,
-    slides,
-  };
 }
 
 function renderXhsCarouselDraft(imageResult, pack, stateFlags = {}) {
@@ -2784,7 +2905,14 @@ async function generateXhsCarousel(ideaIndex) {
   try {
     const idea = trend.ideas?.[ideaIndex];
     if (!idea) throw new Error("当前选题不存在，请重新生成或刷新页面后再试。");
-    const previewPack = buildLocalXhsCarouselPack(brand, trend, idea);
+    const previewResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/preview`, {
+      method: "POST",
+    });
+    updateCurrentUser(previewResult.user);
+    const previewPack = previewResult.carouselPack;
+    if (!previewPack || !Array.isArray(previewPack.slides)) {
+      throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
+    }
     const pack = {
       ...previewPack,
       slides: enrichXhsCarouselSlides(previewPack),

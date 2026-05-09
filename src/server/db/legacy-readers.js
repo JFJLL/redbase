@@ -231,7 +231,7 @@ function readStoreFromCurrentSchema() {
 
 function readIdeasForTrendRow(trendRowId) {
   return db.prepare(`
-    SELECT idea_index, title, summary, angle, brand_fit, audience, hook, tags_json
+    SELECT idea_index, title, summary, angle, brand_fit, audience, hook, tags_json, content_assets_json
     FROM ideas
     WHERE trend_row_id = ?
     ORDER BY idea_index ASC
@@ -243,6 +243,7 @@ function readIdeasForTrendRow(trendRowId) {
     audience: row.audience,
     hook: row.hook,
     tags: safeParseArray(row.tags_json),
+    contentAssets: safeParseObject(row.content_assets_json),
   }));
 }
 

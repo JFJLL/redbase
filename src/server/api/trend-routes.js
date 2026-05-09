@@ -7,6 +7,27 @@ const {
   upsertBrandFull,
   allocateAnalysisAndTrendBase,
 } = require("../db/repositories/brand-repository");
+const {
+  PGY_MAX_CATEGORY_PATH_LENGTH,
+  fetchPgyCategoryTree,
+  getPgyPublicErrorMessage,
+  isPgyCategoryPathInTree,
+  normalizePgyCategoryPath,
+} = require("../integrations/pgy-content-square");
+const { TREND_BUCKET_META, normalizeTrendBucketKey } = require("../ai/trend-service");
+
+function resolveTrendBucketForRequest(value) {
+  const key = normalizeTrendBucketKey(value || "xhs");
+  return TREND_BUCKET_META.find((bucket) => bucket.key === key) || TREND_BUCKET_META[0];
+}
+
+function mergeGeneratedTrendBucket(existingBuckets, generatedBuckets) {
+  const generatedKeys = new Set((generatedBuckets || []).map((bucket) => normalizeTrendBucketKey(bucket.key)));
+  return [
+    ...(existingBuckets || []).filter((bucket) => !generatedKeys.has(normalizeTrendBucketKey(bucket.key))),
+    ...(generatedBuckets || []),
+  ];
+}
 
 async function handleTrendRoutes(context, req, res, pathname) {
   const {
@@ -33,6 +54,24 @@ async function handleTrendRoutes(context, req, res, pathname) {
     unauthorized,
   } = bindRouteScope(context);
 
+  if (req.method === "GET" && pathname === "/api/trends/xhs/categories") {
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+
+    try {
+      const categoryTree = await fetchPgyCategoryTree(appConfig);
+      json(res, 200, categoryTree);
+    } catch (error) {
+      console.warn("[trend-analysis] failed to load pgy categories", {
+        userId: user.id,
+        code: error?.code || "UNKNOWN",
+        message: error?.code ? getPgyPublicErrorMessage(error) : String(error?.message || "unknown error"),
+      });
+      badRequest(res, getPgyPublicErrorMessage(error));
+    }
+    return true;
+  }
+
   const analysisMatch = pathname.match(/^\/api\/brands\/(\d+)\/analyses$/);
   if (req.method === "POST" && analysisMatch) {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
@@ -54,23 +93,58 @@ async function handleTrendRoutes(context, req, res, pathname) {
     }
 
     if (!hasEnoughCredits(user, CREDIT_COSTS.analysis, res)) return true;
+    const payload = await collectBody(req);
+    const selectedBucket = resolveTrendBucketForRequest(payload.bucketKey || payload.trendBucketKey || payload.bucket);
+    const rawXhsCategoryPath = selectedBucket.key === "xhs" ? String(payload.xhsCategoryPath || "").trim() : "";
+    if (rawXhsCategoryPath.length > PGY_MAX_CATEGORY_PATH_LENGTH) {
+      badRequest(res, "小红书内容类目路径过长，请重新选择类目后再试。");
+      return true;
+    }
+    const xhsCategoryPath = normalizePgyCategoryPath(rawXhsCategoryPath);
+    if (xhsCategoryPath) {
+      try {
+        const categoryTree = await fetchPgyCategoryTree(appConfig);
+        if (!isPgyCategoryPathInTree(xhsCategoryPath, categoryTree)) {
+          badRequest(res, "当前小红书内容类目不可用，请刷新类目后重新选择。");
+          return true;
+        }
+      } catch (error) {
+        console.warn("[trend-analysis] failed to validate pgy category", {
+          userId: user.id,
+          brandId: brand.id,
+          code: error?.code || "UNKNOWN",
+          message: error?.code ? getPgyPublicErrorMessage(error) : String(error?.message || "unknown error"),
+        });
+        badRequest(res, getPgyPublicErrorMessage(error));
+        return true;
+      }
+    }
     const { analysisId, trendBase } = allocateAnalysisAndTrendBase();
     brand.analyses.unshift({
       id: analysisId,
-      name: `${brand.name} - 热门趋势分析`,
+      name: `${brand.name} - ${selectedBucket.title}`,
       timestamp: formatTimestamp(),
       trendSnapshot: [],
     });
+    let analysisWarnings = [];
+    let generatedTrends = [];
     try {
-      brand.trends = await generateAiTrendSet(brand, trendBase);
+      generatedTrends = await generateAiTrendSet(brand, trendBase, {
+        bucketKey: selectedBucket.key,
+        xhsCategoryPath,
+      });
+      analysisWarnings = Array.isArray(generatedTrends.analysisWarnings) ? generatedTrends.analysisWarnings : [];
+      brand.trends = mergeGeneratedTrendBucket(brand.trends, generatedTrends);
     } catch (error) {
       console.warn("[trend-analysis] analysis failed for request", {
         userId: user.id,
         brandId: brand.id,
         brandName: brand.name,
-        message: error?.message || "unknown error",
+        bucketKey: selectedBucket.key,
+        code: error?.code || "UNKNOWN",
+        message: error?.code ? getPgyPublicErrorMessage(error) : error?.message || "unknown error",
       });
-      badRequest(res, "本次分析未能获取到可用热点，请稍后重试。");
+      badRequest(res, error?.code ? getPgyPublicErrorMessage(error) : error?.message || "本次分析未能获取到可用热点，请稍后重试。");
       return true;
     }
     const nextCredits = Number(user.credits || 0) - CREDIT_COSTS.analysis;
@@ -84,11 +158,15 @@ async function handleTrendRoutes(context, req, res, pathname) {
       creditCost: CREDIT_COSTS.analysis,
       brandId: brand.id,
       brandName: brand.name,
-      summary: `${brand.name} 热点趋势分析`,
+      summary: `${brand.name} ${selectedBucket.title}`,
     });
-    brand.analyses[0].trendSnapshot = cloneTrendBuckets(brand.trends);
+    brand.analyses[0].trendSnapshot = cloneTrendBuckets(generatedTrends);
     const savedBrand = upsertBrandFull(brand);
-    json(res, 200, { brand: sanitizeBrand(savedBrand, appConfig), user: sanitizeUser(updatedUser) });
+    json(res, 200, {
+      brand: sanitizeBrand(savedBrand, appConfig),
+      user: sanitizeUser(updatedUser),
+      warnings: analysisWarnings,
+    });
     return true;
   }
 

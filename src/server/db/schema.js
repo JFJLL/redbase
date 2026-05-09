@@ -64,6 +64,7 @@ function initializeDatabaseSchema() {
       brand_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       timestamp TEXT NOT NULL,
+      brand_brief_json TEXT NOT NULL DEFAULT '{}',
       position INTEGER NOT NULL,
       FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
     );
@@ -71,6 +72,7 @@ function initializeDatabaseSchema() {
     CREATE TABLE IF NOT EXISTS trends (
       row_id INTEGER PRIMARY KEY AUTOINCREMENT,
       trend_id INTEGER NOT NULL,
+      stable_key TEXT NOT NULL DEFAULT '',
       brand_id INTEGER NOT NULL,
       analysis_id INTEGER,
       scope TEXT NOT NULL,
@@ -101,6 +103,7 @@ function initializeDatabaseSchema() {
       audience TEXT NOT NULL,
       hook TEXT NOT NULL,
       tags_json TEXT NOT NULL DEFAULT '[]',
+      content_assets_json TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (trend_row_id, idea_index),
       FOREIGN KEY (trend_row_id) REFERENCES trends(row_id) ON DELETE CASCADE
     );
@@ -212,6 +215,9 @@ function ensureSchemaUpgrades() {
   }
 
   if (tableExists("trends")) {
+    if (!hasColumn("trends", "stable_key")) {
+      db.exec("ALTER TABLE trends ADD COLUMN stable_key TEXT NOT NULL DEFAULT ''");
+    }
     if (!hasColumn("trends", "bucket_key")) {
       db.exec("ALTER TABLE trends ADD COLUMN bucket_key TEXT NOT NULL DEFAULT 'global'");
     }
@@ -221,6 +227,14 @@ function ensureSchemaUpgrades() {
     if (!hasColumn("trends", "bucket_description")) {
       db.exec("ALTER TABLE trends ADD COLUMN bucket_description TEXT NOT NULL DEFAULT '从跨平台高讨论度内容里筛选可被品牌借势的热点方向。'");
     }
+  }
+
+  if (tableExists("analyses") && !hasColumn("analyses", "brand_brief_json")) {
+    db.exec("ALTER TABLE analyses ADD COLUMN brand_brief_json TEXT NOT NULL DEFAULT '{}'");
+  }
+
+  if (tableExists("ideas") && !hasColumn("ideas", "content_assets_json")) {
+    db.exec("ALTER TABLE ideas ADD COLUMN content_assets_json TEXT NOT NULL DEFAULT '{}'");
   }
 
   if (tableExists("brands") && !hasColumn("brands", "logo_json")) {
@@ -319,10 +333,12 @@ function hasCurrentStoreSchema() {
     tableExists("verification_codes") &&
     tableExists("brands") &&
     tableExists("analyses") &&
+    hasColumn("analyses", "brand_brief_json") &&
     tableExists("trends") &&
     tableExists("ideas") &&
     hasColumn("brands", "asset_tags_json") &&
     hasColumn("trends", "row_id") &&
+    hasColumn("trends", "stable_key") &&
     hasColumn("trends", "scope") &&
     hasColumn("trends", "bucket_key") &&
     hasColumn("trends", "bucket_title") &&
@@ -330,6 +346,7 @@ function hasCurrentStoreSchema() {
     hasColumn("trends", "tags_json") &&
     hasColumn("ideas", "trend_row_id") &&
     hasColumn("ideas", "tags_json") &&
+    hasColumn("ideas", "content_assets_json") &&
     tableExists("generations") &&
     tableExists("product_images") &&
     tableExists("image_jobs") &&

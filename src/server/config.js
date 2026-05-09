@@ -30,6 +30,7 @@ const DEFAULT_APP_CONFIG = {
     anthropicBaseUrl: "",
     apiKey: "",
     searchEnabled: true,
+    maxOutputTokens: 65536,
   },
   imageProvider: {
     baseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
@@ -50,6 +51,20 @@ const DEFAULT_APP_CONFIG = {
   },
   security: {
     assetSigningSecret: "",
+  },
+  pgy: {
+    enabled: false,
+    cookie: "",
+    cookieFile: "",
+    userAgent: "",
+    timeoutMs: 20000,
+    cacheTtlMs: 600000,
+    allowSearchFallback: false,
+    ossEndpoint: "",
+    ossBucket: "",
+    ossObjectKey: "",
+    ossAccessKeyId: "",
+    ossAccessKeySecret: "",
   },
 };
 
@@ -85,6 +100,15 @@ function loadAppConfig() {
   }
 
   const merged = deepMerge(DEFAULT_APP_CONFIG, localConfig);
+  const hasPgyCookieSource = Boolean(
+    process.env.PGY_CONTENT_SQUARE_COOKIE ||
+      process.env.PGY_CONTENT_SQUARE_COOKIE_FILE ||
+      process.env.PGY_COOKIE_FILE ||
+      process.env.PGY_OSS_ACCESS_KEY_ID ||
+      merged.pgy?.cookie ||
+      merged.pgy?.cookieFile ||
+      merged.pgy?.ossAccessKeyId,
+  );
 
   return {
     textProvider: {
@@ -95,6 +119,7 @@ function loadAppConfig() {
       anthropicBaseUrl: String(process.env.TEXT_ANTHROPIC_BASE_URL || merged.textProvider.anthropicBaseUrl || "").trim(),
       apiKey: String(process.env.TEXT_API_KEY || merged.textProvider.apiKey || "").trim(),
       searchEnabled: String(process.env.TEXT_SEARCH_ENABLED || merged.textProvider.searchEnabled || "true").trim() !== "false",
+      maxOutputTokens: Number(process.env.TEXT_MAX_OUTPUT_TOKENS || merged.textProvider.maxOutputTokens || 65536),
     },
     imageProvider: {
       baseUrl: String(process.env.IMAGE_BASE_URL || merged.imageProvider.baseUrl || "").trim(),
@@ -129,6 +154,23 @@ function loadAppConfig() {
         process.env.COOKIE_SECURE,
         parseBooleanConfig(merged.security?.cookieSecure, process.env.NODE_ENV === "production"),
       ),
+    },
+    pgy: {
+      enabled: parseBooleanConfig(process.env.PGY_CONTENT_SQUARE_ENABLED, parseBooleanConfig(merged.pgy?.enabled, hasPgyCookieSource)),
+      cookie: String(process.env.PGY_CONTENT_SQUARE_COOKIE || merged.pgy?.cookie || "").trim(),
+      cookieFile: String(process.env.PGY_CONTENT_SQUARE_COOKIE_FILE || process.env.PGY_COOKIE_FILE || merged.pgy?.cookieFile || "").trim(),
+      userAgent: String(process.env.PGY_CONTENT_SQUARE_USER_AGENT || merged.pgy?.userAgent || "").trim(),
+      timeoutMs: Number(process.env.PGY_CONTENT_SQUARE_TIMEOUT_MS || merged.pgy?.timeoutMs || 20000),
+      cacheTtlMs: Number(process.env.PGY_CONTENT_SQUARE_CACHE_TTL_MS || merged.pgy?.cacheTtlMs || 10 * 60 * 1000),
+      allowSearchFallback: parseBooleanConfig(
+        process.env.PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK,
+        parseBooleanConfig(merged.pgy?.allowSearchFallback, false),
+      ),
+      ossEndpoint: String(process.env.PGY_OSS_ENDPOINT || merged.pgy?.ossEndpoint || "").trim(),
+      ossBucket: String(process.env.PGY_OSS_BUCKET || merged.pgy?.ossBucket || "").trim(),
+      ossObjectKey: String(process.env.PGY_OSS_OBJECT_KEY || merged.pgy?.ossObjectKey || "").trim(),
+      ossAccessKeyId: String(process.env.PGY_OSS_ACCESS_KEY_ID || merged.pgy?.ossAccessKeyId || "").trim(),
+      ossAccessKeySecret: String(process.env.PGY_OSS_ACCESS_KEY_SECRET || merged.pgy?.ossAccessKeySecret || "").trim(),
     },
   };
 }

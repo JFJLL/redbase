@@ -47,6 +47,7 @@ body::before {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -301,6 +302,7 @@ button {
 .brand-card,
 .home-card,
 .history-block,
+.xhs-category-control,
 .trend-card,
 .idea-card,
 .analysis-tip,
@@ -980,6 +982,41 @@ button {
   align-items: start;
 }
 
+.xhs-category-control {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.xhs-category-control span {
+  color: #f7edf2;
+  font-weight: 800;
+}
+
+.xhs-category-control select {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(12, 12, 22, 0.74);
+  color: var(--text);
+  padding: 0 12px;
+  font: inherit;
+}
+
+.xhs-category-control select:disabled {
+  color: #8d8299;
+}
+
+.xhs-category-control small {
+  color: #a99eb8;
+  line-height: 1.5;
+}
+
 .history-block h3 {
   margin: 0 0 18px;
   font-size: 1.3rem;
@@ -1126,6 +1163,25 @@ button {
 
 .idea-card strong {
   color: #ffd6df;
+}
+
+.idea-asset-preview {
+  display: grid;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d8d1e8;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.idea-asset-preview.is-incomplete {
+  color: #ffe1a3;
+  background: rgba(255, 193, 7, 0.08);
+  border-color: rgba(255, 193, 7, 0.24);
 }
 
 .modal-mask {
@@ -1545,6 +1601,31 @@ body::before {
   backdrop-filter: blur(16px);
 }
 
+.xhs-category-control span {
+  color: #3a2c31;
+}
+
+.xhs-category-control select {
+  background: #fff;
+  color: #2c2225;
+  border-color: rgba(229, 72, 77, 0.14);
+}
+
+.xhs-category-control select:focus {
+  border-color: rgba(229, 72, 77, 0.5);
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.08);
+  outline: none;
+}
+
+.xhs-category-control select:disabled {
+  background: #fff8f7;
+  color: #9b8e92;
+}
+
+.xhs-category-control small {
+  color: #7e7075;
+}
+
 .landing-card,
 .home-card {
   padding: 28px;
@@ -1846,6 +1927,7 @@ body {
 .carousel-slide-card,
 .auth-brand-panel,
 .auth-form-panel,
+.xhs-category-control,
 .cta-panel {
   border-radius: 8px;
   box-shadow: none;
@@ -1856,6 +1938,7 @@ body {
 .trend-card,
 .idea-card,
 .history-block,
+.xhs-category-control,
 .analysis-tip,
 .idea-context-card,
 .idea-prompt-card {
@@ -1992,6 +2075,29 @@ body {
 .trend-screen {
   grid-template-columns: 340px 1fr;
   gap: 20px;
+}
+
+.xhs-category-control {
+  border-color: rgba(28, 18, 18, 0.08);
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(126, 55, 55, 0.05);
+}
+
+.xhs-category-control span {
+  color: #24191c;
+}
+
+.xhs-category-control select {
+  border-color: rgba(28, 18, 18, 0.1);
+  border-radius: 4px;
+  background: #fffaf8;
+  color: #161214;
+}
+
+.xhs-category-control select:disabled,
+.xhs-category-control small {
+  color: #86777c;
 }
 
 .trend-rank {
@@ -3428,6 +3534,10 @@ textarea {
   }
 
   .history-filter-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .trend-screen {
     grid-template-columns: 1fr;
   }
 

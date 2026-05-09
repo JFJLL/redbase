@@ -1,8 +1,8 @@
 # Redbase Refactor Roadmap
 
 **Created:** 2026-04-30  
-**Current phase:** 15
-**Overall status:** Helper facade split complete
+**Current phase:** 16
+**Overall status:** Pgy Xiaohongshu hot topics implemented; live Pgy category/hot-note validation passed
 
 ## Progress Summary
 
@@ -23,6 +23,7 @@
 | 13 | History Generation Search | Complete | 1/1 |
 | 14 | Automated Test Coverage | Complete | 1/1 |
 | 15 | Helper Facade Split | Complete | 1/1 |
+| 16 | Pgy Xiaohongshu Hot Topics | Real AI validation pending | 1/1 |
 
 ## Phase 1: Module Boundaries
 
@@ -250,6 +251,32 @@
 - [x] HTTP utilities, credits, domain helpers, admin views, content templates, and image storage helpers live in focused modules.
 - [x] Existing route-scope helper names remain compatible.
 - [x] `npm run check`, `npm test`, API smoke, real browser login, and review pass.
+
+## Phase 16: Pgy Xiaohongshu Hot Topics
+
+**Goal:** Replace only the `小红书热点话题` trend bucket's generic search source with Xiaohongshu Pgy `小红书热门` hot-note evidence, while keeping the remaining five trend buckets on the existing Google Search enhanced model flow.
+
+**Directory:** `.planning/phases/phase-16-xhs-pgy-hot-topics/`
+
+**Research and contracts:**
+- [x] `16-RESEARCH.md` - Validated Pgy page/API behavior and production HTTP feasibility
+- [x] `16-PGY-CONTRACT.md` - Payload contract, response extraction rules, normalizer, errors, and tests
+- [x] `16-CATEGORY-TREE.md` - Complete `内容类目` tree and submission paths
+- [x] `16-EXECUTION-GUIDE.md` - End-to-end implementation guide
+
+**Plans:**
+- [x] `16-01-PLAN.md` - Use Pgy Content Square for Xiaohongshu hot topics
+
+**Exit criteria:**
+- [x] Redbase exposes the Pgy `内容类目` selector for the `小红书热点话题` bucket.
+- [x] Trend analysis fetches `小红书热门` notes with `bizType=1`, `orderBy=premium_imp_num`, `nd=3`, and optional `noteContentCategory`.
+- [x] Pgy response notes are normalized into title, cover image, metric, author, and sanitized source evidence.
+- [x] The analysis still makes one model call for all six trend buckets.
+- [x] The `xhs` bucket uses Pgy evidence; the other five buckets keep the existing `google_search` behavior.
+- [x] Pgy cookies/tokens are never logged or committed.
+- [x] `npm run check`, `npm test`, API smoke, and real browser validation pass.
+
+**Validation note:** Pgy category-tree and hot-note validation pass with local `data/token.txt`. Full real trend-analysis validation remains deferred because it consumes real text-model quota.
 
 ## Phase 8: Review Regression Tests
 

@@ -15,6 +15,11 @@ export const DEFAULT_TREND_BUCKETS = [
     description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
   },
   {
+    key: "traffic",
+    title: "流量热点趋势",
+    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
+  },
+  {
     key: "news",
     title: "新闻热点趋势",
     description: "从近期新闻、行业动态和消费趋势中找到可被品牌内容化的机会。",
@@ -23,11 +28,6 @@ export const DEFAULT_TREND_BUCKETS = [
     key: "social",
     title: "社会热点趋势",
     description: "从大众情绪、生活方式变化、社会议题和公共讨论中找到适合品牌表达的切口。",
-  },
-  {
-    key: "traffic",
-    title: "流量热点趋势",
-    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
   },
   {
     key: "track",
@@ -46,4 +46,3 @@ export const LEGACY_TREND_BUCKET_KEYS = {
   global: "xhs",
   industry: "track",
 };
-

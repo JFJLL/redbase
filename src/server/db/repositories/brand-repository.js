@@ -3,6 +3,7 @@ const {
   groupTrendRows,
   flattenTrendBuckets,
   safeParseArray,
+  safeParseObject,
 } = require("../snapshot-utils");
 const { readIdeasForTrendRow } = require("../legacy-readers");
 const { allocateCounter, runTransaction } = require("./core-repository");
@@ -55,7 +56,7 @@ function hydrateBrandContent(brands) {
   const placeholders = ids.map(() => "?").join(",");
   const analysisMap = new Map();
   const analysisRows = db.prepare(`
-    SELECT id, brand_id, name, timestamp, position
+    SELECT id, brand_id, name, timestamp, brand_brief_json, position
     FROM analyses
     WHERE brand_id IN (${placeholders})
     ORDER BY brand_id DESC, position ASC
@@ -68,6 +69,7 @@ function hydrateBrandContent(brands) {
       id: row.id,
       name: row.name,
       timestamp: row.timestamp,
+      brandBrief: safeParseObject(row.brand_brief_json),
       trendSnapshot: [],
     };
     brand.analyses.push(analysis);
@@ -75,7 +77,7 @@ function hydrateBrandContent(brands) {
   }
 
   const trendRows = db.prepare(`
-    SELECT row_id, trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json
+    SELECT row_id, trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json
     FROM trends
     WHERE brand_id IN (${placeholders})
     ORDER BY brand_id DESC, scope ASC, analysis_id ASC, bucket_key ASC, position ASC
@@ -84,6 +86,7 @@ function hydrateBrandContent(brands) {
   for (const row of trendRows) {
     const trend = {
       id: row.trend_id,
+      stableKey: row.stable_key || "",
       bucketKey: row.bucket_key,
       bucketTitle: row.bucket_title,
       bucketDescription: row.bucket_description,
@@ -192,11 +195,12 @@ function deleteBrandById(brandId) {
 
 function insertBrandContent(brand) {
   for (const [analysisPosition, analysis] of (brand.analyses || []).entries()) {
-    db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, position) VALUES (?, ?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, brand_brief_json, position) VALUES (?, ?, ?, ?, ?, ?)").run(
       analysis.id,
       brand.id,
       analysis.name,
       analysis.timestamp,
+      JSON.stringify(safeParseObject(JSON.stringify(analysis.brandBrief || {}))),
       analysisPosition,
     );
     insertTrendBuckets(brand.id, analysis.id, "snapshot", analysis.trendSnapshot || []);
@@ -207,17 +211,18 @@ function insertBrandContent(brand) {
 function insertTrendBuckets(brandId, analysisId, scope, buckets) {
   const insertTrend = db.prepare(`
     INSERT INTO trends (
-      trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertIdea = db.prepare(`
-    INSERT INTO ideas (trend_row_id, idea_index, title, summary, angle, brand_fit, audience, hook, tags_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO ideas (trend_row_id, idea_index, title, summary, angle, brand_fit, audience, hook, tags_json, content_assets_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (const [trendPosition, trend] of flattenTrendBuckets(buckets).entries()) {
     const trendResult = insertTrend.run(
       trend.id,
+      trend.stableKey || "",
       brandId,
       analysisId,
       scope,
@@ -246,6 +251,7 @@ function insertTrendBuckets(brandId, analysisId, scope, buckets) {
         idea.audience,
         idea.hook,
         JSON.stringify(Array.isArray(idea.tags) ? idea.tags : []),
+        JSON.stringify(safeParseObject(JSON.stringify(idea.contentAssets || {}))),
       );
     }
   }
@@ -258,7 +264,7 @@ function allocateAnalysisAndTrendBase() {
     db.prepare(`
       INSERT INTO counters (name, value) VALUES ('nextTrendId', ?)
       ON CONFLICT(name) DO UPDATE SET value = excluded.value
-    `).run(trendBase + 300);
+    `).run(trendBase + 600);
     return { analysisId, trendBase };
   });
 }

@@ -63,10 +63,14 @@ npm start
 - `CORS_ORIGINS`：允许跨域访问的前端来源，多个用英文逗号分隔；同源本地访问不需要配置
 - `ASSET_SIGNING_SECRET`：图片/资产签名 URL 的 HMAC 密钥；生产环境建议配置长随机字符串，未配置时会使用进程内临时密钥
 - `COOKIE_SECURE`：是否给 session Cookie 添加 `Secure`；`NODE_ENV=production` 时默认启用，本地 HTTP 开发可设为 `false`
+- `PGY_CONTENT_SQUARE_COOKIE`：小红书蒲公英 Content Square Cookie header，用于“小红书热点话题”真实 Pgy 证据
+- `PGY_COOKIE_FILE` / `PGY_CONTENT_SQUARE_COOKIE_FILE`：本地 cookie 文件路径，支持每行一个 JSON cookie 字典，格式兼容 `KOL/token.txt`
+- `PGY_OSS_ENDPOINT`、`PGY_OSS_BUCKET`、`PGY_OSS_OBJECT_KEY`、`PGY_OSS_ACCESS_KEY_ID`、`PGY_OSS_ACCESS_KEY_SECRET`：可选 OSS cookie 来源；服务端会下载 token 文件并缓存，不会向日志输出 cookie
+- `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK`：Pgy 不可用时是否允许 `xhs` bucket 退回原搜索流程，默认 `false`
 
 管理员后台只信任 `ADMIN_PHONES` / `config.local.json` 中显式配置的手机号。未配置管理员手机号时，不会再按账号类型自动授予管理权限。
 
-趋势分析默认会先尝试 `google_search`，失败时自动降级为纯模型生成，避免主流程卡死。
+趋势分析保持单次搜索增强文本模型调用；配置 Pgy 后，`小红书热点话题` 会拉取蒲公英近 3 日曝光排序前 10 条帖子作为证据，并由文本模型总结趋势、品牌关联和每条趋势下的 2 个选题，其余趋势 bucket 继续使用搜索增强。Pgy 默认失败即中止本次分析，避免误扣积分；如需临时回退，可显式开启 `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK`。
 
 ## 启动
 
