@@ -127,7 +127,51 @@ function buildIdeaDiversityPrompt(bucketMeta) {
   return [
     `同一 trend 下的 2 条 idea 必须是两个明显不同的内容选择：idea[0] 走「${firstRoute}」，idea[1] 走「${secondRoute}」。`,
     "两条 idea 禁止只做同义改写；title、summary、angle、audience、hook 至少有 3 项明显不同。",
+    "两条 idea 还必须覆盖不同的用户场景、内容形式和执行动作，不要只是换一组形容词或换一个标题。",
+    "禁止连续复用相同标题结构、相同人群泛称、相同封面钩子或相同组图逻辑。",
     "两条 idea 的 contentAssets 必须分别沿用各自路线，不要复用同一套朋友圈文案、小红书文案、组图页标题或公众号导语。",
+  ].join("\n");
+}
+
+function buildTrendDeduplicationPrompt() {
+  return [
+    "跨趋势去重规则：同一批 10 条 trend 之间，title、summary、reason、ideas.angle、ideas.audience、ideas.hook 不能高度相似。",
+    "如果多个证据指向相似热点，不要换标题重复输出；必须拆成不同用户需求、不同内容形式或不同消费场景，否则合并并改写为新的差异化方向。",
+    "禁止把同一热点、同一人群、同一痛点或同一产品卖点换一种说法后重复生成。",
+  ].join("\n");
+}
+
+function buildTrendFreshnessPrompt() {
+  return [
+    "新颖度与时效判断：每条 trend 必须区分自己属于近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点中的哪一种，并在 summary 或 reason 中体现判断。",
+    "如果只是历史长期复用内容，只能表达为长尾稳定或旧话题复燃，不能包装成近期新热点。",
+    "summary 和 reason 必须说明为什么现在值得做；如果只是稳定长尾机会，要明确说明它适合持续内容而不是快速蹭热点。",
+  ].join("\n");
+}
+
+function buildEvidenceBoundaryPrompt() {
+  return [
+    "数据来源与可信边界：Pgy bucket 只能引用已传入的标题、阅读、赞藏评、作者信息，不能声称已核验正文、真实销量、医学结论或站外排名。",
+    "搜索增强 bucket 只能表达趋势方向或议题方向，不输出未验证的具体机构、日期、排名、数值或确定性事实。",
+    "选题里避免使用“数据证明”“权威认证”“最新政策明确”“销量领先”等无法由输入证据支持的表述。",
+  ].join("\n");
+}
+
+function buildSensitiveRiskPrompt() {
+  return [
+    "敏感风险过滤：健康、儿童、药品、医疗、政策、社会争议类内容不得输出诊断、治疗、用药建议、功效承诺或煽动性立场。",
+    "如果品牌属于大健康、母婴、药品、医疗或功效型赛道，默认转为生活方式、日常护理、合规科普、就医提醒边界，不给专业诊疗结论。",
+    "高风险趋势如果不能合规转化，score 必须降到 60 以下，并在 reason 中说明不建议优先选择。",
+  ].join("\n");
+}
+
+function buildBucketSpecificHardeningPrompt(bucketMeta) {
+  const [bucket] = normalizePromptBucketMeta(bucketMeta);
+  if (!["track", "crowd", "xhs"].includes(bucket.key)) return "";
+  return [
+    "当前 bucket 额外要求：",
+    "track/crowd/xhs 类选题必须给出具体用户场景、人群颗粒度和产品自然植入方式。",
+    "不要只写“宝妈、年轻人、目标用户、关注健康的人”这类泛人群；必须写清楚谁在什么情境下为什么需要这个内容。",
   ].join("\n");
 }
 
@@ -165,6 +209,11 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]]) {
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
     "ideas 必须是 2 条，每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
     buildIdeaDiversityPrompt(selectedBucketMeta),
+    buildTrendDeduplicationPrompt(),
+    buildTrendFreshnessPrompt(),
+    buildEvidenceBoundaryPrompt(),
+    buildSensitiveRiskPrompt(),
+    buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     buildRichIdeaRequirementsPrompt(),
     "contentAssets 必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
     buildContentAssetsSchemaPrompt(),
@@ -206,6 +255,8 @@ function buildPgyEvidencePromptBlock(pgyEvidence) {
     "trend.summary 必须由 AI 总结：同时说明这个 Pgy 热门内容背后的用户需求、内容钩子，以及它和当前品牌的自然关系。",
     "每条 trend 的 2 条 ideas 必须由 AI 生成，并且都要同时挂钩 Pgy 热点和当前品牌；不要使用模板化的“拆解/改写”硬编码表达。",
     "如果 Pgy 原帖本身和品牌距离较远，也要提炼出可借势的消费场景、情绪、生活方式或内容结构，再判断品牌如何自然进入。",
+    "如果多条 Pgy 原帖属于同一类老话题或相似内容形式，必须拆出不同用户需求、不同内容形式或不同消费场景，不要重复生成相同趋势。",
+    "Pgy 证据只代表本次传入的热门笔记信号，不能扩展为已核验正文、真实销量、医学结论或站外排名。",
     "不要编造 Pgy 未返回的曝光量、排名外数据或笔记正文；本次不要生成其他 bucket。",
   ].join("\n");
 }
@@ -262,6 +313,11 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     "9. 不要输出品牌摘要字段；不要在 contentAssets 里补充品牌档案没有依据的固定行业样例。",
     "10. 如果涉及新闻、社会议题或近期热点，请表达为可验证的趋势或议题方向，不要编造具体机构、日期、排名或数据。",
     "11. 不要输出固定行业样例，不要在提示词里写与当前品牌无关的早餐、牛奶、儿童用药等具体场景；只有品牌档案、趋势或选题自然需要时才出现。",
+    `12. ${buildTrendDeduplicationPrompt()}`,
+    `13. ${buildTrendFreshnessPrompt()}`,
+    `14. ${buildEvidenceBoundaryPrompt()}`,
+    `15. ${buildSensitiveRiskPrompt()}`,
+    buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     ...strictLines,
   ].join("\n");
 }
@@ -275,6 +331,9 @@ function buildIdeaRegenerationSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]]) 
     "ideas 必须输出 2 条。",
     "每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
     buildIdeaDiversityPrompt(selectedBucketMeta),
+    buildEvidenceBoundaryPrompt(),
+    buildSensitiveRiskPrompt(),
+    buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     buildRichIdeaRequirementsPrompt(),
     "contentAssets 必须包含 moments、xhsCarousel、wechatLongImage 三个对象。",
     buildContentAssetsSchemaPrompt(),
@@ -303,6 +362,9 @@ function buildIdeaRegenerationUserPrompt(brand, trend, customPrompt) {
   ];
   lines.push(customPrompt ? `补充要求：${customPrompt}` : "补充要求：无，请给出默认版本。");
   lines.push("请保持品牌相关性和小红书内容感，不要输出过度营销化的空话。");
+  lines.push(buildTrendFreshnessPrompt());
+  lines.push(buildEvidenceBoundaryPrompt());
+  lines.push(buildSensitiveRiskPrompt());
   lines.push(buildRichIdeaRequirementsPrompt());
   return lines.join("\n");
 }

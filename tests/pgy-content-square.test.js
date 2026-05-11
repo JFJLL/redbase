@@ -16,6 +16,7 @@ const {
 } = require("../src/server/integrations/pgy-content-square");
 const {
   buildIdeaRegenerationSystemPrompt,
+  buildIdeaRegenerationUserPrompt,
   buildPgyEvidencePromptBlock,
   buildTrendAnalysisSystemPrompt,
   buildTrendAnalysisUserPrompt,
@@ -289,6 +290,10 @@ test("includes Pgy evidence and category constraints in trend prompts", () => {
   assert.match(prompt, /不要在 trend\.summary、reason、ideas 或任何字段里输出小红书链接/);
   assert.match(prompt, /trend\.summary 必须由 AI 总结/);
   assert.match(prompt, /早C晚A新手攻略/);
+  assert.match(prompt, /跨趋势去重规则/);
+  assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
+  assert.match(prompt, /Pgy bucket 只能引用已传入的标题、阅读、赞藏评、作者信息/);
+  assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
 
   const categoryOnlyPrompt = buildTrendAnalysisUserPrompt(brand, { xhsCategoryPath: "美妆/护肤" });
   assert.match(categoryOnlyPrompt, /小红书内容类目限定/);
@@ -309,6 +314,7 @@ test("trend prompts only include the selected bucket rules", () => {
   assert.match(prompt, /只分析内容形式、标题结构、封面表达、组图结构、爆款套路和互动机制/);
   assert.match(prompt, /idea\[0\] 走「爆款形式复用」/);
   assert.match(prompt, /idea\[1\] 走「互动话题反差」/);
+  assert.match(prompt, /搜索增强 bucket 只能表达趋势方向或议题方向/);
   assert.doesNotMatch(prompt, /bucket 标题：小红书热点话题/);
   assert.doesNotMatch(prompt, /bucket 标题：新闻热点趋势/);
   assert.doesNotMatch(prompt, /只基于 Pgy 小红书热门证据和品牌档案/);
@@ -323,5 +329,27 @@ test("idea regeneration prompts keep two ideas on separate routes", () => {
   assert.match(prompt, /idea\[0\] 走「品类决策科普」/);
   assert.match(prompt, /idea\[1\] 走「痛点对比避坑」/);
   assert.match(prompt, /禁止只做同义改写/);
+  assert.match(prompt, /不同的用户场景、内容形式和执行动作/);
+  assert.match(prompt, /track\/crowd\/xhs 类选题必须给出具体用户场景、人群颗粒度和产品自然植入方式/);
+  assert.match(prompt, /避免使用“数据证明”“权威认证”“最新政策明确”“销量领先”/);
+  assert.match(prompt, /高风险趋势如果不能合规转化/);
   assert.doesNotMatch(prompt, /idea\[0\] 走「爆款形式复用」/);
+});
+
+test("idea regeneration user prompts include freshness and risk boundaries", () => {
+  const prompt = buildIdeaRegenerationUserPrompt(
+    brand,
+    {
+      title: "儿童护理热点",
+      category: "大健康",
+      summary: "围绕近期家长关注的日常护理内容。",
+      reason: "品牌可从合规科普角度进入。",
+    },
+    "减少敏感风险",
+  );
+
+  assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
+  assert.match(prompt, /不能声称已核验正文、真实销量、医学结论或站外排名/);
+  assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
+  assert.match(prompt, /减少敏感风险/);
 });
