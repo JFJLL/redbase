@@ -73,6 +73,34 @@ async function handleTrendRoutes(context, req, res, pathname) {
   }
 
   const analysisMatch = pathname.match(/^\/api\/brands\/(\d+)\/analyses$/);
+  const analysisDeleteMatch = pathname.match(/^\/api\/brands\/(\d+)\/analyses\/(\d+)$/);
+  if (req.method === "DELETE" && analysisDeleteMatch) {
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+
+    const brand = findBrandByOwner(Number(analysisDeleteMatch[1]), user.id);
+    if (!brand) {
+      notFound(res);
+      return true;
+    }
+
+    const analysisId = Number(analysisDeleteMatch[2]);
+    const beforeCount = Array.isArray(brand.analyses) ? brand.analyses.length : 0;
+    brand.analyses = (brand.analyses || []).filter((analysis) => Number(analysis.id) !== analysisId);
+    if (brand.analyses.length === beforeCount) {
+      notFound(res);
+      return true;
+    }
+
+    const savedBrand = upsertBrandFull(brand);
+    json(res, 200, {
+      ok: true,
+      brand: sanitizeBrand(savedBrand, appConfig),
+      deletedAnalysisId: analysisId,
+    });
+    return true;
+  }
+
   if (req.method === "POST" && analysisMatch) {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;

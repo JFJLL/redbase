@@ -1034,6 +1034,17 @@ button {
   border-top: 0;
 }
 
+.history-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.danger-text-btn {
+  color: #b72e3a !important;
+}
+
 .analysis-tip {
   margin-bottom: 22px;
   line-height: 1.8;
@@ -1170,10 +1181,10 @@ button {
   gap: 6px;
   margin-top: 2px;
   padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(187, 63, 63, 0.12);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #d8d1e8;
+  background: #faf7f5;
+  color: #5e5558;
   font-size: 0.92rem;
   line-height: 1.6;
 }

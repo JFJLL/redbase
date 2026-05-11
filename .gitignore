@@ -10,3 +10,4 @@ node_modules/
 .playwright-cli/
 .claude/
 redbase-model-cost-estimate.md
+docs/

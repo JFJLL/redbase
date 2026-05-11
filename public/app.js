@@ -1238,6 +1238,36 @@ function restoreAnalysisSnapshot(analysisId) {
   switchTab("trends");
 }
 
+async function deleteAnalysisSnapshot(analysisId) {
+  const brand = getSelectedBrand();
+  if (!brand) return;
+
+  const analysis = (brand.analyses || []).find((item) => Number(item.id) === Number(analysisId));
+  if (!analysis) {
+    alert("未找到对应的历史分析。");
+    return;
+  }
+
+  if (!confirm(`确定删除「${analysis.name}」吗？删除后这条历史分析和其中保存的话题快照将无法恢复。`)) return;
+
+  try {
+    setBusy(true);
+    const result = await request(`/api/brands/${brand.id}/analyses/${analysisId}`, { method: "DELETE" });
+    replaceBrand(result.brand);
+    const nextBrand = getSelectedBrand();
+    const currentBucket = getCurrentTrendBucket(nextBrand);
+    if (!currentBucket?.items?.some((trend) => Number(trend.id) === Number(state.selectedTrendId))) {
+      state.selectedTrendMode = firstTrendBucket(nextBrand)?.key ?? DEFAULT_TREND_MODE;
+      state.selectedTrendId = firstTrendBucket(nextBrand)?.items?.[0]?.id ?? null;
+    }
+    renderAll();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function switchPage(page) {
   state.currentPage = page;
   document.querySelectorAll(".page").forEach((node) => {
@@ -1494,7 +1524,10 @@ function renderHistory() {
             <div>${item.name}</div>
             <div class="panel-subtitle">${item.timestamp}</div>
           </div>
-          <button class="text-btn" data-analysis-view="${item.id}" type="button">查看</button>
+          <div class="history-item-actions">
+            <button class="text-btn" data-analysis-view="${item.id}" type="button">查看</button>
+            <button class="text-btn danger-text-btn" data-analysis-delete="${item.id}" type="button">删除</button>
+          </div>
         </div>
       `,
     )
@@ -1503,6 +1536,11 @@ function renderHistory() {
   root.querySelectorAll("[data-analysis-view]").forEach((button) => {
     button.addEventListener("click", () => {
       restoreAnalysisSnapshot(Number(button.dataset.analysisView));
+    });
+  });
+  root.querySelectorAll("[data-analysis-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      deleteAnalysisSnapshot(Number(button.dataset.analysisDelete));
     });
   });
 }
