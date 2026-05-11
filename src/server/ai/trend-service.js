@@ -175,6 +175,14 @@ function buildBucketSpecificHardeningPrompt(bucketMeta) {
   ].join("\n");
 }
 
+function buildCaptionEndingDiversityPrompt() {
+  return [
+    "小红书文案结尾去模板化：contentAssets.xhsCarousel.publishCaption 不要批量使用“评论区分享一下”“评论区聊聊”“你怎么看”“你家宝宝也这样吗”等评论区互动句。",
+    "同一批内容里最多 1 条 publishCaption 可以使用评论区引导；其他文案要用具体行动建议、保存提醒、场景总结、风险边界、清单收束或自然结束。",
+    "publishCaption 的结尾必须服务当前选题，不要所有文案都以提问或评论区 CTA 收尾。",
+  ].join("\n");
+}
+
 function buildRichIdeaRequirementsPrompt() {
   return [
     "每条 idea 都要按“完整内容选题卡”输出，不要写成一句话骨架。",
@@ -186,6 +194,7 @@ function buildRichIdeaRequirementsPrompt() {
     "idea.hook：25-60 个中文字符，必须是可直接放到开头的第一句话或封面钩子，要有情绪、问题或具体场景。",
     "contentAssets.moments.caption：80-140 个中文字符，像真实朋友圈文案，不要只写一句口号。",
     "contentAssets.xhsCarousel.publishCaption：100-180 个中文字符，像真实小红书发布文案，要有场景、价值点和轻互动。",
+    buildCaptionEndingDiversityPrompt(),
   ].join("\n");
 }
 

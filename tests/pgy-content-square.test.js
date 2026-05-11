@@ -294,6 +294,8 @@ test("includes Pgy evidence and category constraints in trend prompts", () => {
   assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
   assert.match(prompt, /Pgy bucket 只能引用已传入的标题、阅读、赞藏评、作者信息/);
   assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
+  assert.match(prompt, /小红书文案结尾去模板化/);
+  assert.match(prompt, /最多 1 条 publishCaption 可以使用评论区引导/);
 
   const categoryOnlyPrompt = buildTrendAnalysisUserPrompt(brand, { xhsCategoryPath: "美妆/护肤" });
   assert.match(categoryOnlyPrompt, /小红书内容类目限定/);
@@ -333,6 +335,7 @@ test("idea regeneration prompts keep two ideas on separate routes", () => {
   assert.match(prompt, /track\/crowd\/xhs 类选题必须给出具体用户场景、人群颗粒度和产品自然植入方式/);
   assert.match(prompt, /避免使用“数据证明”“权威认证”“最新政策明确”“销量领先”/);
   assert.match(prompt, /高风险趋势如果不能合规转化/);
+  assert.match(prompt, /不要所有文案都以提问或评论区 CTA 收尾/);
   assert.doesNotMatch(prompt, /idea\[0\] 走「爆款形式复用」/);
 });
 
@@ -351,5 +354,6 @@ test("idea regeneration user prompts include freshness and risk boundaries", () 
   assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
   assert.match(prompt, /不能声称已核验正文、真实销量、医学结论或站外排名/);
   assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
+  assert.match(prompt, /不要批量使用“评论区分享一下”“评论区聊聊”“你怎么看”/);
   assert.match(prompt, /减少敏感风险/);
 });
