@@ -10,6 +10,7 @@ const {
   normalizePgyCategoryPath,
   normalizePgyCategoryTree,
   normalizePgyHotNotes,
+  parseCookieTokenList,
   parseCookieTokenText,
   redactSensitiveText,
 } = require("../src/server/integrations/pgy-content-square");
@@ -166,11 +167,90 @@ test("parses bug.py style token files into cookie headers", () => {
     normalizeCookieHeader({ web_session: "session-a", "access-token-pgy.xiaohongshu.com": "token-a" }),
     "web_session=session-a; access-token-pgy.xiaohongshu.com=token-a",
   );
+  assert.deepEqual(parseCookieTokenList('{"web_session":"session-a"}\n{"web_session":"session-b"}'), ["web_session=session-a", "web_session=session-b"]);
   assert.equal(
     parseCookieTokenText('{"web_session":"session-a","x-user-id-pgy.xiaohongshu.com":"user-a"}\n{"web_session":"session-b"}'),
     "web_session=session-a; x-user-id-pgy.xiaohongshu.com=user-a",
   );
   assert.equal(parseCookieTokenText("web_session=session-a; a1=a1-value"), "web_session=session-a; a1=a1-value");
+});
+
+test("rotates Pgy cookie pool after an auth failure", async () => {
+  const cookiesSeen = [];
+  const result = await fetchPgyXhsHotNotes(
+    {
+      pgy: {
+        enabled: true,
+        cookie: '{"web_session":"expired"}\n{"web_session":"fresh"}',
+        userAgent: "test-agent",
+        timeoutMs: 1000,
+      },
+    },
+    {
+      fetchImpl: async (url, options) => {
+        cookiesSeen.push(options.headers.cookie);
+        if (cookiesSeen.length === 1) {
+          return jsonResponse({ code: 401, success: false, msg: "login expired" }, 401);
+        }
+        return jsonResponse({
+          code: 0,
+          success: true,
+          data: {
+            noteList: [
+              {
+                noteInfo: {
+                  title: "fresh cookie note",
+                  noteImages: [{ imageUrl: "https://image.example/fresh.jpg" }],
+                },
+              },
+            ],
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(cookiesSeen, ["web_session=expired", "web_session=fresh"]);
+  assert.equal(result.notes[0].title, "fresh cookie note");
+});
+
+test("retries transient Pgy network failures with the cookie pool", async () => {
+  const cookiesSeen = [];
+  const result = await fetchPgyXhsHotNotes(
+    {
+      pgy: {
+        enabled: true,
+        cookie: "web_session=single",
+        userAgent: "test-agent",
+        timeoutMs: 1000,
+      },
+    },
+    {
+      fetchImpl: async (url, options) => {
+        cookiesSeen.push(options.headers.cookie);
+        if (cookiesSeen.length === 1) {
+          throw new Error("fetch failed");
+        }
+        return jsonResponse({
+          code: 0,
+          success: true,
+          data: {
+            noteList: [
+              {
+                noteInfo: {
+                  title: "retried note",
+                  noteImages: [{ imageUrl: "https://image.example/retry.jpg" }],
+                },
+              },
+            ],
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(cookiesSeen, ["web_session=single", "web_session=single"]);
+  assert.equal(result.notes[0].title, "retried note");
 });
 
 test("includes Pgy evidence and category constraints in trend prompts", () => {

@@ -25,7 +25,9 @@ const PGY_PUBLIC_MESSAGES = {
 let cookieSourceCache = {
   key: "",
   expiresAt: 0,
-  cookie: "",
+  cookies: [],
+  nextIndex: 0,
+  expiredIndexes: new Set(),
 };
 
 function createPgyError(code, message, details = {}) {
@@ -142,21 +144,47 @@ function normalizeCookieHeader(value) {
 }
 
 function parseCookieTokenText(text) {
+  return parseCookieTokenList(text)[0] || "";
+}
+
+function uniqueCookieHeaders(cookies) {
+  return [...new Set(cookies.map((cookie) => normalizeCookieHeader(cookie)).filter(Boolean))];
+}
+
+function parseCookieTokenList(text) {
   const raw = String(text || "").trim();
-  if (!raw) return "";
-  if (raw.startsWith("[")) {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return "";
-    return normalizeCookieHeader(parsed.find((item) => item && typeof item === "object") || "");
+  if (!raw) return [];
+
+  if (raw.startsWith("[") || (raw.startsWith("{") && !raw.includes("\n"))) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return uniqueCookieHeaders(parsed);
+      return uniqueCookieHeaders([parsed]);
+    } catch (error) {
+      // Fall through to line-based parsing for JSONL token files.
+    }
   }
 
+  const cookies = [];
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (trimmed.startsWith("{")) return normalizeCookieHeader(JSON.parse(trimmed));
-    if (trimmed.includes("=")) return normalizeCookieHeader(trimmed);
+    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          cookies.push(...parsed);
+        } else {
+          cookies.push(parsed);
+        }
+      } catch (error) {
+        // Ignore malformed lines; an empty result is reported as not configured.
+      }
+    } else if (trimmed.includes("=")) {
+      cookies.push(trimmed);
+    }
   }
-  return "";
+  return uniqueCookieHeaders(cookies);
 }
 
 function isOssCookieSourceConfigured(pgy) {
@@ -199,26 +227,45 @@ async function readCookieFile(cookieFile) {
   return fs.readFile(resolvedPath, "utf8");
 }
 
-async function resolvePgyCookieHeader(appConfig, options = {}) {
-  const pgy = getPgyConfig(appConfig);
-  if (!pgy.enabled) {
-    throw createPgyError("PGY_NOT_CONFIGURED");
-  }
-  const directCookie = normalizeCookieHeader(pgy.cookie);
-  if (directCookie) return directCookie;
-
-  const sourceKey = JSON.stringify({
+function buildPgyCookieSourceKey(pgy) {
+  return JSON.stringify({
+    cookieHash: pgy.cookie ? crypto.createHash("sha256").update(pgy.cookie).digest("hex") : "",
     cookieFile: pgy.cookieFile,
     ossEndpoint: pgy.ossEndpoint,
     ossBucket: pgy.ossBucket,
     ossObjectKey: pgy.ossObjectKey,
     ossAccessKeyId: pgy.ossAccessKeyId ? "configured" : "",
   });
-  if (cookieSourceCache.key === sourceKey && cookieSourceCache.cookie && cookieSourceCache.expiresAt > Date.now()) {
-    return cookieSourceCache.cookie;
+}
+
+function cachePgyCookiePool(sourceKey, pgy, cookies) {
+  cookieSourceCache = {
+    key: sourceKey,
+    expiresAt: Date.now() + Math.max(1000, pgy.cacheTtlMs),
+    cookies,
+    nextIndex: 0,
+    expiredIndexes: new Set(),
+  };
+  return cookieSourceCache;
+}
+
+async function resolvePgyCookiePool(appConfig, options = {}) {
+  const pgy = getPgyConfig(appConfig);
+  if (!pgy.enabled) {
+    throw createPgyError("PGY_NOT_CONFIGURED");
+  }
+
+  const sourceKey = buildPgyCookieSourceKey(pgy);
+  if (cookieSourceCache.key === sourceKey && cookieSourceCache.cookies.length && cookieSourceCache.expiresAt > Date.now()) {
+    return cookieSourceCache;
   }
 
   let tokenText = "";
+  const directCookies = parseCookieTokenList(pgy.cookie);
+  if (directCookies.length) {
+    return cachePgyCookiePool(sourceKey, pgy, directCookies);
+  }
+
   if (pgy.cookieFile) {
     try {
       tokenText = await readCookieFile(pgy.cookieFile);
@@ -232,21 +279,80 @@ async function resolvePgyCookieHeader(appConfig, options = {}) {
     tokenText = await fetchOssCookieTokenText(pgy, options.fetchImpl);
   }
 
-  const cookie = parseCookieTokenText(tokenText);
-  if (!cookie) {
+  const cookies = parseCookieTokenList(tokenText);
+  if (!cookies.length) {
     throw createPgyError("PGY_NOT_CONFIGURED");
   }
-  cookieSourceCache = {
-    key: sourceKey,
-    expiresAt: Date.now() + Math.max(1000, pgy.cacheTtlMs),
-    cookie,
-  };
-  return cookie;
+  return cachePgyCookiePool(sourceKey, pgy, cookies);
+}
+
+function hasAvailablePgyCookie(pool) {
+  return pool.cookies.length > 0 && pool.expiredIndexes.size < pool.cookies.length;
+}
+
+function getNextPgyCookie(pool) {
+  const cookieCount = pool.cookies.length;
+  if (!cookieCount) return null;
+
+  for (let checked = 0; checked < cookieCount; checked += 1) {
+    const index = pool.nextIndex % cookieCount;
+    pool.nextIndex = (index + 1) % cookieCount;
+    if (!pool.expiredIndexes.has(index)) {
+      return { cookie: pool.cookies[index], index };
+    }
+  }
+  return null;
+}
+
+function markPgyCookieFailure(pool, selectedCookie, error) {
+  if (error?.code !== "PGY_AUTH_EXPIRED" || !selectedCookie) return;
+  pool.expiredIndexes.add(selectedCookie.index);
+  if (!hasAvailablePgyCookie(pool)) {
+    pool.expiresAt = 0;
+  }
+}
+
+function isTransientPgyStatus(statusCode) {
+  return statusCode === 408 || statusCode === 409 || statusCode === 425 || statusCode === 429 || statusCode >= 500;
+}
+
+function shouldRetryPgyRequest(error, pool, attempts, maxAttempts) {
+  if (attempts >= maxAttempts) return false;
+  if (error?.code === "PGY_AUTH_EXPIRED") return hasAvailablePgyCookie(pool);
+  if (error?.code === "PGY_NETWORK_ERROR") return true;
+  if (error?.code === "PGY_API_ERROR" && isTransientPgyStatus(Number(error.statusCode || 0))) return true;
+  return false;
+}
+
+async function resolvePgyCookieHeader(appConfig, options = {}) {
+  const pool = await resolvePgyCookiePool(appConfig, options);
+  return getNextPgyCookie(pool)?.cookie || "";
 }
 
 async function pgyFetchJson(appConfig, url, { method = "GET", body, fetchImpl = fetch } = {}) {
   const pgy = getPgyConfig(appConfig);
-  const cookie = await resolvePgyCookieHeader(appConfig, { fetchImpl });
+  const pool = await resolvePgyCookiePool(appConfig, { fetchImpl });
+  const maxAttempts = Math.max(pool.cookies.length, 3);
+  let lastError = null;
+
+  for (let attempts = 1; attempts <= maxAttempts; attempts += 1) {
+    const selectedCookie = getNextPgyCookie(pool);
+    if (!selectedCookie) break;
+    try {
+      return await pgyFetchJsonWithCookie(pgy, selectedCookie.cookie, url, { method, body, fetchImpl });
+    } catch (error) {
+      lastError = error;
+      markPgyCookieFailure(pool, selectedCookie, error);
+      if (!shouldRetryPgyRequest(error, pool, attempts, maxAttempts)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || createPgyError("PGY_NOT_CONFIGURED");
+}
+
+async function pgyFetchJsonWithCookie(pgy, cookie, url, { method = "GET", body, fetchImpl = fetch } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), pgy.timeoutMs);
 
@@ -446,6 +552,7 @@ module.exports = {
   normalizePgyCategoryTree,
   isPgyCategoryPathInTree,
   normalizeCookieHeader,
+  parseCookieTokenList,
   parseCookieTokenText,
   normalizePgyHotNote,
   normalizePgyHotNotes,
