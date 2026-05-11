@@ -28,6 +28,7 @@ configureApiClient({ onUnauthorized: clearSession });
 let openBrandEditor = () => {};
 let pendingBrandDeleteId = null;
 let historyFilterTimer = null;
+const dashboardScrollPositions = new Map();
 
 const HISTORY_TYPE_LABELS = new Map([
   ["moments", "朋友圈图文"],
@@ -1238,6 +1239,39 @@ function restoreAnalysisSnapshot(analysisId) {
   switchTab("trends");
 }
 
+function getDashboardScrollKey(tab = state.currentTab) {
+  return `dashboard:${tab || "brands"}`;
+}
+
+function getDashboardScrollSnapshot() {
+  const contentArea = document.querySelector(".content-area");
+  const scroller = document.scrollingElement || document.documentElement;
+  return {
+    windowY: window.scrollY || scroller?.scrollTop || 0,
+    contentTop: contentArea?.scrollTop || 0,
+  };
+}
+
+function saveDashboardScrollPosition(tab = state.currentTab) {
+  if (state.currentPage !== "dashboard" || !tab) return;
+  dashboardScrollPositions.set(getDashboardScrollKey(tab), getDashboardScrollSnapshot());
+}
+
+function applyDashboardScrollSnapshot(snapshot = {}) {
+  const top = Number(snapshot.windowY || 0);
+  const contentTop = Number(snapshot.contentTop || 0);
+  const contentArea = document.querySelector(".content-area");
+  if (contentArea) contentArea.scrollTop = contentTop;
+  window.scrollTo({ top, left: 0, behavior: "auto" });
+}
+
+function restoreDashboardScrollPosition(tab = state.currentTab) {
+  if (state.currentPage !== "dashboard" || !tab) return;
+  const snapshot = dashboardScrollPositions.get(getDashboardScrollKey(tab)) || { windowY: 0, contentTop: 0 };
+  applyDashboardScrollSnapshot(snapshot);
+  window.requestAnimationFrame(() => applyDashboardScrollSnapshot(snapshot));
+}
+
 async function deleteAnalysisSnapshot(analysisId) {
   const brand = getSelectedBrand();
   if (!brand) return;
@@ -1269,13 +1303,22 @@ async function deleteAnalysisSnapshot(analysisId) {
 }
 
 function switchPage(page) {
+  if (state.currentPage === "dashboard") {
+    saveDashboardScrollPosition(state.currentTab);
+  }
   state.currentPage = page;
   document.querySelectorAll(".page").forEach((node) => {
     node.classList.toggle("is-active", node.dataset.page === page);
   });
+  if (page === "dashboard") {
+    restoreDashboardScrollPosition(state.currentTab);
+  }
 }
 
 function switchTab(tab) {
+  if (state.currentPage === "dashboard" && tab !== state.currentTab) {
+    saveDashboardScrollPosition(state.currentTab);
+  }
   state.currentTab = tab;
   document.querySelectorAll(".sidebar-item").forEach((node) => {
     node.classList.toggle("is-active", node.dataset.tab === tab);
@@ -1283,6 +1326,7 @@ function switchTab(tab) {
   document.querySelectorAll(".tab-panel").forEach((node) => {
     node.classList.toggle("is-active", node.dataset.tabPanel === tab);
   });
+  restoreDashboardScrollPosition(tab);
 }
 
 function renderUser() {
