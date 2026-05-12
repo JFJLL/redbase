@@ -9,7 +9,8 @@ const { notFound } = require("../api/http-utils");
 const MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PRODUCT_IMAGE_SELECTION_COUNT = 10;
 const MAX_PRODUCT_IMAGE_SELECTION_BYTES = 30 * 1024 * 1024;
-const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;const PRODUCT_IMAGE_MIME_EXTENSIONS = {
+const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
+const PRODUCT_IMAGE_MIME_EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
@@ -20,7 +21,9 @@ async function removeGenerationLocalFiles(generation) {
   const storedPaths = collectGenerationStoredPaths(generation);
   for (const storedPath of storedPaths) {
     try {
-      await removeStoredFileIfExists(resolveStoredAssetPath(storedPath));
+      const absolutePath = resolveStoredAssetPath(storedPath);
+      await removeStoredFileIfExists(absolutePath);
+      await removeEmptyGeneratedImageDirs(path.dirname(absolutePath), generation?.ownerUserId);
     } catch (error) {
       console.warn("[generated-image] failed to remove generated file", {
         generationId: generation?.id,
@@ -39,6 +42,70 @@ function collectGenerationStoredPaths(generation) {
     }
   });
   return paths;
+}
+
+async function cleanupEmptyGeneratedImageDirs(rootDir = path.join(DATA_DIR, "uploads", "generated-images", "users")) {
+  const boundary = path.resolve(rootDir);
+  let deletedCount = 0;
+
+  async function pruneDirectory(directoryPath) {
+    if (!isPathInsideDirectory(directoryPath, boundary) && path.resolve(directoryPath) !== boundary) return;
+    let entries = [];
+    try {
+      entries = await fsp.readdir(directoryPath, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        await pruneDirectory(path.join(directoryPath, entry.name));
+      }
+    }
+
+    if (path.resolve(directoryPath) === boundary) return;
+    try {
+      await fsp.rmdir(directoryPath);
+      deletedCount += 1;
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      if (error?.code === "ENOTEMPTY" || error?.code === "EEXIST") return;
+      throw error;
+    }
+  }
+
+  await pruneDirectory(boundary);
+  return { deletedCount };
+}
+
+async function removeEmptyGeneratedImageDirs(startDir, ownerUserId) {
+  const boundary = resolveGeneratedImageUserRoot(ownerUserId);
+  let currentDir = path.resolve(startDir || "");
+  while (isPathInsideDirectory(currentDir, boundary) && currentDir !== boundary) {
+    try {
+      await fsp.rmdir(currentDir);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        currentDir = path.dirname(currentDir);
+        continue;
+      }
+      if (error?.code === "ENOTEMPTY" || error?.code === "EEXIST") return;
+      throw error;
+    }
+    currentDir = path.dirname(currentDir);
+  }
+}
+
+function resolveGeneratedImageUserRoot(ownerUserId) {
+  const generatedRoot = path.join(DATA_DIR, "uploads", "generated-images", "users");
+  const userId = Number(ownerUserId);
+  return Number.isFinite(userId) && userId > 0 ? path.join(generatedRoot, String(userId)) : generatedRoot;
+}
+
+function isPathInsideDirectory(filePath, directoryPath) {
+  const relativePath = path.relative(path.resolve(directoryPath), path.resolve(filePath));
+  return Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
 function collectGenerationContentUrls(generation) {
@@ -419,6 +486,7 @@ module.exports = {
   PRODUCT_IMAGE_MIME_EXTENSIONS,
   removeGenerationLocalFiles,
   collectGenerationStoredPaths,
+  cleanupEmptyGeneratedImageDirs,
   collectGenerationContentUrls,
   collectObjectValues,
   normalizeProductImage,

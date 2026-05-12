@@ -74,6 +74,9 @@ async function cleanupExpiredGenerationHistory(options = {}) {
   for (const generation of expiredGenerations) {
     await removeGenerationWithLocalFiles(generation, options.removeGenerationLocalFiles);
   }
+  if (typeof options.cleanupEmptyGeneratedImageDirs === "function") {
+    await options.cleanupEmptyGeneratedImageDirs();
+  }
   return {
     cutoffIso,
     deletedCount: expiredGenerations.length,
@@ -87,6 +90,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     sanitizeBrand,
     sanitizeGeneration,
     removeGenerationLocalFiles,
+    cleanupEmptyGeneratedImageDirs,
     serveStoredGeneratedImage,
     verifySignedAssetRequest,
     getSessionToken,
@@ -112,6 +116,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     await cleanupExpiredGenerationHistory({
       nowMs: getHistoryNowMs(context),
       removeGenerationLocalFiles,
+      cleanupEmptyGeneratedImageDirs,
     });
     const filters = buildHistoryFilters(req);
     const generations = Object.keys(filters).length
