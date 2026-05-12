@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260430-history-actions" />
+    <link rel="stylesheet" href="./styles.css?v=20260512-account-history-expiry" />
   </head>
   <body>
     <div class="page page-landing is-active" data-page="landing">
@@ -95,13 +95,16 @@
               <span>单月版</span>
               <strong>¥3,500</strong>
               <small>按月灵活接入</small>
+              <small>每月 1000 积分</small>
             </div>
             <div class="business-price-item">
               <span>包年版</span>
               <strong>¥35,000</strong>
               <small>年付更优惠</small>
+              <small>每月 1000 积分</small>
             </div>
           </div>
+          <p class="business-credit-note">两个版本均为每月 1000 积分；积分到期自动刷新，不会结转至下个月。</p>
 
           <div class="business-qrcode-card">
             <img src="./assets/qrcode.png" alt="联系专属商务二维码" />
@@ -224,13 +227,13 @@
             <span class="sidebar-toggle-icon" data-icon="‹">‹</span>
             <span class="sidebar-toggle-label">收起侧边栏</span>
           </button>
-          <div class="user-info">
+          <button class="user-info" id="accountCenterButton" type="button" aria-haspopup="dialog" aria-controls="accountCenterModal">
             <div class="user-avatar" id="userAvatar">R</div>
             <div>
               <div class="user-name" id="userName">RedBase User</div>
               <div class="user-email" id="userPhone">未登录</div>
             </div>
-          </div>
+          </button>
           <button class="logout-btn" id="logoutButton" type="button">退出登录</button>
         </div>
       </aside>
@@ -270,7 +273,6 @@
               <p class="panel-subtitle">管理你的品牌信息，为 AI 分析提供输入</p>
             </div>
             <div class="header-actions">
-              <button class="header-avatar" type="button">👩🏻</button>
               <button class="primary-btn small-btn" id="openBrandModal" type="button">新增品牌</button>
             </div>
           </header>
@@ -287,7 +289,6 @@
               </div>
               <p class="panel-subtitle">选择品牌，AI 分析全网十大热点趋势</p>
             </div>
-            <button class="header-avatar" type="button">👩🏻</button>
           </header>
 
           <div class="brand-chip-row" id="trendBrandChips"></div>
@@ -330,7 +331,6 @@
               </div>
               <p class="panel-subtitle">结合品牌资产和热点趋势，生成更适合品牌的小红书内容</p>
             </div>
-            <button class="header-avatar" type="button">👩🏻</button>
           </header>
 
           <div class="idea-context-card" id="ideaContext"></div>
@@ -364,8 +364,9 @@
               </div>
               <p class="panel-subtitle">查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。</p>
             </div>
-            <button class="header-avatar" type="button">👩🏻</button>
           </header>
+
+          <div class="history-retention-note" role="note">历史生成图片会保存七天，请及时下载。</div>
 
           <section class="history-filter-panel" aria-label="历史生成筛选">
             <label class="history-filter-search">
@@ -403,6 +404,34 @@
           <div class="history-generate-list" id="generationHistoryList"></div>
         </section>
       </main>
+    </div>
+
+    <div class="modal-mask" id="accountCenterModal">
+      <div class="modal-panel account-modal-panel" role="dialog" aria-modal="true" aria-labelledby="accountCenterTitle">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">个人中心</div>
+            <h2 id="accountCenterTitle">账号信息</h2>
+            <p>查看当前账号、套餐和到期状态。</p>
+          </div>
+          <button class="modal-close" id="closeAccountCenterModal" type="button">×</button>
+        </div>
+
+        <div class="account-summary-grid">
+          <div class="account-summary-item">
+            <span>账号</span>
+            <strong id="accountCenterAccount">-</strong>
+          </div>
+          <div class="account-summary-item">
+            <span>套餐到期时间</span>
+            <strong id="accountCenterExpiry">-</strong>
+          </div>
+          <div class="account-summary-item">
+            <span>当前套餐</span>
+            <strong id="accountCenterPackage">未开通</strong>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="modal-mask" id="brandModal">
@@ -542,6 +571,6 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260430-phase5-modules"></script>
+    <script type="module" src="./app.js?v=20260512-account-history-expiry"></script>
   </body>
 </html>

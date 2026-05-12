@@ -4,12 +4,14 @@ const { listBrandsByOwner } = require("../db/repositories/brand-repository");
 const {
   listGenerationsByOwner,
   searchGenerations,
+  listExpiredGenerations,
   findGenerationByOwner,
   findGenerationById,
   deleteGenerationRows,
 } = require("../db/repositories/generation-repository");
 
 const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "styleImage", "imageEdit"]);
+const HISTORY_GENERATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function normalizeDateBoundary(value, mode) {
   const input = String(value || "").trim();
@@ -31,6 +33,52 @@ function buildHistoryFilters(req) {
     to: normalizeDateBoundary(url.searchParams.get("to"), "to"),
   };
   return Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
+}
+
+function getHistoryNowMs(context) {
+  const value = context?.historyRetentionNowMs;
+  const timestamp = value instanceof Date ? value.getTime() : Number(value ?? Date.now());
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function getHistoryCutoffIso(nowMs = Date.now(), retentionMs = HISTORY_GENERATION_RETENTION_MS) {
+  const timestamp = Number(nowMs);
+  const safeNow = Number.isFinite(timestamp) ? timestamp : Date.now();
+  return new Date(safeNow - retentionMs).toISOString();
+}
+
+function isGenerationExpired(generation, nowMs = Date.now(), retentionMs = HISTORY_GENERATION_RETENTION_MS) {
+  const createdAtMs = Date.parse(generation?.createdAt || "");
+  if (!Number.isFinite(createdAtMs)) return false;
+  return createdAtMs + retentionMs <= nowMs;
+}
+
+async function removeGenerationWithLocalFiles(generation, removeGenerationLocalFiles) {
+  if (!generation?.id) return;
+  if (typeof removeGenerationLocalFiles === "function") {
+    await removeGenerationLocalFiles(generation);
+  }
+  deleteGenerationRows(generation.id);
+}
+
+async function expireGenerationIfNeeded(generation, options = {}) {
+  if (!generation || !isGenerationExpired(generation, options.nowMs, options.retentionMs)) return false;
+  await removeGenerationWithLocalFiles(generation, options.removeGenerationLocalFiles);
+  return true;
+}
+
+async function cleanupExpiredGenerationHistory(options = {}) {
+  const retentionMs = Number(options.retentionMs || HISTORY_GENERATION_RETENTION_MS);
+  const cutoffIso = getHistoryCutoffIso(options.nowMs, retentionMs);
+  const expiredGenerations = listExpiredGenerations(cutoffIso);
+  for (const generation of expiredGenerations) {
+    await removeGenerationWithLocalFiles(generation, options.removeGenerationLocalFiles);
+  }
+  return {
+    cutoffIso,
+    deletedCount: expiredGenerations.length,
+    deletedGenerationIds: expiredGenerations.map((generation) => generation.id),
+  };
 }
 
 async function handleHistoryRoutes(context, req, res, pathname) {
@@ -61,6 +109,10 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/history") {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
+    await cleanupExpiredGenerationHistory({
+      nowMs: getHistoryNowMs(context),
+      removeGenerationLocalFiles,
+    });
     const filters = buildHistoryFilters(req);
     const generations = Object.keys(filters).length
       ? searchGenerations(user.id, filters)
@@ -99,6 +151,10 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       return true;
     }
     const generation = findGenerationById(Number(generatedImageFileMatch[1]));
+    if (await expireGenerationIfNeeded(generation, { nowMs: getHistoryNowMs(context), removeGenerationLocalFiles })) {
+      notFound(res);
+      return true;
+    }
     const asset = generation?.payload?.localImage;
     await serveStoredGeneratedImage(res, asset);
     return true;
@@ -111,6 +167,10 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       return true;
     }
     const generation = findGenerationById(Number(generatedSlideFileMatch[1]));
+    if (await expireGenerationIfNeeded(generation, { nowMs: getHistoryNowMs(context), removeGenerationLocalFiles })) {
+      notFound(res);
+      return true;
+    }
     const slides = Array.isArray(generation?.payload?.slides) ? generation.payload.slides : [];
     const slide = slides[Number(generatedSlideFileMatch[2])];
     await serveStoredGeneratedImage(res, slide?.localImage);
@@ -124,6 +184,10 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       return true;
     }
     const generation = findGenerationById(Number(generatedEditFileMatch[1]));
+    if (await expireGenerationIfNeeded(generation, { nowMs: getHistoryNowMs(context), removeGenerationLocalFiles })) {
+      notFound(res);
+      return true;
+    }
     const editHistory = Array.isArray(generation?.payload?.editHistory) ? generation.payload.editHistory : [];
     const edit = editHistory.find((item) => item.id === generatedEditFileMatch[2]);
     await serveStoredGeneratedImage(res, edit?.localImage);
@@ -134,6 +198,9 @@ async function handleHistoryRoutes(context, req, res, pathname) {
 }
 
 module.exports = {
+  HISTORY_GENERATION_RETENTION_MS,
+  cleanupExpiredGenerationHistory,
+  expireGenerationIfNeeded,
   handleHistoryRoutes,
   buildHistoryFilters,
 };

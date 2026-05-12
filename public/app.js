@@ -41,6 +41,7 @@ const HISTORY_TYPE_LABELS = new Map([
 async function init() {
   bindLandingEntry();
   bindSidebarControls();
+  bindAccountCenterModal();
   bindSidebarTabs();
   bindTabJump();
   bindBrandModal();
@@ -387,6 +388,106 @@ function renderSidebarState() {
     icon.textContent = state.sidebarCollapsed ? "›" : "‹";
     icon.dataset.icon = icon.textContent;
   }
+}
+
+function bindAccountCenterModal() {
+  const modal = document.getElementById("accountCenterModal");
+  const openButton = document.getElementById("accountCenterButton");
+  const closeButton = document.getElementById("closeAccountCenterModal");
+  if (!modal) return;
+
+  openButton?.addEventListener("click", () => {
+    renderAccountCenter();
+    modal.classList.add("is-open");
+  });
+  closeButton?.addEventListener("click", closeAccountCenterModal);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) closeAccountCenterModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("is-open")) {
+      closeAccountCenterModal();
+    }
+  });
+}
+
+function closeAccountCenterModal() {
+  document.getElementById("accountCenterModal")?.classList.remove("is-open");
+}
+
+function renderAccountCenter() {
+  const account = document.getElementById("accountCenterAccount");
+  const expiry = document.getElementById("accountCenterExpiry");
+  const packageName = document.getElementById("accountCenterPackage");
+  const user = state.currentUser;
+  if (!account || !expiry || !packageName) return;
+
+  account.textContent = firstTextValue(user?.phone, user?.name) || "-";
+  expiry.textContent = getAccountPackageExpiry(user);
+  packageName.textContent = getAccountPackageName(user);
+}
+
+function getAccountPackageName(user) {
+  const subscription = user?.subscription || {};
+  const packageInfo = user?.package || {};
+  const planInfo = user?.plan || {};
+  const directPlan = typeof user?.plan === "string" ? user.plan : "";
+  const directPackage = typeof user?.package === "string" ? user.package : "";
+  const name = firstTextValue(
+    user?.packageName,
+    user?.planName,
+    user?.currentPackage,
+    directPackage,
+    directPlan,
+    subscription.packageName,
+    subscription.planName,
+    packageInfo.name,
+    packageInfo.title,
+    planInfo.name,
+    planInfo.title,
+  );
+  return name || "未开通";
+}
+
+function getAccountPackageExpiry(user) {
+  const subscription = user?.subscription || {};
+  const packageInfo = user?.package || {};
+  const planInfo = user?.plan || {};
+  const rawExpiry = firstTextValue(
+    user?.packageExpiry,
+    user?.packageExpiresAt,
+    user?.planExpiry,
+    user?.planExpiresAt,
+    user?.subscriptionExpiry,
+    user?.subscriptionExpiresAt,
+    subscription.expiresAt,
+    subscription.expiry,
+    subscription.endDate,
+    packageInfo.expiresAt,
+    packageInfo.expiry,
+    planInfo.expiresAt,
+    planInfo.expiry,
+  );
+  return rawExpiry ? formatAccountDate(rawExpiry) : "-";
+}
+
+function firstTextValue(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text && text !== "[object Object]") return text;
+  }
+  return "";
+}
+
+function formatAccountDate(value) {
+  const text = String(value || "").trim();
+  const timestamp = /^\d+$/.test(text) ? Number(text) : NaN;
+  const date = Number.isFinite(timestamp)
+    ? new Date(timestamp > 100000000000 ? timestamp : timestamp * 1000)
+    : new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
 function bindLandingEntry() {
@@ -989,6 +1090,7 @@ function clearSession() {
   state.sessionToken = "";
   state.currentUser = null;
   renderUser();
+  closeAccountCenterModal();
 }
 
 function openAuthModal(tab) {
@@ -1365,6 +1467,7 @@ function renderUser() {
     userName.textContent = "未登录";
     userPhone.textContent = "请先登录账号";
     userAvatar.textContent = "R";
+    renderAccountCenter();
     return;
   }
 
@@ -1372,6 +1475,7 @@ function renderUser() {
   const credits = Number(state.currentUser.credits ?? 0);
   userPhone.innerHTML = `${escapeHtml(state.currentUser.phone)}<br><span class="credit-pill">${credits} 积分</span>`;
   userAvatar.textContent = state.currentUser.name.slice(0, 1).toUpperCase();
+  renderAccountCenter();
 }
 
 function getSelectedBrand() {

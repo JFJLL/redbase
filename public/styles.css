@@ -578,6 +578,33 @@ button {
   background: #fff7f5;
 }
 
+.user-info {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  transition: 180ms ease;
+}
+
+.user-info:hover,
+.user-info:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.user-info > div:not(.user-avatar) {
+  min-width: 0;
+}
+
+.user-name,
+.user-email {
+  overflow-wrap: anywhere;
+}
+
 .sidebar-toggle-icon {
   width: 22px;
   height: 22px;
@@ -681,6 +708,17 @@ button {
   gap: 12px;
   align-items: end;
   margin-bottom: 18px;
+}
+
+.history-retention-note {
+  margin: -10px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(216, 68, 68, 0.14);
+  border-radius: 8px;
+  background: #fff7f5;
+  color: #6d4d51;
+  font-size: 0.95rem;
+  line-height: 1.6;
 }
 
 .history-filter-panel label {
@@ -1290,6 +1328,36 @@ button {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font-size: 1.4rem;
+}
+
+.account-modal-panel {
+  width: min(560px, 100%);
+}
+
+.account-summary-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.account-summary-item {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: 8px;
+  background: #faf7f5;
+}
+
+.account-summary-item span {
+  color: #6f6368;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.account-summary-item strong {
+  color: #1f222b;
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
 }
 
 .brand-form {
@@ -3698,6 +3766,18 @@ textarea {
 .business-price-item small {
   color: #7b7376;
   font-size: 0.78rem;
+}
+
+.business-credit-note {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: 8px;
+  background: #fff7f5;
+  color: #6d4d51;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  text-align: left;
 }
 
 .business-qrcode-card {

@@ -71,6 +71,15 @@ function listAllGenerations() {
   `).all().map(mapGenerationRow);
 }
 
+function listExpiredGenerations(cutoffIso) {
+  return db.prepare(`
+    SELECT ${GENERATION_COLUMNS}
+    FROM generations
+    WHERE created_at <= ?
+    ORDER BY created_at ASC, id ASC
+  `).all(String(cutoffIso || "")).map(mapGenerationRow);
+}
+
 function findGenerationByOwner(generationId, ownerUserId) {
   return mapGenerationRow(db.prepare(`
     SELECT ${GENERATION_COLUMNS}
@@ -147,6 +156,7 @@ module.exports = {
   listGenerationsByOwner,
   searchGenerations,
   listAllGenerations,
+  listExpiredGenerations,
   findGenerationByOwner,
   findGenerationById,
   upsertGeneration,

@@ -5,6 +5,8 @@ const { createAiServices } = require("./ai");
 const { createApiHandler, json } = require("./api");
 const { applyCorsHeaders, handleCorsPreflight } = require("./cors");
 const { serveStatic } = require("./static");
+const { cleanupExpiredGenerationHistory } = require("./api/history-routes");
+const { removeGenerationLocalFiles } = require("./assets/image-store");
 
 async function start() {
   const appConfig = loadAppConfig();
@@ -36,6 +38,11 @@ async function start() {
   });
 
   await ensureStore();
+  try {
+    await cleanupExpiredGenerationHistory({ removeGenerationLocalFiles });
+  } catch (error) {
+    console.warn("[history-expiry] failed to clean expired generation history", error);
+  }
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
