@@ -48,6 +48,7 @@ async function init() {
   bindImageModal();
   bindProductImageLibraryModal();
   bindAuthModal();
+  bindBusinessQuoteModal();
   bindAnalysisButton();
   bindXhsCategorySelector();
   bindIdeaPromptActions();
@@ -803,6 +804,32 @@ function bindAuthModal() {
       resumePendingImageTasks();
     } catch (error) {
       alert(error.message);
+    }
+  });
+}
+
+function bindBusinessQuoteModal() {
+  const modal = document.getElementById("businessQuoteModal");
+  if (!modal) return;
+
+  const closeBtn = document.getElementById("closeBusinessQuoteModal");
+  const openButtons = document.querySelectorAll("[data-business-quote-open]");
+  const open = () => {
+    modal.classList.add("is-open");
+    closeBtn?.focus();
+  };
+  const close = () => modal.classList.remove("is-open");
+
+  openButtons.forEach((button) => {
+    button.addEventListener("click", open);
+  });
+  closeBtn?.addEventListener("click", close);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("is-open")) {
+      close();
     }
   });
 }

@@ -75,7 +75,41 @@
           <p>告别选题焦虑，让 AI 成为你的内容运营助手，精准把握每一个流量机会。</p>
           <button class="primary-btn" data-auth-open="register">免费注册使用</button>
         </section>
+
+        <section class="business-quote-section">
+          <h2>成为行业内的数据领跑者</h2>
+          <p>让决策回归理性，让增长有迹可循。立即接入 RedBase 智能内容增长中台。</p>
+          <button class="business-quote-button" data-business-quote-open type="button">获取企业优惠报价</button>
+        </section>
       </main>
+    </div>
+
+    <div class="modal-mask" id="businessQuoteModal">
+      <div class="modal-panel business-modal-panel" role="dialog" aria-modal="true" aria-labelledby="businessQuoteTitle">
+        <button class="modal-close business-modal-close" id="closeBusinessQuoteModal" type="button" aria-label="关闭报价弹窗">×</button>
+        <div class="business-modal-content">
+          <h2 id="businessQuoteTitle">定制专属增长方案</h2>
+
+          <div class="business-price-grid" aria-label="RedBase 企业报价">
+            <div class="business-price-item">
+              <span>单月版</span>
+              <strong>¥3,500</strong>
+              <small>按月灵活接入</small>
+            </div>
+            <div class="business-price-item">
+              <span>包年版</span>
+              <strong>¥35,000</strong>
+              <small>年付更优惠</small>
+            </div>
+          </div>
+
+          <div class="business-qrcode-card">
+            <img src="./assets/qrcode.png" alt="联系专属商务二维码" />
+          </div>
+          <div class="business-contact-title">联系专属商务</div>
+          <div class="business-contact-copy">扫码获取优惠价格</div>
+        </div>
+      </div>
     </div>
 
     <div class="modal-mask" id="authModal">
