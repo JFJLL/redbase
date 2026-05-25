@@ -23,6 +23,13 @@
   "admin": {
     "phones": []
   },
+  "feishu": {
+    "enabled": false,
+    "appId": "",
+    "appSecret": "",
+    "tenantKey": "",
+    "baseUrl": "http://127.0.0.1:3013"
+  },
   "security": {
     "assetSigningSecret": "",
     "cookieSecure": false

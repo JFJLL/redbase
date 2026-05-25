@@ -55,6 +55,7 @@ async function init() {
   bindIdeaPromptActions();
   bindHistoryFilters();
   bindLogout();
+  showAuthRedirectError();
   await restoreSession();
 }
 
@@ -839,6 +840,7 @@ function bindAuthModal() {
   const closeBtn = document.getElementById("closeAuthModal");
   const registerForm = document.getElementById("registerForm");
   const loginForm = document.getElementById("loginForm");
+  const feishuLoginButton = document.getElementById("feishuLoginButton");
   const accountTypeSelect = document.getElementById("accountTypeSelect");
   const departmentField = document.getElementById("departmentField");
   const departmentSelect = document.getElementById("departmentSelect");
@@ -863,6 +865,10 @@ function bindAuthModal() {
 
   document.querySelectorAll(".auth-tab").forEach((tab) => {
     tab.addEventListener("click", () => setAuthTab(tab.dataset.authTab));
+  });
+
+  feishuLoginButton?.addEventListener("click", () => {
+    window.location.href = "/api/auth/feishu/start";
   });
 
   registerForm.addEventListener("submit", async (event) => {
@@ -907,6 +913,23 @@ function bindAuthModal() {
       alert(error.message);
     }
   });
+}
+
+function showAuthRedirectError() {
+  const url = new URL(window.location.href);
+  const error = url.searchParams.get("authError");
+  if (!error) return;
+
+  const messages = {
+    feishu_config: "飞书登录暂未配置，请联系管理员。",
+    feishu_denied: "你已取消飞书授权。",
+    feishu_profile: "飞书账号信息不完整，请联系管理员。",
+    feishu_tenant: "当前飞书账号不属于已授权企业。",
+    feishu_failed: "飞书登录失败，请稍后重试。",
+  };
+  alert(messages[error] || "登录失败，请稍后重试。");
+  url.searchParams.delete("authError");
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
 }
 
 function bindBusinessQuoteModal() {

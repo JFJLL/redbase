@@ -46,6 +46,13 @@ const DEFAULT_APP_CONFIG = {
   admin: {
     phones: [],
   },
+  feishu: {
+    enabled: false,
+    appId: "",
+    appSecret: "",
+    tenantKey: "",
+    baseUrl: "",
+  },
   cors: {
     origins: [],
   },
@@ -100,6 +107,14 @@ function loadAppConfig() {
   }
 
   const merged = deepMerge(DEFAULT_APP_CONFIG, localConfig);
+  const hasFeishuCredentials = Boolean(
+    process.env.FEISHU_APP_ID ||
+      process.env.FEISHU_APP_SECRET ||
+      process.env.FEISHU_TENANT_KEY ||
+      merged.feishu?.appId ||
+      merged.feishu?.appSecret ||
+      merged.feishu?.tenantKey,
+  );
   const hasPgyCookieSource = Boolean(
     process.env.PGY_CONTENT_SQUARE_COOKIE ||
       process.env.PGY_CONTENT_SQUARE_COOKIE_FILE ||
@@ -139,6 +154,13 @@ function loadAppConfig() {
         .filter(Boolean)
         .concat(Array.isArray(merged.admin?.phones) ? merged.admin.phones.map((phone) => String(phone || "").trim()).filter(Boolean) : [])
         .filter((phone, index, all) => all.indexOf(phone) === index),
+    },
+    feishu: {
+      enabled: parseBooleanConfig(process.env.FEISHU_AUTH_ENABLED, parseBooleanConfig(merged.feishu?.enabled, hasFeishuCredentials)),
+      appId: String(process.env.FEISHU_APP_ID || merged.feishu?.appId || "").trim(),
+      appSecret: String(process.env.FEISHU_APP_SECRET || merged.feishu?.appSecret || "").trim(),
+      tenantKey: String(process.env.FEISHU_TENANT_KEY || merged.feishu?.tenantKey || "").trim(),
+      baseUrl: String(process.env.FEISHU_BASE_URL || process.env.BASE_URL || merged.feishu?.baseUrl || "").trim(),
     },
     cors: {
       origins: String(process.env.CORS_ORIGINS || "")

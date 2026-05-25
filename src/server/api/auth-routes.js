@@ -2,6 +2,13 @@ const { bindRouteScope } = require("./route-scope");
 const { hashPassword, verifyAndMigratePassword } = require("../auth/passwords");
 const { setSessionCookie, clearSessionCookie } = require("../auth/cookies");
 const {
+  buildFeishuAccountPhone,
+  buildFeishuAuthorizeUrl,
+  exchangeFeishuCodeForToken,
+  fetchFeishuUserInfo,
+  verifyFeishuTenant,
+} = require("../auth/feishu");
+const {
   findUserByPhone,
   findUserBySessionToken,
   phoneExists,
@@ -30,6 +37,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
     getSessionToken,
     buildApiUserLog,
     isAdminUser,
+    fetch: fetchImpl,
     json,
     badRequest,
     unauthorized,
@@ -117,6 +125,95 @@ async function handleAuthRoutes(context, req, res, pathname) {
     return true;
   }
 
+  if (req.method === "GET" && pathname === "/api/auth/feishu/start") {
+    const feishuConfig = normalizeFeishuConfig(appConfig, req);
+    if (!isFeishuConfigReady(feishuConfig)) {
+      redirect(res, "/?authError=feishu_config");
+      return true;
+    }
+
+    redirect(
+      res,
+      buildFeishuAuthorizeUrl({
+        appId: feishuConfig.appId,
+        redirectUri: feishuConfig.redirectUri,
+        state: "/",
+      }),
+    );
+    return true;
+  }
+
+  if (req.method === "GET" && pathname === "/api/auth/feishu/callback") {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    if (url.searchParams.get("error")) {
+      redirect(res, "/?authError=feishu_denied");
+      return true;
+    }
+
+    const code = String(url.searchParams.get("code") || "").trim();
+    if (!code) {
+      badRequest(res, "缺少飞书授权码");
+      return true;
+    }
+
+    const feishuConfig = normalizeFeishuConfig(appConfig, req);
+    if (!isFeishuConfigReady(feishuConfig)) {
+      redirect(res, "/?authError=feishu_config");
+      return true;
+    }
+
+    try {
+      const accessToken = await exchangeFeishuCodeForToken({
+        code,
+        appId: feishuConfig.appId,
+        appSecret: feishuConfig.appSecret,
+        redirectUri: feishuConfig.redirectUri,
+        fetchImpl,
+      });
+      const userInfo = await fetchFeishuUserInfo({ accessToken, fetchImpl });
+      if (!userInfo.openId) {
+        redirect(res, "/?authError=feishu_profile");
+        return true;
+      }
+      if (!verifyFeishuTenant(userInfo, feishuConfig.tenantKey)) {
+        console.warn("[feishu-auth] tenant mismatch", {
+          receivedTenantKey: userInfo.tenantKey || "",
+          configuredTenantKey: feishuConfig.tenantKey,
+        });
+        redirect(res, "/?authError=feishu_tenant");
+        return true;
+      }
+
+      const token = randomToken();
+      const phone = buildFeishuAccountPhone(userInfo.openId);
+      let savedUser = findUserByPhone(phone);
+      if (savedUser) {
+        savedUser = createSessionForUser(savedUser.id, token);
+      } else {
+        savedUser = createUserWithSession({
+          token,
+          user: {
+            name: userInfo.name || "飞书用户",
+            phone,
+            password: await hashPassword(`feishu:${randomToken()}`),
+            accountType: "yimei",
+            department: "飞书企业成员",
+            credits: INITIAL_CREDITS.yimei,
+            createdAt: new Date().toISOString(),
+          },
+        });
+      }
+
+      req.__redbaseApiUser = buildApiUserLog(savedUser);
+      setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
+      redirect(res, "/");
+    } catch (error) {
+      console.error("[feishu-auth] callback failed", error);
+      redirect(res, "/?authError=feishu_failed");
+    }
+    return true;
+  }
+
   if (req.method === "GET" && pathname === "/api/session") {
     const token = getSessionToken(req);
     const user = token ? findUserBySessionToken(token) : null;
@@ -139,6 +236,33 @@ async function handleAuthRoutes(context, req, res, pathname) {
   }
 
   return false;
+}
+
+function normalizeFeishuConfig(appConfig, req) {
+  const feishu = appConfig?.feishu || {};
+  const baseUrl = String(feishu.baseUrl || "").trim() || getRequestBaseUrl(req);
+  return {
+    enabled: Boolean(feishu.enabled),
+    appId: String(feishu.appId || "").trim(),
+    appSecret: String(feishu.appSecret || "").trim(),
+    tenantKey: String(feishu.tenantKey || "").trim(),
+    redirectUri: `${baseUrl.replace(/\/+$/, "")}/api/auth/feishu/callback`,
+  };
+}
+
+function isFeishuConfigReady(config) {
+  return Boolean(config.enabled && config.appId && config.appSecret && config.tenantKey && config.redirectUri);
+}
+
+function getRequestBaseUrl(req) {
+  const protocol = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "http";
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return host ? `${protocol}://${host}` : "";
+}
+
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end("");
 }
 
 module.exports = {

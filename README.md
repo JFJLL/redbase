@@ -39,6 +39,11 @@ $env:TEXT_BASE_URL = "https://api.im-red-magic.cn"
 $env:TEXT_API_KEY = "<your-text-api-key>"
 $env:IMAGE_API_KEY = "<your-image-api-key>"
 $env:ADMIN_PHONES = "13800000000"
+$env:FEISHU_AUTH_ENABLED = "true"
+$env:FEISHU_APP_ID = "<your-feishu-app-id>"
+$env:FEISHU_APP_SECRET = "<your-feishu-app-secret>"
+$env:FEISHU_TENANT_KEY = "<your-feishu-tenant-key>"
+$env:FEISHU_BASE_URL = "http://127.0.0.1:3013"
 $env:ASSET_SIGNING_SECRET = "<long-random-string>"
 $env:COOKIE_SECURE = "false"
 npm start
@@ -60,6 +65,10 @@ npm start
 - `IMAGE_API_KEY`：图片模型 API Key
 - `IMAGE_ASPECT_RATIO`、`IMAGE_RESOLUTION`、`IMAGE_QUALITY`、`IMAGE_COUNT`：图片参数
 - `ADMIN_PHONES`：管理员手机号，多个用英文逗号分隔
+- `FEISHU_AUTH_ENABLED`：是否启用飞书企业登录；配置了飞书凭据时默认启用
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET`：飞书应用的 OAuth 凭据
+- `FEISHU_TENANT_KEY`：允许登录的飞书企业 `tenant_key`；回调拿到的用户信息必须属于这个企业
+- `FEISHU_BASE_URL`：飞书 OAuth 回调使用的外部访问地址，生产环境应配置为公网 HTTPS 域名
 - `CORS_ORIGINS`：允许跨域访问的前端来源，多个用英文逗号分隔；同源本地访问不需要配置
 - `ASSET_SIGNING_SECRET`：图片/资产签名 URL 的 HMAC 密钥；生产环境建议配置长随机字符串，未配置时会使用进程内临时密钥
 - `COOKIE_SECURE`：是否给 session Cookie 添加 `Secure`；`NODE_ENV=production` 时默认启用，本地 HTTP 开发可设为 `false`
@@ -69,6 +78,8 @@ npm start
 - `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK`：Pgy 不可用时是否允许 `xhs` bucket 退回原搜索流程，默认 `false`
 
 管理员后台只信任 `ADMIN_PHONES` / `config.local.json` 中显式配置的手机号。未配置管理员手机号时，不会再按账号类型自动授予管理权限。
+
+飞书企业登录使用 `/api/auth/feishu/start` 发起 OAuth，回调地址为 `/api/auth/feishu/callback`。服务端会用飞书返回的 `tenant_key` 校验企业身份，匹配 `FEISHU_TENANT_KEY` 后才创建 RedBase 登录态；不再需要维护员工 open_id 白名单。
 
 趋势分析保持单次搜索增强文本模型调用；配置 Pgy 后，`小红书热点话题` 会拉取蒲公英近 3 日曝光排序前 10 条帖子作为证据，并由文本模型总结趋势、品牌关联和每条趋势下的 2 个选题，其余趋势 bucket 继续使用搜索增强。Pgy 默认失败即中止本次分析，避免误扣积分；如需临时回退，可显式开启 `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK`。
 
