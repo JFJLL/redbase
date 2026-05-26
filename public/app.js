@@ -28,6 +28,7 @@ configureApiClient({ onUnauthorized: clearSession });
 let openBrandEditor = () => {};
 let pendingBrandDeleteId = null;
 let historyFilterTimer = null;
+let feishuLoginApps = [];
 const dashboardScrollPositions = new Map();
 
 const HISTORY_TYPE_LABELS = new Map([
@@ -841,6 +842,8 @@ function bindAuthModal() {
   const registerForm = document.getElementById("registerForm");
   const loginForm = document.getElementById("loginForm");
   const feishuLoginActions = document.getElementById("feishuLoginActions");
+  const feishuLoginButton = document.getElementById("feishuLoginButton");
+  const feishuAppMenu = document.getElementById("feishuAppMenu");
 
   closeBtn.addEventListener("click", () => modal.classList.remove("is-open"));
   modal.addEventListener("click", (event) => {
@@ -853,13 +856,16 @@ function bindAuthModal() {
     tab.addEventListener("click", () => setAuthTab(tab.dataset.authTab));
   });
 
-  renderFeishuLoginActions(feishuLoginActions);
+  loadFeishuLoginApps(feishuAppMenu);
   feishuLoginActions?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-feishu-app]");
-    if (!button) return;
-    const appKey = String(button.dataset.feishuApp || "").trim();
-    const query = appKey ? `?app=${encodeURIComponent(appKey)}` : "";
-    window.location.href = `/api/auth/feishu/start${query}`;
+    const appOption = event.target.closest("[data-feishu-app]");
+    if (appOption) {
+      startFeishuLogin(appOption.dataset.feishuApp);
+      return;
+    }
+    if (event.target.closest("#feishuLoginButton")) {
+      handleFeishuLoginClick(feishuAppMenu);
+    }
   });
 
   registerForm.addEventListener("submit", async (event) => {
@@ -902,27 +908,46 @@ function bindAuthModal() {
   });
 }
 
-async function renderFeishuLoginActions(container) {
-  if (!container) return;
+async function loadFeishuLoginApps(menu) {
   try {
     const result = await request("/api/auth/feishu/apps");
-    const apps = Array.isArray(result.apps) ? result.apps : [];
-    if (!apps.length) return;
-    container.innerHTML = apps
-      .map((app) => {
-        const key = escapeHtml(app.key || "");
-        const name = escapeHtml(app.name || "飞书企业");
-        return `
-          <button class="feishu-login-btn" type="button" data-feishu-app="${key}">
-            <span class="feishu-login-mark">飞</span>
-            <span>${name}飞书登录</span>
-          </button>
-        `;
-      })
-      .join("");
+    feishuLoginApps = Array.isArray(result.apps) ? result.apps : [];
+    renderFeishuAppMenu(menu);
   } catch (error) {
+    feishuLoginApps = [];
     console.warn("[feishu-auth] app list unavailable", error);
   }
+}
+
+function renderFeishuAppMenu(menu) {
+  if (!menu || feishuLoginApps.length <= 1) return;
+  menu.innerHTML = feishuLoginApps
+    .map((app) => {
+      const key = escapeHtml(app.key || "");
+      const name = escapeHtml(app.name || "飞书企业");
+      return `
+          <button class="feishu-app-option" type="button" data-feishu-app="${key}">
+            <span>${name}</span>
+          </button>
+        `;
+    })
+    .join("");
+}
+
+function handleFeishuLoginClick(menu) {
+  if (feishuLoginApps.length <= 1) {
+    startFeishuLogin(feishuLoginApps[0]?.key || "");
+    return;
+  }
+  if (menu) {
+    menu.hidden = !menu.hidden;
+  }
+}
+
+function startFeishuLogin(appKey = "") {
+  const normalizedAppKey = String(appKey || "").trim();
+  const query = normalizedAppKey ? `?app=${encodeURIComponent(normalizedAppKey)}` : "";
+  window.location.href = `/api/auth/feishu/start${query}`;
 }
 
 function showAuthRedirectError() {
