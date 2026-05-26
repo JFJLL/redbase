@@ -841,20 +841,6 @@ function bindAuthModal() {
   const registerForm = document.getElementById("registerForm");
   const loginForm = document.getElementById("loginForm");
   const feishuLoginButton = document.getElementById("feishuLoginButton");
-  const accountTypeSelect = document.getElementById("accountTypeSelect");
-  const departmentField = document.getElementById("departmentField");
-  const departmentSelect = document.getElementById("departmentSelect");
-
-  const syncDepartmentField = () => {
-    const isYimei = accountTypeSelect?.value === "yimei";
-    departmentField?.classList.toggle("is-hidden", !isYimei);
-    if (departmentSelect) {
-      departmentSelect.required = isYimei;
-      if (!isYimei) departmentSelect.value = "";
-    }
-  };
-  accountTypeSelect?.addEventListener("change", syncDepartmentField);
-  syncDepartmentField();
 
   closeBtn.addEventListener("click", () => modal.classList.remove("is-open"));
   modal.addEventListener("click", (event) => {
@@ -874,9 +860,6 @@ function bindAuthModal() {
   registerForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(registerForm).entries());
-    if (payload.accountType !== "yimei") {
-      payload.department = "";
-    }
     try {
       const result = await request("/api/auth/register", {
         method: "POST",
@@ -884,7 +867,6 @@ function bindAuthModal() {
       });
       applySession(result.user);
       registerForm.reset();
-      syncDepartmentField();
       document.getElementById("authModal").classList.remove("is-open");
       await loadBrands();
       switchPage("dashboard");

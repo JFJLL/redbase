@@ -62,8 +62,8 @@ async function handleAuthRoutes(context, req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/auth/register") {
     const payload = await collectBody(req);
     const { phone, name, password } = payload;
-    const accountType = payload.accountType === "yimei" ? "yimei" : "customer";
-    const department = accountType === "yimei" ? String(payload.department || "").trim() : "";
+    const accountType = "customer";
+    const department = "";
     if (!isValidPhone(phone)) {
       badRequest(res, "请输入正确的手机号");
       return true;
@@ -72,11 +72,6 @@ async function handleAuthRoutes(context, req, res, pathname) {
       badRequest(res, "请填写昵称并设置至少 6 位密码");
       return true;
     }
-    if (accountType === "yimei" && !department) {
-      badRequest(res, "请选择部门");
-      return true;
-    }
-
     if (phoneExists(phone)) {
       badRequest(res, "该手机号已注册");
       return true;
