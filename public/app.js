@@ -840,7 +840,7 @@ function bindAuthModal() {
   const closeBtn = document.getElementById("closeAuthModal");
   const registerForm = document.getElementById("registerForm");
   const loginForm = document.getElementById("loginForm");
-  const feishuLoginButton = document.getElementById("feishuLoginButton");
+  const feishuLoginActions = document.getElementById("feishuLoginActions");
 
   closeBtn.addEventListener("click", () => modal.classList.remove("is-open"));
   modal.addEventListener("click", (event) => {
@@ -853,8 +853,13 @@ function bindAuthModal() {
     tab.addEventListener("click", () => setAuthTab(tab.dataset.authTab));
   });
 
-  feishuLoginButton?.addEventListener("click", () => {
-    window.location.href = "/api/auth/feishu/start";
+  renderFeishuLoginActions(feishuLoginActions);
+  feishuLoginActions?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-feishu-app]");
+    if (!button) return;
+    const appKey = String(button.dataset.feishuApp || "").trim();
+    const query = appKey ? `?app=${encodeURIComponent(appKey)}` : "";
+    window.location.href = `/api/auth/feishu/start${query}`;
   });
 
   registerForm.addEventListener("submit", async (event) => {
@@ -895,6 +900,29 @@ function bindAuthModal() {
       alert(error.message);
     }
   });
+}
+
+async function renderFeishuLoginActions(container) {
+  if (!container) return;
+  try {
+    const result = await request("/api/auth/feishu/apps");
+    const apps = Array.isArray(result.apps) ? result.apps : [];
+    if (!apps.length) return;
+    container.innerHTML = apps
+      .map((app) => {
+        const key = escapeHtml(app.key || "");
+        const name = escapeHtml(app.name || "飞书企业");
+        return `
+          <button class="feishu-login-btn" type="button" data-feishu-app="${key}">
+            <span class="feishu-login-mark">飞</span>
+            <span>${name}飞书登录</span>
+          </button>
+        `;
+      })
+      .join("");
+  } catch (error) {
+    console.warn("[feishu-auth] app list unavailable", error);
+  }
 }
 
 function showAuthRedirectError() {

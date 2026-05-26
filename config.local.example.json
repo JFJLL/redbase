@@ -28,6 +28,23 @@
     "appId": "",
     "appSecret": "",
     "tenantKey": "",
+    "tenantKeys": [],
+    "apps": [
+      {
+        "key": "yimei",
+        "name": "易美传播",
+        "appId": "",
+        "appSecret": "",
+        "tenantKeys": []
+      },
+      {
+        "key": "hongmo",
+        "name": "弘摩科技",
+        "appId": "",
+        "appSecret": "",
+        "tenantKeys": []
+      }
+    ],
     "baseUrl": "http://127.0.0.1:3013"
   },
   "security": {

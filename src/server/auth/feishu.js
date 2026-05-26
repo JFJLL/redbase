@@ -67,9 +67,12 @@ async function fetchFeishuUserInfo({ accessToken, fetchImpl = globalThis.fetch }
 }
 
 function verifyFeishuTenant(userInfo, tenantKey) {
-  const expectedTenantKey = String(tenantKey || "").trim();
-  if (!expectedTenantKey) return false;
-  return String(userInfo?.tenantKey || "").trim() === expectedTenantKey;
+  const receivedTenantKey = String(userInfo?.tenantKey || "").trim();
+  const expectedTenantKeys = (Array.isArray(tenantKey) ? tenantKey : [tenantKey])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (!receivedTenantKey || !expectedTenantKeys.length) return false;
+  return expectedTenantKeys.includes(receivedTenantKey);
 }
 
 function buildFeishuAccountPhone(openId) {

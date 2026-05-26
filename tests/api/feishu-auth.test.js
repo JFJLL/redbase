@@ -1,9 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 
 process.env.REDBASE_DB_FILE = ":memory:";
 
 const { openDatabase } = require("../../src/server/db/connection");
+const { CONFIG_FILE, loadAppConfig } = require("../../src/server/config");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
 const { findUserByPhone } = require("../../src/server/db/repositories/auth-repository");
 const { handleAuthRoutes } = require("../../src/server/api/auth-routes");
@@ -60,6 +62,10 @@ function createRes() {
       this.body = data;
     },
   };
+}
+
+function parseJsonBody(res) {
+  return JSON.parse(res.body || "{}");
 }
 
 test("buildFeishuAuthorizeUrl uses configured app and callback", () => {
@@ -120,6 +126,195 @@ test("verifyFeishuTenant only accepts the configured tenant", () => {
   assert.equal(verifyFeishuTenant({ tenantKey: "" }, "tenant_a"), false);
 });
 
+test("verifyFeishuTenant accepts any configured tenant key", () => {
+  assert.equal(verifyFeishuTenant({ tenantKey: "tenant_b" }, ["tenant_a", "tenant_b"]), true);
+  assert.equal(verifyFeishuTenant({ tenantKey: "tenant_c" }, ["tenant_a", "tenant_b"]), false);
+  assert.equal(verifyFeishuTenant({ tenantKey: "tenant_a" }, ["", "tenant_a"]), true);
+});
+
+test("loadAppConfig parses multiple Feishu tenant keys from environment", () => {
+  const previousTenantKey = process.env.FEISHU_TENANT_KEY;
+  const previousTenantKeys = process.env.FEISHU_TENANT_KEYS;
+  try {
+    process.env.FEISHU_TENANT_KEY = "tenant_legacy";
+    process.env.FEISHU_TENANT_KEYS = "tenant_a, tenant_b,,tenant_a";
+
+    assert.deepEqual(loadAppConfig().feishu.tenantKeys, ["tenant_a", "tenant_b"]);
+  } finally {
+    if (previousTenantKey === undefined) {
+      delete process.env.FEISHU_TENANT_KEY;
+    } else {
+      process.env.FEISHU_TENANT_KEY = previousTenantKey;
+    }
+    if (previousTenantKeys === undefined) {
+      delete process.env.FEISHU_TENANT_KEYS;
+    } else {
+      process.env.FEISHU_TENANT_KEYS = previousTenantKeys;
+    }
+  }
+});
+
+test("loadAppConfig reads multiple Feishu tenant keys from config file", () => {
+  const previousTenantKey = process.env.FEISHU_TENANT_KEY;
+  const previousTenantKeys = process.env.FEISHU_TENANT_KEYS;
+  const originalExistsSync = fs.existsSync;
+  const originalReadFileSync = fs.readFileSync;
+  try {
+    delete process.env.FEISHU_TENANT_KEY;
+    delete process.env.FEISHU_TENANT_KEYS;
+    fs.existsSync = (filePath) => (filePath === CONFIG_FILE ? true : originalExistsSync(filePath));
+    fs.readFileSync = (filePath, encoding) => {
+      if (filePath !== CONFIG_FILE) return originalReadFileSync(filePath, encoding);
+      return JSON.stringify({
+        feishu: {
+          enabled: true,
+          appId: "cli_a",
+          appSecret: "secret",
+          tenantKey: "tenant_legacy",
+          tenantKeys: ["tenant_a", "tenant_b", "tenant_a"],
+        },
+      });
+    };
+
+    const config = loadAppConfig();
+
+    assert.deepEqual(config.feishu.tenantKeys, ["tenant_a", "tenant_b"]);
+  } finally {
+    fs.existsSync = originalExistsSync;
+    fs.readFileSync = originalReadFileSync;
+    if (previousTenantKey === undefined) {
+      delete process.env.FEISHU_TENANT_KEY;
+    } else {
+      process.env.FEISHU_TENANT_KEY = previousTenantKey;
+    }
+    if (previousTenantKeys === undefined) {
+      delete process.env.FEISHU_TENANT_KEYS;
+    } else {
+      process.env.FEISHU_TENANT_KEYS = previousTenantKeys;
+    }
+  }
+});
+
+test("loadAppConfig reads multiple Feishu apps from config file", () => {
+  const previousTenantKey = process.env.FEISHU_TENANT_KEY;
+  const previousTenantKeys = process.env.FEISHU_TENANT_KEYS;
+  const originalExistsSync = fs.existsSync;
+  const originalReadFileSync = fs.readFileSync;
+  try {
+    delete process.env.FEISHU_TENANT_KEY;
+    delete process.env.FEISHU_TENANT_KEYS;
+    fs.existsSync = (filePath) => (filePath === CONFIG_FILE ? true : originalExistsSync(filePath));
+    fs.readFileSync = (filePath, encoding) => {
+      if (filePath !== CONFIG_FILE) return originalReadFileSync(filePath, encoding);
+      return JSON.stringify({
+        feishu: {
+          enabled: true,
+          baseUrl: "https://redbase.example",
+          apps: [
+            {
+              key: "yimei",
+              name: "易美传播",
+              appId: "cli_yimei",
+              appSecret: "secret_yimei",
+              tenantKeys: ["tenant_yimei"],
+            },
+            {
+              key: "hongmo",
+              name: "弘摩科技",
+              appId: "cli_hongmo",
+              appSecret: "secret_hongmo",
+              tenantKeys: ["tenant_hongmo"],
+            },
+          ],
+        },
+      });
+    };
+
+    const config = loadAppConfig();
+
+    assert.deepEqual(
+      config.feishu.apps.map((app) => ({ key: app.key, name: app.name, appId: app.appId, tenantKeys: app.tenantKeys })),
+      [
+        { key: "yimei", name: "易美传播", appId: "cli_yimei", tenantKeys: ["tenant_yimei"] },
+        { key: "hongmo", name: "弘摩科技", appId: "cli_hongmo", tenantKeys: ["tenant_hongmo"] },
+      ],
+    );
+  } finally {
+    fs.existsSync = originalExistsSync;
+    fs.readFileSync = originalReadFileSync;
+    if (previousTenantKey === undefined) {
+      delete process.env.FEISHU_TENANT_KEY;
+    } else {
+      process.env.FEISHU_TENANT_KEY = previousTenantKey;
+    }
+    if (previousTenantKeys === undefined) {
+      delete process.env.FEISHU_TENANT_KEYS;
+    } else {
+      process.env.FEISHU_TENANT_KEYS = previousTenantKeys;
+    }
+  }
+});
+
+test("Feishu apps endpoint exposes configured login choices without secrets", async () => {
+  const res = createRes();
+  const handled = await handleAuthRoutes(
+    {
+      appConfig: {
+        security: { cookieSecure: false },
+        feishu: {
+          enabled: true,
+          baseUrl: "https://redbase.example",
+          apps: [
+            { key: "yimei", name: "易美传播", appId: "cli_yimei", appSecret: "secret_yimei", tenantKeys: ["tenant_yimei"] },
+            { key: "hongmo", name: "弘摩科技", appId: "cli_hongmo", appSecret: "secret_hongmo", tenantKeys: ["tenant_hongmo"] },
+          ],
+        },
+      },
+    },
+    createReq("/api/auth/feishu/apps"),
+    res,
+    "/api/auth/feishu/apps",
+  );
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(parseJsonBody(res), {
+    apps: [
+      { key: "yimei", name: "易美传播" },
+      { key: "hongmo", name: "弘摩科技" },
+    ],
+  });
+  assert.doesNotMatch(res.body, /secret_|cli_/);
+});
+
+test("Feishu start selects the requested configured app", async () => {
+  const res = createRes();
+  const handled = await handleAuthRoutes(
+    {
+      appConfig: {
+        security: { cookieSecure: false },
+        feishu: {
+          enabled: true,
+          baseUrl: "https://redbase.example",
+          apps: [
+            { key: "yimei", name: "易美传播", appId: "cli_yimei", appSecret: "secret_yimei", tenantKeys: ["tenant_yimei"] },
+            { key: "hongmo", name: "弘摩科技", appId: "cli_hongmo", appSecret: "secret_hongmo", tenantKeys: ["tenant_hongmo"] },
+          ],
+        },
+      },
+    },
+    createReq("/api/auth/feishu/start?app=hongmo"),
+    res,
+    "/api/auth/feishu/start",
+  );
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 302);
+  const location = new URL(res.getHeader("location"));
+  assert.equal(location.searchParams.get("client_id"), "cli_hongmo");
+  assert.equal(JSON.parse(Buffer.from(location.searchParams.get("state"), "base64url").toString("utf8")).app, "hongmo");
+});
+
 test("Feishu callback creates a RedBase session for enterprise users", async () => {
   const fakeFetch = async (url) => {
     if (String(url).includes("/oauth/token")) {
@@ -144,7 +339,7 @@ test("Feishu callback creates a RedBase session for enterprise users", async () 
           enabled: true,
           appId: "cli_a",
           appSecret: "secret",
-          tenantKey: "tenant_a",
+          tenantKeys: ["tenant_a", "tenant_b"],
           baseUrl: "https://redbase.example",
         },
       },
@@ -205,4 +400,140 @@ test("Feishu callback rejects users from other tenants", async () => {
   assert.equal(res.statusCode, 302);
   assert.equal(res.getHeader("location"), "/?authError=feishu_tenant");
   assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_external")), null);
+});
+
+test("Feishu callback prefers tenantKeys over legacy tenantKey", async () => {
+  const fakeFetch = async (url) => {
+    if (String(url).includes("/oauth/token")) {
+      return jsonResponse({ access_token: "user-token" });
+    }
+    return jsonResponse({
+      code: 0,
+      data: {
+        open_id: "ou_legacy",
+        tenant_key: "tenant_legacy",
+        name: "旧企业用户",
+      },
+    });
+  };
+
+  const res = createRes();
+  const handled = await handleAuthRoutes(
+    {
+      appConfig: {
+        security: { cookieSecure: false },
+        feishu: {
+          enabled: true,
+          appId: "cli_a",
+          appSecret: "secret",
+          tenantKey: "tenant_legacy",
+          tenantKeys: ["tenant_a", "tenant_b"],
+          baseUrl: "https://redbase.example",
+        },
+      },
+      fetch: fakeFetch,
+    },
+    createReq("/api/auth/feishu/callback?code=oauth-code"),
+    res,
+    "/api/auth/feishu/callback",
+  );
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.getHeader("location"), "/?authError=feishu_tenant");
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_legacy")), null);
+});
+
+test("Feishu callback uses the app selected in OAuth state", async () => {
+  const tokenRequests = [];
+  const fakeFetch = async (url, options = {}) => {
+    if (String(url).includes("/oauth/token")) {
+      tokenRequests.push(JSON.parse(options.body));
+      return jsonResponse({ access_token: "user-token" });
+    }
+    return jsonResponse({
+      code: 0,
+      data: {
+        open_id: "ou_hongmo",
+        tenant_key: "tenant_hongmo",
+        name: "弘摩员工",
+      },
+    });
+  };
+  const state = Buffer.from(JSON.stringify({ app: "hongmo", next: "/" }), "utf8").toString("base64url");
+
+  const res = createRes();
+  const handled = await handleAuthRoutes(
+    {
+      appConfig: {
+        security: { cookieSecure: false },
+        feishu: {
+          enabled: true,
+          baseUrl: "https://redbase.example",
+          apps: [
+            { key: "yimei", name: "易美传播", appId: "cli_yimei", appSecret: "secret_yimei", tenantKeys: ["tenant_yimei"] },
+            { key: "hongmo", name: "弘摩科技", appId: "cli_hongmo", appSecret: "secret_hongmo", tenantKeys: ["tenant_hongmo"] },
+          ],
+        },
+      },
+      fetch: fakeFetch,
+    },
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    res,
+    "/api/auth/feishu/callback",
+  );
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.getHeader("location"), "/");
+  assert.deepEqual(tokenRequests[0], {
+    grant_type: "authorization_code",
+    client_id: "cli_hongmo",
+    client_secret: "secret_hongmo",
+    code: "oauth-code",
+    redirect_uri: "https://redbase.example/api/auth/feishu/callback",
+  });
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_hongmo")).name, "弘摩员工");
+});
+
+test("Feishu callback logs tenant mismatch for apps awaiting tenant key discovery", async () => {
+  const fakeFetch = async (url) => {
+    if (String(url).includes("/oauth/token")) {
+      return jsonResponse({ access_token: "user-token" });
+    }
+    return jsonResponse({
+      code: 0,
+      data: {
+        open_id: "ou_pending",
+        tenant_key: "tenant_pending",
+        name: "待授权员工",
+      },
+    });
+  };
+  const state = Buffer.from(JSON.stringify({ app: "pending", next: "/" }), "utf8").toString("base64url");
+
+  const res = createRes();
+  const handled = await handleAuthRoutes(
+    {
+      appConfig: {
+        security: { cookieSecure: false },
+        feishu: {
+          enabled: true,
+          baseUrl: "https://redbase.example",
+          apps: [
+            { key: "pending", name: "待配置企业", appId: "cli_pending", appSecret: "secret_pending", tenantKeys: [] },
+          ],
+        },
+      },
+      fetch: fakeFetch,
+    },
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    res,
+    "/api/auth/feishu/callback",
+  );
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.getHeader("location"), "/?authError=feishu_tenant");
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_pending")), null);
 });

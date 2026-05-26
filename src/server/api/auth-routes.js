@@ -120,8 +120,20 @@ async function handleAuthRoutes(context, req, res, pathname) {
     return true;
   }
 
-  if (req.method === "GET" && pathname === "/api/auth/feishu/start") {
+  if (req.method === "GET" && pathname === "/api/auth/feishu/apps") {
     const feishuConfig = normalizeFeishuConfig(appConfig, req);
+    json(res, 200, {
+      apps: getReadyFeishuApps(feishuConfig).map((app) => ({
+        key: app.key,
+        name: app.name,
+      })),
+    });
+    return true;
+  }
+
+  if (req.method === "GET" && pathname === "/api/auth/feishu/start") {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const feishuConfig = normalizeFeishuConfig(appConfig, req, url.searchParams.get("app"));
     if (!isFeishuConfigReady(feishuConfig)) {
       redirect(res, "/?authError=feishu_config");
       return true;
@@ -132,7 +144,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
       buildFeishuAuthorizeUrl({
         appId: feishuConfig.appId,
         redirectUri: feishuConfig.redirectUri,
-        state: "/",
+        state: encodeFeishuState({ app: feishuConfig.appKey, next: "/" }),
       }),
     );
     return true;
@@ -151,7 +163,8 @@ async function handleAuthRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const feishuConfig = normalizeFeishuConfig(appConfig, req);
+    const state = decodeFeishuState(url.searchParams.get("state"));
+    const feishuConfig = normalizeFeishuConfig(appConfig, req, state.app);
     if (!isFeishuConfigReady(feishuConfig)) {
       redirect(res, "/?authError=feishu_config");
       return true;
@@ -170,10 +183,10 @@ async function handleAuthRoutes(context, req, res, pathname) {
         redirect(res, "/?authError=feishu_profile");
         return true;
       }
-      if (!verifyFeishuTenant(userInfo, feishuConfig.tenantKey)) {
+      if (!verifyFeishuTenant(userInfo, feishuConfig.tenantKeys)) {
         console.warn("[feishu-auth] tenant mismatch", {
           receivedTenantKey: userInfo.tenantKey || "",
-          configuredTenantKey: feishuConfig.tenantKey,
+          configuredTenantKeys: feishuConfig.tenantKeys,
         });
         redirect(res, "/?authError=feishu_tenant");
         return true;
@@ -201,7 +214,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
 
       req.__redbaseApiUser = buildApiUserLog(savedUser);
       setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
-      redirect(res, "/");
+      redirect(res, normalizeRedirectPath(state.next) || "/");
     } catch (error) {
       console.error("[feishu-auth] callback failed", error);
       redirect(res, "/?authError=feishu_failed");
@@ -233,20 +246,92 @@ async function handleAuthRoutes(context, req, res, pathname) {
   return false;
 }
 
-function normalizeFeishuConfig(appConfig, req) {
+function normalizeFeishuConfig(appConfig, req, appKey = "") {
   const feishu = appConfig?.feishu || {};
   const baseUrl = String(feishu.baseUrl || "").trim() || getRequestBaseUrl(req);
+  const apps = normalizeFeishuApps(feishu);
+  const selectedApp = selectFeishuApp(apps, appKey);
   return {
     enabled: Boolean(feishu.enabled),
-    appId: String(feishu.appId || "").trim(),
-    appSecret: String(feishu.appSecret || "").trim(),
-    tenantKey: String(feishu.tenantKey || "").trim(),
+    appKey: selectedApp?.key || "",
+    appName: selectedApp?.name || "",
+    appId: String(selectedApp?.appId || "").trim(),
+    appSecret: String(selectedApp?.appSecret || "").trim(),
+    tenantKey: String(selectedApp?.tenantKey || "").trim(),
+    tenantKeys: selectedApp?.tenantKeys || [],
+    apps,
     redirectUri: `${baseUrl.replace(/\/+$/, "")}/api/auth/feishu/callback`,
   };
 }
 
 function isFeishuConfigReady(config) {
-  return Boolean(config.enabled && config.appId && config.appSecret && config.tenantKey && config.redirectUri);
+  return Boolean(config.enabled && config.appId && config.appSecret && config.redirectUri);
+}
+
+function normalizeTenantKeys(feishu) {
+  const configuredTenantKeys = Array.isArray(feishu?.tenantKeys) ? feishu.tenantKeys : [];
+  const tenantKeys = configuredTenantKeys.length ? configuredTenantKeys : [feishu?.tenantKey];
+  return tenantKeys
+    .map((tenantKey) => String(tenantKey || "").trim())
+    .filter(Boolean)
+    .filter((tenantKey, index, all) => all.indexOf(tenantKey) === index);
+}
+
+function normalizeFeishuApps(feishu) {
+  const configuredApps = Array.isArray(feishu?.apps) && feishu.apps.length
+    ? feishu.apps
+    : [{
+        key: "default",
+        name: "飞书企业",
+        appId: feishu?.appId,
+        appSecret: feishu?.appSecret,
+        tenantKey: feishu?.tenantKey,
+        tenantKeys: feishu?.tenantKeys,
+      }];
+  return configuredApps
+    .map((app, index) => ({
+      key: String(app?.key || app?.name || `app-${index + 1}`).trim(),
+      name: String(app?.name || app?.key || `飞书企业 ${index + 1}`).trim(),
+      appId: String(app?.appId || "").trim(),
+      appSecret: String(app?.appSecret || "").trim(),
+      tenantKey: String(app?.tenantKey || "").trim(),
+      tenantKeys: normalizeTenantKeys(app),
+    }))
+    .filter((app, index, all) => app.key && all.findIndex((item) => item.key === app.key) === index);
+}
+
+function selectFeishuApp(apps, appKey) {
+  const requestedKey = String(appKey || "").trim();
+  if (requestedKey) {
+    return apps.find((app) => app.key === requestedKey) || null;
+  }
+  return apps[0] || null;
+}
+
+function getReadyFeishuApps(config) {
+  if (!config.enabled) return [];
+  return config.apps.filter((app) => app.appId && app.appSecret);
+}
+
+function encodeFeishuState(payload) {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function decodeFeishuState(value) {
+  const state = String(value || "").trim();
+  if (!state) return {};
+  if (state.startsWith("/")) return { next: state };
+  try {
+    const parsed = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function normalizeRedirectPath(value) {
+  const path = String(value || "").trim();
+  return path.startsWith("/") && !path.startsWith("//") ? path : "";
 }
 
 function getRequestBaseUrl(req) {

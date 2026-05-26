@@ -461,6 +461,11 @@ button {
   margin-bottom: 20px;
 }
 
+.feishu-login-actions {
+  display: grid;
+  gap: 10px;
+}
+
 .feishu-login-btn {
   width: 100%;
   min-height: 50px;

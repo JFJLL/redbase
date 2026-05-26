@@ -51,6 +51,8 @@ const DEFAULT_APP_CONFIG = {
     appId: "",
     appSecret: "",
     tenantKey: "",
+    tenantKeys: [],
+    apps: [],
     baseUrl: "",
   },
   cors: {
@@ -108,12 +110,15 @@ function loadAppConfig() {
 
   const merged = deepMerge(DEFAULT_APP_CONFIG, localConfig);
   const hasFeishuCredentials = Boolean(
-    process.env.FEISHU_APP_ID ||
+      process.env.FEISHU_APP_ID ||
       process.env.FEISHU_APP_SECRET ||
       process.env.FEISHU_TENANT_KEY ||
+      process.env.FEISHU_TENANT_KEYS ||
       merged.feishu?.appId ||
       merged.feishu?.appSecret ||
-      merged.feishu?.tenantKey,
+      merged.feishu?.tenantKey ||
+      (Array.isArray(merged.feishu?.tenantKeys) && merged.feishu.tenantKeys.length) ||
+      (Array.isArray(merged.feishu?.apps) && merged.feishu.apps.length),
   );
   const hasPgyCookieSource = Boolean(
     process.env.PGY_CONTENT_SQUARE_COOKIE ||
@@ -155,13 +160,7 @@ function loadAppConfig() {
         .concat(Array.isArray(merged.admin?.phones) ? merged.admin.phones.map((phone) => String(phone || "").trim()).filter(Boolean) : [])
         .filter((phone, index, all) => all.indexOf(phone) === index),
     },
-    feishu: {
-      enabled: parseBooleanConfig(process.env.FEISHU_AUTH_ENABLED, parseBooleanConfig(merged.feishu?.enabled, hasFeishuCredentials)),
-      appId: String(process.env.FEISHU_APP_ID || merged.feishu?.appId || "").trim(),
-      appSecret: String(process.env.FEISHU_APP_SECRET || merged.feishu?.appSecret || "").trim(),
-      tenantKey: String(process.env.FEISHU_TENANT_KEY || merged.feishu?.tenantKey || "").trim(),
-      baseUrl: String(process.env.FEISHU_BASE_URL || process.env.BASE_URL || merged.feishu?.baseUrl || "").trim(),
-    },
+    feishu: normalizeFeishuConfig(merged.feishu, hasFeishuCredentials),
     cors: {
       origins: String(process.env.CORS_ORIGINS || "")
         .split(",")
@@ -195,6 +194,65 @@ function loadAppConfig() {
       ossAccessKeySecret: String(process.env.PGY_OSS_ACCESS_KEY_SECRET || merged.pgy?.ossAccessKeySecret || "").trim(),
     },
   };
+}
+
+function normalizeFeishuConfig(feishu, hasFeishuCredentials) {
+  const appId = String(process.env.FEISHU_APP_ID || feishu?.appId || "").trim();
+  const appSecret = String(process.env.FEISHU_APP_SECRET || feishu?.appSecret || "").trim();
+  const tenantKey = String(process.env.FEISHU_TENANT_KEY || feishu?.tenantKey || "").trim();
+  const tenantKeys = parseListConfig(
+    process.env.FEISHU_TENANT_KEYS,
+    feishu?.tenantKeys,
+    process.env.FEISHU_TENANT_KEY || feishu?.tenantKey,
+  );
+  const baseUrl = String(process.env.FEISHU_BASE_URL || process.env.BASE_URL || feishu?.baseUrl || "").trim();
+  const legacyApp = appId || appSecret || tenantKeys.length
+    ? [{ key: "default", name: "飞书企业", appId, appSecret, tenantKeys }]
+    : [];
+  const apps = normalizeFeishuApps(Array.isArray(feishu?.apps) && feishu.apps.length ? feishu.apps : legacyApp);
+
+  return {
+    enabled: parseBooleanConfig(process.env.FEISHU_AUTH_ENABLED, parseBooleanConfig(feishu?.enabled, hasFeishuCredentials)),
+    appId,
+    appSecret,
+    tenantKey,
+    tenantKeys,
+    apps,
+    baseUrl,
+  };
+}
+
+function normalizeFeishuApps(apps) {
+  return apps
+    .map((app, index) => {
+      const key = String(app?.key || app?.name || `app-${index + 1}`)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const tenantKeys = parseListConfig("", app?.tenantKeys, app?.tenantKey);
+      return {
+        key: key || `app-${index + 1}`,
+        name: String(app?.name || app?.key || `飞书企业 ${index + 1}`).trim(),
+        appId: String(app?.appId || "").trim(),
+        appSecret: String(app?.appSecret || "").trim(),
+        tenantKey: String(app?.tenantKey || "").trim(),
+        tenantKeys,
+      };
+    })
+    .filter((app, index, all) => app.key && all.findIndex((item) => item.key === app.key) === index);
+}
+
+function parseListConfig(envValue, localValue, legacyValue = "") {
+  const source = envValue !== undefined && envValue !== null && envValue !== "" ? envValue : localValue;
+  const values = Array.isArray(source) ? source : String(source || "").split(",");
+  const normalized = values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (!normalized.length && legacyValue) {
+    normalized.push(String(legacyValue).trim());
+  }
+  return normalized.filter((value, index, all) => all.indexOf(value) === index);
 }
 
 module.exports = {
