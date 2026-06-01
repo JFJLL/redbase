@@ -1,5 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs/promises");
+const os = require("os");
+const path = require("path");
 
 const {
   buildPgyHotNotesPayload,
@@ -213,6 +216,59 @@ test("rotates Pgy cookie pool after an auth failure", async () => {
 
   assert.deepEqual(cookiesSeen, ["web_session=expired", "web_session=fresh"]);
   assert.equal(result.notes[0].title, "fresh cookie note");
+});
+
+test("prefers OSS cookie text over local cookie file and refreshes local cache", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "redbase-pgy-"));
+  const cookieFile = path.join(tmpDir, "token.txt");
+  await fs.writeFile(cookieFile, '{"web_session":"stale"}\n', "utf8");
+
+  const cookiesSeen = [];
+  const result = await fetchPgyXhsHotNotes(
+    {
+      pgy: {
+        enabled: true,
+        cookieFile,
+        userAgent: "test-agent",
+        timeoutMs: 1000,
+        ossEndpoint: "https://oss-cn-beijing.aliyuncs.com",
+        ossBucket: "redmagic",
+        ossObjectKey: "KOL/token.txt",
+        ossAccessKeyId: "access-key",
+        ossAccessKeySecret: "access-secret",
+      },
+    },
+    {
+      fetchImpl: async (url, options) => {
+        if (url.includes("oss-cn-beijing")) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => '{"web_session":"fresh"}\n',
+          };
+        }
+        cookiesSeen.push(options.headers.cookie);
+        return jsonResponse({
+          code: 0,
+          success: true,
+          data: {
+            noteList: [
+              {
+                noteInfo: {
+                  title: "oss fresh note",
+                  noteImages: [{ imageUrl: "https://image.example/oss.jpg" }],
+                },
+              },
+            ],
+          },
+        });
+      },
+    },
+  );
+
+  assert.deepEqual(cookiesSeen, ["web_session=fresh"]);
+  assert.equal(result.notes[0].title, "oss fresh note");
+  assert.equal(await fs.readFile(cookieFile, "utf8"), '{"web_session":"fresh"}\n');
 });
 
 test("retries transient Pgy network failures with the cookie pool", async () => {

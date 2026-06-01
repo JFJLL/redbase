@@ -85,6 +85,15 @@ test("single-slide xhs carousel generations are renderable in history", () => {
         slides: [{ imageUrl: "https://image.example/one.png" }, { previewUrl: "" }],
       },
     }),
+    true,
+  );
+  assert.equal(
+    isRenderableGeneration({
+      type: "xhsCarousel",
+      payload: {
+        slides: [{ imageUrl: "" }, { previewUrl: "" }],
+      },
+    }),
     false,
   );
 });

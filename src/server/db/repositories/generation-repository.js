@@ -92,6 +92,20 @@ function findGenerationById(generationId) {
   return mapGenerationRow(db.prepare(`SELECT ${GENERATION_COLUMNS} FROM generations WHERE id = ?`).get(Number(generationId)));
 }
 
+function findXhsCarouselGenerationByGroup(ownerUserId, carouselGroupId) {
+  const groupId = String(carouselGroupId || "").trim();
+  if (!groupId) return null;
+  return mapGenerationRow(db.prepare(`
+    SELECT ${GENERATION_COLUMNS}
+    FROM generations
+    WHERE owner_user_id = ?
+      AND type = 'xhsCarousel'
+      AND json_extract(payload_json, '$.carouselGroupId') = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(Number(ownerUserId), groupId));
+}
+
 function upsertGeneration(generation) {
   db.prepare(`
     INSERT INTO generations (
@@ -159,6 +173,7 @@ module.exports = {
   listExpiredGenerations,
   findGenerationByOwner,
   findGenerationById,
+  findXhsCarouselGenerationByGroup,
   upsertGeneration,
   insertGeneration,
   deleteGenerationRows,

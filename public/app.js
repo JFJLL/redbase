@@ -2537,7 +2537,8 @@ function renderGenerationHistory() {
             <div class="history-generate-grid">
               ${(payload.slides || [])
                 .slice(0, 4)
-                .map((slide) => `<img src="${authenticatedImageSrc(slide.previewUrl)}" alt="${escapeHtml(slide.title)}" />`)
+                .filter((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))
+                .map((slide) => `<img src="${authenticatedImageSrc(slide.imageUrl || slide.previewUrl)}" alt="${escapeHtml(slide.title)}" />`)
                 .join("")}
             </div>
           `
@@ -2582,7 +2583,8 @@ function renderGenerationHistory() {
 function getGenerationPrimaryImageUrl(item) {
   if (item?.previewUrl) return item.previewUrl;
   const slides = Array.isArray(item?.payload?.slides) ? item.payload.slides : [];
-  return slides.find((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))?.imageUrl || slides[0]?.previewUrl || "";
+  const slide = slides.find((candidate) => safeImageSrc(candidate.imageUrl || candidate.previewUrl));
+  return slide?.imageUrl || slide?.previewUrl || "";
 }
 
 function isInternalXhsCopy(value) {
@@ -2693,7 +2695,10 @@ function openHistoryGeneration(generationId, selectedSlideIndex = 0) {
 function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
   const payload = item.payload || {};
   const slides = Array.isArray(payload.slides) ? payload.slides : [];
-  const safeIndex = Math.min(Math.max(Number(selectedSlideIndex) || 0, 0), Math.max(slides.length - 1, 0));
+  const requestedIndex = Math.min(Math.max(Number(selectedSlideIndex) || 0, 0), Math.max(slides.length - 1, 0));
+  const firstImageIndex = slides.findIndex((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl));
+  const safeIndex = safeImageSrc(slides[requestedIndex]?.imageUrl || slides[requestedIndex]?.previewUrl) ? requestedIndex : firstImageIndex;
+  if (safeIndex < 0) return;
   const selectedSlide = slides[safeIndex] || {};
   const imageUrl = selectedSlide.imageUrl || selectedSlide.previewUrl;
   if (!imageUrl) return;
@@ -2718,7 +2723,7 @@ function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
         .map((slide, index) => {
           const url = slide.imageUrl || slide.previewUrl;
           return `
-            <button class="history-carousel-thumb ${index === safeIndex ? "is-active" : ""}" data-history-slide-index="${index}" type="button">
+            <button class="history-carousel-thumb ${index === safeIndex ? "is-active" : ""}" data-history-slide-index="${index}" type="button" ${url ? "" : "disabled"}>
               ${url ? `<img src="${authenticatedImageSrc(url)}" alt="${escapeHtml(slide.title || `第 ${index + 1} 张`)}" />` : ""}
               <span>${escapeHtml(slide.pageLabel || `第 ${index + 1} 张`)}</span>
             </button>
@@ -3054,6 +3059,11 @@ function enrichXhsCarouselSlides(pack) {
   }));
 }
 
+function createXhsCarouselGroupId(brandId, trendId, ideaIndex) {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `xhs-${brandId}-${trendId}-${ideaIndex}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function syncXhsCarouselPromptInputs(root, pack) {
   root.querySelectorAll("[data-carousel-prompt]").forEach((textarea) => {
     const slideIndex = Number(textarea.dataset.carouselPrompt);
@@ -3186,6 +3196,7 @@ async function generateXhsCarousel(ideaIndex) {
     }
     const pack = {
       ...previewPack,
+      carouselGroupId: previewPack.carouselGroupId || createXhsCarouselGroupId(brand.id, trend.id, ideaIndex),
       slides: enrichXhsCarouselSlides(previewPack),
     };
     const flags = {

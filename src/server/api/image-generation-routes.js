@@ -11,7 +11,12 @@ const {
   refundCreditEventIfNeeded,
 } = require("../db/repositories/admin-repository");
 const { findBrandByOwner, upsertBrandFull } = require("../db/repositories/brand-repository");
-const { findGenerationByOwner, insertGeneration, upsertGeneration } = require("../db/repositories/generation-repository");
+const {
+  findGenerationByOwner,
+  findXhsCarouselGenerationByGroup,
+  insertGeneration,
+  upsertGeneration,
+} = require("../db/repositories/generation-repository");
 const { findProductImageByOwner, touchProductImageUsed } = require("../db/repositories/product-image-repository");
 const { findImageJobByOwner, upsertImageJob } = require("../db/repositories/image-job-repository");
 const {
@@ -106,11 +111,81 @@ function createSqlGenerationRecord(userId, brand, trend, idea, type, channelLabe
   };
 }
 
+function normalizeCarouselGroupId(value) {
+  return String(value || "").trim().slice(0, 80);
+}
+
+function isGeneratedCarouselSlide(slide) {
+  return Boolean(String(slide?.imageUrl || slide?.previewUrl || "").trim());
+}
+
+function normalizeCarouselSlideIndex(slide, fallbackIndex = 0) {
+  const index = Number.isInteger(slide?.sourceSlideIndex) ? slide.sourceSlideIndex : Number(slide?.slideIndex ?? fallbackIndex);
+  return Number.isInteger(index) && index >= 0 && index <= 3 ? index : fallbackIndex;
+}
+
+function buildEmptyCarouselSlide(index) {
+  return {
+    sourceSlideIndex: index,
+    pageLabel: `第 ${index + 1} 张`,
+    title: "",
+    copy: "",
+    prompt: "",
+    visualDirection: "",
+    style: "",
+    composition: "",
+  };
+}
+
+function normalizeCarouselSlides(slides) {
+  const normalized = Array.from({ length: 4 }, (_, index) => buildEmptyCarouselSlide(index));
+  (Array.isArray(slides) ? slides : []).forEach((slide, fallbackIndex) => {
+    if (!slide || typeof slide !== "object") return;
+    const index = normalizeCarouselSlideIndex(slide, fallbackIndex);
+    normalized[index] = {
+      ...normalized[index],
+      ...slide,
+      sourceSlideIndex: index,
+      pageLabel: slide.pageLabel || normalized[index].pageLabel,
+    };
+  });
+  return normalized;
+}
+
+function mergeXhsCarouselSlidePayload(existingPayload = {}, incomingPayload = {}) {
+  const slides = normalizeCarouselSlides(existingPayload.slides);
+  normalizeCarouselSlides(incomingPayload.slides).forEach((slide, index) => {
+    if (isGeneratedCarouselSlide(slide)) {
+      slides[index] = {
+        ...slides[index],
+        ...slide,
+        sourceSlideIndex: index,
+        pageLabel: slide.pageLabel || slides[index].pageLabel || `第 ${index + 1} 张`,
+      };
+    } else if (!slides[index]?.title && slide.title) {
+      slides[index] = {
+        ...slides[index],
+        ...slide,
+        sourceSlideIndex: index,
+        pageLabel: slide.pageLabel || slides[index].pageLabel || `第 ${index + 1} 张`,
+      };
+    }
+  });
+  return {
+    ...existingPayload,
+    ...incomingPayload,
+    generatedMode: slides.every(isGeneratedCarouselSlide) ? "group" : "partialSlides",
+    carouselGroupId: normalizeCarouselGroupId(incomingPayload.carouselGroupId || existingPayload.carouselGroupId),
+    slides,
+  };
+}
+
 function buildSingleSlideCarouselPayload(job) {
   const metadata = job?.metadata || {};
   const context = job?.generationContext || {};
   const slideIndex = Number.isInteger(context.slideIndex) ? context.slideIndex : Number(metadata.slideIndex || 0);
   const slide = {
+    sourceSlideIndex: slideIndex,
     pageLabel: metadata.pageLabel || `第 ${slideIndex + 1} 张`,
     title: metadata.visualDirection || metadata.title || "小红书组图单张",
     copy: metadata.copy || "",
@@ -128,10 +203,33 @@ function buildSingleSlideCarouselPayload(job) {
     publishTitle: context.publishTitle || metadata.title || slide.title,
     publishCaption: context.publishCaption || metadata.copy || "",
     caption: context.caption || metadata.copy || "",
-    generatedMode: "singleSlide",
+    generatedMode: "partialSlides",
+    carouselGroupId: normalizeCarouselGroupId(context.carouselGroupId),
     sourceSlideIndex: slideIndex,
-    slides: [slide],
+    slides: normalizeCarouselSlides([slide]),
   };
+}
+
+async function upsertSingleSlideCarouselGeneration({ userId, brand, trend, idea, job, payload, persistGenerationImages }) {
+  const groupId = normalizeCarouselGroupId(payload.carouselGroupId);
+  const existingGeneration = groupId ? findXhsCarouselGenerationByGroup(userId, groupId) : null;
+  const mergedPayload = mergeXhsCarouselSlidePayload(existingGeneration?.payload || {}, payload);
+  const generation = existingGeneration
+    ? {
+        ...existingGeneration,
+        cardTitle: mergedPayload.title || existingGeneration.cardTitle,
+        previewUrl: mergedPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
+        summary: mergedPayload.publishCaption || mergedPayload.caption || existingGeneration.summary || "",
+        payload: mergedPayload,
+      }
+    : createSqlGenerationRecord(userId, brand, trend, idea, "xhsCarousel", "小红书组图", mergedPayload);
+  await persistGenerationImages(generation);
+  return existingGeneration ? upsertGeneration(generation) : insertGeneration(generation);
+}
+
+function isValidCompletedCarouselPack(carouselPack) {
+  const slides = Array.isArray(carouselPack?.slides) ? carouselPack.slides : [];
+  return slides.length === 4 && slides.every(isGeneratedCarouselSlide);
 }
 
 function requireIdea({ brand, trendId, ideaIndex, res, badRequest, findTrendItem }) {
@@ -436,13 +534,20 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             : type === "wechat"
               ? buildGeneratedAssetPayload(resolved)
               : buildMomentsGenerationPayload(resolved);
-          const generation = createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
-          await persistGenerationImages(generation);
-          insertGeneration(generation);
-          updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, payload);
+          const generation = isSingleCarouselSlide
+            ? await upsertSingleSlideCarouselGeneration({ userId: user.id, brand, trend, idea, job: resolved, payload, persistGenerationImages })
+            : createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
+          if (!isSingleCarouselSlide) {
+            await persistGenerationImages(generation);
+            insertGeneration(generation);
+          }
+          updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, generation.payload || payload);
           resolved.generationId = generation.id;
-          if (generation.previewUrl) {
-            resolved.imageUrl = generation.previewUrl;
+          const currentSlideIndex = Number.isInteger(payload.sourceSlideIndex) ? payload.sourceSlideIndex : 0;
+          const currentSlide = isSingleCarouselSlide ? generation.payload?.slides?.[currentSlideIndex] : null;
+          const currentImageUrl = currentSlide?.imageUrl || currentSlide?.previewUrl || generation.previewUrl;
+          if (currentImageUrl) {
+            resolved.imageUrl = currentImageUrl;
           }
           upsertImageJob(user.id, resolved);
         }
@@ -905,6 +1010,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       publishTitle: incomingPack.publishTitle || defaultPack.publishTitle || "",
       publishCaption: incomingPack.publishCaption || defaultPack.publishCaption || "",
       caption: incomingPack.caption || defaultPack.caption || "",
+      carouselGroupId: normalizeCarouselGroupId(incomingPack.carouselGroupId),
     };
     spendUserCredits(user, CREDIT_COSTS.xhsCarouselSlide);
     const creditEvent = createSqlCreditEvent({
@@ -955,17 +1061,33 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
     const payload = await collectBody(req);
     const carouselPack = payload.carouselPack || {};
-    const slides = Array.isArray(carouselPack.slides) ? carouselPack.slides : [];
-    if (slides.length !== 4 || slides.some((slide) => !String(slide.imageUrl || slide.previewUrl || "").startsWith("http"))) {
+    if (!isValidCompletedCarouselPack(carouselPack)) {
       badRequest(res, "小红书组图必须等待 4 张真实图片全部生成完成后才能写入历史。");
       return true;
     }
 
     const existingGenerationId = findGenerationIdForCreditEvent(Number(payload.creditEventId), user.id);
-    const existingGeneration = existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null;
+    const existingGeneration =
+      (existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null) ||
+      findXhsCarouselGenerationByGroup(user.id, carouselPack.carouselGroupId);
     if (existingGeneration) {
+      const nextPayload = mergeXhsCarouselSlidePayload(existingGeneration.payload || {}, {
+        ...carouselPack,
+        generatedMode: "group",
+        carouselGroupId: normalizeCarouselGroupId(carouselPack.carouselGroupId || existingGeneration.payload?.carouselGroupId),
+      });
+      const nextGeneration = {
+        ...existingGeneration,
+        cardTitle: nextPayload.title || existingGeneration.cardTitle,
+        previewUrl: nextPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
+        summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
+        payload: nextPayload,
+      };
+      await persistGenerationImages(nextGeneration);
+      const savedGeneration = upsertGeneration(nextGeneration);
+      updateCreditEventGeneration(Number(payload.creditEventId), savedGeneration, savedGeneration.payload);
       json(res, 200, {
-        generation: sanitizeGeneration(existingGeneration, appConfig),
+        generation: sanitizeGeneration(savedGeneration, appConfig),
         creditEventId: Number(payload.creditEventId) || null,
         user: sanitizeUser(user),
       });
@@ -1077,5 +1199,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 }
 
 module.exports = {
+  isGeneratedCarouselSlide,
+  mergeXhsCarouselSlidePayload,
   handleImageGenerationRoutes,
 };

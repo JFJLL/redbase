@@ -5,8 +5,14 @@ process.env.REDBASE_DB_FILE = ":memory:";
 
 const { openDatabase } = require("../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/server/db/schema");
-const { upsertGeneration, searchGenerations } = require("../src/server/db/repositories/generation-repository");
+const {
+  upsertGeneration,
+  searchGenerations,
+  findXhsCarouselGenerationByGroup,
+} = require("../src/server/db/repositories/generation-repository");
 const { buildHistoryFilters } = require("../src/server/api/history-routes");
+const { isRenderableGeneration } = require("../src/server/api/domain-utils");
+const { mergeXhsCarouselSlidePayload } = require("../src/server/api/image-generation-routes");
 
 const db = openDatabase();
 initializeDatabaseSchema();
@@ -90,4 +96,59 @@ test("buildHistoryFilters trims query params and ignores unknown generation type
     from: "2026-05-01T00:00:00.000Z",
     to: "2026-05-02T23:59:59.999Z",
   });
+});
+
+test("xhs carousel single slides merge into one renderable history group", () => {
+  const firstPayload = mergeXhsCarouselSlidePayload(
+    {},
+    {
+      carouselGroupId: "carousel-group-1",
+      title: "同一组图",
+      publishTitle: "发布标题",
+      publishCaption: "发布文案",
+      slides: [
+        {
+          sourceSlideIndex: 1,
+          pageLabel: "第 2 张",
+          title: "第二张",
+          imageUrl: "/api/generated-images/20/slides/1/file",
+          previewUrl: "/api/generated-images/20/slides/1/file",
+        },
+      ],
+    },
+  );
+  const mergedPayload = mergeXhsCarouselSlidePayload(firstPayload, {
+    carouselGroupId: "carousel-group-1",
+    title: "同一组图",
+    slides: [
+      {
+        sourceSlideIndex: 3,
+        pageLabel: "第 4 张",
+        title: "第四张",
+        imageUrl: "/api/generated-images/20/slides/3/file",
+        previewUrl: "/api/generated-images/20/slides/3/file",
+      },
+    ],
+  });
+
+  seedGeneration({
+    id: 20,
+    type: "xhsCarousel",
+    brandId: 10,
+    brandName: "红盒品牌",
+    cardTitle: "同一组图",
+    createdAt: "2026-05-04T10:00:00.000Z",
+    payload: mergedPayload,
+  });
+
+  const generation = findXhsCarouselGenerationByGroup(1, "carousel-group-1");
+  assert.equal(generation.id, 20);
+  assert.equal(generation.payload.slides.length, 4);
+  assert.deepEqual(
+    generation.payload.slides
+      .map((slide, index) => (slide.imageUrl ? index : null))
+      .filter((index) => index != null),
+    [1, 3],
+  );
+  assert.equal(isRenderableGeneration(generation), true);
 });

@@ -227,6 +227,13 @@ async function readCookieFile(cookieFile) {
   return fs.readFile(resolvedPath, "utf8");
 }
 
+async function writeCookieFile(cookieFile, tokenText) {
+  if (!cookieFile || !tokenText) return;
+  const resolvedPath = path.resolve(cookieFile);
+  await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+  await fs.writeFile(resolvedPath, tokenText, "utf8");
+}
+
 function buildPgyCookieSourceKey(pgy) {
   return JSON.stringify({
     cookieHash: pgy.cookie ? crypto.createHash("sha256").update(pgy.cookie).digest("hex") : "",
@@ -266,17 +273,30 @@ async function resolvePgyCookiePool(appConfig, options = {}) {
     return cachePgyCookiePool(sourceKey, pgy, directCookies);
   }
 
-  if (pgy.cookieFile) {
+  const ossConfigured = isOssCookieSourceConfigured(pgy);
+  let ossError = null;
+  if (ossConfigured) {
     try {
-      tokenText = await readCookieFile(pgy.cookieFile);
+      tokenText = await fetchOssCookieTokenText(pgy, options.fetchImpl);
+      await writeCookieFile(pgy.cookieFile, tokenText);
     } catch (error) {
-      if (!isOssCookieSourceConfigured(pgy)) {
+      ossError = error;
+    }
+  }
+
+  if (pgy.cookieFile) {
+    if (!tokenText) {
+      try {
+        tokenText = await readCookieFile(pgy.cookieFile);
+      } catch (error) {
+        if (ossError?.code) throw ossError;
         throw createPgyError("PGY_NOT_CONFIGURED");
       }
     }
   }
-  if (!tokenText && isOssCookieSourceConfigured(pgy)) {
-    tokenText = await fetchOssCookieTokenText(pgy, options.fetchImpl);
+
+  if (!tokenText && ossError?.code) {
+    throw ossError;
   }
 
   const cookies = parseCookieTokenList(tokenText);
