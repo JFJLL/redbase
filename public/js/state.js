@@ -12,6 +12,7 @@ export const state = {
     from: "",
     to: "",
   },
+  generationHistoryNeedsLatest: false,
   selectedBrandId: null,
   selectedTrendId: null,
   selectedTrendMode: DEFAULT_TREND_MODE,

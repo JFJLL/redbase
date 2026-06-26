@@ -316,7 +316,7 @@ async function resumePendingImageTask(task) {
       return;
     }
     await pollImageJob(task.jobId);
-    await loadGenerationHistory();
+    await refreshGenerationHistoryAfterGeneration();
     removePendingImageTask(task.id);
     showToast("一个历史图片任务已恢复完成。");
   } catch (error) {
@@ -357,7 +357,7 @@ async function resumeXhsCarouselTask(task) {
     },
   );
   updateCurrentUser(completeResult.user);
-  await loadGenerationHistory();
+  await refreshGenerationHistoryAfterGeneration();
   removePendingImageTask(task.id);
   showToast("一个历史小红书组图任务已恢复完成。");
 }
@@ -516,6 +516,10 @@ function bindTabJump() {
   document.querySelectorAll("[data-tab-jump]").forEach((node) => {
     node.addEventListener("click", () => switchTab(node.dataset.tabJump));
   });
+}
+
+function createEmptyGenerationHistoryFilters() {
+  return { q: "", brandId: "", type: "", from: "", to: "" };
 }
 
 function bindBrandModal() {
@@ -1611,6 +1615,9 @@ function switchTab(tab) {
     node.classList.toggle("is-active", node.dataset.tabPanel === tab);
   });
   restoreDashboardScrollPosition(tab);
+  if (tab === "history") {
+    refreshGenerationHistoryOnHistoryTab();
+  }
 }
 
 function renderUser() {
@@ -2512,6 +2519,34 @@ async function loadGenerationHistory() {
   renderGenerationHistory();
 }
 
+async function loadLatestGenerationHistory() {
+  state.generationHistoryNeedsLatest = true;
+  state.generationHistoryFilters = createEmptyGenerationHistoryFilters();
+  await loadGenerationHistory();
+  state.generationHistoryNeedsLatest = false;
+}
+
+function refreshGenerationHistoryOnHistoryTab() {
+  if (!state.sessionToken) return;
+  const load = state.generationHistoryNeedsLatest ? loadLatestGenerationHistory : loadGenerationHistory;
+  load().catch((error) => alert(`加载历史失败：${error.message}`));
+}
+
+function markGenerationHistoryNeedsLatest() {
+  state.generationHistoryNeedsLatest = true;
+}
+
+async function refreshGenerationHistoryAfterGeneration() {
+  markGenerationHistoryNeedsLatest();
+  if (state.currentTab === "history") {
+    await loadLatestGenerationHistory();
+    return;
+  }
+  state.generationHistoryFilters = createEmptyGenerationHistoryFilters();
+  await loadGenerationHistory();
+  state.generationHistoryNeedsLatest = false;
+}
+
 function normalizeHistoryText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -3032,7 +3067,7 @@ function bindImageEditActions(root) {
         form.querySelector("[data-edit-prompt]").value = "";
         if (status) status.textContent = "改图完成，可继续追加提示词。";
         if (form.dataset.editGenerationId) {
-          await loadGenerationHistory();
+          await refreshGenerationHistoryAfterGeneration();
           openHistoryGeneration(Number(form.dataset.editGenerationId), Number(form.dataset.editSlideIndex || 0));
         }
       } catch (error) {
@@ -3079,7 +3114,7 @@ async function generateImageConcept(ideaIndex) {
     });
     imageResult.innerHTML = `<div class="image-meta-card"><h3>AI 正在生成朋友圈图...</h3><div class="idea-copy">图片任务已提交，正在等待外部服务返回结果。这一步通常需要几十秒。</div></div>`;
     const imageConcept = await pollImageJob(job.jobId);
-    await loadGenerationHistory();
+    await refreshGenerationHistoryAfterGeneration();
     removePendingImageTask(pendingTaskId);
     const generatedImageUrl = imageConcept.imageUrl || imageConcept.previewUrl;
     imageResult.innerHTML = `
@@ -3166,7 +3201,7 @@ async function generateWechatLongImage(ideaIndex) {
     const imageConcept = await pollImageJob(result.jobId);
     pack.previewUrl = imageConcept.imageUrl || imageConcept.previewUrl;
     pack.imageUrl = imageConcept.imageUrl || imageConcept.previewUrl;
-    await loadGenerationHistory();
+    await refreshGenerationHistoryAfterGeneration();
     removePendingImageTask(pendingTaskId);
     imageResult.innerHTML = `
       <div class="asset-header-card">
@@ -3383,6 +3418,8 @@ async function generateXhsCarousel(ideaIndex) {
       });
       updateCurrentUser(completeResult.user);
       if (completeResult.generation && !state.generationHistory.some((item) => item.id === completeResult.generation.id)) {
+        state.generationHistoryFilters = createEmptyGenerationHistoryFilters();
+        state.generationHistoryNeedsLatest = false;
         state.generationHistory.unshift(completeResult.generation);
         renderGenerationHistory();
       }
@@ -3655,7 +3692,7 @@ async function generateStyleImage(ideaIndex) {
     });
     imageResult.innerHTML = `<div class="image-meta-card"><h3>AI 正在生成风格化图...</h3><div class="idea-copy">图片任务已提交，正在等待外部服务返回结果。</div></div>`;
     const imageConcept = await pollImageJob(result.jobId);
-    await loadGenerationHistory();
+    await refreshGenerationHistoryAfterGeneration();
     removePendingImageTask(pendingTaskId);
     const generatedImageUrl = imageConcept.imageUrl || imageConcept.previewUrl;
     imageResult.innerHTML = `
