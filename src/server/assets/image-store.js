@@ -3,7 +3,12 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { DATA_DIR } = require("../config");
 const { signAssetUrl, verifySignedAssetRequest, signLocalAssetUrls } = require("./signed-urls");
-const { randomId, sanitizeGeneration: baseSanitizeGeneration, sanitizeBrand: baseSanitizeBrand } = require("../utils");
+const {
+  randomId,
+  sanitizeGeneration: baseSanitizeGeneration,
+  sanitizeBrand: baseSanitizeBrand,
+  sanitizeBrandSummary: baseSanitizeBrandSummary,
+} = require("../utils");
 const { notFound } = require("../api/http-utils");
 
 const MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -462,6 +467,17 @@ function sanitizeBrand(brand, appConfig) {
   return sanitized;
 }
 
+function sanitizeBrandSummary(brand, appConfig) {
+  const sanitized = baseSanitizeBrandSummary(brand);
+  if (sanitized.logo?.url) {
+    sanitized.logo = {
+      ...sanitized.logo,
+      url: signAssetUrl(appConfig, sanitized.logo.url),
+    };
+  }
+  return sanitized;
+}
+
 function buildProductImageView(image, appConfig) {
   return {
     id: image.id,
@@ -513,6 +529,7 @@ module.exports = {
   selectGeneratedImageAsset,
   sanitizeGeneration,
   sanitizeBrand,
+  sanitizeBrandSummary,
   buildProductImageView,
   verifySignedAssetRequest,
   sortProductImages,

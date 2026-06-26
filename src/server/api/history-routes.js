@@ -1,6 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
-const { listBrandsByOwner } = require("../db/repositories/brand-repository");
+const { listBrandsByOwner, listBrandSummariesByOwner } = require("../db/repositories/brand-repository");
 const {
   listGenerationsByOwner,
   searchGenerations,
@@ -88,6 +88,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   const {
     appConfig,
     sanitizeBrand,
+    sanitizeBrandSummary,
     sanitizeGeneration,
     removeGenerationLocalFiles,
     cleanupEmptyGeneratedImageDirs,
@@ -104,8 +105,12 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/brands") {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const summaryOnly = ["1", "true"].includes(String(url.searchParams.get("summary") || "").toLowerCase());
     json(res, 200, {
-      brands: listBrandsByOwner(user.id).map((brand) => sanitizeBrand(brand, appConfig)),
+      brands: summaryOnly
+        ? listBrandSummariesByOwner(user.id).map((brand) => sanitizeBrandSummary(brand, appConfig))
+        : listBrandsByOwner(user.id).map((brand) => sanitizeBrand(brand, appConfig)),
     });
     return true;
   }

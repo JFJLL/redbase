@@ -6,6 +6,7 @@ process.env.REDBASE_DB_FILE = ":memory:";
 const { openDatabase } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
 const { insertUser, insertSession } = require("../../src/server/db/repositories/auth-repository");
+const { insertBrand, upsertBrandFull } = require("../../src/server/db/repositories/brand-repository");
 const { upsertGeneration, findGenerationById } = require("../../src/server/db/repositories/generation-repository");
 const { cleanupExpiredGenerationHistory, handleHistoryRoutes } = require("../../src/server/api/history-routes");
 
@@ -23,6 +24,74 @@ insertUser({
   createdAt: "2026-05-02T00:00:00.000Z",
 });
 insertSession({ token: "route-token", userId: 1, createdAt: "2026-05-02T00:00:00.000Z" });
+
+insertBrand({
+  id: 10,
+  ownerUserId: 1,
+  name: "Route Brand",
+  industry: "母婴",
+  audience: "新手妈妈",
+  description: "用于接口测试的品牌",
+  product: "完整产品介绍不应出现在 summary",
+  goal: "完整运营目标不应出现在 summary",
+  knowledgeBase: "完整品牌资料库不应出现在 summary",
+  logo: {
+    originalName: "logo.png",
+    storedPath: "uploads/brand-logos/users/1/route/logo.png",
+    mimeType: "image/png",
+    sizeBytes: 1200,
+    createdAt: "2026-05-02T00:00:00.000Z",
+  },
+  assetTags: ["母婴", "内容运营"],
+});
+upsertBrandFull({
+  id: 10,
+  ownerUserId: 1,
+  name: "Route Brand",
+  industry: "母婴",
+  audience: "新手妈妈",
+  description: "用于接口测试的品牌",
+  product: "完整产品介绍不应出现在 summary",
+  goal: "完整运营目标不应出现在 summary",
+  knowledgeBase: "完整品牌资料库不应出现在 summary",
+  logo: {
+    originalName: "logo.png",
+    storedPath: "uploads/brand-logos/users/1/route/logo.png",
+    mimeType: "image/png",
+    sizeBytes: 1200,
+    createdAt: "2026-05-02T00:00:00.000Z",
+  },
+  assetTags: ["母婴", "内容运营"],
+  analyses: [
+    {
+      id: 9001,
+      name: "历史分析",
+      timestamp: "2026-05-02T00:00:00.000Z",
+      brandBrief: {},
+      trendSnapshot: [],
+    },
+  ],
+  trends: [
+    {
+      key: "global",
+      title: "全网热点指数",
+      description: "测试维度",
+      items: [
+        {
+          id: 100,
+          stableKey: "route-trend",
+          rank: 1,
+          title: "测试趋势",
+          category: "测试",
+          summary: "测试摘要",
+          score: 90,
+          reason: "测试原因",
+          ideas: [],
+        },
+      ],
+    },
+  ],
+});
 
 function seedGeneration(input) {
   upsertGeneration({
@@ -100,6 +169,30 @@ test("GET /api/history rejects unauthenticated requests", async () => {
   const handled = await handleHistoryRoutes(context, createReq("/api/history"), res, "/api/history");
   assert.equal(handled, true);
   assert.equal(res.statusCode, 401);
+});
+
+test("GET /api/brands summary returns lightweight signed brand records", async () => {
+  const res = createRes();
+  const handled = await handleHistoryRoutes(
+    context,
+    createReq("/api/brands?summary=1", "redbase_session=route-token"),
+    res,
+    "/api/brands",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.brands.length, 1);
+  const brand = res.body.brands[0];
+  assert.equal(brand.id, 10);
+  assert.equal(brand.name, "Route Brand");
+  assert.equal(brand.trendCount, 1);
+  assert.equal(brand.analysisCount, 1);
+  assert.equal(brand.logo.url.includes("assetSignature="), true);
+  assert.equal("knowledgeBase" in brand, false);
+  assert.equal("product" in brand, false);
+  assert.equal("goal" in brand, false);
+  assert.equal("trends" in brand, false);
+  assert.equal("analyses" in brand, false);
 });
 
 test("GET /api/history returns unfiltered history for authenticated user", async () => {

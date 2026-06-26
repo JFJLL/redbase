@@ -32,6 +32,7 @@ let feishuLoginApps = [];
 let historyImageSignatureRefreshInFlight = null;
 const dashboardScrollPositions = new Map();
 const retriedHistoryImagePaths = new Set();
+const brandDetailRequests = new Map();
 
 const HISTORY_TYPE_LABELS = new Map([
   ["moments", "朋友圈图文"],
@@ -635,7 +636,7 @@ function bindBrandModal() {
       if (editingBrandId) {
         replaceBrand(result.brand);
       } else {
-        state.brands.unshift(result.brand);
+        replaceBrand(result.brand);
         state.selectedBrandId = result.brand.id;
         state.selectedTrendId = null;
       }
@@ -1005,10 +1006,9 @@ function bindXhsCategorySelector() {
 
 function bindAnalysisButton() {
   document.getElementById("runTrendAnalysis").addEventListener("click", async () => {
-    const brand = getSelectedBrand();
-    if (!brand) return;
-
     try {
+      const brand = await ensureBrandDetailLoaded();
+      if (!brand) return;
       setBusy(true);
       const bucketKey = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE;
       const result = await request(`/api/brands/${brand.id}/analyses`, {
@@ -1109,10 +1109,12 @@ function bindLogout() {
     }
     clearSession();
     state.brands = [];
-      state.generationHistory = [];
-      state.productImageLibrary = [];
-      state.productImages = {};
-      state.selectedBrandId = null;
+    state.brandDetailLoadingId = null;
+    brandDetailRequests.clear();
+    state.generationHistory = [];
+    state.productImageLibrary = [];
+    state.productImages = {};
+    state.selectedBrandId = null;
     state.selectedTrendId = null;
     renderAll();
     switchPage("landing");
@@ -1182,10 +1184,16 @@ function renderTrendAnalysisButton() {
   const button = document.getElementById("runTrendAnalysis");
   if (button) {
     const label = getSelectedTrendBucketLabel();
-    button.disabled = state.loading;
-    button.innerHTML = state.loading
-      ? `<span>${escapeHtml(label)}生成中...</span>`
-      : `<span>生成${escapeHtml(label)}</span><small>消耗 1 积分</small>`;
+    const brand = getSelectedBrand();
+    const waitingForBrand = Boolean(brand && !isBrandDetailLoaded(brand));
+    button.disabled = state.loading || waitingForBrand;
+    if (waitingForBrand) {
+      button.innerHTML = `<span>加载品牌详情中...</span><small>稍后可生成</small>`;
+    } else if (state.loading) {
+      button.innerHTML = `<span>${escapeHtml(label)}生成中...</span>`;
+    } else {
+      button.innerHTML = `<span>生成${escapeHtml(label)}</span><small>消耗 1 积分</small>`;
+    }
   }
 }
 
@@ -1193,28 +1201,29 @@ async function loadBrands() {
   if (!state.sessionToken) return;
   try {
     setBusy(true);
+    brandDetailRequests.clear();
+    state.brandDetailLoadingId = null;
     const [brandResult, historyResult, productImageResult] = await Promise.all([
-      request("/api/brands"),
+      request("/api/brands?summary=1"),
       request("/api/history"),
       request("/api/product-images"),
     ]);
-    state.brands = brandResult.brands;
+    state.brands = (brandResult.brands || []).map(markBrandSummary);
     state.generationHistory = historyResult.generations;
     state.productImageLibrary = productImageResult.images || [];
     if (state.brands.length) {
       if (!state.brands.some((brand) => brand.id === state.selectedBrandId)) {
         state.selectedBrandId = state.brands[0].id;
       }
-      const currentBrand = getSelectedBrand();
-      if (!getTrendBucketsForBrand(currentBrand).some((bucket) => bucket.key === state.selectedTrendMode)) {
-        state.selectedTrendMode = firstTrendBucket(currentBrand)?.key ?? DEFAULT_TREND_MODE;
-      }
-      state.selectedTrendId = getCurrentTrendBucket(currentBrand)?.items?.[0]?.id ?? null;
+      state.selectedTrendId = null;
     } else {
       state.selectedBrandId = null;
       state.selectedTrendId = null;
     }
     renderAll();
+    ensureBrandDetailLoaded(state.selectedBrandId).catch((error) => {
+      showToast(`品牌详情加载失败：${error.message}`, 8000);
+    });
     loadXhsCategories();
   } catch (error) {
     throw new Error(`加载失败：${error.message}`);
@@ -1236,6 +1245,88 @@ async function loadXhsCategories() {
   renderXhsCategorySelector();
 }
 
+function markBrandSummary(brand) {
+  return {
+    ...brand,
+    knowledgeBase: "",
+    trends: [],
+    analyses: [],
+    _detailLoaded: false,
+  };
+}
+
+function countBrandTrends(brand) {
+  return getTrendBucketsForBrand(brand).reduce((sum, bucket) => sum + (bucket.items?.length || 0), 0);
+}
+
+function markBrandDetail(brand, previous = {}) {
+  const next = {
+    ...previous,
+    ...brand,
+    _detailLoaded: true,
+  };
+  next.trends = Array.isArray(next.trends) ? next.trends : [];
+  next.analyses = Array.isArray(next.analyses) ? next.analyses : [];
+  next.trendCount = countBrandTrends(next);
+  next.analysisCount = next.analyses.length;
+  return next;
+}
+
+function isBrandDetailLoaded(brand) {
+  return Boolean(brand?._detailLoaded);
+}
+
+function syncSelectedTrendSelection(brand = getSelectedBrand()) {
+  if (!brand || !isBrandDetailLoaded(brand)) {
+    state.selectedTrendId = null;
+    return;
+  }
+  if (!getTrendBucketsForBrand(brand).some((bucket) => bucket.key === state.selectedTrendMode)) {
+    state.selectedTrendMode = firstTrendBucket(brand)?.key ?? DEFAULT_TREND_MODE;
+  }
+  const currentBucket = getCurrentTrendBucket(brand);
+  if (!currentBucket?.items?.some((trend) => Number(trend.id) === Number(state.selectedTrendId))) {
+    state.selectedTrendId = currentBucket?.items?.[0]?.id ?? null;
+  }
+}
+
+async function ensureBrandDetailLoaded(brandId = state.selectedBrandId) {
+  const id = Number(brandId || 0);
+  if (!id || !state.sessionToken) return null;
+  const current = state.brands.find((brand) => Number(brand.id) === id);
+  if (isBrandDetailLoaded(current)) return current;
+
+  if (Number(state.selectedBrandId) === id) {
+    state.brandDetailLoadingId = id;
+    renderAll();
+  }
+
+  if (!brandDetailRequests.has(id)) {
+    const detailRequest = request(`/api/brands/${id}`)
+      .then((result) => {
+        if (!state.brands.some((brand) => Number(brand.id) === id)) return null;
+        replaceBrand(result.brand);
+        const nextBrand = state.brands.find((brand) => Number(brand.id) === id) || null;
+        if (Number(state.selectedBrandId) === id) {
+          syncSelectedTrendSelection(nextBrand);
+        }
+        return nextBrand;
+      })
+      .finally(() => {
+        brandDetailRequests.delete(id);
+        if (Number(state.brandDetailLoadingId) === id) {
+          state.brandDetailLoadingId = null;
+        }
+        if (Number(state.selectedBrandId) === id) {
+          renderAll();
+        }
+      });
+    brandDetailRequests.set(id, detailRequest);
+  }
+
+  return brandDetailRequests.get(id);
+}
+
 function applyXhsCategoryResult(result) {
   if (result?.error) {
     state.xhsCategories = [];
@@ -1255,7 +1346,11 @@ function applyXhsCategoryResult(result) {
 }
 
 function replaceBrand(nextBrand) {
-  state.brands = state.brands.map((brand) => (brand.id === nextBrand.id ? nextBrand : brand));
+  const previous = state.brands.find((brand) => Number(brand.id) === Number(nextBrand.id)) || {};
+  const normalized = markBrandDetail(nextBrand, previous);
+  state.brands = state.brands.some((brand) => Number(brand.id) === Number(nextBrand.id))
+    ? state.brands.map((brand) => (Number(brand.id) === Number(nextBrand.id) ? normalized : brand))
+    : [normalized, ...state.brands];
 }
 
 async function deleteBrand(brandId) {
@@ -1319,7 +1414,7 @@ function replaceTrend(brandId, nextTrend) {
     if (brand.id !== brandId) return brand;
     return {
       ...brand,
-      trends: brand.trends.map((bucket) => ({
+      trends: (brand.trends || []).map((bucket) => ({
         ...bucket,
         items: bucket.items.map((trend) => (trend.id === nextTrend.id ? nextTrend : trend)),
       })),
@@ -1639,6 +1734,7 @@ function renderBrands() {
                 <strong>目标受众：</strong>${escapeHtml(brand.audience)}<br /><br />
                 ${escapeHtml(brand.description)}
               </div>
+              <div class="panel-subtitle">趋势 ${Number(brand.trendCount || 0)} 条 · 分析 ${Number(brand.analysisCount || 0)} 次</div>
               ${
                 brand.knowledgeBase
                   ? `
@@ -1661,10 +1757,10 @@ function renderBrands() {
     )
     .join("");
 
-  root.onclick = (event) => {
+  root.onclick = async (event) => {
     const editButton = event.target.closest("[data-brand-edit]");
     if (editButton && root.contains(editButton)) {
-      const brand = state.brands.find((item) => item.id === Number(editButton.dataset.brandEdit));
+      const brand = await ensureBrandDetailLoaded(Number(editButton.dataset.brandEdit));
       if (brand) openBrandEditor(brand);
       return;
     }
@@ -1681,10 +1777,12 @@ function renderBrands() {
     const selectedBrandId = Number(button.dataset.brandId);
     const nextTab = button.dataset.brandAction || "brands";
     state.selectedBrandId = selectedBrandId;
-    state.selectedTrendMode = firstTrendBucket(getSelectedBrand())?.key ?? DEFAULT_TREND_MODE;
-    state.selectedTrendId = firstTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
+    syncSelectedTrendSelection(getSelectedBrand());
     switchTab(nextTab);
     renderAll();
+    ensureBrandDetailLoaded(selectedBrandId).catch((error) => {
+      showToast(`品牌详情加载失败：${error.message}`, 8000);
+    });
   };
 }
 
@@ -1703,9 +1801,11 @@ function renderBrandChips() {
   root.querySelectorAll("[data-chip-brand]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedBrandId = Number(button.dataset.chipBrand);
-      state.selectedTrendMode = firstTrendBucket(getSelectedBrand())?.key ?? DEFAULT_TREND_MODE;
-      state.selectedTrendId = firstTrendBucket(getSelectedBrand())?.items?.[0]?.id ?? null;
+      syncSelectedTrendSelection(getSelectedBrand());
       renderAll();
+      ensureBrandDetailLoaded(state.selectedBrandId).catch((error) => {
+        showToast(`品牌详情加载失败：${error.message}`, 8000);
+      });
     });
   });
 }
@@ -1743,6 +1843,11 @@ function renderHistory() {
 
   if (!brand) {
     root.innerHTML = `<p class="analysis-tip">当前账号还没有任何品牌分析记录。</p>`;
+    return;
+  }
+
+  if (!isBrandDetailLoaded(brand)) {
+    root.innerHTML = `<p class="analysis-tip">正在加载 ${escapeHtml(brand.name)} 的分析记录...</p>`;
     return;
   }
 
@@ -1789,6 +1894,11 @@ function renderAnalysisSummary() {
     return;
   }
 
+  if (!isBrandDetailLoaded(brand)) {
+    root.textContent = `正在加载 ${brand.name} 的完整品牌详情和趋势记录。`;
+    return;
+  }
+
   if (!brand.trends.length) {
     root.textContent = `已为 ${brand.name} 建立品牌档案。请选择一个热点维度，点击左侧按钮只生成该维度的 10 条趋势和 20 个完整选题。`;
     return;
@@ -1808,6 +1918,20 @@ function renderTrends() {
   const root = document.getElementById("trendList");
   const brand = getSelectedBrand();
   const bucket = getCurrentTrendBucket(brand);
+
+  if (brand && !isBrandDetailLoaded(brand)) {
+    const fallbackBucket = getDefaultTrendBucket(state.selectedTrendMode) || DEFAULT_TREND_BUCKETS[0];
+    root.innerHTML = `
+      <article class="trend-card">
+        <div>
+          <h3>${escapeHtml(fallbackBucket.title)}</h3>
+          <p>${escapeHtml(fallbackBucket.description)}</p>
+          <p class="analysis-tip">正在加载 ${escapeHtml(brand.name)} 的趋势和选题记录...</p>
+        </div>
+      </article>
+    `;
+    return;
+  }
 
   if (!brand || !bucket || !bucket.items?.length) {
     const fallbackBucket = getDefaultTrendBucket(state.selectedTrendMode) || DEFAULT_TREND_BUCKETS[0];
@@ -1876,6 +2000,14 @@ function renderIdeas() {
     context.innerHTML = `<div class="idea-copy">先新增品牌，再开始生成内容选题。</div>`;
     promptInput.value = "";
     promptMeta.textContent = "当前使用默认系统提示词生成。";
+    root.innerHTML = "";
+    return;
+  }
+
+  if (!isBrandDetailLoaded(brand)) {
+    context.innerHTML = `<div class="idea-copy">正在加载 ${escapeHtml(brand.name)} 的完整品牌详情和选题记录...</div>`;
+    promptInput.value = "";
+    promptMeta.textContent = "品牌详情加载完成后可继续生成内容。";
     root.innerHTML = "";
     return;
   }

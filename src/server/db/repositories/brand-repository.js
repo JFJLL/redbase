@@ -25,6 +25,51 @@ function listBrandsByOwner(ownerUserId) {
   );
 }
 
+function listBrandSummariesByOwner(ownerUserId) {
+  return db.prepare(
+    `SELECT
+       b.id,
+       b.owner_user_id,
+       b.name,
+       b.industry,
+       b.audience,
+       b.description,
+       b.logo_json,
+       b.asset_tags_json,
+       (
+         SELECT COUNT(*)
+         FROM trends t
+         WHERE t.brand_id = b.id AND t.scope = 'current'
+       ) AS trend_count,
+       (
+         SELECT COUNT(*)
+         FROM analyses a
+         WHERE a.brand_id = b.id
+       ) AS analysis_count
+     FROM brands b
+     WHERE b.owner_user_id = ?
+     ORDER BY b.id DESC`,
+  )
+    .all(Number(ownerUserId))
+    .map((row) => ({
+      ...mapBrandRow({
+        id: row.id,
+        owner_user_id: row.owner_user_id,
+        name: row.name,
+        industry: row.industry,
+        audience: row.audience,
+        description: row.description,
+        product: "",
+        goal: "",
+        knowledge_base: "",
+        logo_json: row.logo_json,
+        asset_tags_json: row.asset_tags_json,
+      }),
+      trendCount: Number(row.trend_count || 0),
+      analysisCount: Number(row.analysis_count || 0),
+    }));
+}
+
 function listAllBrands() {
   return getBrandsBySql(`
     SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
@@ -271,6 +316,7 @@ function allocateAnalysisAndTrendBase() {
 
 module.exports = {
   listBrandsByOwner,
+  listBrandSummariesByOwner,
   listAllBrands,
   findBrandByOwner,
   findBrandById,

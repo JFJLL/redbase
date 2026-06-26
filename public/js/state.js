@@ -15,6 +15,7 @@ export const state = {
   selectedBrandId: null,
   selectedTrendId: null,
   selectedTrendMode: DEFAULT_TREND_MODE,
+  brandDetailLoadingId: null,
   xhsCategoryPath: "",
   xhsCategories: [],
   xhsCategoryStatus: "idle",

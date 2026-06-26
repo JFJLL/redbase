@@ -199,6 +199,30 @@ function sanitizeBrand(brand) {
   };
 }
 
+function sanitizeBrandSummary(brand) {
+  return {
+    id: brand.id,
+    ownerUserId: brand.ownerUserId,
+    name: brand.name,
+    industry: brand.industry,
+    audience: brand.audience,
+    description: brand.description,
+    logo: brand.logo
+      ? {
+          originalName: brand.logo.originalName || "brand-logo",
+          url: `/api/brands/${brand.id}/logo/file`,
+          mimeType: brand.logo.mimeType || "",
+          sizeBytes: Number(brand.logo.sizeBytes || 0),
+          createdAt: brand.logo.createdAt || "",
+          updatedAt: brand.logo.updatedAt || "",
+        }
+      : null,
+    assetTags: Array.isArray(brand.assetTags) ? brand.assetTags : [],
+    trendCount: Number(brand.trendCount || 0),
+    analysisCount: Number(brand.analysisCount || 0),
+  };
+}
+
 function createBrandAssetTags(payload) {
   const tags = [];
   if (payload.industry) tags.push(String(payload.industry).trim());
@@ -436,6 +460,7 @@ module.exports = {
   sanitizeGeneration,
   sanitizeUser,
   sanitizeBrand,
+  sanitizeBrandSummary,
   createBrandAssetTags,
   parseJsonFromModelText,
   sleep,
