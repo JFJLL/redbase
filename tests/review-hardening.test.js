@@ -2,7 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { buildSessionCookie } = require("../src/server/auth/cookies");
-const { signAssetUrl, verifySignedAssetRequest } = require("../src/server/assets/signed-urls");
+const { signAssetUrl, signLocalAssetUrls, verifySignedAssetRequest } = require("../src/server/assets/signed-urls");
+const { buildImageJobResponse } = require("../src/server/ai/image-jobs");
 const { DEFAULT_APP_CONFIG, loadAppConfig } = require("../src/server/config");
 const helpers = require("../src/server/api/helpers");
 const { isAdminUser, findTrendItem, isRenderableGeneration } = helpers;
@@ -116,6 +117,39 @@ test("signed asset URLs verify, reject tampering, and reject expiry", () => {
 
   const expired = signAssetUrl(appConfig, "/api/product-images/7/file", { ttlMs: -1 });
   assert.equal(verifySignedAssetRequest(appConfig, { url: expired, headers: { host: "localhost" } }), false);
+});
+
+test("signed asset URLs are stable within the same cache window", () => {
+  const appConfig = { security: { assetSigningSecret: "test-secret" } };
+  const windowStart = Math.floor(Date.now() / 60_000) * 60_000;
+  const first = signAssetUrl(appConfig, "/api/generated-images/12/file", { ttlMs: 60_000, nowMs: windowStart + 1_000 });
+  const second = signAssetUrl(appConfig, "/api/generated-images/12/file", { ttlMs: 60_000, nowMs: windowStart + 59_000 });
+  const nextWindow = signAssetUrl(appConfig, "/api/generated-images/12/file", { ttlMs: 60_000, nowMs: windowStart + 61_000 });
+
+  assert.equal(first, second);
+  assert.notEqual(first, nextWindow);
+  assert.equal(verifySignedAssetRequest(appConfig, { url: first, headers: { host: "localhost" } }), true);
+});
+
+test("completed image job responses sign local generated image URLs", () => {
+  const appConfig = { security: { assetSigningSecret: "test-secret" } };
+  const response = signLocalAssetUrls(
+    buildImageJobResponse({
+      id: "job-1",
+      status: "completed",
+      createdAt: Date.now(),
+      provider: "wavespeed",
+      model: "gpt-image-2",
+      metadata: { title: "Generated image" },
+      imageUrl: "/api/generated-images/42/file",
+      error: "",
+    }),
+    appConfig,
+  );
+
+  assert.match(response.imageConcept.imageUrl, /assetExpires=/);
+  assert.match(response.imageConcept.previewUrl, /assetSignature=/);
+  assert.equal(verifySignedAssetRequest(appConfig, { url: response.imageConcept.imageUrl, headers: { host: "localhost" } }), true);
 });
 
 test("repository row mappers centralize snake case to camel case conversion", () => {

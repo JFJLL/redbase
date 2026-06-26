@@ -32,10 +32,19 @@ function signCanonicalValue(appConfig, canonicalValue, expiresAt) {
     .digest("base64url");
 }
 
+function getStableAssetExpiry(options = {}) {
+  const ttlMs = Number(options.ttlMs ?? DEFAULT_ASSET_URL_TTL_MS);
+  const nowMs = Number(options.nowMs ?? Date.now());
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0 || options.stable === false) {
+    return nowMs + ttlMs;
+  }
+  return Math.floor(nowMs / ttlMs) * ttlMs + ttlMs * 2;
+}
+
 function signAssetUrl(appConfig, value, options = {}) {
   const text = String(value || "");
   if (!isSignableAssetUrl(text)) return text;
-  const expiresAt = Date.now() + Number(options.ttlMs || DEFAULT_ASSET_URL_TTL_MS);
+  const expiresAt = getStableAssetExpiry(options);
   const canonicalValue = canonicalizeAssetUrl(text);
   const signature = signCanonicalValue(appConfig, canonicalValue, expiresAt);
   const parsed = new URL(text, "http://redbase.local");
@@ -71,4 +80,5 @@ module.exports = {
   signAssetUrl,
   verifySignedAssetRequest,
   signLocalAssetUrls,
+  getStableAssetExpiry,
 };

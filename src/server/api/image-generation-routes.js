@@ -1,5 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
+const { signLocalAssetUrls } = require("../assets/signed-urls");
 const { allocateCounter } = require("../db/repositories/core-repository");
 const { findUserById, updateUserCredits } = require("../db/repositories/auth-repository");
 const {
@@ -117,6 +118,10 @@ function normalizeCarouselGroupId(value) {
 
 function isGeneratedCarouselSlide(slide) {
   return Boolean(String(slide?.imageUrl || slide?.previewUrl || "").trim());
+}
+
+function buildSignedImageJobResponse(appConfig, buildImageJobResponse, job) {
+  return signLocalAssetUrls(buildImageJobResponse(job), appConfig);
 }
 
 function normalizeCarouselSlideIndex(slide, fallbackIndex = 0) {
@@ -470,7 +475,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       creditEventId: creditEvent.id,
     };
     upsertImageJob(user.id, job);
-    json(res, 202, { ...buildImageJobResponse(job), user: sanitizeUser(user) });
+    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(user) });
     return true;
   }
 
@@ -553,7 +558,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         }
       }
     }
-    const response = buildImageJobResponse(resolved);
+    const response = buildSignedImageJobResponse(appConfig, buildImageJobResponse, resolved);
     if (resolved.status === "failed" && responseUser?.id === user.id) {
       response.user = sanitizeUser(responseUser);
     }
@@ -635,7 +640,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
     };
     upsertImageJob(user.id, job);
-    json(res, 202, { ...buildImageJobResponse(job), user: sanitizeUser(user) });
+    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(user) });
     return true;
   }
 
@@ -1191,7 +1196,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       creditEventId: creditEvent.id,
     };
     upsertImageJob(user.id, job);
-    json(res, 202, { ...buildImageJobResponse(job), user: sanitizeUser(user) });
+    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(user) });
     return true;
   }
 

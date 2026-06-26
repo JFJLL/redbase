@@ -29,7 +29,9 @@ let openBrandEditor = () => {};
 let pendingBrandDeleteId = null;
 let historyFilterTimer = null;
 let feishuLoginApps = [];
+let historyImageSignatureRefreshInFlight = null;
 const dashboardScrollPositions = new Map();
+const retriedHistoryImagePaths = new Set();
 
 const HISTORY_TYPE_LABELS = new Map([
   ["moments", "朋友圈图文"],
@@ -2538,12 +2540,15 @@ function renderGenerationHistory() {
               ${(payload.slides || [])
                 .slice(0, 4)
                 .filter((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))
-                .map((slide) => `<img src="${authenticatedImageSrc(slide.imageUrl || slide.previewUrl)}" alt="${escapeHtml(slide.title)}" />`)
+                .map(
+                  (slide) =>
+                    `<img src="${authenticatedImageSrc(slide.imageUrl || slide.previewUrl)}" alt="${escapeHtml(slide.title)}" loading="lazy" decoding="async" data-history-image="true" />`,
+                )
                 .join("")}
             </div>
           `
           : item.previewUrl
-            ? `<div class="history-generate-preview"><img src="${authenticatedImageSrc(item.previewUrl)}" alt="${escapeHtml(item.cardTitle)}" /></div>`
+            ? `<div class="history-generate-preview"><img src="${authenticatedImageSrc(item.previewUrl)}" alt="${escapeHtml(item.cardTitle)}" loading="lazy" decoding="async" data-history-image="true" /></div>`
             : "";
 
       return `
@@ -2578,6 +2583,34 @@ function renderGenerationHistory() {
   root.querySelectorAll("[data-delete-history-generation]").forEach((button) => {
     button.addEventListener("click", () => deleteGenerationHistoryItem(Number(button.dataset.deleteHistoryGeneration)));
   });
+  bindHistoryImageRetry(root);
+}
+
+function bindHistoryImageRetry(root) {
+  root.querySelectorAll("img[data-history-image]").forEach((image) => {
+    image.addEventListener("error", () => retryHistoryImageAfterSignatureRefresh(image), { once: true });
+  });
+}
+
+function getHistoryImageRetryPath(image) {
+  try {
+    return new URL(image.currentSrc || image.src, window.location.origin).pathname;
+  } catch (error) {
+    return image.currentSrc || image.src || "";
+  }
+}
+
+function retryHistoryImageAfterSignatureRefresh(image) {
+  const retryPath = getHistoryImageRetryPath(image);
+  if (!retryPath || retriedHistoryImagePaths.has(retryPath)) return;
+  retriedHistoryImagePaths.add(retryPath);
+  if (!historyImageSignatureRefreshInFlight) {
+    historyImageSignatureRefreshInFlight = loadGenerationHistory()
+      .catch((error) => console.warn("历史图片刷新失败", error.message))
+      .finally(() => {
+        historyImageSignatureRefreshInFlight = null;
+      });
+  }
 }
 
 function getGenerationPrimaryImageUrl(item) {

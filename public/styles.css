@@ -2503,15 +2503,15 @@ textarea {
 }
 
 .image-brand {
-  background-image: url("./assets/home-brand-archive.png");
+  background-image: url("./assets/home-brand-archive.webp");
 }
 
 .image-trend {
-  background-image: url("./assets/home-trend-insight.png");
+  background-image: url("./assets/home-trend-insight.webp");
 }
 
 .image-idea {
-  background-image: url("./assets/home-idea-generation.png");
+  background-image: url("./assets/home-idea-generation.webp");
 }
 
 .cta-panel {
