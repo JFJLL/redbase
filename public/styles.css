@@ -1439,6 +1439,39 @@ button {
   overflow-wrap: anywhere;
 }
 
+.account-business-plan {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.account-business-plan h3 {
+  margin: 0;
+  color: #1f222b;
+  font-size: 1.12rem;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+.account-business-price-grid {
+  margin-top: 0;
+}
+
+.account-business-credit-note {
+  margin: 0;
+}
+
+.account-business-contact {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: 8px;
+  background: #fff7f5;
+  color: #1f222b;
+  font-weight: 900;
+  text-align: center;
+}
+
 .brand-form {
   display: grid;
   gap: 16px;
