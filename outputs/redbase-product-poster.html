@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RedBase Product Poster</title>
+    <style>
+      :root {
+        --ink: #171820;
+        --muted: #62636d;
+        --line: rgba(201, 58, 64, 0.16);
+        --red: #d84444;
+        --red-deep: #a92530;
+        --coral: #f36a56;
+        --amber: #f5ab4b;
+        --teal: #2bbf9a;
+        --paper: #fff9f7;
+        --soft: #fff0eb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        min-height: 100%;
+        background: #ece8e3;
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, sans-serif;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+      }
+
+      .poster {
+        position: relative;
+        width: 1080px;
+        height: 1920px;
+        overflow: hidden;
+        background:
+          linear-gradient(140deg, rgba(216, 68, 68, 0.11), transparent 32%),
+          linear-gradient(210deg, rgba(43, 191, 154, 0.1), transparent 30%),
+          linear-gradient(180deg, #fffdfb 0%, #fff8f5 48%, #fff2ee 100%);
+        padding: 68px 72px;
+      }
+
+      .poster::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(216, 68, 68, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(216, 68, 68, 0.04) 1px, transparent 1px);
+        background-size: 38px 38px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 72%);
+        pointer-events: none;
+      }
+
+      .content {
+        position: relative;
+        z-index: 1;
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 38px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .brand-mark {
+        width: 78px;
+        height: 78px;
+        border-radius: 22px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(145deg, #ff7a76 0%, #d84444 56%, #7d2ee8 100%);
+        box-shadow: 0 22px 52px rgba(216, 68, 68, 0.26);
+        overflow: hidden;
+      }
+
+      .brand-mark img {
+        width: 62px;
+        height: auto;
+        display: block;
+      }
+
+      .brand-name {
+        display: grid;
+        gap: 2px;
+      }
+
+      .brand-name strong {
+        font-size: 34px;
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .brand-name span,
+      .badge {
+        color: var(--muted);
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .badge {
+        padding: 12px 18px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .hero {
+        display: grid;
+        gap: 24px;
+      }
+
+      .eyebrow {
+        width: fit-content;
+        padding: 13px 20px;
+        border-radius: 999px;
+        background: #fff;
+        border: 1px solid var(--line);
+        color: var(--red);
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 890px;
+        color: #15151d;
+        font-size: 82px;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .hero-copy {
+        margin: 0;
+        max-width: 840px;
+        color: #4f505a;
+        font-size: 30px;
+        line-height: 1.58;
+        font-weight: 600;
+      }
+
+      .hero-copy strong {
+        color: var(--red-deep);
+      }
+
+      .main {
+        display: grid;
+        grid-template-columns: 1.03fr 0.97fr;
+        gap: 28px;
+        min-height: 0;
+      }
+
+      .visual {
+        position: relative;
+        min-height: 0;
+        display: grid;
+        gap: 18px;
+        align-content: start;
+      }
+
+      .screen {
+        overflow: hidden;
+        border: 1px solid rgba(140, 62, 62, 0.14);
+        border-radius: 24px;
+        background: #fff;
+        box-shadow: 0 28px 72px rgba(98, 38, 32, 0.13);
+      }
+
+      .screen.large {
+        height: 430px;
+      }
+
+      .screen-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .screen.small {
+        height: 276px;
+      }
+
+      .screen img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+        object-position: top left;
+      }
+
+      .metric-strip {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+
+      .metric {
+        min-height: 112px;
+        padding: 18px 14px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .metric strong {
+        display: block;
+        color: var(--red);
+        font-size: 31px;
+        line-height: 1.05;
+      }
+
+      .metric span {
+        display: block;
+        margin-top: 8px;
+        color: #65626a;
+        font-size: 16px;
+        line-height: 1.35;
+        font-weight: 700;
+      }
+
+      .panel {
+        display: grid;
+        gap: 18px;
+        align-content: start;
+      }
+
+      .section-title {
+        margin: 0;
+        color: #20212a;
+        font-size: 30px;
+        line-height: 1.25;
+      }
+
+      .feature-grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .feature {
+        min-height: 128px;
+        padding: 20px 20px 18px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 16px 42px rgba(98, 38, 32, 0.07);
+      }
+
+      .feature-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 9px;
+      }
+
+      .index {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 18px;
+        font-weight: 900;
+        background: var(--red);
+      }
+
+      .feature:nth-child(2) .index {
+        background: var(--amber);
+      }
+
+      .feature:nth-child(3) .index {
+        background: var(--teal);
+      }
+
+      .feature:nth-child(4) .index {
+        background: #7d62d9;
+      }
+
+      .feature h3 {
+        margin: 0;
+        color: #20212a;
+        font-size: 24px;
+        line-height: 1.25;
+      }
+
+      .feature p {
+        margin: 0;
+        color: #5d5b65;
+        font-size: 18px;
+        line-height: 1.48;
+        font-weight: 600;
+      }
+
+      .tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 4px;
+      }
+
+      .tag {
+        padding: 9px 12px;
+        border-radius: 999px;
+        background: #fff;
+        border: 1px solid var(--line);
+        color: #5b5358;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .bottom {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: end;
+        gap: 28px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(216, 68, 68, 0.18);
+      }
+
+      .claim {
+        display: grid;
+        gap: 10px;
+      }
+
+      .claim strong {
+        color: var(--red-deep);
+        font-size: 34px;
+        line-height: 1.25;
+      }
+
+      .claim span {
+        color: #5d5b65;
+        font-size: 21px;
+        line-height: 1.45;
+        font-weight: 700;
+      }
+
+      .cta {
+        min-width: 278px;
+        padding: 22px 26px;
+        border-radius: 24px;
+        color: #fff;
+        background: linear-gradient(135deg, var(--red) 0%, var(--coral) 100%);
+        box-shadow: 0 20px 44px rgba(216, 68, 68, 0.24);
+        text-align: center;
+      }
+
+      .cta strong {
+        display: block;
+        font-size: 26px;
+        line-height: 1.2;
+      }
+
+      .cta span {
+        display: block;
+        margin-top: 7px;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 16px;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <article class="poster" aria-label="RedBase 产品宣传海报">
+      <div class="content">
+        <header class="topbar">
+          <div class="brand">
+            <div class="brand-mark">
+              <img src="../public/assets/redbase-logo.png" alt="" />
+            </div>
+            <div class="brand-name">
+              <strong>RedBase</strong>
+              <span>小红书内容运营工具</span>
+            </div>
+          </div>
+          <div class="badge">AI 内容增长中台</div>
+        </header>
+
+        <section class="hero">
+          <div class="eyebrow">AI 驱动 · 热点洞察 · 内容生成</div>
+          <h1>让品牌精准踩中每一个热点</h1>
+          <p class="hero-copy">
+            上传品牌档案，RedBase 自动分析小红书与全网热点，筛选真正适合品牌借势的趋势，并生成可直接执行的
+            <strong>内容选题、文案资产和视觉方案</strong>。
+          </p>
+        </section>
+
+        <main class="main">
+          <section class="visual">
+            <div class="screen large">
+              <img src="../public/assets/home-trend-insight.png" alt="RedBase 热点洞察界面" />
+            </div>
+            <div class="screen-row">
+              <div class="screen small">
+                <img src="../public/assets/home-brand-archive.png" alt="RedBase 品牌档案界面" />
+              </div>
+              <div class="screen small">
+                <img src="../public/assets/home-idea-generation.png" alt="RedBase 选题生成界面" />
+              </div>
+            </div>
+            <div class="metric-strip">
+              <div class="metric">
+                <strong>6 类</strong>
+                <span>热点维度覆盖</span>
+              </div>
+              <div class="metric">
+                <strong>10 条</strong>
+                <span>趋势方向输出</span>
+              </div>
+              <div class="metric">
+                <strong>20 个</strong>
+                <span>品牌选题生成</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2 class="section-title">核心优势与功能</h2>
+            <div class="feature-grid">
+              <article class="feature">
+                <div class="feature-head">
+                  <span class="index">1</span>
+                  <h3>品牌资产驱动</h3>
+                </div>
+                <p>录入品牌介绍、产品信息、目标受众和资料库，让每次分析都围绕品牌本身，而不是生成通用内容。</p>
+              </article>
+
+              <article class="feature">
+                <div class="feature-head">
+                  <span class="index">2</span>
+                  <h3>热点趋势筛选</h3>
+                </div>
+                <p>结合小红书热门内容、流量话题、新闻趋势、社会情绪、赛道机会和人群需求，判断哪些热点值得追。</p>
+              </article>
+
+              <article class="feature">
+                <div class="feature-head">
+                  <span class="index">3</span>
+                  <h3>可执行内容选题</h3>
+                </div>
+                <p>每条趋势自动生成小红书风格选题，包含标题、摘要、切入角度、开头钩子、品牌结合方式和推荐话题。</p>
+              </article>
+
+              <article class="feature">
+                <div class="feature-head">
+                  <span class="index">4</span>
+                  <h3>一键生成运营视觉</h3>
+                </div>
+                <p>基于选题生成朋友圈图、公众号长图、小红书组图和风格化海报，支持产品图、Logo 与风格参考图。</p>
+              </article>
+            </div>
+
+            <div class="tags" aria-label="功能标签">
+              <span class="tag">品牌档案</span>
+              <span class="tag">热点洞察</span>
+              <span class="tag">选题生成</span>
+              <span class="tag">小红书组图</span>
+              <span class="tag">历史沉淀</span>
+              <span class="tag">积分管理</span>
+            </div>
+          </section>
+        </main>
+
+        <footer class="bottom">
+          <div class="claim">
+            <strong>从“追热点”到“用热点做增长”</strong>
+            <span>RedBase 把品牌资产、趋势判断、内容策划和视觉生产串成一条完整工作流。</span>
+          </div>
+          <div class="cta">
+            <strong>免费注册使用</strong>
+            <span>开启品牌热点运营工作台</span>
+          </div>
+        </footer>
+      </div>
+    </article>
+  </body>
+</html>

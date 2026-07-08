@@ -11,7 +11,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/admin.css?v=20260430-generation-delete" />
+    <link rel="stylesheet" href="/admin.css?v=20260708-credit-user-search" />
   </head>
   <body>
     <section class="admin-auth" id="adminAuth">
@@ -69,13 +69,36 @@
               <h2>用户管理</h2>
               <p>查看每个用户当前额度、总消耗使用额度、生成次数，并手动加额度。</p>
             </div>
+            <div class="panel-actions">
+              <input
+                class="compact-search"
+                id="adminUserSearchInput"
+                type="search"
+                placeholder="搜索手机号或昵称"
+                autocomplete="off"
+                aria-label="搜索手机号或昵称"
+              />
+              <span class="search-result-pill" id="adminUserSearchSummary" hidden></span>
+            </div>
           </div>
 
           <form class="credit-form" id="creditForm">
-            <label>
-              <span>选择用户</span>
-              <select name="userId" id="creditUserSelect" required></select>
-            </label>
+            <div class="credit-user-field">
+              <label class="field-label" for="creditUserSearchInput">搜索用户</label>
+              <div class="user-picker" id="creditUserPicker">
+                <input
+                  id="creditUserSearchInput"
+                  type="search"
+                  placeholder="输入手机号或昵称"
+                  autocomplete="off"
+                  aria-controls="creditUserOptions"
+                  aria-expanded="false"
+                />
+                <input id="creditUserId" name="userId" type="hidden" required />
+                <div class="user-picker-options" id="creditUserOptions" hidden></div>
+                <div class="user-picker-selected" id="creditUserSelected" hidden></div>
+              </div>
+            </div>
             <label>
               <span>增加额度</span>
               <input name="amount" type="number" min="1" step="1" placeholder="例如 100" required />
@@ -168,6 +191,6 @@
       </div>
     </div>
 
-    <script src="/admin.js?v=20260430-generation-delete"></script>
+    <script src="/admin.js?v=20260708-credit-user-search"></script>
   </body>
 </html>

@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RedBase Mascot Posters</title>
+    <style>
+      :root {
+        --red: #d9342b;
+        --red-soft: #fff1ef;
+        --ink: #15161b;
+        --muted: #666a73;
+        --line: #ead8d5;
+        --paper: #fffaf8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #e7e2dd;
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        color: var(--ink);
+      }
+
+      .poster {
+        position: relative;
+        width: 1080px;
+        height: 1920px;
+        margin: 0 auto 32px;
+        overflow: hidden;
+        background: var(--paper);
+        padding: 74px 76px;
+      }
+
+      .poster::after {
+        content: "";
+        position: absolute;
+        inset: 24px;
+        border: 1px solid rgba(217, 52, 43, 0.08);
+        border-radius: 34px;
+        pointer-events: none;
+      }
+
+      .layer {
+        position: relative;
+        z-index: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .mark {
+        width: 58px;
+        height: 58px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        background: var(--red);
+        color: #fff;
+        font-size: 28px;
+        font-weight: 900;
+      }
+
+      .brand-text strong {
+        display: block;
+        font-size: 31px;
+        line-height: 1;
+      }
+
+      .brand-text span,
+      .date {
+        color: var(--muted);
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .hero {
+        margin-top: 78px;
+      }
+
+      .kicker {
+        display: inline-flex;
+        padding: 10px 16px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--red);
+        font-size: 19px;
+        font-weight: 900;
+      }
+
+      h1 {
+        margin: 30px 0 0;
+        max-width: 830px;
+        color: var(--ink);
+        font-size: 80px;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        margin: 28px 0 0;
+        max-width: 760px;
+        color: var(--muted);
+        font-size: 28px;
+        line-height: 1.58;
+        font-weight: 650;
+      }
+
+      .lead strong {
+        color: var(--red);
+      }
+
+      .screen {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: #fff;
+        box-shadow: 0 26px 64px rgba(64, 28, 24, 0.1);
+      }
+
+      .screen img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+        object-position: left top;
+      }
+
+      .mascot-window {
+        position: absolute;
+        overflow: hidden;
+        background: #fff;
+      }
+
+      .mascot-window img {
+        position: absolute;
+        width: 820px;
+        height: auto;
+      }
+
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+      }
+
+      .feature {
+        min-height: 136px;
+        padding: 20px 18px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: #fff;
+      }
+
+      .feature b {
+        display: block;
+        color: var(--ink);
+        font-size: 23px;
+        line-height: 1.24;
+      }
+
+      .feature span {
+        display: block;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.4;
+        font-weight: 650;
+      }
+
+      .footer {
+        margin-top: auto;
+        padding-top: 28px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 42px;
+      }
+
+      .footer strong {
+        display: block;
+        color: var(--red);
+        font-size: 31px;
+      }
+
+      .footer span {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.45;
+        font-weight: 700;
+      }
+
+      .button {
+        flex: 0 0 auto;
+        padding: 18px 26px;
+        border-radius: 999px;
+        background: var(--red);
+        color: #fff;
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .p1 .stage {
+        position: relative;
+        margin-top: 56px;
+        height: 780px;
+      }
+
+      .p1 .screen {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 820px;
+        height: 560px;
+      }
+
+      .p1 .mascot-window {
+        right: -18px;
+        bottom: 36px;
+        width: 360px;
+        height: 360px;
+        border-radius: 50%;
+      }
+
+      .p1 .mascot-window img {
+        left: -18px;
+        top: -820px;
+      }
+
+      .p1 .features {
+        margin-top: 6px;
+      }
+
+      .p2 .visual-grid {
+        margin-top: 52px;
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 24px;
+        align-items: stretch;
+      }
+
+      .p2 .screen {
+        height: 704px;
+      }
+
+      .p2 .side {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+
+      .p2 .mascot-window {
+        position: relative;
+        width: 100%;
+        height: 330px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+      }
+
+      .p2 .mascot-window img {
+        left: -380px;
+        top: -700px;
+      }
+
+      .p2 .feature {
+        min-height: 108px;
+      }
+
+      .p3 {
+        background: #fff;
+      }
+
+      .p3 .hero {
+        max-width: 690px;
+      }
+
+      .p3 .mascot-window {
+        top: 174px;
+        right: 42px;
+        width: 304px;
+        height: 304px;
+        border-radius: 50%;
+      }
+
+      .p3 .mascot-window img {
+        left: -486px;
+        top: -94px;
+      }
+
+      .p3 .screen {
+        margin-top: 70px;
+        height: 660px;
+      }
+
+      .p3 .features {
+        margin-top: 34px;
+      }
+
+      .p4 {
+        background: linear-gradient(180deg, #fffaf8 0%, #fff6f3 100%);
+      }
+
+      .p4 .layout {
+        margin-top: 58px;
+        display: grid;
+        grid-template-columns: 0.92fr 1.08fr;
+        gap: 28px;
+        align-items: start;
+      }
+
+      .p4 .mascot-window {
+        position: relative;
+        width: 100%;
+        height: 610px;
+        border: 1px solid var(--line);
+        border-radius: 32px;
+      }
+
+      .p4 .mascot-window img {
+        width: 930px;
+        left: -70px;
+        top: -62px;
+      }
+
+      .p4 .screen {
+        height: 610px;
+      }
+
+      .p4 .features {
+        margin-top: 38px;
+      }
+    </style>
+  </head>
+  <body>
+    <article class="poster p1" id="poster-1">
+      <div class="layer">
+        <header class="topbar">
+          <div class="brand"><div class="mark">R</div><div class="brand-text"><strong>RedBase</strong><span>AI 小红书内容运营工具</span></div></div>
+          <div class="date">品牌内容增长工作台</div>
+        </header>
+        <section class="hero">
+          <div class="kicker">真实产品界面</div>
+          <h1>让品牌精准踩中每一个热点</h1>
+          <p class="lead">用 AI 结合品牌档案和热点趋势，生成真正能落地的小红书<strong>选题、文案和视觉资产</strong>。</p>
+        </section>
+        <section class="stage">
+          <div class="screen"><img src="poster-sources/redbase-trends-real.png" alt="" /></div>
+          <div class="mascot-window"><img src="poster-sources/redbase-mascot.png" alt="" /></div>
+        </section>
+        <section class="features">
+          <div class="feature"><b>品牌档案</b><span>先理解品牌，再判断内容机会。</span></div>
+          <div class="feature"><b>热点洞察</b><span>筛出适合品牌借势的趋势。</span></div>
+          <div class="feature"><b>内容落地</b><span>生成选题、文案和视觉方向。</span></div>
+        </section>
+        <footer class="footer"><div><strong>从追热点到用热点做增长</strong><span>减少凭感觉策划，让每次内容生产都有依据。</span></div><div class="button">免费注册使用</div></footer>
+      </div>
+    </article>
+
+    <article class="poster p2" id="poster-2">
+      <div class="layer">
+        <header class="topbar">
+          <div class="brand"><div class="mark">R</div><div class="brand-text"><strong>RedBase</strong><span>一站式内容运营流程</span></div></div>
+          <div class="date">为品牌方和代运营团队设计</div>
+        </header>
+        <section class="hero">
+          <div class="kicker">功能清晰版</div>
+          <h1>把品牌信息变成可发布内容</h1>
+          <p class="lead">品牌录入、趋势分析、选题生成、历史复用，集中在一个干净的工作台。</p>
+        </section>
+        <section class="visual-grid">
+          <div class="screen"><img src="poster-sources/redbase-home-real.png" alt="" /></div>
+          <div class="side">
+            <div class="mascot-window"><img src="poster-sources/redbase-mascot.png" alt="" /></div>
+            <div class="feature"><b>01 品牌档案</b><span>沉淀定位、产品卖点、目标受众。</span></div>
+            <div class="feature"><b>02 趋势分析</b><span>输出热度、标签和适配理由。</span></div>
+            <div class="feature"><b>03 内容选题</b><span>生成可执行的小红书方向。</span></div>
+          </div>
+        </section>
+        <footer class="footer"><div><strong>更少返工，更快交付</strong><span>把分散的策划、文案、视觉资产收敛成稳定流程。</span></div><div class="button">开始体验</div></footer>
+      </div>
+    </article>
+
+    <article class="poster p3" id="poster-3">
+      <div class="layer">
+        <header class="topbar">
+          <div class="brand"><div class="mark">R</div><div class="brand-text"><strong>RedBase</strong><span>热点趋势分析</span></div></div>
+          <div class="date">AI Content Ops</div>
+        </header>
+        <div class="mascot-window"><img src="poster-sources/redbase-mascot.png" alt="" /></div>
+        <section class="hero">
+          <div class="kicker">核心优势</div>
+          <h1>别再凭感觉追热点</h1>
+          <p class="lead">RedBase 先理解品牌，再筛选热点，最后产出能执行、能复用、能交付的内容资产。</p>
+        </section>
+        <div class="screen"><img src="poster-sources/redbase-trends-real.png" alt="" /></div>
+        <section class="features">
+          <div class="feature"><b>更精准</b><span>只追适合品牌自然进入的热点。</span></div>
+          <div class="feature"><b>更高效</b><span>减少选题和制图反复返工。</span></div>
+          <div class="feature"><b>更完整</b><span>文案、视觉、历史资产一体化。</span></div>
+        </section>
+        <footer class="footer"><div><strong>适合品牌运营、内容团队、代运营机构</strong><span>让内容团队从灵感驱动升级为系统驱动。</span></div><div class="button">RedBase</div></footer>
+      </div>
+    </article>
+
+    <article class="poster p4" id="poster-4">
+      <div class="layer">
+        <header class="topbar">
+          <div class="brand"><div class="mark">R</div><div class="brand-text"><strong>RedBase</strong><span>品牌内容增长中台</span></div></div>
+          <div class="date">简洁 · 专业 · 可落地</div>
+        </header>
+        <section class="hero">
+          <div class="kicker">团队版方案</div>
+          <h1>用 AI 把热点变成内容资产</h1>
+          <p class="lead">围绕品牌资产、热点判断、选题策划和视觉生产，形成可复用的小红书运营工作流。</p>
+        </section>
+        <section class="layout">
+          <div class="mascot-window"><img src="poster-sources/redbase-mascot.png" alt="" /></div>
+          <div class="screen"><img src="poster-sources/redbase-account-real.png" alt="" /></div>
+        </section>
+        <section class="features">
+          <div class="feature"><b>定制增长方案</b><span>适合团队长期内容运营。</span></div>
+          <div class="feature"><b>专属客服支持</b><span>获取优惠价格与使用建议。</span></div>
+          <div class="feature"><b>真实产品能力</b><span>基于当前 RedBase 工作台交付。</span></div>
+        </section>
+        <footer class="footer"><div><strong>联系专属客服获取优惠价格</strong><span>让团队内容生产更稳定、更可复用。</span></div><div class="button">获取方案</div></footer>
+      </div>
+    </article>
+  </body>
+</html>

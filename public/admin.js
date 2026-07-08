@@ -5,6 +5,10 @@ const state = {
   brandUserId: "all",
   usageUserId: "all",
   generationUserId: "all",
+  userSearchQuery: "",
+  creditUserSearchQuery: "",
+  selectedCreditUserId: "",
+  creditUserPickerOpen: false,
 };
 
 function escapeHtml(value) {
@@ -92,6 +96,45 @@ function bindEvents() {
     state.generationUserId = event.target.value;
     renderGenerationList();
   });
+  document.getElementById("adminUserSearchInput").addEventListener("input", (event) => {
+    state.userSearchQuery = event.target.value;
+    renderUsers();
+  });
+  document.getElementById("creditUserSearchInput").addEventListener("input", (event) => {
+    state.creditUserSearchQuery = event.target.value;
+    state.selectedCreditUserId = "";
+    state.creditUserPickerOpen = true;
+    renderCreditUserPicker();
+  });
+  document.getElementById("creditUserSearchInput").addEventListener("focus", () => {
+    state.creditUserPickerOpen = true;
+    renderCreditUserPicker();
+  });
+  document.getElementById("creditUserSearchInput").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      state.creditUserPickerOpen = false;
+      renderCreditUserPicker();
+      return;
+    }
+    if (event.key === "Enter" && state.creditUserPickerOpen) {
+      const firstUser = getCreditUserMatches()[0];
+      if (firstUser) {
+        event.preventDefault();
+        selectCreditUser(firstUser.id);
+      }
+    }
+  });
+  document.getElementById("creditUserOptions").addEventListener("click", (event) => {
+    const option = event.target.closest("[data-credit-user-id]");
+    if (!option) return;
+    selectCreditUser(Number(option.dataset.creditUserId));
+  });
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("#creditUserPicker")) return;
+    if (!state.creditUserPickerOpen) return;
+    state.creditUserPickerOpen = false;
+    renderCreditUserPicker();
+  });
   document.getElementById("creditForm").addEventListener("submit", submitCreditForm);
   document.getElementById("adminUserRows").addEventListener("click", handleUserRowAction);
   document.getElementById("generationList").addEventListener("click", handleGenerationListAction);
@@ -174,6 +217,11 @@ async function submitCreditForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = Object.fromEntries(new FormData(form).entries());
+  if (!payload.userId) {
+    alert("请先搜索并选择要加额度的用户。");
+    document.getElementById("creditUserSearchInput").focus();
+    return;
+  }
   try {
     const result = await request(`/api/admin/users/${payload.userId}/credits`, {
       method: "POST",
@@ -184,6 +232,9 @@ async function submitCreditForm(event) {
     });
     state.overview = result.overview;
     form.reset();
+    state.selectedCreditUserId = "";
+    state.creditUserSearchQuery = "";
+    state.creditUserPickerOpen = false;
     renderAll();
   } catch (error) {
     alert(error.message);
@@ -261,15 +312,18 @@ function renderFilters() {
   document.getElementById("brandUserFilter").value = state.brandUserId;
   document.getElementById("generationUserFilter").innerHTML = options;
   document.getElementById("generationUserFilter").value = state.generationUserId;
-  document.getElementById("creditUserSelect").innerHTML = users
-    .map((user) => `<option value="${user.id}">${escapeHtml(user.name)} · ${escapeHtml(user.phone)} · 当前 ${formatNumber(user.currentCredits)} 额度</option>`)
-    .join("");
+  renderCreditUserPicker();
 }
 
 function renderUsers() {
   const users = state.overview?.users || [];
-  document.getElementById("adminUserRows").innerHTML = users.length
-    ? users
+  const visibleUsers = getVisibleUsers();
+  const summary = document.getElementById("adminUserSearchSummary");
+  const searchQuery = normalizeSearchText(state.userSearchQuery);
+  summary.hidden = !searchQuery;
+  summary.textContent = searchQuery ? `${formatNumber(visibleUsers.length)} / ${formatNumber(users.length)}` : "";
+  document.getElementById("adminUserRows").innerHTML = visibleUsers.length
+    ? visibleUsers
         .map(
           (user) => `
             <tr>
@@ -294,7 +348,7 @@ function renderUsers() {
           `,
         )
         .join("")
-    : `<tr><td colspan="9" class="muted">暂无用户。</td></tr>`;
+    : `<tr><td colspan="9" class="muted">${users.length ? "没有匹配的用户。" : "暂无用户。"}</td></tr>`;
 }
 
 function renderBrandArchiveList() {
@@ -517,6 +571,96 @@ function renderPayloadContent(item, payload) {
 function filterByUser(items, userId) {
   if (userId === "all") return items;
   return items.filter((item) => Number(item.userId || item.ownerUserId || item.user?.id) === Number(userId));
+}
+
+function renderCreditUserPicker() {
+  const input = document.getElementById("creditUserSearchInput");
+  const hiddenInput = document.getElementById("creditUserId");
+  const optionsRoot = document.getElementById("creditUserOptions");
+  const selectedRoot = document.getElementById("creditUserSelected");
+  const selectedUser = getSelectedCreditUser();
+  if (state.selectedCreditUserId && !selectedUser) {
+    state.selectedCreditUserId = "";
+    state.creditUserSearchQuery = "";
+  }
+
+  input.value = state.creditUserSearchQuery;
+  input.setAttribute("aria-expanded", state.creditUserPickerOpen ? "true" : "false");
+  hiddenInput.value = selectedUser?.id || "";
+  selectedRoot.hidden = !selectedUser;
+  selectedRoot.textContent = selectedUser
+    ? `当前 ${formatNumber(selectedUser.currentCredits)} 额度`
+    : "";
+
+  optionsRoot.hidden = !state.creditUserPickerOpen;
+  if (!state.creditUserPickerOpen) return;
+
+  const users = getCreditUserMatches();
+  optionsRoot.innerHTML = users.length
+    ? users
+        .map(
+          (user) => `
+            <button class="user-picker-option" data-credit-user-id="${user.id}" type="button">
+              <strong>${escapeHtml(user.name)}</strong>
+              <span class="muted">${escapeHtml(user.phone)} · 当前 ${formatNumber(user.currentCredits)} 额度</span>
+            </button>
+          `,
+        )
+        .join("")
+    : `<div class="muted user-picker-empty">没有匹配的用户。</div>`;
+}
+
+function getSelectedCreditUser() {
+  const userId = Number(state.selectedCreditUserId);
+  if (!userId) return null;
+  return (state.overview?.users || []).find((user) => Number(user.id) === userId) || null;
+}
+
+function selectCreditUser(userId) {
+  const user = (state.overview?.users || []).find((item) => Number(item.id) === Number(userId));
+  if (!user) return;
+  state.selectedCreditUserId = String(user.id);
+  state.creditUserSearchQuery = formatCreditUserLabel(user);
+  state.creditUserPickerOpen = false;
+  renderCreditUserPicker();
+}
+
+function getCreditUserMatches() {
+  const users = state.overview?.users || [];
+  const query = normalizeSearchText(state.creditUserSearchQuery);
+  if (!query) return users;
+  const compactQuery = compactSearchText(query);
+  return users
+    .filter((user) => {
+      const fields = [user.name, user.phone].map(normalizeSearchText);
+      const compactFields = fields.map(compactSearchText);
+      return fields.some((field) => field.includes(query)) || compactFields.some((field) => field.includes(compactQuery));
+    });
+}
+
+function formatCreditUserLabel(user) {
+  return `${user.name || "-"} · ${user.phone || ""}`;
+}
+
+function getVisibleUsers() {
+  return (state.overview?.users || []).filter(matchesUserSearch);
+}
+
+function matchesUserSearch(user) {
+  const query = normalizeSearchText(state.userSearchQuery);
+  if (!query) return true;
+  const compactQuery = compactSearchText(query);
+  const searchableFields = [user.name, user.phone].map(normalizeSearchText);
+  const compactFields = searchableFields.map(compactSearchText);
+  return searchableFields.some((field) => field.includes(query)) || compactFields.some((field) => field.includes(compactQuery));
+}
+
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function compactSearchText(value) {
+  return String(value || "").replace(/\s+/g, "");
 }
 
 function getGenerationPreview(item) {

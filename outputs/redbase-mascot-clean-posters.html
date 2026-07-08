@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RedBase Clean Mascot Posters</title>
+    <style>
+      :root {
+        --red: #db332b;
+        --ink: #14151a;
+        --muted: #626771;
+        --line: #ecd8d5;
+        --paper: #fffaf8;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: #e6e1dc;
+        font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        color: var(--ink);
+      }
+
+      .poster {
+        width: 1080px;
+        height: 1920px;
+        margin: 0 auto 32px;
+        padding: 78px;
+        background: var(--paper);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .poster::before {
+        content: "";
+        position: absolute;
+        inset: 24px;
+        border: 1px solid rgba(219, 51, 43, 0.08);
+        border-radius: 34px;
+      }
+
+      .layer {
+        position: relative;
+        z-index: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .mark {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: var(--red);
+        color: white;
+        display: grid;
+        place-items: center;
+        font-size: 28px;
+        font-weight: 900;
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 32px;
+        line-height: 1;
+      }
+
+      .brand span,
+      .top-note {
+        color: var(--muted);
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .hero {
+        margin-top: 86px;
+        position: relative;
+      }
+
+      .tag {
+        display: inline-block;
+        padding: 10px 16px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: white;
+        color: var(--red);
+        font-size: 19px;
+        font-weight: 900;
+      }
+
+      h1 {
+        margin: 30px 0 0;
+        max-width: 790px;
+        font-size: 76px;
+        line-height: 1.1;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 740px;
+        margin: 26px 0 0;
+        color: var(--muted);
+        font-size: 28px;
+        line-height: 1.58;
+        font-weight: 650;
+      }
+
+      .lead strong { color: var(--red); }
+
+      .mascot {
+        position: absolute;
+        object-fit: contain;
+      }
+
+      .screen {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        background: white;
+        box-shadow: 0 28px 70px rgba(73, 34, 31, 0.1);
+      }
+
+      .screen img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: top left;
+        display: block;
+      }
+
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .feature {
+        min-height: 132px;
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: white;
+      }
+
+      .feature b {
+        display: block;
+        font-size: 23px;
+        line-height: 1.25;
+      }
+
+      .feature span {
+        display: block;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.42;
+        font-weight: 650;
+      }
+
+      .footer {
+        margin-top: auto;
+        padding-top: 30px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 38px;
+      }
+
+      .footer strong {
+        display: block;
+        color: var(--red);
+        font-size: 31px;
+      }
+
+      .footer span {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.42;
+        font-weight: 700;
+      }
+
+      .cta {
+        flex: 0 0 auto;
+        padding: 18px 28px;
+        border-radius: 999px;
+        background: var(--red);
+        color: white;
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .p1 .hero .mascot {
+        right: 6px;
+        top: 4px;
+        width: 230px;
+      }
+
+      .p1 .screen {
+        margin-top: 70px;
+        height: 620px;
+      }
+
+      .p1 .features {
+        margin-top: 34px;
+      }
+
+      .p2 .hero {
+        max-width: 680px;
+      }
+
+      .p2 .mascot-main {
+        right: 78px;
+        top: 250px;
+        width: 260px;
+      }
+
+      .p2 .flow {
+        margin-top: 76px;
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 26px;
+        align-items: stretch;
+      }
+
+      .p2 .screen {
+        height: 620px;
+      }
+
+      .steps {
+        display: grid;
+        gap: 18px;
+        align-content: start;
+      }
+
+      .step {
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: white;
+      }
+
+      .step b {
+        display: block;
+        font-size: 25px;
+      }
+
+      .step span {
+        display: block;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.42;
+        font-weight: 650;
+      }
+
+      .p3 .hero {
+        max-width: 760px;
+      }
+
+      .p3 .mascot-main {
+        right: 76px;
+        top: 236px;
+        width: 230px;
+      }
+
+      .p3 .screen {
+        margin-top: 76px;
+        height: 590px;
+      }
+
+      .p3 .features {
+        margin-top: 34px;
+      }
+
+      .p4 .product-area {
+        margin-top: 72px;
+        display: grid;
+        grid-template-columns: 0.86fr 1.14fr;
+        gap: 30px;
+        align-items: center;
+      }
+
+      .p4 .mascot-panel {
+        height: 560px;
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        background: white;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+
+      .p4 .mascot-panel img {
+        width: 390px;
+      }
+
+      .p4 .screen {
+        height: 560px;
+      }
+
+      .p4 .features {
+        margin-top: 38px;
+      }
+    </style>
+  </head>
+  <body>
+    <article class="poster p1" id="clean-poster-1">
+      <div class="layer">
+        <header class="top">
+          <div class="brand"><div class="mark">R</div><div><strong>RedBase</strong><span>AI 小红书内容运营工具</span></div></div>
+          <div class="top-note">真实产品界面</div>
+        </header>
+        <section class="hero">
+          <span class="tag">品牌资产 × 热点趋势</span>
+          <h1>让品牌精准踩中每一个热点</h1>
+          <p class="lead">基于品牌档案筛选适合借势的趋势，并生成可落地的小红书<strong>选题、文案和视觉资产</strong>。</p>
+          <img class="mascot" src="poster-sources/mascot-thumbs.png" alt="" />
+        </section>
+        <div class="screen"><img src="poster-sources/redbase-trends-real.png" alt="" /></div>
+        <section class="features">
+          <div class="feature"><b>先理解品牌</b><span>沉淀定位、产品卖点和目标受众。</span></div>
+          <div class="feature"><b>再筛选热点</b><span>判断哪些趋势真正值得追。</span></div>
+          <div class="feature"><b>最后落地内容</b><span>输出选题、文案和视觉方向。</span></div>
+        </section>
+        <footer class="footer"><div><strong>从追热点到用热点做增长</strong><span>让每次内容生产都有依据。</span></div><div class="cta">免费注册使用</div></footer>
+      </div>
+    </article>
+
+    <article class="poster p2" id="clean-poster-2">
+      <div class="layer">
+        <header class="top">
+          <div class="brand"><div class="mark">R</div><div><strong>RedBase</strong><span>一站式内容运营流程</span></div></div>
+          <div class="top-note">简洁 · 专业 · 可落地</div>
+        </header>
+        <section class="hero">
+          <span class="tag">功能清晰版</span>
+          <h1>把品牌信息变成可发布内容</h1>
+          <p class="lead">品牌录入、趋势分析、选题生成、历史复用，集中在一个干净工作台。</p>
+        </section>
+        <img class="mascot mascot-main" src="poster-sources/mascot-stand.png" alt="" />
+        <section class="flow">
+          <div class="screen"><img src="poster-sources/redbase-home-real.png" alt="" /></div>
+          <div class="steps">
+            <div class="step"><b>01 品牌档案</b><span>让 AI 先理解品牌、产品和人群。</span></div>
+            <div class="step"><b>02 热点洞察</b><span>输出热度、标签和适配理由。</span></div>
+            <div class="step"><b>03 内容选题</b><span>生成可执行的小红书内容方向。</span></div>
+            <div class="step"><b>04 历史沉淀</b><span>统一回看并复用内容资产。</span></div>
+          </div>
+        </section>
+        <footer class="footer"><div><strong>更少返工，更快交付</strong><span>把分散的策划、文案、视觉资产收敛成稳定流程。</span></div><div class="cta">开始体验</div></footer>
+      </div>
+    </article>
+
+    <article class="poster p3" id="clean-poster-3">
+      <div class="layer">
+        <header class="top">
+          <div class="brand"><div class="mark">R</div><div><strong>RedBase</strong><span>热点趋势分析</span></div></div>
+          <div class="top-note">AI Content Ops</div>
+        </header>
+        <section class="hero">
+          <span class="tag">核心优势</span>
+          <h1>别再凭感觉追热点</h1>
+          <p class="lead">RedBase 先理解品牌，再筛选热点，最后产出能复用、能交付的内容资产。</p>
+        </section>
+        <img class="mascot mascot-main" src="poster-sources/mascot-wink.png" alt="" />
+        <div class="screen"><img src="poster-sources/redbase-trends-real.png" alt="" /></div>
+        <section class="features">
+          <div class="feature"><b>更精准</b><span>只追适合品牌自然进入的热点。</span></div>
+          <div class="feature"><b>更高效</b><span>减少选题和制图反复返工。</span></div>
+          <div class="feature"><b>更完整</b><span>文案、视觉、历史资产一体化。</span></div>
+        </section>
+        <footer class="footer"><div><strong>适合品牌运营、内容团队、代运营机构</strong><span>从灵感驱动升级为系统驱动。</span></div><div class="cta">RedBase</div></footer>
+      </div>
+    </article>
+
+    <article class="poster p4" id="clean-poster-4">
+      <div class="layer">
+        <header class="top">
+          <div class="brand"><div class="mark">R</div><div><strong>RedBase</strong><span>品牌内容增长中台</span></div></div>
+          <div class="top-note">团队版方案</div>
+        </header>
+        <section class="hero">
+          <span class="tag">定制增长方案</span>
+          <h1>用 AI 把热点变成内容资产</h1>
+          <p class="lead">围绕品牌资产、热点判断、选题策划和视觉生产，形成可复用的小红书运营工作流。</p>
+        </section>
+        <section class="product-area">
+          <div class="mascot-panel"><img src="poster-sources/mascot-love.png" alt="" /></div>
+          <div class="screen"><img src="poster-sources/redbase-account-real.png" alt="" /></div>
+        </section>
+        <section class="features">
+          <div class="feature"><b>团队套餐</b><span>适合长期内容运营。</span></div>
+          <div class="feature"><b>专属客服</b><span>获取优惠价格与使用建议。</span></div>
+          <div class="feature"><b>真实产品能力</b><span>基于当前 RedBase 工作台交付。</span></div>
+        </section>
+        <footer class="footer"><div><strong>联系专属客服获取优惠价格</strong><span>让团队内容生产更稳定、更可复用。</span></div><div class="cta">获取方案</div></footer>
+      </div>
+    </article>
+  </body>
+</html>

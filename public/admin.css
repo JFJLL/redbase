@@ -101,6 +101,10 @@ label span {
   font-weight: 800;
 }
 
+.field-label {
+  font-weight: 800;
+}
+
 input,
 select {
   width: 100%;
@@ -284,8 +288,113 @@ select:focus {
   background: var(--panel-soft);
 }
 
+.credit-user-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.user-picker {
+  position: relative;
+  display: grid;
+  gap: 8px;
+}
+
+.user-picker-options {
+  position: absolute;
+  top: 48px;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 4px;
+  max-height: 268px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 16px 32px rgba(58, 38, 38, 0.12);
+}
+
+.user-picker-options[hidden] {
+  display: none;
+}
+
+.user-picker-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: #fff;
+  color: #332c2e;
+  text-align: left;
+}
+
+.user-picker-option:hover,
+.user-picker-option:focus-visible {
+  background: var(--panel-soft);
+  outline: none;
+}
+
+.user-picker-option strong {
+  font-size: 0.96rem;
+}
+
+.user-picker-selected {
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid rgba(216, 68, 68, 0.16);
+  border-radius: 999px;
+  background: #fff;
+  color: #4b4244;
+  font-size: 0.82rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .compact-select {
   width: min(260px, 100%);
+}
+
+.panel-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.compact-search {
+  width: min(280px, 100%);
+  min-height: 44px;
+  background: var(--panel-soft);
+}
+
+.search-result-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.search-result-pill[hidden],
+.user-picker-selected[hidden] {
+  display: none;
 }
 
 .table-wrap {
@@ -589,8 +698,18 @@ tr:last-child td {
   }
 
   .admin-topbar,
-  .panel-head {
+  .panel-head,
+  .panel-actions {
     display: grid;
+  }
+
+  .panel-actions {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+
+  .compact-search {
+    width: 100%;
   }
 }
 
