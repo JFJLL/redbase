@@ -392,11 +392,6 @@ select:focus {
   white-space: nowrap;
 }
 
-.search-result-pill[hidden],
-.user-picker-selected[hidden] {
-  display: none;
-}
-
 .table-wrap {
   width: 100%;
   overflow: auto;

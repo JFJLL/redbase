@@ -589,7 +589,7 @@ function renderCreditUserPicker() {
   hiddenInput.value = selectedUser?.id || "";
   selectedRoot.hidden = !selectedUser;
   selectedRoot.textContent = selectedUser
-    ? `当前 ${formatNumber(selectedUser.currentCredits)} 额度`
+    ? `${selectedUser.name} · ${selectedUser.phone} · 当前 ${formatNumber(selectedUser.currentCredits)} 额度`
     : "";
 
   optionsRoot.hidden = !state.creditUserPickerOpen;
