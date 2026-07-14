@@ -25,6 +25,28 @@ const {
   buildWechatLongImagePackFromIdea,
 } = require("../ai/content-service");
 const { sanitizePayloadForClient } = require("../utils");
+const { resolveAspectRatio } = require("./aspect-ratios");
+
+function requireAspectRatio(payload, type, res, badRequest) {
+  const aspectRatio = resolveAspectRatio(payload?.aspectRatio, type);
+  if (!aspectRatio) {
+    badRequest(res, "当前生图服务暂不支持该图片比例，请选择其他比例。");
+    return null;
+  }
+  return aspectRatio;
+}
+
+function applyAspectRatioToCarouselPack(carouselPack, aspectRatio) {
+  return {
+    ...carouselPack,
+    aspectRatio,
+    slides: (Array.isArray(carouselPack?.slides) ? carouselPack.slides : []).map((slide) => ({
+      ...slide,
+      aspectRatio,
+      composition: String(slide?.composition || "").replace(/3:4/g, aspectRatio),
+    })),
+  };
+}
 
 function requireRouteUser(req, res, helpers) {
   return requireSqlAuth(req, res, {
@@ -199,6 +221,7 @@ function buildSingleSlideCarouselPayload(job) {
     generatedMode: "partialSlides",
     carouselGroupId: normalizeCarouselGroupId(context.carouselGroupId),
     sourceSlideIndex: slideIndex,
+    aspectRatio: context.aspectRatio || metadata.aspectRatio || "",
     slides: normalizeCarouselSlides([slide]),
   };
 }
@@ -426,6 +449,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const { trend, idea } = selected;
 
     const payload = await collectBody(req);
+    const aspectRatio = requireAspectRatio(payload, "moments", res, badRequest);
+    if (!aspectRatio) return true;
     console.log("[image-job] request body collected", {
       elapsedMs: Date.now() - requestStartedAt,
       hasProductImage: Array.isArray(payload.productImages) ? payload.productImages.length > 0 : Boolean(payload.productImage),
@@ -459,9 +484,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
           logoUsed: Boolean(logoImage),
+          aspectRatio,
         },
       }),
-      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, logoImage, metadata }),
+      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, logoImage, aspectRatio, metadata: { ...metadata, aspectRatio } }),
     });
     if (!charged) return true;
     const job = charged.value;
@@ -478,11 +504,14 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       remainingCredits: charged.user.credits,
     });
     job.generationContext = {
+      type: "moments",
+      channelLabel: "朋友圈图",
       userId: user.id,
       brandId: brand.id,
       trendId: trend.id,
       ideaIndex: Number(imageMatch[3]),
       creditEventId: charged.creditEvent.id,
+      aspectRatio,
     };
     upsertImageJob(user.id, job);
     json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
@@ -587,6 +616,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     if (!user) return true;
 
     const payload = await collectBody(req);
+    const editAspectRatio = requireAspectRatio(payload, "moments", res, badRequest);
+    if (!editAspectRatio) return true;
     const sourceImageUrl = String(payload.imageUrl || "").trim();
     const editPrompt = String(payload.prompt || "").trim();
     const sourceSlideIndex = payload.slideIndex === "" || payload.slideIndex == null ? null : Number(payload.slideIndex);
@@ -618,7 +649,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         summary: editPrompt.slice(0, 80),
         payload: {
           sourceImageUrl,
-          aspectRatio: payload.aspectRatio || "",
+          aspectRatio: editAspectRatio,
           sourceGenerationId: sourceGeneration?.id ?? null,
           parentEditId: payload.parentEditId || "",
           sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
@@ -629,7 +660,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           ownerUserId: user.id,
           sourceImageUrls: sourceIsRemoteUrl && !localSourceImage ? [sourceImageUrl] : [],
           sourceImages: localSourceImage ? [localSourceImage] : [],
-          aspectRatio: String(payload.aspectRatio || appConfig.imageProvider.aspectRatio || "").trim() || undefined,
+          aspectRatio: editAspectRatio,
           metadata: {
             title: String(payload.title || "改图结果").slice(0, 120),
             visualDirection: "基于已生成图片继续改图",
@@ -638,6 +669,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             prompt: editPrompt,
             editPrompt,
             originalImageUrl: sourceImageUrl,
+            aspectRatio: editAspectRatio,
             sourceStoredPath: localSourceImage?.storedPath || "",
           },
         }),
@@ -654,7 +686,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       sourceImageUrl,
       editPrompt,
       title: String(payload.title || "改图结果").slice(0, 120),
-      aspectRatio: String(payload.aspectRatio || ""),
+      aspectRatio: editAspectRatio,
       sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
     };
     upsertImageJob(user.id, job);
@@ -683,6 +715,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const { trend, idea } = selected;
 
     const payload = await collectBody(req);
+    const aspectRatio = requireAspectRatio(payload, "wechat", res, badRequest);
+    if (!aspectRatio) return true;
     const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     console.log("[image-job] wechat request body collected", {
@@ -727,7 +761,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
           logoUsed: Boolean(logoImage),
-          aspectRatio: "9:16",
+          aspectRatio,
         },
       }),
       run: () =>
@@ -738,10 +772,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           idea,
           productImages,
           logoImage,
-          aspectRatio: "9:16",
+          aspectRatio,
           metadata: {
             ...wechatPack,
-            aspectRatio: "9:16",
+            aspectRatio,
             visualDirection: wechatPack.visualDirection,
             style: wechatPack.style,
             composition: wechatPack.composition,
@@ -758,6 +792,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       trendId: trend.id,
       ideaIndex: Number(wechatLongImageMatch[3]),
       creditEventId: charged.creditEvent.id,
+      aspectRatio,
     };
     console.log("[image-job] api created wechat job", {
       elapsedMs: Date.now() - requestStartedAt,
@@ -792,6 +827,9 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const selected = requireIdea({ brand, trendId: xhsCarouselPreviewMatch[2], ideaIndex: xhsCarouselPreviewMatch[3], res, badRequest, findTrendItem });
     if (!selected) return true;
     const { trend, idea } = selected;
+    const payload = await collectBody(req);
+    const aspectRatio = requireAspectRatio(payload, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
 
     let carouselPack;
     try {
@@ -804,6 +842,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return true;
       }
     }
+    carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
     json(res, 200, {
       carouselPack: sanitizePayloadForClient(carouselPack),
       user: sanitizeUser(user),
@@ -832,6 +871,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const { trend, idea } = selected;
 
     const payload = await collectBody(req);
+    const aspectRatio = requireAspectRatio(payload, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
     const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     console.log("[image-job] carousel request body collected", {
@@ -851,6 +892,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return true;
       }
     }
+    carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
     const charged = await runChargedAiWork({
       user,
       cost: CREDIT_COSTS.xhsCarousel,
@@ -866,6 +908,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
           logoUsed: Boolean(logoImage),
+          aspectRatio,
         },
       }),
       run: () =>
@@ -889,11 +932,13 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               idea,
               productImages,
               logoImage,
+              aspectRatio,
               metadata: {
                 title: `${carouselPack.title} ${slide.pageLabel}`,
                 visualDirection: slide.title,
                 style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
-                composition: `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
+                composition: `小红书组图${slideIndex + 1}/4，比例${aspectRatio}，标题清晰，画面有连续组图统一性`,
+                aspectRatio,
                 prompt: slide.prompt,
                 slideIndex,
                 pageLabel: slide.pageLabel,
@@ -907,6 +952,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               trendId: trend.id,
               ideaIndex: Number(xhsCarouselMatch[3]),
               slideIndex,
+              aspectRatio,
             };
             console.log("[image-job] api created carousel slide job", {
               elapsedMs: Date.now() - requestStartedAt,
@@ -973,6 +1019,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
     const payload = await collectBody(req);
     const incomingPack = payload.carouselPack && typeof payload.carouselPack === "object" ? payload.carouselPack : {};
+    const aspectRatio = requireAspectRatio({ aspectRatio: payload.aspectRatio || incomingPack.aspectRatio }, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
     const incomingSlides = Array.isArray(incomingPack.slides) ? incomingPack.slides : [];
     let defaultPack = null;
     if (!incomingSlides[slideIndex]?.prompt && !payload.slide?.prompt) {
@@ -987,7 +1035,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         }
       }
     }
-    defaultPack = defaultPack || { title: "", publishTitle: "", publishCaption: "", caption: "", slides: [] };
+    defaultPack = applyAspectRatioToCarouselPack(
+      defaultPack || { title: "", publishTitle: "", publishCaption: "", caption: "", slides: [] },
+      aspectRatio,
+    );
     const slide = normalizeXhsCarouselSlideForJob(payload.slide || incomingSlides[slideIndex], defaultPack.slides[slideIndex], slideIndex);
     if (!slide.prompt) {
       badRequest(res, "当前页缺少服务端生图提示词，请重新生成组图方案后再试。");
@@ -1025,6 +1076,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
           logoUsed: Boolean(logoImage),
+          aspectRatio,
         },
       }),
       run: () =>
@@ -1035,6 +1087,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           idea,
           productImages,
           logoImage,
+          aspectRatio,
           metadata: {
             title: `${incomingPack.title || defaultPack.title} ${slide.pageLabel}`,
             visualDirection: slide.visualDirection,
@@ -1044,6 +1097,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             slideIndex,
             pageLabel: slide.pageLabel,
             copy: slide.copy,
+            aspectRatio,
           },
         }),
     });
@@ -1063,6 +1117,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       caption: incomingPack.caption || defaultPack.caption || "",
       carouselGroupId: normalizeCarouselGroupId(incomingPack.carouselGroupId),
       creditEventId: charged.creditEvent.id,
+      aspectRatio,
     };
     upsertImageJob(user.id, job);
     json(res, 202, {
@@ -1091,7 +1146,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const { trend, idea } = selected;
 
     const payload = await collectBody(req);
-    const carouselPack = payload.carouselPack || {};
+    let carouselPack = payload.carouselPack || {};
+    const aspectRatio = requireAspectRatio(carouselPack, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
+    carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
     if (!isValidCompletedCarouselPack(carouselPack)) {
       badRequest(res, "小红书组图必须等待 4 张真实图片全部生成完成后才能写入历史。");
       return true;
@@ -1160,6 +1218,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     if (!selected) return true;
     const { trend, idea } = selected;
     const payload = await collectBody(req);
+    const aspectRatio = requireAspectRatio(payload, "styleImage", res, badRequest);
+    if (!aspectRatio) return true;
     const stylePrompt = String(payload.stylePrompt || payload.prompt || "").trim();
     if (!stylePrompt) {
       badRequest(res, "请先填写风格化图提示词。");
@@ -1178,6 +1238,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       composition: "根据提示词生成适合公众号封面、节日祝福海报或运营视觉的完整画面",
       prompt: `${stylePrompt}\n\n生成一张完整的风格化运营图片，可用于公众号封面、节日祝福海报或品牌日常内容视觉。画面需要完整、干净、有设计感，避免杂乱文字。`,
       stylePrompt,
+      aspectRatio,
     };
     const charged = await runChargedAiWork({
       user,
@@ -1194,6 +1255,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImageUsed: styleReferenceImages.length > 0,
           styleReferenceImageCount: styleReferenceImages.length,
           logoUsed: Boolean(logoImage),
+          aspectRatio,
         },
       }),
       run: () =>
@@ -1205,6 +1267,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           metadata,
           logoImage,
           styleReferenceImages,
+          aspectRatio,
         }),
     });
     if (!charged) return true;
@@ -1217,6 +1280,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       trendId: trend.id,
       ideaIndex: Number(styleImageMatch[3]),
       creditEventId: charged.creditEvent.id,
+      aspectRatio,
     };
     upsertImageJob(user.id, job);
     json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });

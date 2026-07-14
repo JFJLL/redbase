@@ -33,6 +33,10 @@ let historyImageSignatureRefreshInFlight = null;
 const dashboardScrollPositions = new Map();
 const retriedHistoryImagePaths = new Set();
 const brandDetailRequests = new Map();
+const WECHAT_ASPECT_RATIO_WARNING_DISABLED_KEY = "redbase:wechat-aspect-ratio-warning-disabled";
+const IMAGE_ASPECT_RATIOS = ["21:9", "16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16", "9:21"];
+const KNOWN_ASPECT_RATIOS = new Set(["1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "21:9", "9:21", "16:9"]);
+const SMART_ASPECT_RATIO_DEFAULTS = Object.freeze({ moments: "3:4", wechat: "9:21", xhsCarousel: "3:4", styleImage: "3:4" });
 
 const HISTORY_TYPE_LABELS = new Map([
   ["moments", "朋友圈图文"],
@@ -1154,6 +1158,8 @@ function updateCurrentUser(user) {
 function clearSession() {
   state.sessionToken = "";
   state.currentUser = null;
+  state.aspectRatios = {};
+  state.openAspectRatioKey = "";
   renderUser();
   closeAccountCenterModal();
 }
@@ -2053,6 +2059,7 @@ function renderIdeas() {
           ${renderIdeaLogoControl(index)}
           ${renderIdeaProductUpload(index)}
           ${renderIdeaStyleReferenceUpload(index)}
+          ${renderIdeaAspectRatioControl(index)}
           <div class="idea-actions">
             <button class="primary-btn small-btn cost-button" data-generate-image="${index}" type="button"><span>一键朋友圈图</span><small>1 积分</small></button>
             <button class="secondary-btn cost-button" data-generate-wechat="${index}" type="button"><span>一键公众号长图</span><small>1 积分</small></button>
@@ -2066,6 +2073,24 @@ function renderIdeas() {
       `,
     )
     .join("");
+
+  root.querySelectorAll("[data-toggle-aspect-ratio]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const ideaIndex = Number(button.dataset.toggleAspectRatio);
+      const key = getIdeaProductKey(ideaIndex);
+      state.openAspectRatioKey = state.openAspectRatioKey === key ? "" : key;
+      renderIdeas();
+    });
+  });
+
+  root.querySelectorAll("[data-select-aspect-ratio]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const ideaIndex = Number(button.dataset.ideaIndex);
+      state.aspectRatios[getIdeaProductKey(ideaIndex)] = button.dataset.selectAspectRatio;
+      state.openAspectRatioKey = "";
+      renderIdeas();
+    });
+  });
 
   root.querySelectorAll("[data-generate-image]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -2340,6 +2365,118 @@ function getIdeaProductKey(ideaIndex) {
   const brand = getSelectedBrand();
   const trend = getSelectedTrend();
   return `${brand?.id || "none"}:${trend?.id || "none"}:${ideaIndex}`;
+}
+
+function getIdeaAspectRatioSelection(ideaIndex) {
+  const selection = state.aspectRatios[getIdeaProductKey(ideaIndex)] || "smart";
+  return selection === "smart" || IMAGE_ASPECT_RATIOS.includes(selection) ? selection : "smart";
+}
+
+function getResolvedIdeaAspectRatio(ideaIndex, type) {
+  const selection = getIdeaAspectRatioSelection(ideaIndex);
+  return selection === "smart" ? SMART_ASPECT_RATIO_DEFAULTS[type] || "3:4" : selection;
+}
+
+function getAspectRatioShapeStyle(ratio) {
+  const [width, height] = String(ratio).split(":").map(Number);
+  const max = 30;
+  const scale = max / Math.max(width, height);
+  return `width:${Math.max(5, Math.round(width * scale))}px;height:${Math.max(5, Math.round(height * scale))}px`;
+}
+
+function renderIdeaAspectRatioControl(ideaIndex) {
+  const key = getIdeaProductKey(ideaIndex);
+  const selection = getIdeaAspectRatioSelection(ideaIndex);
+  const isOpen = state.openAspectRatioKey === key;
+  const label = selection === "smart" ? "智能推荐" : selection;
+  const options = ["smart", ...IMAGE_ASPECT_RATIOS];
+  return `
+    <section class="idea-aspect-ratio ${isOpen ? "is-open" : ""}">
+      <button class="idea-aspect-ratio-trigger" data-toggle-aspect-ratio="${ideaIndex}" type="button" aria-expanded="${isOpen}">
+        <span class="idea-aspect-ratio-copy">
+          <strong>图片比例</strong>
+          <small>${selection === "smart" ? "按图片类型自动选择合适比例" : "四种生图都使用这个比例"}</small>
+        </span>
+        <span class="idea-aspect-ratio-value">
+          ${selection === "smart" ? `<span class="aspect-smart-mark"><i></i><i></i></span>` : `<i class="aspect-shape" style="${getAspectRatioShapeStyle(selection)}"></i>`}
+          <b>${label}</b>
+          <span class="idea-aspect-ratio-chevron" aria-hidden="true"></span>
+        </span>
+      </button>
+      ${
+        isOpen
+          ? `<div class="idea-aspect-ratio-panel">
+              <div class="idea-aspect-ratio-grid">
+                ${options
+                  .map((ratio) => {
+                    const selected = ratio === selection;
+                    return `<button class="idea-aspect-ratio-option ${selected ? "is-selected" : ""}" data-select-aspect-ratio="${ratio}" data-idea-index="${ideaIndex}" type="button">
+                      <span class="idea-aspect-ratio-visual">${ratio === "smart" ? `<span class="aspect-smart-mark"><i></i><i></i></span>` : `<i class="aspect-shape" style="${getAspectRatioShapeStyle(ratio)}"></i>`}</span>
+                      <span>${ratio === "smart" ? "智能" : ratio}</span>
+                    </button>`;
+                  })
+                  .join("")}
+              </div>
+              <p>智能推荐：朋友圈图、组图和风格图使用 3:4，公众号长图使用 9:21。</p>
+            </div>`
+          : ""
+      }
+    </section>
+  `;
+}
+
+function isWechatAspectRatioWarningDisabled() {
+  return localStorage.getItem(WECHAT_ASPECT_RATIO_WARNING_DISABLED_KEY) === "true";
+}
+
+function confirmWechatAspectRatio(ideaIndex, aspectRatio) {
+  if (aspectRatio === "9:21" || isWechatAspectRatioWarningDisabled()) return Promise.resolve(aspectRatio);
+  return new Promise((resolve) => {
+    const dialog = document.createElement("div");
+    dialog.className = "aspect-ratio-warning-backdrop";
+    dialog.innerHTML = `
+      <section class="aspect-ratio-warning-dialog" role="dialog" aria-modal="true" aria-labelledby="aspectRatioWarningTitle">
+        <button class="aspect-ratio-warning-close" data-warning-action="cancel" type="button" aria-label="关闭">×</button>
+        <div class="aspect-ratio-warning-kicker">公众号长图比例提醒</div>
+        <h2 id="aspectRatioWarningTitle">当前选择的是 ${escapeHtml(aspectRatio)}</h2>
+        <p>公众号长图推荐使用 9:21。继续使用 ${escapeHtml(aspectRatio)} 可能影响长图的阅读体验和版式完整性。</p>
+        <label class="aspect-ratio-warning-check"><input type="checkbox" data-warning-disabled /> <span>不再提醒</span></label>
+        <div class="aspect-ratio-warning-actions">
+          <button class="secondary-btn" data-warning-action="use-default" type="button">改用 9:21</button>
+          <button class="primary-btn" data-warning-action="continue" type="button">继续使用 ${escapeHtml(aspectRatio)}</button>
+        </div>
+      </section>
+    `;
+    const finish = (value) => {
+      document.removeEventListener("keydown", onKeyDown);
+      dialog.remove();
+      resolve(value);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") finish(null);
+    };
+    dialog.querySelectorAll("[data-warning-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.warningAction;
+        if (action === "cancel") return finish(null);
+        if (action === "use-default") {
+          state.aspectRatios[getIdeaProductKey(ideaIndex)] = "9:21";
+          renderIdeas();
+          return finish("9:21");
+        }
+        if (dialog.querySelector("[data-warning-disabled]")?.checked) {
+          localStorage.setItem(WECHAT_ASPECT_RATIO_WARNING_DISABLED_KEY, "true");
+        }
+        return finish(aspectRatio);
+      });
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) finish(null);
+    });
+    document.body.appendChild(dialog);
+    document.addEventListener("keydown", onKeyDown);
+    dialog.querySelector('[data-warning-action="continue"]')?.focus();
+  });
 }
 
 function getIdeaDraftKey(ideaIndex) {
@@ -2670,6 +2807,7 @@ function renderGenerationHistory() {
     .map((item) => {
       const payload = item.payload || {};
       const editHistory = Array.isArray(payload.editHistory) ? payload.editHistory : [];
+      const aspectRatio = KNOWN_ASPECT_RATIOS.has(payload.aspectRatio) ? payload.aspectRatio : "";
       let contentHtml = "";
 
       if (item.type === "moments") {
@@ -2724,6 +2862,7 @@ function renderGenerationHistory() {
               <div class="history-generate-meta">
                 <span class="brand-tag">${escapeHtml(item.channelLabel)}</span>
                 <span class="brand-tag">${escapeHtml(HISTORY_TYPE_LABELS.get(item.type) || item.type)}</span>
+                ${aspectRatio ? `<span class="brand-tag history-aspect-ratio"><i class="aspect-shape" style="${getAspectRatioShapeStyle(aspectRatio)}"></i>${escapeHtml(aspectRatio)}</span>` : ""}
                 <span class="panel-subtitle">${escapeHtml(new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false }))}</span>
                 ${editHistory.length ? `<span class="brand-tag">已改图 ${editHistory.length} 次</span>` : ""}
               </div>
@@ -3071,6 +3210,7 @@ async function generateImageConcept(ideaIndex) {
   const trend = getSelectedTrend();
   if (!brand || !trend) return;
   let pendingTaskId = "";
+  const aspectRatio = getResolvedIdeaAspectRatio(ideaIndex, "moments");
 
   const imageResult = openAssetModal({
     kicker: "AI 朋友圈图",
@@ -3086,6 +3226,7 @@ async function generateImageConcept(ideaIndex) {
       body: JSON.stringify({
         productImages: getSelectedProductImages(ideaIndex),
         useBrandLogo: isBrandLogoEnabled(ideaIndex),
+        aspectRatio,
       }),
     });
     updateCurrentUser(job.user);
@@ -3146,6 +3287,8 @@ async function generateWechatLongImage(ideaIndex) {
   const brand = getSelectedBrand();
   const trend = getSelectedTrend();
   if (!brand || !trend) return;
+  const aspectRatio = await confirmWechatAspectRatio(ideaIndex, getResolvedIdeaAspectRatio(ideaIndex, "wechat"));
+  if (!aspectRatio) return;
   let pendingTaskId = "";
 
   const imageResult = openAssetModal({
@@ -3162,6 +3305,7 @@ async function generateWechatLongImage(ideaIndex) {
       body: JSON.stringify({
         productImages: getSelectedProductImages(ideaIndex),
         useBrandLogo: isBrandLogoEnabled(ideaIndex),
+        aspectRatio,
       }),
     });
     updateCurrentUser(result.user);
@@ -3208,7 +3352,7 @@ async function generateWechatLongImage(ideaIndex) {
           ${renderImageEditPanel({
             imageUrl: pack.imageUrl || pack.previewUrl,
             title: pack.title,
-            aspectRatio: "9:16",
+            aspectRatio: pack.aspectRatio || imageConcept.aspectRatio || aspectRatio,
           })}
         </div>
       </div>
@@ -3227,7 +3371,7 @@ function enrichXhsCarouselSlides(pack) {
     pageLabel: slide.pageLabel || `第 ${index + 1} 张`,
     visualDirection: slide.visualDirection || slide.title || `第 ${index + 1} 张视觉方向`,
     style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
-    composition: slide.composition || `小红书组图${index + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性。`,
+    composition: slide.composition || `小红书组图${index + 1}/4，比例${pack.aspectRatio || "3:4"}，标题清晰，画面有连续组图统一性。`,
     prompt: slide.prompt || "",
     isGenerating: false,
     error: "",
@@ -3345,6 +3489,7 @@ async function generateXhsCarousel(ideaIndex) {
   const brand = getSelectedBrand();
   const trend = getSelectedTrend();
   if (!brand || !trend) return;
+  const aspectRatio = getResolvedIdeaAspectRatio(ideaIndex, "xhsCarousel");
 
   const imageResult = openAssetModal({
     kicker: "AI 小红书组图",
@@ -3359,6 +3504,7 @@ async function generateXhsCarousel(ideaIndex) {
     if (!idea) throw new Error("当前选题不存在，请重新生成或刷新页面后再试。");
     const previewResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/preview`, {
       method: "POST",
+      body: JSON.stringify({ aspectRatio }),
     });
     updateCurrentUser(previewResult.user);
     const previewPack = previewResult.carouselPack;
@@ -3367,6 +3513,7 @@ async function generateXhsCarousel(ideaIndex) {
     }
     const pack = {
       ...previewPack,
+      aspectRatio,
       carouselGroupId: previewPack.carouselGroupId || createXhsCarouselGroupId(brand.id, trend.id, ideaIndex),
       slides: enrichXhsCarouselSlides(previewPack),
     };
@@ -3466,6 +3613,7 @@ async function generateXhsCarousel(ideaIndex) {
               slide,
               productImages: getSelectedProductImages(ideaIndex),
               useBrandLogo: isBrandLogoEnabled(ideaIndex),
+              aspectRatio,
             }),
           }),
         );
@@ -3517,7 +3665,7 @@ async function generateXhsCarousel(ideaIndex) {
               imageUrl: slide.imageUrl || slide.previewUrl,
               prompt,
               title: slide.title || pack.title,
-              aspectRatio: "3:4",
+              aspectRatio: pack.aspectRatio || aspectRatio,
             }),
           }),
         );
@@ -3619,6 +3767,7 @@ async function generateStyleImage(ideaIndex) {
     return;
   }
   const styleReference = getStyleReference(ideaIndex);
+  const aspectRatio = getResolvedIdeaAspectRatio(ideaIndex, "styleImage");
   let pendingTaskId = "";
   const imageResult = openAssetModal({
     kicker: "AI 风格化图",
@@ -3635,6 +3784,7 @@ async function generateStyleImage(ideaIndex) {
         title: idea.title || "风格化图片",
         stylePrompt,
         useBrandLogo: isBrandLogoEnabled(ideaIndex),
+        aspectRatio,
         styleReferenceImages: styleReference
           ? [
               {
