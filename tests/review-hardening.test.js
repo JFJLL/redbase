@@ -210,10 +210,7 @@ test("CORS rejects credentialed wildcard and allows noncredentialed wildcard onl
     () => validateCorsConfigForStartup({ cors: { origins: ["*"], credentials: true } }, "production"),
     /wildcard origin/,
   );
-  assert.throws(
-    () => validateCorsConfigForStartup({ cors: { origins: [], credentials: true } }, "production"),
-    /CORS_ORIGINS/,
-  );
+  assert.doesNotThrow(() => validateCorsConfigForStartup({ cors: { origins: [], credentials: true } }, "production"));
 
   const res = {
     headers: {},

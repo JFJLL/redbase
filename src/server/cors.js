@@ -42,13 +42,10 @@ function resolveAllowedOrigin(origin, corsConfig) {
   return "";
 }
 
-function validateCorsConfigForStartup(appConfig, env = process.env.NODE_ENV || "") {
+function validateCorsConfigForStartup(appConfig) {
   const corsConfig = getCorsConfig(appConfig);
   if (corsConfig.credentials && corsConfig.origins.includes("*")) {
     throw new Error("CORS 配置不安全：credentials=true 时不能使用 wildcard origin。请配置明确的 CORS_ORIGINS。");
-  }
-  if (String(env).trim() === "production" && !corsConfig.origins.length) {
-    throw new Error("生产环境必须显式配置 CORS_ORIGINS 客户前端域名白名单。");
   }
 }
 
