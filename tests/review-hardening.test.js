@@ -5,6 +5,8 @@ const { buildSessionCookie } = require("../src/server/auth/cookies");
 const { signAssetUrl, signLocalAssetUrls, verifySignedAssetRequest } = require("../src/server/assets/signed-urls");
 const { buildImageJobResponse } = require("../src/server/ai/image-jobs");
 const { DEFAULT_APP_CONFIG, loadAppConfig } = require("../src/server/config");
+const { applyCorsHeaders, validateCorsConfigForStartup } = require("../src/server/cors");
+const { handleHealthRoutes } = require("../src/server/api/health-routes");
 const helpers = require("../src/server/api/helpers");
 const { isAdminUser, findTrendItem, isRenderableGeneration } = helpers;
 const { bindRouteScope } = require("../src/server/api/route-scope");
@@ -150,6 +152,110 @@ test("completed image job responses sign local generated image URLs", () => {
   assert.match(response.imageConcept.imageUrl, /assetExpires=/);
   assert.match(response.imageConcept.previewUrl, /assetSignature=/);
   assert.equal(verifySignedAssetRequest(appConfig, { url: response.imageConcept.imageUrl, headers: { host: "localhost" } }), true);
+});
+
+test("completed image job responses do not expose prompt or provider internals", () => {
+  const response = buildImageJobResponse({
+    id: "job-2",
+    status: "completed",
+    createdAt: Date.now(),
+    provider: "wavespeed",
+    model: "gpt-image-2",
+    metadata: {
+      title: "Generated image",
+      prompt: "full private prompt",
+      editPrompt: "private edit prompt",
+      stylePrompt: "private style prompt",
+      visualDirection: "clean visual",
+    },
+    imageUrl: "/api/generated-images/42/file",
+    error: "",
+  });
+
+  const text = JSON.stringify(response);
+  assert.equal(response.imageConcept.title, "Generated image");
+  assert.equal(response.imageConcept.visualDirection, "clean visual");
+  assert.doesNotMatch(text, /full private prompt|private edit prompt|private style prompt|wavespeed|gpt-image-2/);
+});
+
+test("sanitizeGeneration removes prompt and provider internals recursively", () => {
+  const sanitized = helpers.sanitizeGeneration({
+    id: 1,
+    ownerUserId: 1,
+    type: "xhsCarousel",
+    channelLabel: "小红书组图",
+    brandId: 1,
+    brandName: "Brand",
+    trendId: 1,
+    trendTitle: "Trend",
+    ideaTitle: "Idea",
+    cardTitle: "Card",
+    createdAt: "2026-05-02T00:00:00.000Z",
+    previewUrl: "",
+    summary: "",
+    payload: {
+      prompt: "private prompt",
+      provider: "wavespeed",
+      slides: [{ title: "slide", model: "gpt-image-2", prompt: "slide prompt" }],
+    },
+  });
+
+  const text = JSON.stringify(sanitized);
+  assert.doesNotMatch(text, /private prompt|slide prompt|wavespeed|gpt-image-2/);
+  assert.equal(sanitized.payload.slides[0].title, "slide");
+});
+
+test("CORS rejects credentialed wildcard and allows noncredentialed wildcard only", () => {
+  assert.throws(
+    () => validateCorsConfigForStartup({ cors: { origins: ["*"], credentials: true } }, "production"),
+    /wildcard origin/,
+  );
+  assert.throws(
+    () => validateCorsConfigForStartup({ cors: { origins: [], credentials: true } }, "production"),
+    /CORS_ORIGINS/,
+  );
+
+  const res = {
+    headers: {},
+    setHeader(name, value) {
+      this.headers[name] = value;
+    },
+    getHeader(name) {
+      return this.headers[name];
+    },
+  };
+  const applied = applyCorsHeaders(
+    { headers: { origin: "https://evil.example" } },
+    res,
+    { cors: { origins: ["*"], credentials: false } },
+  );
+  assert.equal(applied, true);
+  assert.equal(res.headers["Access-Control-Allow-Origin"], "*");
+  assert.equal(Object.hasOwn(res.headers, "Access-Control-Allow-Credentials"), false);
+});
+
+test("public health response does not expose provider configuration", async () => {
+  const res = {
+    statusCode: 0,
+    body: null,
+    writeHead(code) {
+      this.statusCode = code;
+    },
+    end(data) {
+      this.body = JSON.parse(data);
+    },
+  };
+  const handled = await handleHealthRoutes(
+    { appConfig: DEFAULT_APP_CONFIG },
+    { method: "GET", headers: {} },
+    res,
+    "/api/health",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  const text = JSON.stringify(res.body);
+  assert.doesNotMatch(text, /textProvider|imageProvider|model|baseUrl|searchEnabled|configured/);
 });
 
 test("repository row mappers centralize snake case to camel case conversion", () => {

@@ -38,6 +38,27 @@ async function handleAdminRoutes(context, req, res, pathname) {
     return user;
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/health") {
+    const adminUser = requireAdminFromSql();
+    if (!adminUser) return true;
+    json(res, 200, {
+      ok: true,
+      uptime: Math.round(process.uptime()),
+      textProvider: {
+        apiStyle: appConfig.textProvider.apiStyle,
+        model: appConfig.textProvider.model,
+        baseUrl: appConfig.textProvider.baseUrl || "",
+        configured: Boolean(appConfig.textProvider.apiKey),
+        searchEnabled: appConfig.textProvider.searchEnabled,
+      },
+      imageProvider: {
+        model: appConfig.imageProvider.model,
+        configured: Boolean(appConfig.imageProvider.apiKey),
+      },
+    });
+    return true;
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/overview") {
     const adminUser = requireAdminFromSql();
     if (!adminUser) return true;

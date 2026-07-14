@@ -5,8 +5,6 @@ function buildMomentsGenerationPayload(job) {
     title: job.metadata.title || "朋友圈图方案",
     imageUrl: job.imageUrl || "",
     previewUrl: job.imageUrl || "",
-    model: job.model,
-    provider: job.provider,
     caption: job.metadata.caption || "",
   };
 }
@@ -16,8 +14,6 @@ function buildGeneratedAssetPayload(job) {
     ...job.metadata,
     imageUrl: job.imageUrl || "",
     previewUrl: job.imageUrl || "",
-    model: job.model,
-    provider: job.provider,
   };
 }
 

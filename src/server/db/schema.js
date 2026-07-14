@@ -201,6 +201,11 @@ function ensureDatabaseIndexes() {
   `);
 }
 
+function clearStoredTrendSystemPrompts() {
+  if (!tableExists("trends") || !hasColumn("trends", "system_prompt")) return;
+  db.prepare("UPDATE trends SET system_prompt = '' WHERE system_prompt <> ''").run();
+}
+
 function ensureSchemaUpgrades() {
   if (tableExists("users")) {
     if (!hasColumn("users", "account_type")) {
@@ -359,6 +364,7 @@ module.exports = {
   hasColumn,
   initializeDatabaseSchema,
   ensureDatabaseIndexes,
+  clearStoredTrendSystemPrompts,
   ensureSchemaUpgrades,
   isSchemaCurrent,
   hasCurrentStoreSchema,

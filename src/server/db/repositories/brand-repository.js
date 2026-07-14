@@ -143,7 +143,6 @@ function hydrateBrandContent(brands) {
       tags: safeParseArray(row.tags_json),
       reason: row.reason,
       customPrompt: row.custom_prompt || "",
-      systemPrompt: row.system_prompt || "",
       ideas: readIdeasForTrendRow(row.row_id),
     };
 
@@ -281,7 +280,7 @@ function insertTrendBuckets(brandId, analysisId, scope, buckets) {
       trend.score,
       trend.reason,
       trend.customPrompt || "",
-      trend.systemPrompt || "",
+      "",
       JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
       trendPosition,
     );

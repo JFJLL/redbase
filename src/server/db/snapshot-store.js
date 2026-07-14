@@ -13,6 +13,7 @@ const {
   isSchemaCurrent,
   initializeDatabaseSchema,
   ensureDatabaseIndexes,
+  clearStoredTrendSystemPrompts,
   ensureSchemaUpgrades,
 } = require("./schema");
 const { migrateSchemaIfNeeded } = require("./migrations");
@@ -34,6 +35,7 @@ async function ensureStore() {
     writeStore,
   });
   ensureDatabaseIndexes();
+  clearStoredTrendSystemPrompts();
 
   const hasUsers = tableExists("users") && db.prepare("SELECT COUNT(*) AS count FROM users").get().count > 0;
   if (!hasUsers) {
@@ -325,9 +327,9 @@ async function writeStore(data) {
             trend.category,
             trend.summary,
             trend.score,
-            trend.reason,
-            trend.customPrompt || "",
-            trend.systemPrompt || "",
+              trend.reason,
+              trend.customPrompt || "",
+              "",
               JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
               trendPosition,
           );
@@ -364,9 +366,9 @@ async function writeStore(data) {
           trend.category,
           trend.summary,
           trend.score,
-          trend.reason,
-          trend.customPrompt || "",
-          trend.systemPrompt || "",
+            trend.reason,
+            trend.customPrompt || "",
+            "",
           JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
           trendPosition,
         );

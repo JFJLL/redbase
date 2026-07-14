@@ -49,7 +49,6 @@ function upsertImageJob(ownerUserId, job) {
       created_at_ms, updated_at, completed_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
-      owner_user_id = excluded.owner_user_id,
       status = excluded.status,
       provider = excluded.provider,
       provider_mode = excluded.provider_mode,
@@ -63,6 +62,7 @@ function upsertImageJob(ownerUserId, job) {
       created_at_ms = excluded.created_at_ms,
       updated_at = excluded.updated_at,
       completed_at = excluded.completed_at
+      WHERE image_jobs.owner_user_id = excluded.owner_user_id
   `).run(
     job.id,
     Number(ownerUserId),

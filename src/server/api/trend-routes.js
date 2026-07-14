@@ -1,7 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
-const { findUserById, updateUserCredits } = require("../db/repositories/auth-repository");
-const { insertCreditEvent } = require("../db/repositories/admin-repository");
+const { trySpendCreditsWithEvent, refundCreditEventIfNeeded } = require("../db/repositories/admin-repository");
 const {
   findBrandByOwner,
   upsertBrandFull,
@@ -40,7 +39,6 @@ async function handleTrendRoutes(context, req, res, pathname) {
     formatTimestamp,
     CREDIT_COSTS,
     MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS,
-    hasEnoughCredits,
     getTrendAnalysisBrandProfileSize,
     collectBody,
     getSessionToken,
@@ -120,7 +118,6 @@ async function handleTrendRoutes(context, req, res, pathname) {
       return true;
     }
 
-    if (!hasEnoughCredits(user, CREDIT_COSTS.analysis, res)) return true;
     const payload = await collectBody(req);
     const selectedBucket = resolveTrendBucketForRequest(payload.bucketKey || payload.trendBucketKey || payload.bucket);
     const rawXhsCategoryPath = selectedBucket.key === "xhs" ? String(payload.xhsCategoryPath || "").trim() : "";
@@ -147,6 +144,22 @@ async function handleTrendRoutes(context, req, res, pathname) {
         return true;
       }
     }
+    const spendResult = trySpendCreditsWithEvent({
+      userId: user.id,
+      amount: CREDIT_COSTS.analysis,
+      event: {
+        actionType: "analysis",
+        actionLabel: "AI 热点分析",
+        brandId: brand.id,
+        brandName: brand.name,
+        summary: `${brand.name} ${selectedBucket.title}`,
+      },
+    });
+    if (!spendResult.spent) {
+      const current = Number(spendResult.user?.credits || 0);
+      json(res, 402, { error: `积分不足，本次操作需要 ${CREDIT_COSTS.analysis} 积分，当前剩余 ${current} 积分。` });
+      return true;
+    }
     const { analysisId, trendBase } = allocateAnalysisAndTrendBase();
     brand.analyses.unshift({
       id: analysisId,
@@ -164,6 +177,11 @@ async function handleTrendRoutes(context, req, res, pathname) {
       analysisWarnings = Array.isArray(generatedTrends.analysisWarnings) ? generatedTrends.analysisWarnings : [];
       brand.trends = mergeGeneratedTrendBucket(brand.trends, generatedTrends);
     } catch (error) {
+      refundCreditEventIfNeeded({
+        creditEventId: spendResult.creditEvent.id,
+        userId: user.id,
+        reason: error?.message || "trend analysis failed",
+      });
       console.warn("[trend-analysis] analysis failed for request", {
         userId: user.id,
         brandId: brand.id,
@@ -175,24 +193,11 @@ async function handleTrendRoutes(context, req, res, pathname) {
       badRequest(res, error?.code ? getPgyPublicErrorMessage(error) : error?.message || "本次分析未能获取到可用热点，请稍后重试。");
       return true;
     }
-    const nextCredits = Number(user.credits || 0) - CREDIT_COSTS.analysis;
-    updateUserCredits(user.id, nextCredits);
-    const updatedUser = findUserById(user.id);
-    insertCreditEvent({
-      userId: user.id,
-      actionType: "analysis",
-      actionLabel: "AI 热点分析",
-      creditDelta: -CREDIT_COSTS.analysis,
-      creditCost: CREDIT_COSTS.analysis,
-      brandId: brand.id,
-      brandName: brand.name,
-      summary: `${brand.name} ${selectedBucket.title}`,
-    });
     brand.analyses[0].trendSnapshot = cloneTrendBuckets(generatedTrends);
     const savedBrand = upsertBrandFull(brand);
     json(res, 200, {
       brand: sanitizeBrand(savedBrand, appConfig),
-      user: sanitizeUser(updatedUser),
+      user: sanitizeUser(spendResult.user),
       warnings: analysisWarnings,
     });
     return true;
@@ -248,37 +253,43 @@ async function handleTrendRoutes(context, req, res, pathname) {
 
     const payload = await collectBody(req);
     const customPrompt = String(payload.customPrompt || "").trim();
-    if (!hasEnoughCredits(user, CREDIT_COSTS.regenerateIdeas, res)) return true;
-    const next = await regenerateTrendIdeas(brand, trend, customPrompt);
-    const nextCredits = Number(user.credits || 0) - CREDIT_COSTS.regenerateIdeas;
-    updateUserCredits(user.id, nextCredits);
-    const updatedUser = findUserById(user.id);
-    insertCreditEvent({
+    const spendResult = trySpendCreditsWithEvent({
       userId: user.id,
-      actionType: "regenerateIdeas",
-      actionLabel: "重新生成选题",
-      creditDelta: -CREDIT_COSTS.regenerateIdeas,
-      creditCost: CREDIT_COSTS.regenerateIdeas,
-      brandId: brand.id,
-      brandName: brand.name,
-      trendId: trend.id,
-      trendTitle: trend.title,
-      summary: customPrompt || `${brand.name} / ${trend.title}`,
-      payload: {
-        customPrompt,
+      amount: CREDIT_COSTS.regenerateIdeas,
+      event: {
+        actionType: "regenerateIdeas",
+        actionLabel: "重新生成选题",
+        brandId: brand.id,
+        brandName: brand.name,
+        trendId: trend.id,
+        trendTitle: trend.title,
+        summary: customPrompt || `${brand.name} / ${trend.title}`,
+        payload: { customPrompt },
       },
     });
+    if (!spendResult.spent) {
+      const current = Number(spendResult.user?.credits || 0);
+      json(res, 402, { error: `积分不足，本次操作需要 ${CREDIT_COSTS.regenerateIdeas} 积分，当前剩余 ${current} 积分。` });
+      return true;
+    }
+    let next;
+    try {
+      next = await regenerateTrendIdeas(brand, trend, customPrompt);
+    } catch (error) {
+      refundCreditEventIfNeeded({
+        creditEventId: spendResult.creditEvent.id,
+        userId: user.id,
+        reason: error?.message || "regenerate ideas failed",
+      });
+      badRequest(res, error?.message || "重新生成选题失败，请稍后重试。");
+      return true;
+    }
     trend.customPrompt = customPrompt;
-    trend.systemPrompt = next.systemPrompt;
     trend.ideas = next.ideas;
     upsertBrandFull(brand);
     json(res, 200, {
       trend: sanitizeTrend(trend),
-      user: sanitizeUser(updatedUser),
-      promptInfo: {
-        systemPrompt: trend.systemPrompt,
-        customPrompt,
-      },
+      user: sanitizeUser(spendResult.user),
     });
     return true;
   }

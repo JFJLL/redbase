@@ -16,6 +16,96 @@ function extractWavespeedOutput(payload) {
   return first?.image || first?.url || first?.image_url || null;
 }
 
+function getImageProviderName(provider) {
+  return String(provider?.provider || "wavespeed").trim().toLowerCase() === "runninghub" ? "runninghub" : "wavespeed";
+}
+
+function extractRunningHubOutput(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  return results.find((item) => item?.url)?.url || "";
+}
+
+function normalizeRunningHubError(payload) {
+  if (payload?.errorMessage) return String(payload.errorMessage);
+  if (payload?.failedReason && Object.keys(payload.failedReason).length) return truncateLogValue(payload.failedReason, 1000);
+  if (payload?.errorCode) return String(payload.errorCode);
+  return "";
+}
+
+function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = [] }) {
+  if (getImageProviderName(provider) === "runninghub") {
+    const includeResolution = imageUrls.length > 0 || provider.sendTextResolution !== false;
+    return {
+      prompt,
+      ...(imageUrls.length ? { imageUrls } : {}),
+      aspectRatio,
+      ...(includeResolution && provider.resolution ? { resolution: provider.resolution } : {}),
+      ...(provider.sendQuality !== false && provider.quality ? { quality: provider.quality } : {}),
+    };
+  }
+
+  return {
+    prompt,
+    aspect_ratio: aspectRatio,
+    resolution: provider.resolution,
+    quality: provider.quality,
+    enable_sync_mode: false,
+    enable_base64_output: false,
+    ...(imageUrls.length ? { images: imageUrls } : {}),
+  };
+}
+
+function parseImageProviderResult(provider, payload) {
+  if (getImageProviderName(provider) === "runninghub") {
+    const status = String(payload?.status || "").toUpperCase();
+    const imageUrl = extractRunningHubOutput(payload);
+    const error = normalizeRunningHubError(payload);
+    return {
+      imageUrl,
+      status: imageUrl || status === "SUCCESS" ? "completed" : status === "FAILED" || error ? "failed" : "pending",
+      error,
+    };
+  }
+
+  const imageUrl = extractWavespeedOutput(payload) || "";
+  const status = String(payload?.data?.status || "").toLowerCase();
+  const error = normalizeWavespeedError(payload);
+  return {
+    imageUrl,
+    status: imageUrl || status === "completed" ? "completed" : status === "failed" || error ? "failed" : "pending",
+    error,
+  };
+}
+
+function parseImageProviderSubmission(provider, payload) {
+  const parsed = parseImageProviderResult(provider, payload);
+  if (getImageProviderName(provider) === "runninghub") {
+    return {
+      taskId: String(payload?.taskId || ""),
+      resultUrl: String(provider.queryBaseUrl || ""),
+      ...parsed,
+    };
+  }
+  return {
+    taskId: String(payload?.data?.id || ""),
+    resultUrl: String(payload?.data?.urls?.get || payload?.data?.get_result_url || ""),
+    ...parsed,
+  };
+}
+
+function validateImageProviderSubmission(provider, submission) {
+  if (submission.status === "failed") {
+    throw new Error(submission.error || "图片生成失败。");
+  }
+  if (submission.imageUrl) return submission;
+  const missingResultUrl = !submission.resultUrl;
+  const missingRunningHubTaskId = getImageProviderName(provider) === "runninghub" && !submission.taskId;
+  if (missingResultUrl || missingRunningHubTaskId) {
+    throw new Error("图片服务未返回可轮询的任务地址。");
+  }
+  return submission;
+}
+
 function truncateLogValue(value, maxLength = 800) {
   const text = typeof value === "string" ? value : JSON.stringify(value || "");
   if (text.length <= maxLength) return text;
@@ -70,17 +160,28 @@ function buildImageJobLogContext(job) {
   };
 }
 
-async function fetchWavespeedResultOnce(getUrl, headers) {
-  const payload = await withRetries(() => fetchJson(getUrl, { headers, timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS }), {
-    retries: 2,
-    delayMs: 1500,
-  });
+async function fetchImageProviderResultOnce(provider, job, headers) {
+  const runningHub = getImageProviderName(provider) === "runninghub";
+  const taskId = String(job.metadata?.providerTaskId || "");
+  if (runningHub) assertConfigured(taskId, "RunningHub 图片任务 ID");
+  const options = runningHub
+    ? { method: "POST", headers, body: JSON.stringify({ taskId }), timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS }
+    : { headers, timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS };
+  const payload = await withRetries(() => fetchJson(job.providerResultUrl, options), { retries: 2, delayMs: 1500 });
+  const parsed = parseImageProviderResult(provider, payload);
   return {
     payload,
-    imageUrl: extractWavespeedOutput(payload),
-    status: payload?.data?.status || "",
-    error: normalizeWavespeedError(payload),
-    summary: summarizeWavespeedPayload(payload),
+    ...parsed,
+    summary:
+      runningHub
+        ? {
+            upstreamId: payload?.taskId || taskId,
+            status: payload?.status || "",
+            error: parsed.error,
+            outputCount: Array.isArray(payload?.results) ? payload.results.length : 0,
+            usage: payload?.usage || null,
+          }
+        : summarizeWavespeedPayload(payload),
   };
 }
 
@@ -88,6 +189,7 @@ async function createImageJob(
   appConfig,
   imageJobs,
   {
+    ownerUserId,
     brand,
     trend,
     idea,
@@ -127,15 +229,11 @@ async function createImageJob(
   const useEditModel = editImageUrls.length > 0;
   const endpoint = useEditModel ? provider.editBaseUrl || provider.baseUrl : provider.baseUrl;
   const outputAspectRatio = aspectRatio || metadata.aspectRatio || provider.aspectRatio;
-  const body = {
+  const body = buildImageProviderRequest(provider, {
     prompt: metadata.prompt,
-    aspect_ratio: outputAspectRatio,
-    resolution: provider.resolution,
-    quality: provider.quality,
-    enable_sync_mode: false,
-    enable_base64_output: false,
-    ...(useEditModel ? { images: editImageUrls } : {}),
-  };
+    aspectRatio: outputAspectRatio,
+    imageUrls: useEditModel ? editImageUrls : [],
+  });
 
   console.log("[image-job] creating upstream task", {
     brandId: brand?.id,
@@ -145,7 +243,7 @@ async function createImageJob(
     endpoint: summarizeUrl(endpoint),
     aspectRatio: outputAspectRatio,
     resultResolution: provider.resolution,
-    resultQuality: provider.quality,
+    resultQuality: provider.sendQuality === false ? "" : provider.quality,
     hasReferenceImage: useReferenceImages,
     referenceImageCount: referenceImages.length,
     referenceImageNames: referenceImages.map((image) => image.name || "").filter(Boolean),
@@ -185,24 +283,29 @@ async function createImageJob(
     throw error;
   }
 
-  const resultUrl = initial?.data?.urls?.get || initial?.data?.get_result_url;
-  const imageUrl = extractWavespeedOutput(initial);
+  const submission = parseImageProviderSubmission(provider, initial);
+  const imageUrl = submission.imageUrl;
   console.log("[image-job] upstream task accepted", {
-    ...summarizeWavespeedPayload(initial),
-    resultUrl: summarizeUrl(resultUrl),
+    upstreamId: submission.taskId,
+    status: submission.status,
+    error: submission.error,
+    resultUrl: summarizeUrl(submission.resultUrl),
     hasDirectImageUrl: Boolean(imageUrl),
   });
+  validateImageProviderSubmission(provider, submission);
   const job = {
     id: randomId(),
+    ownerUserId: Number(ownerUserId || 0),
     status: imageUrl ? "completed" : "pending",
     createdAt: Date.now(),
-    provider: "wavespeed",
+    provider: getImageProviderName(provider),
     providerMode: useEditModel ? "edit" : "text-to-image",
-    providerResultUrl: resultUrl || "",
+    providerResultUrl: submission.resultUrl,
     providerHeaders: headers,
     model: provider.model,
     metadata: {
       ...metadata,
+      providerTaskId: submission.taskId,
       aspectRatio: outputAspectRatio,
       sourceImageUrls: [...sourceUrls, ...uploadedSourceUrls],
       referenceImageName: referenceImages[0]?.name || "",
@@ -219,10 +322,6 @@ async function createImageJob(
     imageUrl: imageUrl || "",
     error: "",
   };
-
-  if (!job.imageUrl && !job.providerResultUrl) {
-    throw new Error("图片服务未返回可轮询的任务地址。");
-  }
 
   imageJobs.set(job.id, job);
   return job;
@@ -347,7 +446,8 @@ async function resolveImageJob(appConfig, imageJobs, job) {
   }
 
   try {
-    const polled = await fetchWavespeedResultOnce(job.providerResultUrl, getImageJobProviderHeaders(appConfig, job));
+    const provider = { ...appConfig.imageProvider, provider: job.provider || appConfig.imageProvider.provider };
+    const polled = await fetchImageProviderResultOnce(provider, job, getImageJobProviderHeaders(appConfig, job));
     console.log("[image-job] polled upstream result", {
       ...buildImageJobLogContext(job),
       upstreamStatus: polled.status || "",
@@ -355,14 +455,14 @@ async function resolveImageJob(appConfig, imageJobs, job) {
       upstreamError: polled.error || "",
       upstreamSummary: polled.summary,
     });
-    if (polled.imageUrl) {
+    if (polled.status === "completed" && polled.imageUrl) {
       job.status = "completed";
       job.imageUrl = polled.imageUrl;
       console.log("[image-job] completed", {
         ...buildImageJobLogContext(job),
         imageUrl: summarizeUrl(job.imageUrl),
       });
-    } else if (polled.status === "failed" || polled.error) {
+    } else if (polled.status === "failed") {
       job.status = "failed";
       job.error = polled.error || "图片生成失败";
       console.error("[image-job] upstream marked failed", {
@@ -401,6 +501,7 @@ async function resolveImageJob(appConfig, imageJobs, job) {
 }
 
 function buildImageJobResponse(job) {
+  const metadata = job.metadata && typeof job.metadata === "object" ? job.metadata : {};
   return {
     jobId: job.id,
     status: job.status,
@@ -409,11 +510,26 @@ function buildImageJobResponse(job) {
     imageConcept:
       job.status === "completed"
         ? {
-            ...job.metadata,
+            title: metadata.title || "",
+            caption: metadata.caption || "",
+            publishTitle: metadata.publishTitle || "",
+            publishCaption: metadata.publishCaption || "",
+            intro: metadata.intro || "",
+            outline: Array.isArray(metadata.outline) ? metadata.outline : [],
+            positioning: metadata.positioning || "",
+            cta: metadata.cta || "",
+            visualDirection: metadata.visualDirection || "",
+            style: metadata.style || "",
+            composition: metadata.composition || "",
+            copy: metadata.copy || "",
+            pageLabel: metadata.pageLabel || "",
+            slideIndex: metadata.slideIndex ?? null,
+            aspectRatio: metadata.aspectRatio || "",
+            referenceImageUsed: Boolean(metadata.referenceImageUsed),
+            logoImageUsed: Boolean(metadata.logoImageUsed),
+            styleReferenceImageUsed: Boolean(metadata.styleReferenceImageUsed),
             previewUrl: job.imageUrl,
             imageUrl: job.imageUrl,
-            provider: job.provider,
-            model: job.model,
           }
         : null,
     error: job.error || "",
@@ -437,4 +553,8 @@ module.exports = {
   resolveImageJob,
   buildImageJobResponse,
   getImageJobProviderHeaders,
+  buildImageProviderRequest,
+  parseImageProviderSubmission,
+  parseImageProviderResult,
+  validateImageProviderSubmission,
 };

@@ -48,6 +48,32 @@ function insertCreditEvent(input) {
   return mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(id));
 }
 
+function trySpendCreditsWithEvent({ userId, amount, event }) {
+  return runTransaction(() => {
+    const cost = Number(amount || 0);
+    if (!Number.isFinite(cost) || cost <= 0) {
+      return { spent: false, user: findUserById(userId), creditEvent: null };
+    }
+
+    const result = db.prepare(`
+      UPDATE users
+      SET credits = credits - ?
+      WHERE id = ? AND credits >= ?
+    `).run(cost, Number(userId), cost);
+    if (result.changes !== 1) {
+      return { spent: false, user: findUserById(userId), creditEvent: null };
+    }
+
+    const creditEvent = insertCreditEvent({
+      ...(event || {}),
+      userId,
+      creditDelta: -cost,
+      creditCost: cost,
+    });
+    return { spent: true, user: findUserById(userId), creditEvent };
+  });
+}
+
 function findCreditEventById(creditEventId) {
   return mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(Number(creditEventId)));
 }
@@ -335,7 +361,7 @@ function refundCreditEventIfNeeded({ creditEventId, userId, reason }) {
       ideaTitle: originalEvent.ideaTitle,
       generationId: originalEvent.generationId,
       channelLabel: originalEvent.channelLabel,
-      summary: `图片任务失败，自动退还 ${refundAmount} 积分`,
+      summary: `${originalEvent.actionLabel || "积分扣除"}失败，自动退还 ${refundAmount} 积分`,
       payload: {
         refundForCreditEventId: originalEvent.id,
         refundReason: String(reason || "image job failed").slice(0, 500),
@@ -457,6 +483,7 @@ function deleteUserCascadeRows(userId) {
 
 module.exports = {
   insertCreditEvent,
+  trySpendCreditsWithEvent,
   findCreditEventById,
   listAllUsers,
   listAdminUsersByIds,

@@ -348,7 +348,6 @@ function groupTrendRows(rows, target) {
       tags: trend.tags,
       reason: trend.reason,
       customPrompt: trend.customPrompt,
-      systemPrompt: trend.systemPrompt,
       ideas: trend.ideas,
     });
   }

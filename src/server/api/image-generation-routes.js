@@ -2,9 +2,8 @@ const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
 const { signLocalAssetUrls } = require("../assets/signed-urls");
 const { allocateCounter } = require("../db/repositories/core-repository");
-const { findUserById, updateUserCredits } = require("../db/repositories/auth-repository");
 const {
-  insertCreditEvent,
+  trySpendCreditsWithEvent,
   findGenerationForCreditEvent: findGenerationIdForCreditEvent,
   updateCreditEventGeneration,
   updateCreditEventEditResult,
@@ -25,6 +24,7 @@ const {
   buildXhsCarouselPackFromIdea,
   buildWechatLongImagePackFromIdea,
 } = require("../ai/content-service");
+const { sanitizePayloadForClient } = require("../utils");
 
 function requireRouteUser(req, res, helpers) {
   return requireSqlAuth(req, res, {
@@ -34,13 +34,10 @@ function requireRouteUser(req, res, helpers) {
   });
 }
 
-function createSqlCreditEvent({ user, actionType, actionLabel, creditDelta, creditCost, brand, trend, idea, channelLabel, summary, payload }) {
-  return insertCreditEvent({
-    userId: user.id,
+function buildSqlCreditEventInput({ actionType, actionLabel, brand, trend, idea, channelLabel, summary, payload }) {
+  return {
     actionType,
     actionLabel,
-    creditDelta,
-    creditCost,
     brandId: brand?.id ?? null,
     brandName: brand?.name || "",
     trendId: trend?.id ?? null,
@@ -49,14 +46,7 @@ function createSqlCreditEvent({ user, actionType, actionLabel, creditDelta, cred
     channelLabel,
     summary,
     payload,
-  });
-}
-
-function spendUserCredits(user, cost) {
-  const nextCredits = Number(user.credits || 0) - Number(cost || 0);
-  updateUserCredits(user.id, nextCredits);
-  user.credits = nextCredits;
-  return findUserById(user.id) || user;
+  };
 }
 
 function refundFailedImageJobCredits(user, job) {
@@ -200,8 +190,6 @@ function buildSingleSlideCarouselPayload(job) {
     composition: metadata.composition || "",
     previewUrl: job.imageUrl || "",
     imageUrl: job.imageUrl || "",
-    model: job.model || "",
-    provider: job.provider || "",
   };
   return {
     title: context.carouselTitle || metadata.title || "小红书组图单张",
@@ -266,7 +254,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     MAX_PRODUCT_IMAGE_BYTES,
     MAX_PRODUCT_IMAGE_SELECTION_COUNT,
     MAX_PRODUCT_IMAGE_SELECTION_BYTES,
-    hasEnoughCredits,
     normalizeProductImage,
     resolveBrandLogoImage,
     estimateDataUrlBytes,
@@ -284,6 +271,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     buildGeneratedAssetPayload,
     normalizeXhsCarouselSlideForJob,
     json,
+    notFound,
     badRequest,
     formatImageServiceError,
     unauthorized,
@@ -347,15 +335,12 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const editEntry = {
       id: job.id,
       parentEditId: job.generationContext.parentEditId || "",
-      prompt: job.generationContext.editPrompt || job.metadata?.editPrompt || job.metadata?.prompt || "",
       sourceImageUrl: job.generationContext.sourceImageUrl || job.metadata?.originalImageUrl || "",
       sourceSlideIndex: Number.isInteger(job.generationContext.sourceSlideIndex) ? job.generationContext.sourceSlideIndex : null,
       imageUrl: job.imageUrl || "",
       previewUrl: job.imageUrl || "",
       title: job.generationContext.title || job.metadata?.title || "改图结果",
       aspectRatio: job.generationContext.aspectRatio || job.metadata?.aspectRatio || "",
-      model: job.model || "",
-      provider: job.provider || "",
       createdAt: new Date(Number(job.createdAt || Date.now())).toISOString(),
       completedAt: job.completedAt || new Date().toISOString(),
     };
@@ -374,6 +359,36 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
   function contentAssetsUnavailable(res, error) {
     badRequest(res, error?.message || "当前选题缺少趋势分析时生成的内容资产，请先重新生成趋势分析。");
+  }
+
+  function writeInsufficientCredits(res, user, cost) {
+    const current = Number(user?.credits || 0);
+    json(res, 402, { error: `积分不足，本次操作需要 ${cost} 积分，当前剩余 ${current} 积分。` });
+  }
+
+  async function runChargedAiWork({ user, cost, event, run }) {
+    const spendResult = trySpendCreditsWithEvent({
+      userId: user.id,
+      amount: cost,
+      event,
+    });
+    if (!spendResult.spent) {
+      writeInsufficientCredits(res, spendResult.user || user, cost);
+      return null;
+    }
+
+    try {
+      const value = await run();
+      return { value, spendResult, creditEvent: spendResult.creditEvent, user: spendResult.user || user };
+    } catch (error) {
+      refundCreditEventIfNeeded({
+        creditEventId: spendResult.creditEvent.id,
+        userId: user.id,
+        reason: error?.message || "AI work failed",
+      });
+      json(res, 502, { error: formatImageServiceError(error) });
+      return null;
+    }
   }
 
   async function ensureIdeaAssetsForImage(brand, trend, ideaIndex) {
@@ -418,7 +433,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
     const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
-    if (!hasEnoughCredits(user, CREDIT_COSTS.momentsImage, res)) return true;
     let metadata;
     try {
       metadata = buildImageConceptMetadataFromIdea(idea);
@@ -430,13 +444,27 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return true;
       }
     }
-    console.log("[image-job] credits checked", {
-      elapsedMs: Date.now() - requestStartedAt,
-      userId: user.id,
-      currentCredits: user.credits,
+    const charged = await runChargedAiWork({
+      user,
+      cost: CREDIT_COSTS.momentsImage,
+      event: buildSqlCreditEventInput({
+        actionType: "momentsImage",
+        actionLabel: "朋友圈图生成",
+        brand,
+        trend,
+        idea,
+        channelLabel: "朋友圈图",
+        summary: idea.title,
+        payload: {
+          referenceImageUsed: productImages.length > 0,
+          referenceImageCount: productImages.length,
+          logoUsed: Boolean(logoImage),
+        },
+      }),
+      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, logoImage, metadata }),
     });
-
-    const job = await createImageJob({ brand, trend, idea, productImages, logoImage, metadata });
+    if (!charged) return true;
+    const job = charged.value;
     console.log("[image-job] api created job", {
       jobId: job.id,
       userId: user.id,
@@ -444,38 +472,20 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       trendId: trend.id,
       ideaIndex: Number(imageMatch[3]),
     });
-    spendUserCredits(user, CREDIT_COSTS.momentsImage);
-    const creditEvent = createSqlCreditEvent({
-      user,
-      actionType: "momentsImage",
-      actionLabel: "朋友圈图生成",
-      creditDelta: -CREDIT_COSTS.momentsImage,
-      creditCost: CREDIT_COSTS.momentsImage,
-      brand,
-      trend,
-      idea,
-      channelLabel: "朋友圈图",
-      summary: idea.title,
-      payload: {
-        referenceImageUsed: productImages.length > 0,
-        referenceImageCount: productImages.length,
-        logoUsed: Boolean(logoImage),
-      },
-    });
     console.log("[image-job] credits spent", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
-      remainingCredits: user.credits,
+      remainingCredits: charged.user.credits,
     });
     job.generationContext = {
       userId: user.id,
       brandId: brand.id,
       trendId: trend.id,
       ideaIndex: Number(imageMatch[3]),
-      creditEventId: creditEvent.id,
+      creditEventId: charged.creditEvent.id,
     };
     upsertImageJob(user.id, job);
-    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(user) });
+    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
     return true;
   }
 
@@ -484,9 +494,15 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const job = imageJobs.get(imageJobMatch[1]) || findImageJobByOwner(imageJobMatch[1], user.id);
+    const memoryJob = imageJobs.get(imageJobMatch[1]);
+    let job = null;
+    if (memoryJob?.ownerUserId === user.id || memoryJob?.generationContext?.userId === user.id) {
+      job = memoryJob;
+    } else {
+      job = findImageJobByOwner(imageJobMatch[1], user.id);
+    }
     if (!job) {
-      badRequest(res, "图片任务不存在或已过期，请重新发起生图。");
+      notFound(res);
       return true;
     }
     imageJobs.set(job.id, job);
@@ -592,45 +608,47 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       badRequest(res, "请先选择一张已生成的图片再改图。");
       return true;
     }
-    if (!hasEnoughCredits(user, CREDIT_COSTS.imageEdit, res)) return true;
-
-    const job = await createImageJob({
-      sourceImageUrls: sourceIsRemoteUrl && !localSourceImage ? [sourceImageUrl] : [],
-      sourceImages: localSourceImage ? [localSourceImage] : [],
-      aspectRatio: String(payload.aspectRatio || appConfig.imageProvider.aspectRatio || "").trim() || undefined,
-      metadata: {
-        title: String(payload.title || "改图结果").slice(0, 120),
-        visualDirection: "基于已生成图片继续改图",
-        style: "image edit",
-        composition: "保留原图主体和构图基础，只按追加提示词修改需要调整的部分",
-        prompt: editPrompt,
-        editPrompt,
-        originalImageUrl: sourceImageUrl,
-        sourceStoredPath: localSourceImage?.storedPath || "",
-      },
-    });
-    spendUserCredits(user, CREDIT_COSTS.imageEdit);
-    const creditEvent = createSqlCreditEvent({
+    const charged = await runChargedAiWork({
       user,
-      actionType: "imageEdit",
-      actionLabel: "追加提示词改图",
-      creditDelta: -CREDIT_COSTS.imageEdit,
-      creditCost: CREDIT_COSTS.imageEdit,
-      channelLabel: "改图",
-      summary: editPrompt.slice(0, 80),
-      payload: {
-        sourceImageUrl,
-        aspectRatio: payload.aspectRatio || "",
-        sourceGenerationId: sourceGeneration?.id ?? null,
-        parentEditId: payload.parentEditId || "",
-        sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
-      },
+      cost: CREDIT_COSTS.imageEdit,
+      event: buildSqlCreditEventInput({
+        actionType: "imageEdit",
+        actionLabel: "追加提示词改图",
+        channelLabel: "改图",
+        summary: editPrompt.slice(0, 80),
+        payload: {
+          sourceImageUrl,
+          aspectRatio: payload.aspectRatio || "",
+          sourceGenerationId: sourceGeneration?.id ?? null,
+          parentEditId: payload.parentEditId || "",
+          sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
+        },
+      }),
+      run: () =>
+        createImageJob({
+          ownerUserId: user.id,
+          sourceImageUrls: sourceIsRemoteUrl && !localSourceImage ? [sourceImageUrl] : [],
+          sourceImages: localSourceImage ? [localSourceImage] : [],
+          aspectRatio: String(payload.aspectRatio || appConfig.imageProvider.aspectRatio || "").trim() || undefined,
+          metadata: {
+            title: String(payload.title || "改图结果").slice(0, 120),
+            visualDirection: "基于已生成图片继续改图",
+            style: "image edit",
+            composition: "保留原图主体和构图基础，只按追加提示词修改需要调整的部分",
+            prompt: editPrompt,
+            editPrompt,
+            originalImageUrl: sourceImageUrl,
+            sourceStoredPath: localSourceImage?.storedPath || "",
+          },
+        }),
     });
+    if (!charged) return true;
+    const job = charged.value;
     job.generationContext = {
       type: "imageEdit",
       channelLabel: "改图",
       userId: user.id,
-      creditEventId: creditEvent.id,
+      creditEventId: charged.creditEvent.id,
       sourceGenerationId: sourceGeneration?.id ?? null,
       parentEditId: String(payload.parentEditId || ""),
       sourceImageUrl,
@@ -640,7 +658,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
     };
     upsertImageJob(user.id, job);
-    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(user) });
+    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
     return true;
   }
 
@@ -673,7 +691,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       hasProductImage: productImages.length > 0,
       productImageCount: productImages.length,
     });
-    if (!hasEnoughCredits(user, CREDIT_COSTS.wechatImage, res)) return true;
     let wechatPack;
     try {
       wechatPack = buildWechatLongImagePackFromIdea(idea);
@@ -695,21 +712,44 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       productImageCount: productImages.length,
       title: wechatPack.publishTitle || idea.title,
     });
-    const job = await createImageJob({
-      brand,
-      trend,
-      idea,
-      productImages,
-      logoImage,
-      aspectRatio: "9:16",
-      metadata: {
-        ...wechatPack,
-        aspectRatio: "9:16",
-        visualDirection: wechatPack.visualDirection,
-        style: wechatPack.style,
-        composition: wechatPack.composition,
-      },
+    const charged = await runChargedAiWork({
+      user,
+      cost: CREDIT_COSTS.wechatImage,
+      event: buildSqlCreditEventInput({
+        actionType: "wechatImage",
+        actionLabel: "公众号长图生成",
+        brand,
+        trend,
+        idea,
+        channelLabel: "公众号长图",
+        summary: wechatPack.publishTitle || idea.title,
+        payload: {
+          referenceImageUsed: productImages.length > 0,
+          referenceImageCount: productImages.length,
+          logoUsed: Boolean(logoImage),
+          aspectRatio: "9:16",
+        },
+      }),
+      run: () =>
+        createImageJob({
+          ownerUserId: user.id,
+          brand,
+          trend,
+          idea,
+          productImages,
+          logoImage,
+          aspectRatio: "9:16",
+          metadata: {
+            ...wechatPack,
+            aspectRatio: "9:16",
+            visualDirection: wechatPack.visualDirection,
+            style: wechatPack.style,
+            composition: wechatPack.composition,
+          },
+        }),
     });
+    if (!charged) return true;
+    const job = charged.value;
     job.generationContext = {
       type: "wechat",
       channelLabel: "公众号长图",
@@ -717,43 +757,24 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       brandId: brand.id,
       trendId: trend.id,
       ideaIndex: Number(wechatLongImageMatch[3]),
+      creditEventId: charged.creditEvent.id,
     };
     console.log("[image-job] api created wechat job", {
       elapsedMs: Date.now() - requestStartedAt,
       jobId: job.id,
       userId: user.id,
     });
-    spendUserCredits(user, CREDIT_COSTS.wechatImage);
-    const creditEvent = createSqlCreditEvent({
-      user,
-      actionType: "wechatImage",
-      actionLabel: "公众号长图生成",
-      creditDelta: -CREDIT_COSTS.wechatImage,
-      creditCost: CREDIT_COSTS.wechatImage,
-      brand,
-      trend,
-      idea,
-      channelLabel: "公众号长图",
-      summary: wechatPack.publishTitle || idea.title,
-      payload: {
-        referenceImageUsed: productImages.length > 0,
-        referenceImageCount: productImages.length,
-        logoUsed: Boolean(logoImage),
-        aspectRatio: "9:16",
-      },
-    });
-    job.generationContext.creditEventId = creditEvent.id;
     upsertImageJob(user.id, job);
     console.log("[image-job] wechat credits spent", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
-      remainingCredits: user.credits,
-      creditEventId: creditEvent.id,
+      remainingCredits: charged.user.credits,
+      creditEventId: charged.creditEvent.id,
     });
     json(res, 200, {
-      wechatPack,
+      wechatPack: sanitizePayloadForClient(wechatPack),
       jobId: job.id,
-      user: sanitizeUser(user),
+      user: sanitizeUser(charged.user),
     });
     return true;
   }
@@ -784,7 +805,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       }
     }
     json(res, 200, {
-      carouselPack,
+      carouselPack: sanitizePayloadForClient(carouselPack),
       user: sanitizeUser(user),
     });
     return true;
@@ -819,7 +840,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       hasProductImage: productImages.length > 0,
       productImageCount: productImages.length,
     });
-    if (!hasEnoughCredits(user, CREDIT_COSTS.xhsCarousel, res)) return true;
     let carouselPack;
     try {
       carouselPack = buildXhsCarouselPackFromIdea(idea);
@@ -831,53 +851,75 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return true;
       }
     }
-    const slideJobRecords = await Promise.all(
-      carouselPack.slides.map(async (slide, slideIndex) => {
-        console.log("[image-job] creating carousel slide job", {
-          elapsedMs: Date.now() - requestStartedAt,
-          userId: user.id,
-          brandId: brand.id,
-          trendId: trend.id,
-          ideaIndex: Number(xhsCarouselMatch[3]),
-          slideIndex,
-          pageLabel: slide.pageLabel,
-          hasProductImage: productImages.length > 0,
-          productImageCount: productImages.length,
-        });
-        const job = await createImageJob({
-          brand,
-          trend,
-          idea,
-          productImages,
-          logoImage,
-          metadata: {
-            title: `${carouselPack.title} ${slide.pageLabel}`,
-            visualDirection: slide.title,
-            style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
-            composition: `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
-            prompt: slide.prompt,
-            slideIndex,
-            pageLabel: slide.pageLabel,
-            copy: slide.copy,
-          },
-        });
-        job.generationContext = {
-          type: "xhsCarouselSlide",
-          userId: user.id,
-          brandId: brand.id,
-          trendId: trend.id,
-          ideaIndex: Number(xhsCarouselMatch[3]),
-          slideIndex,
-        };
-        console.log("[image-job] api created carousel slide job", {
-          elapsedMs: Date.now() - requestStartedAt,
-          jobId: job.id,
-          userId: user.id,
-          slideIndex,
-        });
-        return { slideIndex, job };
+    const charged = await runChargedAiWork({
+      user,
+      cost: CREDIT_COSTS.xhsCarousel,
+      event: buildSqlCreditEventInput({
+        actionType: "xhsCarousel",
+        actionLabel: "小红书组图生成",
+        brand,
+        trend,
+        idea,
+        channelLabel: "小红书组图",
+        summary: carouselPack.publishTitle || idea.title,
+        payload: {
+          referenceImageUsed: productImages.length > 0,
+          referenceImageCount: productImages.length,
+          logoUsed: Boolean(logoImage),
+        },
       }),
-    );
+      run: () =>
+        Promise.all(
+          carouselPack.slides.map(async (slide, slideIndex) => {
+            console.log("[image-job] creating carousel slide job", {
+              elapsedMs: Date.now() - requestStartedAt,
+              userId: user.id,
+              brandId: brand.id,
+              trendId: trend.id,
+              ideaIndex: Number(xhsCarouselMatch[3]),
+              slideIndex,
+              pageLabel: slide.pageLabel,
+              hasProductImage: productImages.length > 0,
+              productImageCount: productImages.length,
+            });
+            const job = await createImageJob({
+              ownerUserId: user.id,
+              brand,
+              trend,
+              idea,
+              productImages,
+              logoImage,
+              metadata: {
+                title: `${carouselPack.title} ${slide.pageLabel}`,
+                visualDirection: slide.title,
+                style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
+                composition: `小红书组图${slideIndex + 1}/4，竖版3:4，标题清晰，画面有连续组图统一性`,
+                prompt: slide.prompt,
+                slideIndex,
+                pageLabel: slide.pageLabel,
+                copy: slide.copy,
+              },
+            });
+            job.generationContext = {
+              type: "xhsCarouselSlide",
+              userId: user.id,
+              brandId: brand.id,
+              trendId: trend.id,
+              ideaIndex: Number(xhsCarouselMatch[3]),
+              slideIndex,
+            };
+            console.log("[image-job] api created carousel slide job", {
+              elapsedMs: Date.now() - requestStartedAt,
+              jobId: job.id,
+              userId: user.id,
+              slideIndex,
+            });
+            return { slideIndex, job };
+          }),
+        ),
+    });
+    if (!charged) return true;
+    const slideJobRecords = charged.value;
     const slideJobs = slideJobRecords.map(({ slideIndex, job }) => ({
       slideIndex,
       jobId: job.id,
@@ -885,44 +927,25 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     for (const { job } of slideJobRecords) {
       upsertImageJob(user.id, job);
     }
-    spendUserCredits(user, CREDIT_COSTS.xhsCarousel);
-    const creditEvent = createSqlCreditEvent({
-      user,
-      actionType: "xhsCarousel",
-      actionLabel: "小红书组图生成",
-      creditDelta: -CREDIT_COSTS.xhsCarousel,
-      creditCost: CREDIT_COSTS.xhsCarousel,
-      brand,
-      trend,
-      idea,
-      channelLabel: "小红书组图",
-      summary: carouselPack.publishTitle || idea.title,
-      payload: {
-        slideJobs,
-        referenceImageUsed: productImages.length > 0,
-        referenceImageCount: productImages.length,
-        logoUsed: Boolean(logoImage),
-      },
-    });
     console.log("[image-job] carousel credits spent", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
-      remainingCredits: user.credits,
-      creditEventId: creditEvent.id,
+      remainingCredits: charged.user.credits,
+      creditEventId: charged.creditEvent.id,
       slideJobCount: slideJobs.length,
     });
     for (const slideJob of slideJobs) {
       const job = imageJobs.get(slideJob.jobId);
       if (job?.generationContext) {
-        job.generationContext.creditEventId = creditEvent.id;
+        job.generationContext.creditEventId = charged.creditEvent.id;
         upsertImageJob(user.id, job);
       }
     }
     json(res, 200, {
-      carouselPack,
+      carouselPack: sanitizePayloadForClient(carouselPack),
       slideJobs,
-      creditEventId: creditEvent.id,
-      user: sanitizeUser(user),
+      creditEventId: charged.creditEvent.id,
+      user: sanitizeUser(charged.user),
     });
     return true;
   }
@@ -952,7 +975,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const incomingPack = payload.carouselPack && typeof payload.carouselPack === "object" ? payload.carouselPack : {};
     const incomingSlides = Array.isArray(incomingPack.slides) ? incomingPack.slides : [];
     let defaultPack = null;
-    if (!incomingSlides[slideIndex] && !payload.slide) {
+    if (!incomingSlides[slideIndex]?.prompt && !payload.slide?.prompt) {
       try {
         defaultPack = buildXhsCarouselPackFromIdea(idea);
       } catch (error) {
@@ -967,13 +990,12 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     defaultPack = defaultPack || { title: "", publishTitle: "", publishCaption: "", caption: "", slides: [] };
     const slide = normalizeXhsCarouselSlideForJob(payload.slide || incomingSlides[slideIndex], defaultPack.slides[slideIndex], slideIndex);
     if (!slide.prompt) {
-      badRequest(res, "请先填写当前页的生图 Prompt。");
+      badRequest(res, "当前页缺少服务端生图提示词，请重新生成组图方案后再试。");
       return true;
     }
 
     const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
-    if (!hasEnoughCredits(user, CREDIT_COSTS.xhsCarouselSlide, res)) return true;
 
     console.log("[image-job] creating carousel single slide job", {
       elapsedMs: Date.now() - requestStartedAt,
@@ -986,23 +1008,47 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       hasProductImage: productImages.length > 0,
       productImageCount: productImages.length,
     });
-    const job = await createImageJob({
-      brand,
-      trend,
-      idea,
-      productImages,
-      logoImage,
-      metadata: {
-        title: `${incomingPack.title || defaultPack.title} ${slide.pageLabel}`,
-        visualDirection: slide.visualDirection,
-        style: slide.style,
-        composition: slide.composition,
-        prompt: slide.prompt,
-        slideIndex,
-        pageLabel: slide.pageLabel,
-        copy: slide.copy,
-      },
+    const charged = await runChargedAiWork({
+      user,
+      cost: CREDIT_COSTS.xhsCarouselSlide,
+      event: buildSqlCreditEventInput({
+        actionType: "xhsCarousel",
+        actionLabel: "小红书组图单张生成",
+        brand,
+        trend,
+        idea,
+        channelLabel: "小红书组图",
+        summary: `${slide.pageLabel} · ${slide.title}`,
+        payload: {
+          slideIndex,
+          pageLabel: slide.pageLabel,
+          referenceImageUsed: productImages.length > 0,
+          referenceImageCount: productImages.length,
+          logoUsed: Boolean(logoImage),
+        },
+      }),
+      run: () =>
+        createImageJob({
+          ownerUserId: user.id,
+          brand,
+          trend,
+          idea,
+          productImages,
+          logoImage,
+          metadata: {
+            title: `${incomingPack.title || defaultPack.title} ${slide.pageLabel}`,
+            visualDirection: slide.visualDirection,
+            style: slide.style,
+            composition: slide.composition,
+            prompt: slide.prompt,
+            slideIndex,
+            pageLabel: slide.pageLabel,
+            copy: slide.copy,
+          },
+        }),
     });
+    if (!charged) return true;
+    const job = charged.value;
     job.generationContext = {
       type: "xhsCarouselSlide",
       singleSlideOnly: true,
@@ -1016,36 +1062,16 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       publishCaption: incomingPack.publishCaption || defaultPack.publishCaption || "",
       caption: incomingPack.caption || defaultPack.caption || "",
       carouselGroupId: normalizeCarouselGroupId(incomingPack.carouselGroupId),
+      creditEventId: charged.creditEvent.id,
     };
-    spendUserCredits(user, CREDIT_COSTS.xhsCarouselSlide);
-    const creditEvent = createSqlCreditEvent({
-      user,
-      actionType: "xhsCarousel",
-      actionLabel: "小红书组图单张生成",
-      creditDelta: -CREDIT_COSTS.xhsCarouselSlide,
-      creditCost: CREDIT_COSTS.xhsCarouselSlide,
-      brand,
-      trend,
-      idea,
-      channelLabel: "小红书组图",
-      summary: `${slide.pageLabel} · ${slide.title}`,
-      payload: {
-        slideIndex,
-        pageLabel: slide.pageLabel,
-        referenceImageUsed: productImages.length > 0,
-        referenceImageCount: productImages.length,
-        logoUsed: Boolean(logoImage),
-      },
-    });
-    job.generationContext.creditEventId = creditEvent.id;
     upsertImageJob(user.id, job);
     json(res, 202, {
       slideJob: {
         slideIndex,
         jobId: job.id,
       },
-      creditEventId: creditEvent.id,
-      user: sanitizeUser(user),
+      creditEventId: charged.creditEvent.id,
+      user: sanitizeUser(charged.user),
     });
     return true;
   }
@@ -1145,7 +1171,6 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       label: "风格参考图",
     });
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
-    if (!hasEnoughCredits(user, CREDIT_COSTS.styleImage, res)) return true;
     const metadata = {
       title: String(payload.title || "风格化图片").slice(0, 120),
       visualDirection: "按独立提示词生成风格化图片",
@@ -1154,38 +1179,36 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       prompt: `${stylePrompt}\n\n生成一张完整的风格化运营图片，可用于公众号封面、节日祝福海报或品牌日常内容视觉。画面需要完整、干净、有设计感，避免杂乱文字。`,
       stylePrompt,
     };
-    let job;
-    try {
-      job = await createImageJob({
+    const charged = await runChargedAiWork({
+      user,
+      cost: CREDIT_COSTS.styleImage,
+      event: buildSqlCreditEventInput({
+        actionType: "styleImage",
+        actionLabel: "风格化图生成",
         brand,
         trend,
         idea,
-        metadata,
-        logoImage,
-        styleReferenceImages,
-      });
-    } catch (error) {
-      json(res, 502, { error: formatImageServiceError(error) });
-      return true;
-    }
-    spendUserCredits(user, CREDIT_COSTS.styleImage);
-    const creditEvent = createSqlCreditEvent({
-      user,
-      actionType: "styleImage",
-      actionLabel: "风格化图生成",
-      creditDelta: -CREDIT_COSTS.styleImage,
-      creditCost: CREDIT_COSTS.styleImage,
-      brand,
-      trend,
-      idea,
-      channelLabel: "风格化图",
-      summary: stylePrompt.slice(0, 80),
-      payload: {
-        styleReferenceImageUsed: styleReferenceImages.length > 0,
-        styleReferenceImageCount: styleReferenceImages.length,
-        logoUsed: Boolean(logoImage),
-      },
+        channelLabel: "风格化图",
+        summary: stylePrompt.slice(0, 80),
+        payload: {
+          styleReferenceImageUsed: styleReferenceImages.length > 0,
+          styleReferenceImageCount: styleReferenceImages.length,
+          logoUsed: Boolean(logoImage),
+        },
+      }),
+      run: () =>
+        createImageJob({
+          ownerUserId: user.id,
+          brand,
+          trend,
+          idea,
+          metadata,
+          logoImage,
+          styleReferenceImages,
+        }),
     });
+    if (!charged) return true;
+    const job = charged.value;
     job.generationContext = {
       type: "styleImage",
       channelLabel: "风格化图",
@@ -1193,10 +1216,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       brandId: brand.id,
       trendId: trend.id,
       ideaIndex: Number(styleImageMatch[3]),
-      creditEventId: creditEvent.id,
+      creditEventId: charged.creditEvent.id,
     };
     upsertImageJob(user.id, job);
-    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(user) });
+    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
     return true;
   }
 

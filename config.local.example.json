@@ -51,6 +51,10 @@
     "assetSigningSecret": "",
     "cookieSecure": false
   },
+  "cors": {
+    "origins": ["http://127.0.0.1:3013"],
+    "credentials": true
+  },
   "pgy": {
     "enabled": false,
     "cookie": "",

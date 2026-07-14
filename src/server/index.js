@@ -3,13 +3,14 @@ const { HOST, PORT, loadAppConfig } = require("./config");
 const { ensureStore, readStore, writeStore } = require("./store");
 const { createAiServices } = require("./ai");
 const { createApiHandler, json } = require("./api");
-const { applyCorsHeaders, handleCorsPreflight } = require("./cors");
+const { applyCorsHeaders, handleCorsPreflight, validateCorsConfigForStartup } = require("./cors");
 const { serveStatic } = require("./static");
 const { cleanupExpiredGenerationHistory } = require("./api/history-routes");
 const { cleanupEmptyGeneratedImageDirs, removeGenerationLocalFiles } = require("./assets/image-store");
 
 async function start() {
   const appConfig = loadAppConfig();
+  validateCorsConfigForStartup(appConfig);
   const store = { ensureStore, readStore, writeStore };
   const ai = createAiServices(appConfig);
   const handleApi = createApiHandler({ appConfig, store, ai });

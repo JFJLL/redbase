@@ -6,7 +6,7 @@ process.env.REDBASE_DB_FILE = ":memory:";
 const { openDatabase } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
 const { insertUser, findUserById } = require("../../src/server/db/repositories/auth-repository");
-const { insertCreditEvent, refundCreditEventIfNeeded } = require("../../src/server/db/repositories/admin-repository");
+const { insertCreditEvent, trySpendCreditsWithEvent, refundCreditEventIfNeeded } = require("../../src/server/db/repositories/admin-repository");
 const {
   CREDIT_COSTS,
   hasEnoughCredits,
@@ -25,6 +25,15 @@ insertUser({
   password: "hash",
   accountType: "customer",
   credits: 3,
+  createdAt: "2026-05-02T00:00:00.000Z",
+});
+insertUser({
+  id: 2,
+  name: "Atomic Credit Tester",
+  phone: "13910000002",
+  password: "hash",
+  accountType: "customer",
+  credits: 1,
   createdAt: "2026-05-02T00:00:00.000Z",
 });
 
@@ -100,4 +109,35 @@ test("refundCreditEventIfNeeded restores credits once and is idempotent", () => 
 
   const refundCount = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE credit_delta > 0").get().count;
   assert.equal(refundCount, 1);
+});
+
+test("trySpendCreditsWithEvent atomically spends and records only affordable actions", () => {
+  const first = trySpendCreditsWithEvent({
+    userId: 2,
+    amount: 1,
+    event: {
+      actionType: "styleImage",
+      actionLabel: "风格化图生成",
+      summary: "atomic spend",
+    },
+  });
+  assert.equal(first.spent, true);
+  assert.equal(first.user.credits, 0);
+  assert.equal(first.creditEvent.creditDelta, -1);
+  assert.equal(first.creditEvent.creditCost, 1);
+
+  const second = trySpendCreditsWithEvent({
+    userId: 2,
+    amount: 1,
+    event: {
+      actionType: "styleImage",
+      actionLabel: "风格化图生成",
+      summary: "should not spend",
+    },
+  });
+  assert.equal(second.spent, false);
+  assert.equal(second.user.credits, 0);
+
+  const spendCount = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE user_id = 2 AND credit_delta < 0").get().count;
+  assert.equal(spendCount, 1);
 });

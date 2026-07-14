@@ -343,7 +343,6 @@ async function resumeXhsCarouselTask(task) {
       ...(generatedSlides[slideIndex] || {}),
       previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
       imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
-      model: imageConcept.model,
     };
     updatePendingImageTask(task.id, { carouselPack: { ...pack, slides: generatedSlides } });
   }
@@ -2685,7 +2684,7 @@ function renderGenerationHistory() {
         `;
       } else if (item.type === "styleImage") {
         contentHtml = `
-          <div class="history-generate-copy"><strong>风格化提示词：</strong>${escapeHtml(payload.stylePrompt || payload.prompt || "")}</div>
+          <div class="history-generate-copy"><strong>内容摘要：</strong>${escapeHtml(item.summary || payload.visualDirection || "风格化图片")}</div>
           <div class="history-generate-copy"><strong>用途：</strong>公众号封面、节日祝福海报或运营视觉</div>
         `;
       } else if (item.type === "xhsCarousel") {
@@ -2872,10 +2871,6 @@ function openHistoryGeneration(generationId, selectedSlideIndex = 0) {
       </div>
       <div class="image-meta-card">
         <h3>原图改图</h3>
-        <div class="image-meta-item">
-          <span>原始 Prompt</span>
-          <div class="image-prompt">${escapeHtml(payload.prompt || payload.stylePrompt || payload.visualDirection || payload.caption || "")}</div>
-        </div>
         ${renderImageEditPanel({
           imageUrl,
           title: item.cardTitle || "改图结果",
@@ -2937,10 +2932,6 @@ function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
       </div>
       <div class="image-meta-card">
         <h3>${escapeHtml(selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`)} · ${escapeHtml(selectedSlide.title || item.cardTitle || "小红书组图")}</h3>
-        <div class="image-meta-item">
-          <span>原始 Prompt</span>
-          <div class="image-prompt">${escapeHtml(selectedSlide.prompt || payload.prompt || payload.publishCaption || "")}</div>
-        </div>
         ${renderImageEditPanel({
           imageUrl,
           title: `${selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`} · ${selectedSlide.title || item.cardTitle || "改图结果"}`,
@@ -2979,10 +2970,6 @@ function renderImageEditHistory(editHistory, generation) {
                   <span class="panel-subtitle">${escapeHtml(new Date(entry.completedAt || entry.createdAt || Date.now()).toLocaleString("zh-CN", { hour12: false }))}</span>
                 </div>
                 <h3>${escapeHtml(entry.title || "改图结果")}</h3>
-                <div class="image-meta-item">
-                  <span>改图提示词</span>
-                  <div class="image-prompt">${escapeHtml(entry.prompt || "")}</div>
-                </div>
                 ${renderImageEditPanel({
                   imageUrl: entry.imageUrl || entry.previewUrl,
                   title: entry.title || generation.cardTitle || "改图结果",
@@ -3140,14 +3127,6 @@ async function generateImageConcept(ideaIndex) {
             <span>构图建议</span>
             <div>${escapeHtml(imageConcept.composition)}</div>
           </div>
-          <div class="image-meta-item">
-            <span>生图 Prompt</span>
-            <div class="image-prompt">${escapeHtml(imageConcept.prompt)}</div>
-          </div>
-          <div class="image-meta-item">
-            <span>模型</span>
-            <div>${escapeHtml(imageConcept.model || "未返回")}</div>
-          </div>
           ${renderImageEditPanel({
             imageUrl: generatedImageUrl,
             title: imageConcept.title,
@@ -3172,7 +3151,7 @@ async function generateWechatLongImage(ideaIndex) {
   const imageResult = openAssetModal({
     kicker: "AI 公众号长图",
     title: "微信公众号内容长图方案",
-    description: "输出适合公众号场景的发布标题、导语、结构和长图视觉 prompt。",
+    description: "输出适合公众号场景的发布标题、导语、结构和长图视觉方向。",
     loadingTitle: "AI 正在生成公众号长图方案...",
     loadingCopy: "正在组合标题、导语、文章结构和长图视觉方向。",
   });
@@ -3225,10 +3204,6 @@ async function generateWechatLongImage(ideaIndex) {
           <div class="image-meta-item">
             <span>适合插入的 CTA</span>
             <div>${escapeHtml(pack.cta)}</div>
-          </div>
-          <div class="image-meta-item">
-            <span>长图生图 Prompt</span>
-            <div class="image-prompt">${escapeHtml(pack.prompt)}</div>
           </div>
           ${renderImageEditPanel({
             imageUrl: pack.imageUrl || pack.previewUrl,
@@ -3329,10 +3304,6 @@ function renderXhsCarouselDraft(imageResult, pack, stateFlags = {}) {
                     <span>构图建议</span>
                     <div>${escapeHtml(slide.composition)}</div>
                   </div>
-                  <label class="image-meta-item">
-                    <span>生图 Prompt</span>
-                    <textarea class="carousel-prompt-input" data-carousel-prompt="${index}" rows="6">${escapeHtml(slide.prompt)}</textarea>
-                  </label>
                   ${
                     hasImage
                       ? `
@@ -3378,9 +3349,9 @@ async function generateXhsCarousel(ideaIndex) {
   const imageResult = openAssetModal({
     kicker: "AI 小红书组图",
     title: "小红书组图内容包",
-    description: "先检查并编辑每张图的生图 Prompt，再选择单张或一键生成四张图。",
+    description: "先检查每张图的视觉方向、风格和构图，再选择单张或一键生成四张图。",
     loadingTitle: "正在准备小红书组图方案...",
-    loadingCopy: "正在整理 4 张组图页面的视觉方向、风格、构图建议和 Prompt。",
+    loadingCopy: "正在整理 4 张组图页面的视觉方向、风格和构图建议。",
   });
 
   try {
@@ -3475,11 +3446,6 @@ async function generateXhsCarousel(ideaIndex) {
       const slide = pack.slides[slideIndex];
       if (!slide || hasXhsCarouselSlideImage(slide) || slide.isGenerating || slide.isQueued) return;
       syncXhsCarouselPromptInputs(imageResult, pack);
-      if (!String(slide.prompt || "").trim()) {
-        slide.error = "请先填写当前页的生图 Prompt。";
-        renderAndBind();
-        return;
-      }
       slide.isQueued = true;
       slide.error = "";
       enqueueImageTask("generate", () => runGenerateSlide(slideIndex));
@@ -3511,7 +3477,6 @@ async function generateXhsCarousel(ideaIndex) {
           ...pack.slides[slideIndex],
           previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
           imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
-          model: imageConcept.model,
           isGenerating: false,
           isQueued: false,
           error: "",
@@ -3563,7 +3528,6 @@ async function generateXhsCarousel(ideaIndex) {
           ...pack.slides[slideIndex],
           previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
           imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
-          model: imageConcept.model,
           isEditing: false,
           editQueued: false,
           editPrompt: "",
@@ -3698,7 +3662,6 @@ async function generateStyleImage(ideaIndex) {
     imageResult.innerHTML = `
       <div class="asset-header-card">
         <h3>${escapeHtml(imageConcept.title || "风格化图片")}</h3>
-        <p><strong>提示词：</strong>${escapeHtml(imageConcept.stylePrompt || stylePrompt)}</p>
       </div>
       <div class="asset-grid">
         <div class="image-preview-card">
@@ -3709,10 +3672,6 @@ async function generateStyleImage(ideaIndex) {
           <div class="image-meta-item">
             <span>用途</span>
             <div>公众号封面、节日祝福海报或运营视觉</div>
-          </div>
-          <div class="image-meta-item">
-            <span>生图 Prompt</span>
-            <div class="image-prompt">${escapeHtml(imageConcept.prompt || stylePrompt)}</div>
           </div>
           ${renderImageEditPanel({
             imageUrl: generatedImageUrl,

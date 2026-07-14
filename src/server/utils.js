@@ -64,7 +64,7 @@ function sanitizeIdea(idea, fallbackAudience, fallbackTag) {
     audience: String(idea?.audience ?? fallbackAudience ?? ""),
     hook: String(idea?.hook ?? ""),
     tags: normalizeTags(idea?.tags, fallbackTag ? [fallbackTag] : []),
-    contentAssets,
+    contentAssets: sanitizePayloadForClient(contentAssets),
   };
 }
 
@@ -81,8 +81,34 @@ function sanitizeTrend(trend) {
     reason: trend.reason,
     ideas: Array.isArray(trend.ideas) ? trend.ideas.map((idea) => sanitizeIdea(idea)) : [],
     customPrompt: trend.customPrompt || "",
-    systemPrompt: trend.systemPrompt || "",
   };
+}
+
+const SENSITIVE_PAYLOAD_KEYS = new Set([
+  "systemPrompt",
+  "system_prompt",
+  "prompt",
+  "editPrompt",
+  "stylePrompt",
+  "provider",
+  "model",
+  "providerResultUrl",
+  "providerHeaders",
+  "responseBody",
+  "upstreamPayload",
+  "sourceStoredPath",
+]);
+
+function sanitizePayloadForClient(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizePayloadForClient(item));
+  }
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !SENSITIVE_PAYLOAD_KEYS.has(key))
+      .map(([key, child]) => [key, sanitizePayloadForClient(child)]),
+  );
 }
 
 function isTrendBucket(value) {
@@ -149,7 +175,7 @@ function sanitizeGeneration(item) {
     createdAt: item.createdAt,
     previewUrl: item.previewUrl || "",
     summary: item.summary || "",
-    payload: item.payload || {},
+    payload: sanitizePayloadForClient(item.payload || {}),
   };
 }
 
@@ -455,6 +481,7 @@ module.exports = {
   normalizeTags,
   sanitizeIdea,
   sanitizeTrend,
+  sanitizePayloadForClient,
   normalizeTrendBuckets,
   flattenTrendBuckets,
   sanitizeGeneration,

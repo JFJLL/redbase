@@ -102,7 +102,6 @@ function readStoreFromCurrentSchema() {
       tags: safeParseArray(row.tags_json),
       reason: row.reason,
       customPrompt: row.custom_prompt || "",
-      systemPrompt: row.system_prompt || "",
       ideas: readIdeasForTrendRow(row.row_id),
     };
 
@@ -373,7 +372,6 @@ function readLegacyAnalysisTrends(analysisId) {
     tags: readLegacyAnalysisTrendTags(analysisId, row.id, row.tags_json),
     reason: row.reason,
     customPrompt: row.custom_prompt || "",
-    systemPrompt: row.system_prompt || "",
     ideas: readLegacyAnalysisTrendIdeas(analysisId, row.id),
   }));
 }
@@ -441,7 +439,6 @@ function readLegacyCurrentTrends(brandId) {
     tags: readLegacyCurrentTrendTags(row.id, row.tags_json),
     reason: row.reason,
     customPrompt: row.custom_prompt || "",
-    systemPrompt: row.system_prompt || "",
     ideas: readLegacyCurrentTrendIdeas(row.id),
   }));
 }

@@ -35,15 +35,19 @@ const DEFAULT_APP_CONFIG = {
     maxOutputTokens: 65536,
   },
   imageProvider: {
+    provider: "wavespeed",
     baseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
     editBaseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
     uploadBaseUrl: "https://api.wavespeed.ai/api/v3/media/upload/binary",
+    queryBaseUrl: "",
     model: "gpt-image-2",
     apiKey: "",
     aspectRatio: "3:4",
     resolution: "2k",
     quality: "medium",
     imageCount: 1,
+    sendTextResolution: true,
+    sendQuality: true,
   },
   admin: {
     phones: [],
@@ -59,6 +63,7 @@ const DEFAULT_APP_CONFIG = {
   },
   cors: {
     origins: [],
+    credentials: true,
   },
   security: {
     assetSigningSecret: "",
@@ -131,6 +136,7 @@ function loadAppConfig() {
       merged.pgy?.cookieFile ||
       merged.pgy?.ossAccessKeyId,
   );
+  const imageProviderName = String(process.env.IMAGE_PROVIDER || merged.imageProvider.provider || "wavespeed").trim().toLowerCase();
 
   return {
     textProvider: {
@@ -144,15 +150,22 @@ function loadAppConfig() {
       maxOutputTokens: Number(process.env.TEXT_MAX_OUTPUT_TOKENS || merged.textProvider.maxOutputTokens || 65536),
     },
     imageProvider: {
+      provider: imageProviderName,
       baseUrl: String(process.env.IMAGE_BASE_URL || merged.imageProvider.baseUrl || "").trim(),
       editBaseUrl: String(process.env.IMAGE_EDIT_BASE_URL || merged.imageProvider.editBaseUrl || "").trim(),
       uploadBaseUrl: String(process.env.IMAGE_UPLOAD_BASE_URL || merged.imageProvider.uploadBaseUrl || "").trim(),
-      model: String(process.env.IMAGE_MODEL || merged.imageProvider.model || "").trim(),
+      queryBaseUrl: String(process.env.IMAGE_QUERY_BASE_URL || merged.imageProvider.queryBaseUrl || "").trim(),
+      model: String(process.env.IMAGE_MODEL || (imageProviderName === "wavespeed" ? merged.imageProvider.model : "")).trim(),
       apiKey: String(process.env.IMAGE_API_KEY || merged.imageProvider.apiKey || "").trim(),
       aspectRatio: String(process.env.IMAGE_ASPECT_RATIO || merged.imageProvider.aspectRatio || "3:4").trim(),
       resolution: String(process.env.IMAGE_RESOLUTION || merged.imageProvider.resolution || "2k").trim(),
       quality: String(process.env.IMAGE_QUALITY || merged.imageProvider.quality || "medium").trim(),
       imageCount: Number(process.env.IMAGE_COUNT || merged.imageProvider.imageCount || 1),
+      sendTextResolution: parseBooleanConfig(
+        process.env.IMAGE_SEND_TEXT_RESOLUTION,
+        parseBooleanConfig(merged.imageProvider.sendTextResolution, true),
+      ),
+      sendQuality: parseBooleanConfig(process.env.IMAGE_SEND_QUALITY, parseBooleanConfig(merged.imageProvider.sendQuality, true)),
     },
     admin: {
       phones: String(process.env.ADMIN_PHONES || "")
@@ -170,6 +183,7 @@ function loadAppConfig() {
         .filter(Boolean)
         .concat(Array.isArray(merged.cors?.origins) ? merged.cors.origins.map((origin) => String(origin || "").trim()).filter(Boolean) : [])
         .filter((origin, index, all) => all.indexOf(origin) === index),
+      credentials: parseBooleanConfig(process.env.CORS_CREDENTIALS, parseBooleanConfig(merged.cors?.credentials, true)),
     },
     security: {
       assetSigningSecret: String(process.env.ASSET_SIGNING_SECRET || merged.security?.assetSigningSecret || "").trim(),
