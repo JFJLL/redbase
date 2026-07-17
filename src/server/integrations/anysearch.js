@@ -318,6 +318,33 @@ function buildAnySearchQueries(brand, bucketMeta, config = {}, now = new Date())
   return [...generalQueries, ...socialQueries].slice(0, 5);
 }
 
+function buildAnySearchAuthoritativeQueries(brand, bucketMeta, config = {}) {
+  const bucketKey = getBucketKey(bucketMeta);
+  const industry = truncateQueryValue(brand?.industry || "消费行业", 48);
+  const product = truncateQueryValue(String(brand?.product || industry).split(/\r?\n/)[0], 56);
+  const focusByBucket = {
+    traffic: "内容营销 平台趋势 消费者关注",
+    news: "政策 标准 行业动态 消费趋势",
+    social: "社会话题 生活方式 消费情绪",
+    track: "品类趋势 行业动态 消费决策",
+    crowd: "人群趋势 消费需求 使用场景",
+    xhs: "小红书 内容趋势 消费者关注",
+  };
+  const focus = focusByBucket[bucketKey] || focusByBucket.news;
+  const maxResults = Math.max(1, Math.min(10, Number(config.maxResultsPerQuery || DEFAULT_MAX_RESULTS_PER_QUERY)));
+  const domain = String(config.domain || GENERAL_DOMAIN);
+  const subDomain = String(config.subDomain || GENERAL_SUB_DOMAIN);
+  return [
+    `site:gov.cn ${industry} ${product} ${focus} 官方`,
+    `(site:people.com.cn OR site:xinhuanet.com OR site:ce.cn OR site:36kr.com) ${industry} ${product} ${focus}`,
+  ].map((query) => ({
+    query,
+    domain,
+    sub_domain: subDomain,
+    max_results: maxResults,
+  }));
+}
+
 function decodeBasicHtml(value) {
   return String(value || "")
     .replace(/<em>/gi, "")
@@ -425,6 +452,56 @@ function getTrustScore(level) {
   return { high: 4, medium: 3, social: 2, low: 1 }[level] || 0;
 }
 
+function normalizeRelevancePhrase(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function buildFieldRelevanceTerms(value) {
+  const stopTerms = new Set([
+    "品牌", "产品", "用户", "消费", "行业", "趋势", "内容", "关注", "提升", "核心",
+    "目标", "使用", "场景", "设计", "市场", "家庭", "生活", "专为",
+  ]);
+  const source = String(value || "").toLowerCase();
+  const phrases = new Set();
+  const terms = [];
+  let offset = 0;
+  for (const chunk of source.match(/[\p{Script=Han}]{2,}/gu) || []) {
+    const phrase = normalizeRelevancePhrase(chunk);
+    if (phrase.length <= 20 && !stopTerms.has(phrase)) phrases.add(phrase);
+    for (let index = 0; index < chunk.length - 1; index += 1) {
+      const term = chunk.slice(index, index + 2);
+      if (!stopTerms.has(term)) terms.push({ term, position: offset + index });
+    }
+    offset += chunk.length + 1;
+  }
+  for (const token of source.match(/[a-z0-9][a-z0-9.+-]{2,}/g) || []) {
+    const phrase = normalizeRelevancePhrase(token);
+    if (!stopTerms.has(phrase)) {
+      phrases.add(phrase);
+      terms.push({ term: phrase, position: offset });
+      offset += phrase.length + 1;
+    }
+  }
+  return { phrases: [...phrases], terms };
+}
+
+function isEvidenceRelevantToBrand(item, brand) {
+  const haystack = normalizeRelevancePhrase(`${item?.title || ""} ${item?.snippet || ""}`);
+  const brandProfile = buildFieldRelevanceTerms(brand?.name);
+  const productProfile = buildFieldRelevanceTerms(brand?.product);
+  if (brandProfile.phrases.some((phrase) => phrase.length >= 2 && haystack.includes(phrase))) return true;
+  if (productProfile.phrases.some((phrase) => phrase.length >= 2 && haystack.includes(phrase))) return true;
+
+  const matchedProductTerms = productProfile.terms.filter(({ term }) => haystack.includes(term));
+  if (matchedProductTerms.some(({ term }) => /^[a-z0-9]/.test(term) && term.length >= 5)) return true;
+  const hasSeparatedProductPair = matchedProductTerms.some((left, index) =>
+    matchedProductTerms.slice(index + 1).some((right) => Math.abs(left.position - right.position) >= 2),
+  );
+  return hasSeparatedProductPair;
+}
+
 function parseResultBlocks(sectionText, query, queryIndex) {
   const matches = [...String(sectionText || "").matchAll(/^###\s+\d+\.\s+(.+)$/gm)];
   const results = [];
@@ -472,9 +549,7 @@ function looksLikeBrokenPage(item) {
   return /(?:页面不见了|页面不存在|网页不存在|page not found|404 not found|404 error)/i.test(`${title} ${excerpt}`);
 }
 
-function normalizeEvidence(items, options = {}) {
-  const seenUrls = new Set();
-  const seenTitles = new Set();
+function prepareEvidence(items, options = {}) {
   const maxSnippetChars = Math.max(200, Math.min(800, Number(options.maxSnippetChars || 520)));
   return (Array.isArray(items) ? items : [])
     .map((item) => {
@@ -483,9 +558,6 @@ function normalizeEvidence(items, options = {}) {
       const parsed = new URL(url);
       const title = sanitizeEvidenceText(item?.title || parsed.hostname, 180);
       const titleKey = title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 100);
-      if (seenUrls.has(url) || (titleKey && seenTitles.has(titleKey))) return null;
-      seenUrls.add(url);
-      if (titleKey) seenTitles.add(titleKey);
       const sourceType =
         item?.sourceType === "social" || SOCIAL_HOSTS.some((host) => hostMatches(parsed.hostname, host))
           ? "social"
@@ -503,10 +575,28 @@ function normalizeEvidence(items, options = {}) {
         trustLevel,
         trustScore: getTrustScore(trustLevel),
         queryIndex: Number(item?.queryIndex || 0),
+        dedupeTitleKey: titleKey,
       };
     })
-    .filter(Boolean)
-    .sort((left, right) => right.trustScore - left.trustScore || String(right.publishedAt).localeCompare(String(left.publishedAt)));
+    .filter(Boolean);
+}
+
+function dedupeEvidence(items) {
+  const seenUrls = new Set();
+  const seenTitles = new Set();
+  return (Array.isArray(items) ? items : [])
+    .sort((left, right) => right.trustScore - left.trustScore || String(right.publishedAt).localeCompare(String(left.publishedAt)))
+    .filter((item) => {
+      if (seenUrls.has(item.url) || (item.dedupeTitleKey && seenTitles.has(item.dedupeTitleKey))) return false;
+      seenUrls.add(item.url);
+      if (item.dedupeTitleKey) seenTitles.add(item.dedupeTitleKey);
+      return true;
+    })
+    .map(({ dedupeTitleKey, ...item }) => item);
+}
+
+function normalizeEvidence(items, options = {}) {
+  return dedupeEvidence(prepareEvidence(items, options));
 }
 
 function selectEvidence(items, options = {}) {
@@ -717,10 +807,15 @@ async function requestAnySearch(config, queries, options = {}) {
   throw lastError || createAnySearchError("ANYSEARCH_NETWORK_ERROR", "AnySearch 网络连接失败。");
 }
 
-function buildCacheKey(config, queries) {
+function buildCacheKey(config, queries, brand) {
   return JSON.stringify({
     baseUrl: config.baseUrl || ANYSEARCH_ENDPOINT,
     queries,
+    relevanceSignature: {
+      name: normalizeRelevancePhrase(brand?.name),
+      industry: normalizeRelevancePhrase(brand?.industry),
+      product: normalizeRelevancePhrase(brand?.product),
+    },
     urlCheckEnabled: config.urlCheckEnabled !== false,
     maxEvidence: config.maxEvidence || DEFAULT_MAX_EVIDENCE,
     maxSocialEvidence: config.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE,
@@ -754,51 +849,87 @@ function getAnySearchCacheSize() {
   return evidenceCache.size;
 }
 
+function getEvidenceCandidates(normalized, config) {
+  const candidateLimit = Math.max(Number(config.maxEvidence || DEFAULT_MAX_EVIDENCE) + 4, 8);
+  const socialCandidateLimit = Math.min(
+    12,
+    Math.max(Number(config.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE) + 6, 8),
+  );
+  return [
+    ...normalized.filter((item) => item.sourceType !== "social").slice(0, candidateLimit),
+    ...normalized.filter((item) => item.sourceType === "social").slice(0, socialCandidateLimit),
+  ];
+}
+
+async function getAccessibleEvidence(normalized, config, options, accessibilityCache) {
+  const candidates = getEvidenceCandidates(normalized, config);
+  if (config.urlCheckEnabled === false) return candidates;
+  const urlChecker = options.urlChecker || checkUrlAccessible;
+  const checks = await Promise.all(
+    candidates.map(async (item) => {
+      if (!accessibilityCache.has(item.url)) {
+        accessibilityCache.set(
+          item.url,
+          await urlChecker(item.url, {
+            timeoutMs: config.urlCheckTimeoutMs,
+            lookupImpl: options.lookupImpl,
+          }).catch(() => false),
+        );
+      }
+      return { item, accessible: accessibilityCache.get(item.url) };
+    }),
+  );
+  return checks.filter((result) => result.accessible).map((result) => result.item);
+}
+
+function countReliableEvidence(evidence) {
+  return evidence.filter(
+    (item) => item.sourceType === "web" && ["high", "medium"].includes(item.trustLevel),
+  ).length;
+}
+
 async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}) {
   const config = appConfig?.searchProvider || {};
   if (!config.enabled) throw createAnySearchError("ANYSEARCH_DISABLED", "AnySearch 搜索服务尚未启用。");
-  const queries = buildAnySearchQueries(brand, bucketMeta, config, options.now || new Date());
+  const initialQueries = buildAnySearchQueries(brand, bucketMeta, config, options.now || new Date());
   const cacheTtlMs = Math.max(0, Number(config.cacheTtlMs ?? 10 * 60 * 1000));
-  const cacheKey = buildCacheKey(config, queries);
+  const cacheKey = buildCacheKey(config, initialQueries, brand);
   if (!options.skipCache && cacheTtlMs > 0) {
     const cached = getCachedEvidence(cacheKey, cacheTtlMs);
     if (cached) return cached;
   }
 
   const requestImpl = options.requestImpl || requestAnySearch;
-  const markdown = await requestImpl(config, queries, options);
-  const parsed = parseAnySearchMarkdown(markdown, queries);
-  const normalized = normalizeEvidence(parsed, config);
-  const candidateLimit = Math.max(Number(config.maxEvidence || DEFAULT_MAX_EVIDENCE) + 4, 8);
-  const socialCandidateLimit = Math.min(
-    12,
-    Math.max(Number(config.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE) + 6, 8),
-  );
-  const candidates = [
-    ...normalized.filter((item) => item.sourceType !== "social").slice(0, candidateLimit),
-    ...normalized.filter((item) => item.sourceType === "social").slice(0, socialCandidateLimit),
-  ];
-  let accessible = candidates;
-  if (config.urlCheckEnabled !== false) {
-    const urlChecker = options.urlChecker || checkUrlAccessible;
-    const checks = await Promise.all(
-      candidates.map(async (item) => ({
-        item,
-        accessible: await urlChecker(item.url, {
-          timeoutMs: config.urlCheckTimeoutMs,
-          lookupImpl: options.lookupImpl,
-        }).catch(() => false),
-      })),
-    );
-    accessible = checks.filter((result) => result.accessible).map((result) => result.item);
-  }
-  const evidence = selectEvidence(accessible, config);
-  const reliableCount = evidence.filter((item) => item.sourceType === "web" && ["high", "medium"].includes(item.trustLevel)).length;
+  let queries = [...initialQueries];
+  const markdown = await requestImpl(config, initialQueries, options);
+  let parsed = parseAnySearchMarkdown(markdown, initialQueries);
+  const accessibilityCache = new Map();
+  const initialCandidates = prepareEvidence(parsed, config);
+  let normalized = dedupeEvidence(initialCandidates);
+  let accessible = await getAccessibleEvidence(normalized, config, options, accessibilityCache);
+  let evidence = selectEvidence(accessible, config);
+  let reliableCount = countReliableEvidence(evidence);
   const minReliableEvidence = Math.max(1, Number(config.minReliableEvidence || DEFAULT_MIN_RELIABLE_EVIDENCE));
+
+  if (reliableCount < minReliableEvidence) {
+    const authoritativeQueries = buildAnySearchAuthoritativeQueries(brand, bucketMeta, config);
+    const authoritativeMarkdown = await requestImpl(config, authoritativeQueries, options);
+    const authoritativeParsed = parseAnySearchMarkdown(authoritativeMarkdown, authoritativeQueries)
+      .map((item) => ({ ...item, queryIndex: item.queryIndex + initialQueries.length }));
+    queries = [...initialQueries, ...authoritativeQueries];
+    parsed = [...parsed, ...authoritativeParsed];
+    const relevantAuthoritativeCandidates = prepareEvidence(authoritativeParsed, config)
+      .filter((item) => isEvidenceRelevantToBrand(item, brand));
+    normalized = dedupeEvidence([...initialCandidates, ...relevantAuthoritativeCandidates]);
+    accessible = await getAccessibleEvidence(normalized, config, options, accessibilityCache);
+    evidence = selectEvidence(accessible, config);
+    reliableCount = countReliableEvidence(evidence);
+  }
+
   if (reliableCount < minReliableEvidence) {
     throw createAnySearchError(
       "ANYSEARCH_INSUFFICIENT_EVIDENCE",
-      `AnySearch 返回的可验证来源不足：${reliableCount}/${minReliableEvidence}。`,
+      `AnySearch 已补充检索权威来源，但可验证来源仍不足：${reliableCount}/${minReliableEvidence}。`,
     );
   }
 
@@ -831,6 +962,7 @@ module.exports = {
   SOCIAL_DOMAIN,
   SOCIAL_SUB_DOMAIN,
   buildAnySearchQueries,
+  buildAnySearchAuthoritativeQueries,
   parseAnySearchMarkdown,
   normalizeEvidence,
   selectEvidence,

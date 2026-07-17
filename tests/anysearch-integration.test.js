@@ -8,6 +8,7 @@ const {
   GENERAL_SUB_DOMAIN,
   SOCIAL_SUB_DOMAIN,
   buildAnySearchQueries,
+  buildAnySearchAuthoritativeQueries,
   parseAnySearchMarkdown,
   normalizeEvidence,
   selectEvidence,
@@ -97,6 +98,12 @@ test("routes general and social-media searches by trend bucket", () => {
   const newsQueries = buildAnySearchQueries(brand, { key: "news" }, {}, fixedNow);
   assert.equal(newsQueries.length, 2);
   assert.ok(newsQueries.every((query) => query.sub_domain === GENERAL_SUB_DOMAIN));
+
+  const authoritativeQueries = buildAnySearchAuthoritativeQueries(brand, { key: "xhs" });
+  assert.equal(authoritativeQueries.length, 2);
+  assert.ok(authoritativeQueries.every((query) => query.sub_domain === GENERAL_SUB_DOMAIN));
+  assert.match(authoritativeQueries[0].query, /site:gov\.cn/);
+  assert.match(authoritativeQueries[1].query, /^\(site:people\.com\.cn.*site:xinhuanet\.com.*\)/);
 });
 
 test("parses, sanitizes, deduplicates, and caps mixed evidence", () => {
@@ -245,6 +252,40 @@ test("counts every outbound retry attempt toward the conservative daily ceiling"
     ),
     { code: "ANYSEARCH_DAILY_LIMIT" },
   );
+  assert.equal(fetchCalls, 1);
+  resetAnySearchBudget();
+});
+
+test("serializes same-process quota reservations before concurrent requests reach the network", async () => {
+  resetAnySearchBudget();
+  let fetchCalls = 0;
+  let releaseFirstRequest;
+  const firstRequestGate = new Promise((resolve) => {
+    releaseFirstRequest = resolve;
+  });
+  const config = {
+    baseUrl: "https://api.anysearch.test/mcp",
+    apiKey: "fixture-key",
+    dailyQueryLimit: 1,
+    timeoutMs: 1000,
+  };
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    await firstRequestGate;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ result: { content: [{ type: "text", text: "ok" }] } }),
+    };
+  };
+
+  const first = requestAnySearch(config, [{ query: "one" }], { retries: 0, fetchImpl });
+  await assert.rejects(
+    requestAnySearch(config, [{ query: "two" }], { retries: 0, fetchImpl }),
+    { code: "ANYSEARCH_DAILY_LIMIT" },
+  );
+  releaseFirstRequest();
+  assert.equal(await first, "ok");
   assert.equal(fetchCalls, 1);
   resetAnySearchBudget();
 });
@@ -403,6 +444,266 @@ test("fetches auditable mixed evidence and fails closed when reliable web source
     }),
     { code: "ANYSEARCH_INSUFFICIENT_EVIDENCE" },
   );
+});
+
+test("enriches an initially low-trust result set with authoritative web searches", async () => {
+  clearAnySearchCache();
+  const calls = [];
+  const lowTrustMarkdown = [
+    "## Query 1: initial",
+    "### 1. 儿童感冒用药官方标准",
+    "- **URL**: https://www.chinairn.com/initial-low",
+    "- 儿童感冒药营销站转载。",
+    "### 2. 儿童感冒药消费观察",
+    "- **URL**: https://www.sohu.com/initial-low-copy",
+    "- 儿童感冒药营销站转载。",
+  ].join("\n");
+  const authoritativeMarkdown = [
+    "## Query 1: official",
+    "### 1. 儿童感冒用药官方标准",
+    "- **URL**: https://www.samr.gov.cn/official-a",
+    "- 儿童感冒用药官方标准与风险提示。",
+    "## Query 2: media",
+    "### 1. 儿童感冒药消费观察",
+    "- **URL**: https://www.xinhuanet.com/official-b",
+    "- 权威媒体报道儿童感冒药消费者关注。",
+  ].join("\n");
+  const result = await fetchAnySearchEvidence(
+    {
+      searchProvider: {
+        enabled: true,
+        socialEnabled: true,
+        maxEvidence: 8,
+        maxSocialEvidence: 2,
+        minReliableEvidence: 2,
+        urlCheckEnabled: true,
+        cacheTtlMs: 0,
+      },
+    },
+    { ...brand, industry: "大健康", product: "儿童感冒药" },
+    { key: "xhs" },
+    {
+      now: fixedNow,
+      requestImpl: async (_config, queries) => {
+        calls.push(queries);
+        return calls.length === 1 ? lowTrustMarkdown : authoritativeMarkdown;
+      },
+      urlChecker: async () => true,
+    },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].length, 2);
+  assert.ok(calls[1].every((query) => query.sub_domain === GENERAL_SUB_DOMAIN));
+  assert.equal(result.reliableCount, 2);
+  assert.equal(result.queries.length, calls[0].length + calls[1].length);
+  assert.equal(result.rawResultCount, 4);
+  assert.deepEqual(
+    result.evidence.filter((item) => ["high", "medium"].includes(item.trustLevel)).map((item) => item.host),
+    ["www.samr.gov.cn", "www.xinhuanet.com"],
+  );
+});
+
+test("rejects authoritative fallback pages that only match broad child and health terms", async () => {
+  clearAnySearchCache();
+  let requestCount = 0;
+  const lowTrustMarkdown = [
+    "## Query 1: initial",
+    "### 1. 低可信儿童感冒药文章",
+    "- **URL**: https://www.chinairn.com/initial-low-topic",
+    "- 儿童感冒药营销内容。",
+  ].join("\n");
+  const unrelatedAuthoritativeMarkdown = [
+    "## Query 1: official",
+    "### 1. 大健康产业儿童篮球赛事",
+    "- **URL**: https://www.xinhuanet.com/sports-unrelated",
+    "- 大健康产业儿童篮球赛事、比分和球队排名。",
+    "## Query 2: media",
+    "### 1. 大健康儿童夏令营",
+    "- **URL**: https://www.ce.cn/camp-unrelated",
+    "- 大健康儿童夏令营户外体育活动日程。",
+  ].join("\n");
+
+  await assert.rejects(
+    fetchAnySearchEvidence(
+      {
+        searchProvider: {
+          enabled: true,
+          minReliableEvidence: 2,
+          urlCheckEnabled: true,
+          cacheTtlMs: 0,
+        },
+      },
+      { ...brand, industry: "大健康", product: "儿童感冒药" },
+      { key: "xhs" },
+      {
+        now: fixedNow,
+        requestImpl: async () => {
+          requestCount += 1;
+          return requestCount === 1 ? lowTrustMarkdown : unrelatedAuthoritativeMarkdown;
+        },
+        urlChecker: async () => true,
+      },
+    ),
+    { code: "ANYSEARCH_INSUFFICIENT_EVIDENCE" },
+  );
+  assert.equal(requestCount, 2);
+});
+
+test("filters unrelated authoritative fallback before title deduplication", async () => {
+  clearAnySearchCache();
+  let requestCount = 0;
+  const initialMarkdown = [
+    "## Query 1: initial",
+    "### 1. 共同标题",
+    "- **URL**: https://www.ce.cn/initial-relevant",
+    "- 儿童感冒药官方标准。",
+    "### 2. 低可信转载",
+    "- **URL**: https://www.chinairn.com/initial-low-copy",
+    "- 儿童感冒药营销内容。",
+  ].join("\n");
+  const fallbackMarkdown = [
+    "## Query 1: official",
+    "### 1. 共同标题",
+    "- **URL**: https://www.samr.gov.cn/unrelated-same-title",
+    "- 篮球赛事比分和球队排名。",
+    "## Query 2: media",
+    "### 1. 儿童感冒药风险提示",
+    "- **URL**: https://www.xinhuanet.com/relevant-warning",
+    "- 儿童感冒药风险提示与用药标准。",
+  ].join("\n");
+
+  const result = await fetchAnySearchEvidence(
+    {
+      searchProvider: {
+        enabled: true,
+        minReliableEvidence: 2,
+        urlCheckEnabled: true,
+        cacheTtlMs: 0,
+      },
+    },
+    { ...brand, industry: "大健康", product: "儿童感冒药" },
+    { key: "xhs" },
+    {
+      now: fixedNow,
+      requestImpl: async () => {
+        requestCount += 1;
+        return requestCount === 1 ? initialMarkdown : fallbackMarkdown;
+      },
+      urlChecker: async () => true,
+    },
+  );
+
+  assert.equal(result.reliableCount, 2);
+  assert.ok(result.evidence.some((item) => item.url === "https://www.ce.cn/initial-relevant"));
+  assert.ok(result.evidence.some((item) => item.url === "https://www.xinhuanet.com/relevant-warning"));
+  assert.ok(result.evidence.every((item) => item.url !== "https://www.samr.gov.cn/unrelated-same-title"));
+});
+
+test("isolates cached fallback evidence between brands with the same category fields", async () => {
+  clearAnySearchCache();
+  let requestCount = 0;
+  const lowTrustMarkdown = [
+    "## Query 1: initial",
+    "### 1. 低可信品类文章",
+    "- **URL**: https://www.chinairn.com/shared-category",
+    "- 家居照明品类转载。",
+  ].join("\n");
+  const authoritativeMarkdown = (name, slug) => [
+    "## Query 1: official",
+    `### 1. ${name} 官方质量信息`,
+    `- **URL**: https://www.samr.gov.cn/${slug}-a`,
+    `- ${name} 官方质量信息。`,
+    "## Query 2: media",
+    `### 1. ${name} 消费观察`,
+    `- **URL**: https://www.xinhuanet.com/${slug}-b`,
+    `- ${name} 消费观察。`,
+  ].join("\n");
+  const requestImpl = async () => {
+    requestCount += 1;
+    if (requestCount % 2 === 1) return lowTrustMarkdown;
+    return requestCount === 2
+      ? authoritativeMarkdown("Alpha", "alpha")
+      : authoritativeMarkdown("Beta", "beta");
+  };
+  const appConfig = {
+    searchProvider: {
+      enabled: true,
+      minReliableEvidence: 2,
+      urlCheckEnabled: false,
+      cacheTtlMs: 600000,
+    },
+  };
+  const sharedBrand = {
+    ...brand,
+    industry: "家居照明",
+    product: "折叠桌面灯",
+    audience: "租房人群",
+  };
+
+  const alphaResult = await fetchAnySearchEvidence(
+    appConfig,
+    { ...sharedBrand, name: "Alpha" },
+    { key: "xhs" },
+    { now: fixedNow, requestImpl },
+  );
+  const betaResult = await fetchAnySearchEvidence(
+    appConfig,
+    { ...sharedBrand, name: "Beta" },
+    { key: "xhs" },
+    { now: fixedNow, requestImpl },
+  );
+
+  assert.equal(requestCount, 4);
+  assert.ok(alphaResult.evidence.some((item) => item.url.endsWith("/alpha-a")));
+  assert.ok(betaResult.evidence.some((item) => item.url.endsWith("/beta-a")));
+  assert.ok(betaResult.evidence.every((item) => !item.url.includes("/alpha-")));
+});
+
+test("charges authoritative fallback queries to the daily budget before another network call", async () => {
+  clearAnySearchCache();
+  resetAnySearchBudget();
+  let fetchCalls = 0;
+  const lowTrustMarkdown = [
+    "## Query 1: initial",
+    "### 1. 低可信行业文章",
+    "- **URL**: https://www.chinairn.com/only-low",
+    "- 只有低可信结果。",
+  ].join("\n");
+  await assert.rejects(
+    fetchAnySearchEvidence(
+      {
+        searchProvider: {
+          enabled: true,
+          apiKey: "fixture-key",
+          dailyQueryLimit: 4,
+          timeoutMs: 1000,
+          maxEvidence: 8,
+          maxSocialEvidence: 2,
+          minReliableEvidence: 2,
+          urlCheckEnabled: false,
+          cacheTtlMs: 0,
+        },
+      },
+      brand,
+      { key: "xhs" },
+      {
+        now: fixedNow,
+        retries: 0,
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ result: { content: [{ type: "text", text: lowTrustMarkdown }] } }),
+          };
+        },
+      },
+    ),
+    { code: "ANYSEARCH_DAILY_LIMIT" },
+  );
+  assert.equal(fetchCalls, 1);
+  resetAnySearchBudget();
 });
 
 test("prunes expired evidence cache entries and enforces a size cap", async () => {
