@@ -372,7 +372,7 @@ test("trend prompts only include the selected bucket rules", () => {
   assert.match(prompt, /只分析内容形式、标题结构、封面表达、组图结构、爆款套路和互动机制/);
   assert.match(prompt, /idea\[0\] 走「爆款形式复用」/);
   assert.match(prompt, /idea\[1\] 走「互动话题反差」/);
-  assert.match(prompt, /搜索增强 bucket 只能表达趋势方向或议题方向/);
+  assert.match(prompt, /AnySearch 证据时，必须使用传入的 S 编号/);
   assert.doesNotMatch(prompt, /bucket 标题：小红书热点话题/);
   assert.doesNotMatch(prompt, /bucket 标题：新闻热点趋势/);
   assert.doesNotMatch(prompt, /只基于 Pgy 小红书热门证据和品牌档案/);

@@ -1,0 +1,43 @@
+# RedBase project rules
+
+## Project
+
+- Goal: run a local/hosted Xiaohongshu content-operations product with real trend evidence, AI generation, image generation, authentication, and SQLite persistence.
+- Runtime: Node.js server with static frontend assets; there is no compile/bundle step.
+- Main directories: `src/server/` backend, `public/` frontend, `tests/` deterministic tests, `scripts/` operational checks, `data/` local runtime state.
+
+## Commands
+
+```powershell
+npm start
+npm run check
+npm test
+npm run test:integration
+npm run eval:ai
+npm run smoke:api
+```
+
+## Security and temporary files
+
+- Keep API keys, cookies, tokens, passwords, customer data, and local database contents out of source, examples, logs, test fixtures, and commits.
+- Real secrets belong in environment variables or ignored `config.local.json`; `config.local.example.json` contains placeholders only.
+- Disposable benchmark output belongs in ignored `outputs/`; verification receipts belong in ignored `.verification/` and `artifacts/verification/`.
+- Preserve unrelated worktree changes. Do not commit, push, deploy, or enable hooks/CI without explicit user instruction.
+
+## Verification contract
+
+- `verification-policy.json` defines change risk and required verification lanes.
+- After any runtime behavior change, run `$verify-change` or `pwsh -NoProfile -File scripts/verify-change.ps1`.
+- Completion requires `.verification/receipt.json` with `status: pass` and a fingerprint matching the current diff.
+- Do not skip failing tests, weaken assertions, or edit the receipt by hand.
+- Kimi WebBridge is the browser acceptance gate. Reproducible defects become unit/API/domain/data regressions when practical; UI-only defects become named reusable Kimi cases.
+- Independent reviewers provide evidence and reproduction; the same reviewer does not approve its own fix.
+- R3 work includes production-like smoke and rollback/recovery checks before release.
+
+### Canonical commands
+
+```powershell
+pwsh -NoProfile -File scripts/verify-change.ps1 -PlanOnly
+pwsh -NoProfile -File scripts/verify-change.ps1
+pwsh -NoProfile -File scripts/verify-change.ps1 -CheckReceipt
+```

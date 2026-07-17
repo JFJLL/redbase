@@ -349,6 +349,8 @@ async function sleep(ms) {
 function isRetriableNetworkError(error) {
   const message = String(error?.message || "");
   return (
+    Number(error?.statusCode) === 429 ||
+    Number(error?.statusCode) >= 500 ||
     message.includes("timeout") ||
     message.includes("fetch failed") ||
     message.includes("ECONNRESET") ||

@@ -124,7 +124,7 @@ function extractTextFromGoogleResponse(payload) {
 
 function buildRetryOptions(options) {
   return {
-    retries: Number.isFinite(Number(options.retries)) ? Number(options.retries) : 3,
+    retries: Number.isFinite(Number(options.retries)) ? Math.max(1, Number(options.retries)) : 3,
     delayMs: Number.isFinite(Number(options.delayMs)) ? Number(options.delayMs) : 1200,
   };
 }
@@ -203,6 +203,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
         body: JSON.stringify({
           model: provider.model,
           temperature: modelTemperature,
+          response_format: { type: "json_object" },
           ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
           messages: [
             { role: "system", content: systemPrompt },

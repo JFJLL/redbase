@@ -2,6 +2,8 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..", "..");
+const PROJECT_ENV_FILE = path.join(ROOT, ".env");
+loadProjectEnvFile(PROJECT_ENV_FILE);
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = process.env.REDBASE_DB_FILE || path.join(DATA_DIR, "redbase.sqlite");
@@ -25,14 +27,43 @@ const MIME_TYPES = {
 
 const DEFAULT_APP_CONFIG = {
   textProvider: {
-    apiStyle: "google",
-    model: "gemini-3.1-flash-lite-preview",
-    baseUrl: "https://api.im-red-magic.cn",
-    openaiBaseUrl: "",
+    apiStyle: "openai",
+    model: "deepseek/deepseek-v4-flash",
+    baseUrl: "",
+    openaiBaseUrl: "https://llm.runninghub.ai/v1",
     anthropicBaseUrl: "",
     apiKey: "",
-    searchEnabled: true,
+    useImageProviderApiKey: false,
+    searchEnabled: false,
     maxOutputTokens: 65536,
+  },
+  searchProvider: {
+    enabled: false,
+    type: "anysearch",
+    baseUrl: "https://api.anysearch.com/mcp",
+    apiKey: "",
+    apiKeys: [],
+    apiKeyFile: "",
+    apiKeyFiles: [],
+    domain: "general",
+    subDomain: "general.general",
+    socialEnabled: true,
+    socialDomain: "social_media",
+    socialSubDomain: "social_media.social_media",
+    maxResultsPerQuery: 6,
+    maxEvidence: 8,
+    maxSocialEvidence: 2,
+    minReliableEvidence: 2,
+    maxSnippetChars: 520,
+    timeoutMs: 30000,
+    retries: 2,
+    retryDelayMs: 350,
+    dailyQueryLimit: 950,
+    dailyUsageFile: "data/anysearch-usage.json",
+    urlCheckEnabled: true,
+    urlCheckTimeoutMs: 3500,
+    cacheTtlMs: 600000,
+    maxCacheEntries: 100,
   },
   imageProvider: {
     provider: "wavespeed",
@@ -108,6 +139,43 @@ function parseBooleanConfig(value, fallback = false) {
   return fallback;
 }
 
+function loadProjectEnvFile(filePath = PROJECT_ENV_FILE) {
+  const resolvedPath = path.resolve(String(filePath || PROJECT_ENV_FILE));
+  if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) return false;
+  if (typeof process.loadEnvFile === "function") {
+    process.loadEnvFile(resolvedPath);
+    return true;
+  }
+  const raw = fs.readFileSync(resolvedPath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim().replace(/^export\s+/, "");
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const separatorIndex = trimmed.indexOf("=");
+    const name = trimmed.slice(0, separatorIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || process.env[name] !== undefined) continue;
+    process.env[name] = trimmed.slice(separatorIndex + 1).trim().replace(/^(["'])(.*)\1$/, "$2");
+  }
+  return true;
+}
+
+function readEnvValueFile(filePath, keyName) {
+  const configuredPath = String(filePath || "").trim();
+  if (!configuredPath) return "";
+  const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(ROOT, configuredPath);
+  if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) return "";
+  const raw = fs.readFileSync(resolvedPath, "utf8").trim();
+  const lines = raw.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const separatorIndex = trimmed.indexOf("=");
+    const name = trimmed.slice(0, separatorIndex).trim();
+    if (name !== keyName) continue;
+    return trimmed.slice(separatorIndex + 1).trim().replace(/^["']+|["']+$/g, "");
+  }
+  return lines.length === 1 && !raw.includes("=") ? raw : "";
+}
+
 function loadAppConfig() {
   let localConfig = {};
 
@@ -137,6 +205,26 @@ function loadAppConfig() {
       merged.pgy?.ossAccessKeyId,
   );
   const imageProviderName = String(process.env.IMAGE_PROVIDER || merged.imageProvider.provider || "wavespeed").trim().toLowerCase();
+  const imageProviderApiKey = String(process.env.IMAGE_API_KEY || merged.imageProvider.apiKey || "").trim();
+  const useImageProviderApiKey = parseBooleanConfig(
+    process.env.TEXT_USE_IMAGE_PROVIDER_API_KEY,
+    parseBooleanConfig(merged.textProvider?.useImageProviderApiKey, false),
+  );
+  const anySearchApiKeyFile = String(process.env.ANYSEARCH_API_KEY_FILE || merged.searchProvider?.apiKeyFile || "").trim();
+  const anySearchApiKeyFiles = parseListConfig(
+    process.env.ANYSEARCH_API_KEY_FILES,
+    merged.searchProvider?.apiKeyFiles,
+  );
+  const anySearchApiKeys = [
+    String(process.env.ANYSEARCH_API_KEY || "").trim(),
+    ...parseListConfig(process.env.ANYSEARCH_API_KEYS, merged.searchProvider?.apiKeys),
+    String(merged.searchProvider?.apiKey || "").trim(),
+    readEnvValueFile(anySearchApiKeyFile, "ANYSEARCH_API_KEY"),
+    ...anySearchApiKeyFiles.map((filePath) => readEnvValueFile(filePath, "ANYSEARCH_API_KEY")),
+  ]
+    .filter(Boolean)
+    .filter((value, index, all) => all.indexOf(value) === index);
+  const anySearchApiKey = anySearchApiKeys[0] || "";
 
   return {
     textProvider: {
@@ -145,9 +233,67 @@ function loadAppConfig() {
       baseUrl: String(process.env.TEXT_BASE_URL || merged.textProvider.baseUrl || "").trim(),
       openaiBaseUrl: String(process.env.TEXT_OPENAI_BASE_URL || merged.textProvider.openaiBaseUrl || "").trim(),
       anthropicBaseUrl: String(process.env.TEXT_ANTHROPIC_BASE_URL || merged.textProvider.anthropicBaseUrl || "").trim(),
-      apiKey: String(process.env.TEXT_API_KEY || merged.textProvider.apiKey || "").trim(),
-      searchEnabled: String(process.env.TEXT_SEARCH_ENABLED || merged.textProvider.searchEnabled || "true").trim() !== "false",
+      apiKey: String(
+        process.env.TEXT_API_KEY ||
+          (useImageProviderApiKey ? imageProviderApiKey : merged.textProvider.apiKey) ||
+          "",
+      ).trim(),
+      useImageProviderApiKey,
+      searchEnabled: parseBooleanConfig(
+        process.env.TEXT_SEARCH_ENABLED,
+        parseBooleanConfig(merged.textProvider.searchEnabled, false),
+      ),
       maxOutputTokens: Number(process.env.TEXT_MAX_OUTPUT_TOKENS || merged.textProvider.maxOutputTokens || 65536),
+    },
+    searchProvider: {
+      enabled: parseBooleanConfig(process.env.ANYSEARCH_ENABLED, parseBooleanConfig(merged.searchProvider?.enabled, false)),
+      type: "anysearch",
+      baseUrl: String(process.env.ANYSEARCH_BASE_URL || merged.searchProvider?.baseUrl || "https://api.anysearch.com/mcp").trim(),
+      apiKey: anySearchApiKey,
+      apiKeys: anySearchApiKeys,
+      apiKeyFile: anySearchApiKeyFile,
+      apiKeyFiles: anySearchApiKeyFiles,
+      domain: String(process.env.ANYSEARCH_DOMAIN || merged.searchProvider?.domain || "general").trim(),
+      subDomain: String(process.env.ANYSEARCH_SUB_DOMAIN || merged.searchProvider?.subDomain || "general.general").trim(),
+      socialEnabled: parseBooleanConfig(
+        process.env.ANYSEARCH_SOCIAL_ENABLED,
+        parseBooleanConfig(merged.searchProvider?.socialEnabled, true),
+      ),
+      socialDomain: String(process.env.ANYSEARCH_SOCIAL_DOMAIN || merged.searchProvider?.socialDomain || "social_media").trim(),
+      socialSubDomain: String(
+        process.env.ANYSEARCH_SOCIAL_SUB_DOMAIN || merged.searchProvider?.socialSubDomain || "social_media.social_media",
+      ).trim(),
+      maxResultsPerQuery: Number(
+        process.env.ANYSEARCH_MAX_RESULTS_PER_QUERY || merged.searchProvider?.maxResultsPerQuery || 6,
+      ),
+      maxEvidence: Number(process.env.ANYSEARCH_MAX_EVIDENCE || merged.searchProvider?.maxEvidence || 8),
+      maxSocialEvidence: Number(
+        process.env.ANYSEARCH_MAX_SOCIAL_EVIDENCE || merged.searchProvider?.maxSocialEvidence || 2,
+      ),
+      minReliableEvidence: Number(
+        process.env.ANYSEARCH_MIN_RELIABLE_EVIDENCE || merged.searchProvider?.minReliableEvidence || 2,
+      ),
+      maxSnippetChars: Number(process.env.ANYSEARCH_MAX_SNIPPET_CHARS || merged.searchProvider?.maxSnippetChars || 520),
+      timeoutMs: Number(process.env.ANYSEARCH_TIMEOUT_MS || merged.searchProvider?.timeoutMs || 30000),
+      retries: Number(process.env.ANYSEARCH_RETRIES || merged.searchProvider?.retries || 2),
+      retryDelayMs: Number(process.env.ANYSEARCH_RETRY_DELAY_MS || merged.searchProvider?.retryDelayMs || 350),
+      dailyQueryLimit: Number(
+        process.env.ANYSEARCH_DAILY_QUERY_LIMIT || merged.searchProvider?.dailyQueryLimit || 950,
+      ),
+      dailyUsageFile: String(
+        process.env.ANYSEARCH_DAILY_USAGE_FILE || merged.searchProvider?.dailyUsageFile || "data/anysearch-usage.json",
+      ).trim(),
+      urlCheckEnabled: parseBooleanConfig(
+        process.env.ANYSEARCH_URL_CHECK_ENABLED,
+        parseBooleanConfig(merged.searchProvider?.urlCheckEnabled, true),
+      ),
+      urlCheckTimeoutMs: Number(
+        process.env.ANYSEARCH_URL_CHECK_TIMEOUT_MS || merged.searchProvider?.urlCheckTimeoutMs || 3500,
+      ),
+      cacheTtlMs: Number(process.env.ANYSEARCH_CACHE_TTL_MS || merged.searchProvider?.cacheTtlMs || 600000),
+      maxCacheEntries: Number(
+        process.env.ANYSEARCH_MAX_CACHE_ENTRIES || merged.searchProvider?.maxCacheEntries || 100,
+      ),
     },
     imageProvider: {
       provider: imageProviderName,
@@ -156,7 +302,7 @@ function loadAppConfig() {
       uploadBaseUrl: String(process.env.IMAGE_UPLOAD_BASE_URL || merged.imageProvider.uploadBaseUrl || "").trim(),
       queryBaseUrl: String(process.env.IMAGE_QUERY_BASE_URL || merged.imageProvider.queryBaseUrl || "").trim(),
       model: String(process.env.IMAGE_MODEL || (imageProviderName === "wavespeed" ? merged.imageProvider.model : "")).trim(),
-      apiKey: String(process.env.IMAGE_API_KEY || merged.imageProvider.apiKey || "").trim(),
+      apiKey: imageProviderApiKey,
       aspectRatio: String(process.env.IMAGE_ASPECT_RATIO || merged.imageProvider.aspectRatio || "3:4").trim(),
       resolution: String(process.env.IMAGE_RESOLUTION || merged.imageProvider.resolution || "2k").trim(),
       quality: String(process.env.IMAGE_QUALITY || merged.imageProvider.quality || "medium").trim(),
@@ -281,5 +427,7 @@ module.exports = {
   PORT,
   MIME_TYPES,
   DEFAULT_APP_CONFIG,
+  loadProjectEnvFile,
+  readEnvValueFile,
   loadAppConfig,
 };

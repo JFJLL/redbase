@@ -2,12 +2,19 @@
 Thumbs.db
 config.local.json
 config.local - *.json
+.env
+.env.local
+.env.production
 logs/
 data/
 node_modules/
 *.log
 .workflow/
 .planning/
+.verification/
+artifacts/verification/
+.codegraph/
+outputs/
 .playwright-cli/
 .claude/
 redbase-model-cost-estimate.md

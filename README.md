@@ -28,7 +28,11 @@
 
 ## 模型配置
 
-生产和本地运行都使用 `config.local.json` 配置真实密钥。该文件已加入 `.gitignore`，不要提交到仓库。
+生产和本地运行使用项目根目录下被 Git 忽略的 `.env` 保存密钥，非敏感参数继续放在 `config.local.json`。服务启动时会自动加载 `.env`；部署服务器时需单独同步该文件，不要提交到仓库。
+
+```dotenv
+ANYSEARCH_API_KEYS=<key-1>,<key-2>
+```
 
 飞书多企业登录示例：
 
@@ -59,13 +63,25 @@
 
 常用配置项：
 
-- `textProvider.apiStyle`：文本模型接口类型，默认 `google`
-- `textProvider.model`：文本模型名，默认 `gemini-3.1-flash-lite-preview`
-- `textProvider.baseUrl`：Google 风格文本接口地址
-- `textProvider.openaiBaseUrl`：OpenAI 兼容接口地址
+- `textProvider.apiStyle`：文本模型接口类型，默认 `openai`
+- `textProvider.model`：文本模型名，默认 `deepseek/deepseek-v4-flash`
+- `textProvider.baseUrl`：Google 风格文本接口地址，仅兼容旧配置
+- `textProvider.openaiBaseUrl`：OpenAI 兼容接口地址，默认 `https://llm.runninghub.ai/v1`
 - `textProvider.anthropicBaseUrl`：Anthropic 兼容接口地址
 - `textProvider.apiKey`：文本模型 API Key
-- `textProvider.searchEnabled`：是否启用搜索，默认 `true`
+- `textProvider.useImageProviderApiKey`：文本服务是否复用图片服务 API Key；当前 RunningHub 配置为 `true`
+- `textProvider.searchEnabled`：是否启用模型内置搜索；当前关闭，趋势证据改由 AnySearch 提供
+- `searchProvider.enabled`：是否启用 AnySearch；非小红书趋势维度启用后才会生成，来源不足时直接中止
+- `ANYSEARCH_API_KEYS`：推荐的多 Key 配置，写在项目根目录 `.env` 中并用逗号分隔；运行时按当日已用量最少的 Key 分流
+- `ANYSEARCH_API_KEY`：单 Key 兼容配置；`searchProvider.apiKey`、`apiKeyFile`、`apiKeyFiles` 仅保留给旧部署兼容
+- `searchProvider.domain` / `searchProvider.subDomain`：网页检索路由，默认 `general` / `general.general`
+- `searchProvider.socialEnabled`：是否补充社交媒体信号；社会话题检索微博和知乎，其它适用维度补充知乎
+- `searchProvider.socialDomain` / `searchProvider.socialSubDomain`：社媒检索路由，默认 `social_media` / `social_media.social_media`
+- `searchProvider.maxSocialEvidence`：每次最多送入模型的社媒证据数，默认 `2`；社媒只表达讨论与情绪，不能单独支撑政策、数据或功效事实
+- `searchProvider.minReliableEvidence`：每次生成至少需要的高/中可信网页来源数，默认 `2`
+- `searchProvider.dailyQueryLimit`：每个 Key 按批次内子查询计数的每日硬上限，默认 `950`；两个 Key 合计上限 `1900`。超时和 5xx 重试也按一次外发搜索计数，避免项目记录低于供应商实际消耗
+- `searchProvider.dailyUsageFile`：每日用量状态文件，默认 `data/anysearch-usage.json`；重启服务后仍会延续当日计数
+- `searchProvider.maxCacheEntries`：进程内证据缓存最多保留的查询组数，默认 `100`；过期条目会主动清理
 - `imageProvider.baseUrl`：图片生成接口地址
 - `imageProvider.editBaseUrl`：图片编辑接口地址
 - `imageProvider.uploadBaseUrl`：图片上传接口地址
@@ -87,13 +103,15 @@
 - `pgy.cookie`：小红书蒲公英 Content Square Cookie header，用于“小红书热点话题”真实 Pgy 证据
 - `pgy.cookieFile`：本地 cookie 文件路径，支持每行一个 JSON cookie 字典，格式兼容 `KOL/token.txt`
 - `pgy.ossEndpoint`、`pgy.ossBucket`、`pgy.ossObjectKey`、`pgy.ossAccessKeyId`、`pgy.ossAccessKeySecret`：可选 OSS cookie 来源；服务端会下载 token 文件并缓存，不会向日志输出 cookie
-- `pgy.allowSearchFallback`：Pgy 不可用时是否允许 `xhs` bucket 退回原搜索流程，默认 `false`
+- `pgy.allowSearchFallback`：Pgy 不可用时是否允许 `xhs` bucket 退回 AnySearch 证据，默认 `false`
 
 管理员后台只信任 `config.local.json` 中 `admin.phones` 显式配置的手机号。未配置管理员手机号时，不会再按账号类型自动授予管理权限。
 
 飞书企业登录使用 `/api/auth/feishu/start?app=<key>` 发起 OAuth，回调地址为 `/api/auth/feishu/callback`。服务端会根据 OAuth `state` 找回对应的 `feishu.apps[]`，用该应用的 `appSecret` 换取用户信息，再用该应用的 `tenantKeys` 校验企业身份；不再需要维护员工 open_id 白名单。
 
-趋势分析保持单次搜索增强文本模型调用；配置 Pgy 后，`小红书热点话题` 会拉取蒲公英近 3 日曝光排序前 10 条帖子作为证据，并由文本模型总结趋势、品牌关联和每条趋势下的 2 个选题，其余趋势 bucket 继续使用搜索增强。Pgy 默认失败即中止本次分析，避免误扣积分；如需临时回退，可显式开启 `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK`。
+趋势分析采用“AnySearch 检索证据 → DeepSeek V4 Flash 结构化生成”的两阶段流程，不再调用 Gemini 内置 Google Search。网页走 `general.general`；社会话题会补充微博、知乎结果，流量、赛道和人群等适合社媒信号的维度补充知乎。服务端会去重、限制摘要、过滤私网/占位/失效 URL、划分来源级别，并要求每条趋势返回真实 `evidenceIds`。社媒和低可信来源只用于发现讨论方向，不能单独证明硬事实。
+
+`小红书热点话题` 仍优先使用蒲公英近 3 日曝光排序前 10 条帖子；Pgy 默认失败即中止本次分析，避免误扣积分。显式开启 `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK` 后才会降级到 AnySearch。
 
 ## 启动
 
@@ -118,7 +136,18 @@ http://127.0.0.1:3013
 
 ```bash
 npm run check
+npm test
+npm run test:integration
+npm run eval:ai
 ```
+
+项目已接入风险路由验证系统。查看当前改动对应的验证计划：
+
+```powershell
+pwsh -NoProfile -File scripts/verify-change.ps1 -PlanOnly
+```
+
+Hook 与 CI 接入当前保持关闭；完成改动后由开发者主动运行验证脚本。
 
 运行中的本地服务可以执行无依赖 API 烟测：
 
@@ -144,5 +173,5 @@ Remove-Item Env:RUN_REAL_AI
 - 配置入口：`src/server/config.js`，真实密钥来自本机或服务器上的 `config.local.json`。
 - 鉴权：`src/server/auth/cookies.js` 设置 HttpOnly Cookie；生产环境可通过 `COOKIE_SECURE`/`NODE_ENV=production` 添加 `Secure`；服务端通过 `src/server/api/sql-auth.js` 和用户/session 仓库校验登录态。
 - 数据层：`src/server/db/repositories/` 提供用户、品牌、趋势、历史、产品图、图片任务和积分流水的直接 SQL 操作；`snapshot-store` 主要保留给迁移和管理后台总览兼容读取。
-- AI 调用：文本模型走 Node 原生 `fetch`，图片任务持久化到 `image_jobs` 表并在轮询时落历史生成记录。
+- AI 调用：趋势证据由 `src/server/integrations/anysearch.js` 通过 AnySearch JSON-RPC 获取，文本模型通过 RunningHub 的 OpenAI 兼容接口调用 DeepSeek；图片任务持久化到 `image_jobs` 表并在轮询时落历史生成记录。
 - 静态前端：`public/app.js` 是主编排入口，公共配置、状态、DOM 工具和 API 客户端已拆到 `public/js/`。

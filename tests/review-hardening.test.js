@@ -20,8 +20,10 @@ const {
 } = require("../src/server/ai/content-service");
 const { mapUserRow, mapBrandRow, mapGenerationRow } = require("../src/server/db/repositories/row-mappers");
 
-test("compatible text provider defaults do not expose infrastructure URLs", () => {
-  assert.equal(DEFAULT_APP_CONFIG.textProvider.openaiBaseUrl, "");
+test("text provider defaults use the selected OpenAI-compatible DeepSeek endpoint", () => {
+  assert.equal(DEFAULT_APP_CONFIG.textProvider.apiStyle, "openai");
+  assert.equal(DEFAULT_APP_CONFIG.textProvider.model, "deepseek/deepseek-v4-flash");
+  assert.equal(DEFAULT_APP_CONFIG.textProvider.openaiBaseUrl, "https://llm.runninghub.ai/v1");
   assert.equal(DEFAULT_APP_CONFIG.textProvider.anthropicBaseUrl, "");
 });
 

@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "defaultRisk": "R1",
+  "riskOrder": {
+    "R0": 0,
+    "R1": 1,
+    "R2": 2,
+    "R3": 3
+  },
+  "baseLanes": {
+    "R0": ["static"],
+    "R1": ["static", "unit"],
+    "R2": ["static", "unit", "integration"],
+    "R3": ["static", "unit", "integration", "smoke"]
+  },
+  "routes": [
+    {
+      "id": "docs-only",
+      "risk": "R0",
+      "patterns": ["(^|/)docs?/", "\\.md$", "\\.txt$"],
+      "addLanes": []
+    },
+    {
+      "id": "user-interface",
+      "risk": "R2",
+      "patterns": ["(^|/)(app|pages|public|components|ui)/", "\\.(tsx|jsx|vue|svelte|css|scss|less)$"],
+      "addLanes": ["kimi-browser"]
+    },
+    {
+      "id": "api-contract",
+      "risk": "R2",
+      "patterns": ["(^|/)(api|routes?|controllers?|server)/", "openapi", "schema\\.(json|ya?ml)$"],
+      "addLanes": ["integration"]
+    },
+    {
+      "id": "ai-behavior",
+      "risk": "R2",
+      "patterns": ["(^|/)(ai|llm|prompts?|agents?|models?|evals?)/", "(prompt|provider|generation|inference|anysearch)"],
+      "addLanes": ["ai-eval", "agent-review"]
+    },
+    {
+      "id": "data-state",
+      "risk": "R3",
+      "patterns": ["(^|/)(db|database|migrations?|prisma|repositories|storage)/", "(schema|migration|repository|persistence)"],
+      "addLanes": ["integration", "data", "agent-review"]
+    },
+    {
+      "id": "critical-user-journey",
+      "risk": "R3",
+      "patterns": ["(auth|permission|tenant|credit|billing|payment|cookie|session)"],
+      "addLanes": ["integration", "kimi-browser", "agent-review"]
+    },
+    {
+      "id": "critical-processing",
+      "risk": "R3",
+      "patterns": ["(queue|worker|retry|idempot)"],
+      "addLanes": ["integration", "agent-review"]
+    },
+    {
+      "id": "deployment",
+      "risk": "R3",
+      "patterns": ["(^|/)(deploy|infra|docker|scripts/release|\\.github/workflows)/", "(Dockerfile|wrangler\\.toml|nginx)"],
+      "addLanes": ["smoke", "agent-review"]
+    }
+  ],
+  "lanes": {
+    "static": {
+      "kind": "command",
+      "modes": ["local", "ci"],
+      "minExecuted": 2,
+      "commands": [
+        {"id": "diff-check", "program": "git", "args": ["diff", "--check"], "required": true},
+        {"id": "project-check", "program": "npm.cmd", "args": ["run", "check"], "npmScript": "check", "required": true}
+      ]
+    },
+    "unit": {
+      "kind": "command",
+      "modes": ["local", "ci"],
+      "minExecuted": 1,
+      "commands": [
+        {"id": "unit", "program": "npm.cmd", "args": ["run", "test"], "npmScript": "test", "required": true}
+      ]
+    },
+    "integration": {
+      "kind": "command",
+      "modes": ["local", "ci"],
+      "minExecuted": 1,
+      "commands": [
+        {"id": "integration", "program": "npm.cmd", "args": ["run", "test:integration"], "npmScript": "test:integration", "required": true}
+      ]
+    },
+    "smoke": {
+      "kind": "command",
+      "modes": ["local", "ci"],
+      "minExecuted": 1,
+      "commands": [
+        {"id": "smoke-api", "program": "npm.cmd", "args": ["run", "smoke:api"], "npmScript": "smoke:api", "required": true}
+      ]
+    },
+    "ai-eval": {
+      "kind": "command",
+      "modes": ["local", "ci"],
+      "minExecuted": 1,
+      "commands": [
+        {"id": "ai-eval", "program": "npm.cmd", "args": ["run", "eval:ai"], "npmScript": "eval:ai", "required": true}
+      ]
+    },
+    "data": {
+      "kind": "command",
+      "modes": ["local", "ci"],
+      "minExecuted": 1,
+      "commands": [
+        {"id": "data", "program": "npm.cmd", "args": ["run", "test:data"], "npmScript": "test:data", "required": true}
+      ]
+    },
+    "kimi-browser": {
+      "kind": "evidence",
+      "modes": ["local"],
+      "evidenceKey": "kimi-browser"
+    },
+    "agent-review": {
+      "kind": "evidence",
+      "modes": ["local"],
+      "evidenceKey": "agent-review"
+    }
+  }
+}
