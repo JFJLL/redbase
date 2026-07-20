@@ -167,6 +167,44 @@ test("streams long OpenAI-compatible JSON generations so active responses do not
   assert.equal(receivedBody.stream, true);
 });
 
+test("retries a transient socket disconnect inside one streamed model call", async (t) => {
+  let requestCount = 0;
+  const server = http.createServer((_request, response) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      response.socket.destroy();
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end('data:{"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\ndata:[DONE]\n\n');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  const result = await callTextModelJson(
+    {
+      textProvider: {
+        apiStyle: "openai",
+        model: "deepseek/deepseek-v4-flash",
+        openaiBaseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: "fixture-key",
+        maxOutputTokens: 1024,
+      },
+    },
+    {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      retries: 2,
+      delayMs: 1,
+      stream: true,
+    },
+  );
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(requestCount, 2);
+});
+
 test("rejects an OpenAI-compatible stream that ends without the DONE marker", async (t) => {
   const server = http.createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "text/event-stream" });

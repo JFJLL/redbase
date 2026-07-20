@@ -10,7 +10,7 @@ const {
   attachGenerationToLatestCreditEvent,
   refundCreditEventIfNeeded,
 } = require("../db/repositories/admin-repository");
-const { findBrandByOwner, upsertBrandFull } = require("../db/repositories/brand-repository");
+const { findBrandByOwner, updateCurrentTrendIdeaContentAssets } = require("../db/repositories/brand-repository");
 const {
   findGenerationByOwner,
   findXhsCarouselGenerationByGroup,
@@ -395,7 +395,16 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     if (!ensureTrendIdeaContentAssets) return trend.ideas[Number(ideaIndex)];
     const result = await ensureTrendIdeaContentAssets(brand, trend, Number(ideaIndex));
     if (result.filled) {
-      upsertBrandFull(brand);
+      const persisted = updateCurrentTrendIdeaContentAssets(
+        brand.id,
+        brand.ownerUserId,
+        trend.id,
+        Number(ideaIndex),
+        result.idea.contentAssets,
+      );
+      if (!persisted) {
+        throw new Error("当前选题内容资产保存失败，请刷新趋势后重试。");
+      }
     }
     return result.idea;
   }

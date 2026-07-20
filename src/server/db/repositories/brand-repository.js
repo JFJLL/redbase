@@ -228,6 +228,31 @@ function upsertBrandFull(brand) {
   });
 }
 
+function updateCurrentTrendIdeaContentAssets(brandId, ownerUserId, trendId, ideaIndex, contentAssets) {
+  const result = db.prepare(`
+    UPDATE ideas
+    SET content_assets_json = ?
+    WHERE idea_index = ?
+      AND trend_row_id = (
+        SELECT t.row_id
+        FROM trends t
+        INNER JOIN brands b ON b.id = t.brand_id
+        WHERE t.brand_id = ?
+          AND b.owner_user_id = ?
+          AND t.scope = 'current'
+          AND t.trend_id = ?
+        LIMIT 1
+      )
+  `).run(
+    JSON.stringify(safeParseObject(JSON.stringify(contentAssets || {}))),
+    Number(ideaIndex),
+    Number(brandId),
+    Number(ownerUserId),
+    Number(trendId),
+  );
+  return result.changes === 1;
+}
+
 function deleteBrandById(brandId) {
   return runTransaction(() => {
     db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
@@ -322,6 +347,7 @@ module.exports = {
   insertBrand,
   updateBrand,
   upsertBrandFull,
+  updateCurrentTrendIdeaContentAssets,
   deleteBrandById,
   allocateAnalysisAndTrendBase,
 };

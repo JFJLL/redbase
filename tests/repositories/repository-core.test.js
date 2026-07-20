@@ -7,7 +7,14 @@ const { openDatabase } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
 const { getCounter, setCounter, allocateCounter } = require("../../src/server/db/repositories/core-repository");
 const { insertUser } = require("../../src/server/db/repositories/auth-repository");
-const { insertBrand, updateBrand, findBrandByOwner, listBrandsByOwner } = require("../../src/server/db/repositories/brand-repository");
+const {
+  insertBrand,
+  updateBrand,
+  upsertBrandFull,
+  updateCurrentTrendIdeaContentAssets,
+  findBrandByOwner,
+  listBrandsByOwner,
+} = require("../../src/server/db/repositories/brand-repository");
 const { upsertGeneration, listGenerationsByOwner, searchGenerations } = require("../../src/server/db/repositories/generation-repository");
 
 openDatabase();
@@ -65,6 +72,45 @@ test("brand repository creates, updates, and scopes by owner", () => {
   assert.equal(updated.name, "Redbase Studio");
   assert.equal(findBrandByOwner(10, 2), null);
   assert.deepEqual(listBrandsByOwner(1).map((item) => item.id), [10]);
+});
+
+test("targeted idea asset updates preserve assets written by concurrent requests", () => {
+  const brand = findBrandByOwner(10, 1);
+  brand.trends = [{
+    key: "traffic",
+    title: "流量热点趋势",
+    description: "测试趋势",
+    items: [{
+      id: 1001,
+      stableKey: "traffic-concurrency",
+      rank: 1,
+      title: "并发选题资产",
+      category: "内容趋势",
+      summary: "验证两个选题分别补齐时不会互相覆盖。",
+      score: 80,
+      reason: "用于数据库回归测试。",
+      tags: ["#并发测试"],
+      ideas: [0, 1].map((ideaIndex) => ({
+        title: `选题 ${ideaIndex + 1}`,
+        summary: "测试摘要",
+        angle: "测试角度",
+        brandFit: "品牌结合",
+        audience: "测试人群",
+        hook: "测试钩子",
+        tags: ["#测试"],
+        contentAssets: {},
+      })),
+    }],
+  }];
+  upsertBrandFull(brand);
+
+  assert.equal(updateCurrentTrendIdeaContentAssets(10, 1, 1001, 0, { marker: "first" }), true);
+  assert.equal(updateCurrentTrendIdeaContentAssets(10, 1, 1001, 1, { marker: "second" }), true);
+  assert.equal(updateCurrentTrendIdeaContentAssets(10, 2, 1001, 0, { marker: "wrong-owner" }), false);
+
+  const persistedIdeas = findBrandByOwner(10, 1).trends[0].items[0].ideas;
+  assert.equal(persistedIdeas[0].contentAssets.marker, "first");
+  assert.equal(persistedIdeas[1].contentAssets.marker, "second");
 });
 
 test("generation repository upserts, scopes by owner, and searches combinations", () => {

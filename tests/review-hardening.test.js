@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 
 const { buildSessionCookie } = require("../src/server/auth/cookies");
 const { signAssetUrl, signLocalAssetUrls, verifySignedAssetRequest } = require("../src/server/assets/signed-urls");
@@ -384,6 +386,23 @@ test("wechat long image content accepts AI-generated brand-specific copy", () =>
   assert.doesNotMatch(JSON.stringify(pack), /特仑苏|牛奶|早餐|早晨|晨间|一杯|喝完|好牛奶/);
   assert.match(pack.intro, /儿童用药|家长|安全/);
   assert.equal(pack.outline.length, 4);
+});
+
+test("trend analysis loading state is scoped by brand and bucket", () => {
+  const appSource = readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
+  const stateSource = readFileSync(path.join(__dirname, "../public/js/state.js"), "utf8");
+  const analysisHandler = appSource.slice(appSource.indexOf("function bindAnalysisButton"), appSource.indexOf("function showTrendAnalysisWarnings"));
+
+  assert.match(stateSource, /trendAnalysisLoadingKeys:\s*\[\]/);
+  assert.match(analysisHandler, /setTrendAnalysisBusy\(brandId, bucketKey, true\)/);
+  assert.match(analysisHandler, /setTrendAnalysisBusy\(brandId, bucketKey, false\)/);
+  assert.ok(
+    analysisHandler.indexOf("setTrendAnalysisBusy(brandId, bucketKey, true)")
+      < analysisHandler.indexOf("await ensureBrandDetailLoaded(brandId)"),
+    "loading guard must be set before awaiting brand details to prevent duplicate analysis requests",
+  );
+  assert.doesNotMatch(analysisHandler, /setBusy\(true\)/);
+  assert.match(appSource, /isTrendAnalysisLoading\(brand\.id, bucketKey\)/);
 });
 
 test("wechat long image content repairs a short model outline from the same generated pack", () => {

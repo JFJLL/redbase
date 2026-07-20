@@ -11,7 +11,7 @@ const { fetchAnySearchEvidence, sanitizeEvidenceText } = require("../integration
 
 const PGY_XHS_TREND_COUNT = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE;
 const TREND_ITEMS_PER_BUCKET = 10;
-const TREND_GENERATION_BATCH_SIZE = 5;
+const TREND_GENERATION_BATCH_SIZE = TREND_ITEMS_PER_BUCKET;
 const MIN_TREND_ITEMS_PER_BUCKET = 1;
 
 const IDEA_ROUTE_PAIRS = {
@@ -207,7 +207,7 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
   const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
   return [
     "你是资深小红书内容运营策略顾问，擅长品牌定位、热点适配判断与内容选题策划。",
-    "你的任务是根据完整品牌档案和当前 bucket 证据，一次性输出热点趋势、选题和每个选题的完整 contentAssets。",
+    "你的任务是根据完整品牌档案和当前 bucket 证据，快速输出热点趋势和选题骨架；完整发布文案与视觉资产会在用户实际生成内容时另行创建。",
     "所有趋势都要优先判断其在小红书上的讨论价值、内容扩散潜力、用户搜索/收藏/互动意愿和品牌适配度，不要写成泛泛的全网热点报告。",
     "请只输出 JSON，不要输出 Markdown，不要补充解释。",
     'JSON 顶层结构必须是：{"trendBuckets":[...]}。',
@@ -222,16 +222,14 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
     "热度指数评分标准：90-100 为爆发级热点，站内讨论强、内容供给增长快、品牌借势窗口短；80-89 为高潜热点，搜索/互动趋势明显，适合快速布局；70-79 为稳定热点，有持续内容需求，适合做系列化内容；60-69 为长尾热点，适合垂直人群或细分场景；60 以下为弱热点，除非品牌强相关，否则不建议优先选择。",
     "评分时综合考虑：小红书站内讨论度、搜索意图、互动/收藏潜力、内容可复制性、目标人群相关性、品牌自然植入度和近期时效性。不要编造具体播放量、搜索量、排名或机构数据。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
-    "ideas 必须是 2 条，每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
+    "ideas 必须是 2 条，每条 idea 只包含：title, summary, angle, brandFit, audience, hook, tags；不要输出 contentAssets。",
     buildIdeaDiversityPrompt(selectedBucketMeta),
     buildTrendDeduplicationPrompt(trendCount),
     buildTrendFreshnessPrompt(),
     buildEvidenceBoundaryPrompt(),
     buildSensitiveRiskPrompt(),
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
-    buildRichIdeaRequirementsPrompt(),
-    "contentAssets 必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
-    buildContentAssetsSchemaPrompt(),
+    buildLeanIdeaRequirementsPrompt(),
     "所有字段都用中文输出，允许品牌名保留原文。",
   ].join("\n");
 }
@@ -306,6 +304,18 @@ function buildAnySearchEvidencePromptBlock(searchEvidence) {
   ].join("\n");
 }
 
+function buildLeanIdeaRequirementsPrompt() {
+  return [
+    "每条 idea 只输出 title, summary, angle, brandFit, audience, hook, tags；趋势分析阶段不要输出 contentAssets。",
+    "idea.title：16-32 个中文字符，要像可直接派给运营执行的小红书选题标题。",
+    "idea.summary：50-90 个中文字符，说明内容价值和用户关注点。",
+    "idea.angle：25-50 个中文字符，写清楚具体切入方式。",
+    "idea.brandFit：35-70 个中文字符，只能使用品牌档案明确提供的事实；档案未提供卖点时用真实使用场景自然带入。",
+    "idea.audience：15-40 个中文字符，描述具体人群和场景。",
+    "idea.hook：20-45 个中文字符，输出可直接使用的开头或封面钩子。",
+  ].join("\n");
+}
+
 function buildXhsCategoryPromptBlock(categoryPath) {
   const normalizedCategoryPath = normalizePgyCategoryPath(categoryPath);
   if (!normalizedCategoryPath) return "";
@@ -331,13 +341,13 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
   const strictLines = options.strict
     ? [
         `重要：必须返回 trendBuckets，且 ${formatBucketKeys(selectedBucketMeta)} ${selectedBucketMeta.length} 个当前 bucket 的 items 都不能为空。`,
-        "每条 trend 必须有 2 条 idea，且每条 idea 必须有完整 contentAssets。",
+        "每条 trend 必须有 2 条 idea，每条 idea 只输出选题骨架字段，不要输出 contentAssets。",
         "如果搜索结果不足，请降级为可验证的趋势方向，不要编造具体机构、日期、数据或 evidenceIds。",
         "只返回 JSON 对象，不要解释失败原因，不要输出自然语言说明。",
       ]
     : [];
   return [
-    `请基于以下品牌信息，围绕小红书平台的热点话题与内容机会，只为用户当前点击的维度生成热点趋势、选题和完整内容资产包。`,
+    `请基于以下品牌信息，围绕小红书平台的热点话题与内容机会，只为用户当前点击的维度快速生成热点趋势和选题骨架。`,
     "",
     "当前 bucket 独立规则：",
     formatBucketPromptRules(selectedBucketMeta),
@@ -369,18 +379,17 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     "4. 每条趋势都要解释为什么适合该品牌，尤其说明它和品牌、人群、内容场景之间的自然连接。",
     "5. score 要严格按热度指数评分标准给出，不要所有趋势都给高分；优先把 80 分以上留给真正具备快速借势价值的趋势。",
     "6. 选题要能直接给运营同学使用，标题、角度、钩子都要有小红书笔记感，避免空泛文案。",
-    buildRichIdeaRequirementsPrompt(),
-    "7. 每条趋势固定生成 2 条 idea，每条 idea 必须同步生成完整 contentAssets，并遵守两条选题差异规则，不能只返回选题骨架或同义改写。",
-    "8. contentAssets 要包含内容选题页可直接展示的文案和后续生图需要的中文视觉方向；不要输出 style、composition、prompt，系统会自动生成生图 prompt。",
-    "9. 不要输出品牌摘要字段；不要在 contentAssets 里补充品牌档案没有依据的固定行业样例。",
+    buildLeanIdeaRequirementsPrompt(),
+    "7. 每条趋势固定生成 2 条不同路线的 idea；本阶段不要输出 contentAssets，避免把趋势分析拖成完整内容生产。",
+    "8. 不要输出品牌摘要字段，也不要补充品牌档案没有依据的产品功能、认证、功效或适用人群。",
     anySearchEvidenceBlock
-      ? "10. 如果涉及新闻、社会议题或近期热点，必须引用对应 evidenceIds；没有证据时只能表达为待验证方向，不要编造具体机构、日期、排名或数据。"
-      : "10. 只使用本次 Pgy 证据概括站内热门信号，不要编造具体机构、日期、站外排名或数据。",
-    "11. 不要输出固定行业样例，不要在提示词里写与当前品牌无关的早餐、牛奶、儿童用药等具体场景；只有品牌档案、趋势或选题自然需要时才出现。",
-    `12. ${buildTrendDeduplicationPrompt(trendCount)}`,
-    `13. ${buildTrendFreshnessPrompt()}`,
-    `14. ${buildEvidenceBoundaryPrompt()}`,
-    `15. ${buildSensitiveRiskPrompt()}`,
+      ? "9. 如果涉及新闻、社会议题或近期热点，必须引用对应 evidenceIds；没有证据时只能表达为待验证方向，不要编造具体机构、日期、排名或数据。"
+      : "9. 只使用本次 Pgy 证据概括站内热门信号，不要编造具体机构、日期、站外排名或数据。",
+    "10. 不要输出固定行业样例；只有品牌档案、趋势或选题自然需要时才出现具体场景。",
+    `11. ${buildTrendDeduplicationPrompt(trendCount)}`,
+    `12. ${buildTrendFreshnessPrompt()}`,
+    `13. ${buildEvidenceBoundaryPrompt()}`,
+    `14. ${buildSensitiveRiskPrompt()}`,
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     ...(retryFeedback ? ["上一次输出未通过服务端校验，本次必须修正：", retryFeedback] : []),
     ...strictLines,
@@ -461,6 +470,40 @@ function buildContentAssetsSchemaPrompt() {
     "字段长度要服务可展示内容：标题不超过 32 字，caption/publishCaption 按完整选题卡要求输出，slide.copy 40-80 字，intro 80-140 字，visualDirection 不超过 100 字。",
     "contentAssets 是内容选题页可展示的完整内容资产包，不只是生图 prompt。",
     "不要输出固定行业样例，不要把不属于当前品牌、趋势或选题的具体品牌、品类、生活场景带入；只有品牌档案、趋势或选题自然需要时才出现。",
+  ].join("\n");
+}
+
+function buildContentAssetEnrichmentSystemPrompt() {
+  return [
+    "你是小红书内容资产编辑，只为已经确定的单条选题补齐发布文案和视觉方向。",
+    "只输出 JSON，不要输出 Markdown 或解释。",
+    'JSON 顶层结构必须是：{"contentAssets":{...}}。',
+    buildContentAssetsSchemaPrompt(),
+    buildCaptionEndingDiversityPrompt(),
+    buildSensitiveRiskPrompt(),
+    "不得改变选题方向，不得补充品牌档案未提供的产品功能、认证、功效、适用人群或数据。",
+  ].join("\n");
+}
+
+function buildContentAssetEnrichmentUserPrompt(brand, trend, idea, retryFeedback = "") {
+  return [
+    "请为下面这条已经确定的选题补齐 contentAssets。",
+    `品牌名称：${brand.name}`,
+    `行业：${brand.industry}`,
+    `目标受众：${brand.audience}`,
+    `品牌介绍：${brand.description}`,
+    `产品/服务：${brand.product}`,
+    `品牌资料库：${brand.knowledgeBase || "暂无补充资料"}`,
+    `品牌资产标签：${(brand.assetTags || []).join("、") || "暂无"}`,
+    `趋势标题：${trend.title}`,
+    `趋势摘要：${trend.summary}`,
+    `选题标题：${idea.title}`,
+    `选题摘要：${idea.summary}`,
+    `切入角度：${idea.angle}`,
+    `品牌结合：${idea.brandFit}`,
+    `目标人群：${idea.audience}`,
+    `开头钩子：${idea.hook}`,
+    ...(retryFeedback ? ["上一次输出未通过校验，本次必须修正：", retryFeedback] : []),
   ].join("\n");
 }
 
@@ -708,34 +751,6 @@ function hasUsableTrendBuckets(trendBuckets, bucketMeta = TREND_BUCKET_META) {
   );
 }
 
-function hasFullTrendBuckets(trendBuckets, bucketMeta = TREND_BUCKET_META) {
-  return (
-    hasUsableTrendBuckets(trendBuckets, bucketMeta) &&
-    trendBuckets.every((bucket) => Array.isArray(bucket.items) && bucket.items.length === TREND_ITEMS_PER_BUCKET)
-  );
-}
-
-function hasCompleteTrendBucketContentAssets(trendBuckets, bucketMeta = TREND_BUCKET_META) {
-  return (
-    hasFullTrendBuckets(trendBuckets, bucketMeta) &&
-    trendBuckets.every((bucket) =>
-      bucket.items.every((trend) => (trend.ideas || []).every((idea) => hasCompleteIdeaContentAssets(idea))),
-    )
-  );
-}
-
-function hasCompleteTrendBatchContentAssets(trendBuckets, expectedCount, bucketMeta = TREND_BUCKET_META) {
-  return (
-    hasUsableTrendBuckets(trendBuckets, bucketMeta) &&
-    trendBuckets.every(
-      (bucket) =>
-        Array.isArray(bucket.items) &&
-        bucket.items.length === expectedCount &&
-        bucket.items.every((trend) => (trend.ideas || []).every((idea) => hasCompleteIdeaContentAssets(idea))),
-    )
-  );
-}
-
 function collectTrendClaimTexts(value, key = "") {
   if (["evidenceIds", "id", "score"].includes(key)) return [];
   if (typeof value === "string") return [value];
@@ -767,6 +782,24 @@ function hasPositiveBrandSupport(brandText, pattern) {
   return Boolean(findPositiveClaimMatch(brandText, pattern));
 }
 
+function getBrandClaimTextEntries(trend) {
+  const entries = ["title", "summary", "reason"].map((field) => ({
+    field,
+    text: String(trend?.[field] || ""),
+  }));
+  for (const [ideaIndex, idea] of (trend?.ideas || []).entries()) {
+    entries.push({ field: `ideas.${ideaIndex}.brandFit`, text: String(idea?.brandFit || "") });
+    for (const text of collectTrendClaimTexts(idea?.contentAssets || {})) {
+      entries.push({ field: `ideas.${ideaIndex}.contentAssets`, text });
+    }
+    for (const field of ["title", "summary", "angle", "hook"]) {
+      const text = String(idea?.[field] || "");
+      entries.push({ field: `ideas.${ideaIndex}.${field}`, text });
+    }
+  }
+  return entries.filter((entry) => entry.text);
+}
+
 function getUnsupportedBrandClaimIssues(trendBuckets, brand) {
   const brandText = [brand?.description, brand?.product, brand?.knowledgeBase, ...(brand?.assetTags || [])]
     .map((value) => String(value || ""))
@@ -774,14 +807,15 @@ function getUnsupportedBrandClaimIssues(trendBuckets, brand) {
   const issues = [];
   for (const bucket of trendBuckets || []) {
     for (const trend of bucket.items || []) {
-      const claimTexts = collectTrendClaimTexts(trend);
+      const claimTexts = getBrandClaimTextEntries(trend);
       for (const pattern of HIGH_RISK_BRAND_CLAIM_PATTERNS) {
-        const generatedClaim = claimTexts.find((text) => findPositiveClaimMatch(text, pattern));
+        const generatedClaim = claimTexts.find((entry) => findPositiveClaimMatch(entry.text, pattern));
         if (generatedClaim && !hasPositiveBrandSupport(brandText, pattern)) {
           issues.push({
-            title: String(trend.title || "").slice(0, 80),
+            title: String(trend.title || ""),
             reason: "unsupported-brand-claim",
-            claim: generatedClaim.slice(0, 120),
+            field: generatedClaim.field,
+            claim: generatedClaim.text.slice(0, 120),
           });
           break;
         }
@@ -789,6 +823,28 @@ function getUnsupportedBrandClaimIssues(trendBuckets, brand) {
     }
   }
   return issues;
+}
+
+function neutralizeUnsupportedBrandClaims(trendBuckets, brand) {
+  const issues = getUnsupportedBrandClaimIssues(trendBuckets, brand);
+  const neutralizedIssues = [];
+  const product = String(brand?.product || brand?.industry || "产品或服务").trim();
+  const audience = String(brand?.audience || "目标用户").trim();
+  for (const issue of issues) {
+    const trend = (trendBuckets || []).flatMap((bucket) => bucket.items || []).find((item) => item.title === issue.title);
+    if (!trend) continue;
+    if (issue.field === "reason") {
+      trend.reason = `该方向与${brand.name}的${product}及${audience}使用场景相关，具体卖点以品牌档案为准。`;
+      neutralizedIssues.push(issue);
+      continue;
+    }
+    const match = issue.field.match(/^ideas\.(\d+)\.brandFit$/);
+    if (match && trend.ideas?.[Number(match[1])]) {
+      trend.ideas[Number(match[1])].brandFit = `${brand.name}可从${product}的真实使用场景自然进入内容，不补充品牌档案未提供的功效、认证或适用人群承诺。`;
+      neutralizedIssues.push(issue);
+    }
+  }
+  return neutralizedIssues;
 }
 
 function normalizeTrendIdentity(value) {
@@ -991,7 +1047,6 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     const analysisAttempts = [
       { label: anySearchEvidence ? "anysearch-enhanced" : "pgy-evidence", pgyEvidence, anySearchEvidence, temperature: 0.3 },
       { label: anySearchEvidence ? "strict-anysearch-enhanced" : "strict-pgy-evidence", pgyEvidence, anySearchEvidence, temperature: 0.25, strict: true },
-      { label: anySearchEvidence ? "corrective-anysearch-enhanced" : "corrective-pgy-evidence", pgyEvidence, anySearchEvidence, temperature: 0.15, strict: true },
     ];
     const batchSize = anySearchEvidence ? TREND_GENERATION_BATCH_SIZE : TREND_ITEMS_PER_BUCKET;
     const totalBatches = Math.ceil(TREND_ITEMS_PER_BUCKET / batchSize);
@@ -1037,12 +1092,12 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             useSearch: false,
             temperature: attempt.temperature,
             timeoutMs: Number(options.textTimeoutMs || 180000),
-            retries: 1,
-            maxOutputTokens: Number(options.trendMaxOutputTokens || appConfig.textProvider.maxOutputTokens || 65536),
+            retries: 2,
+            maxOutputTokens: Number(options.trendMaxOutputTokens || Math.min(appConfig.textProvider.maxOutputTokens || 24576, 24576)),
             stream: appConfig.textProvider.apiStyle === "openai",
           });
           const { rawBuckets, rawTrends } = unwrapTrendModelResult(result);
-          const trendBuckets = normalizeTrendBuckets(
+          let trendBuckets = normalizeTrendBuckets(
             rawBuckets,
             rawTrends,
             brand,
@@ -1070,36 +1125,49 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             });
             throw new Error("模型返回了重复趋势，已拒绝本批结果并重试。");
           }
-          const unsupportedBrandClaimIssues = getUnsupportedBrandClaimIssues(trendBuckets, brand);
+          const unsupportedBrandClaimIssues = neutralizeUnsupportedBrandClaims(trendBuckets, brand);
           if (unsupportedBrandClaimIssues.length) {
-            console.warn("[trend-analysis] unsupported brand claims rejected", {
+            console.warn("[trend-analysis] unsupported brand claims neutralized", {
               brandId: brand.id,
               batchNumber: batchIndex + 1,
               issues: unsupportedBrandClaimIssues,
             });
-            throw new Error("模型使用了品牌档案未提供的高风险卖点或信任背书，已拒绝本批结果并重试。");
           }
-          if (attempt.anySearchEvidence && !hasValidAnySearchEvidenceCoverage(trendBuckets, attempt.anySearchEvidence)) {
-            console.warn("[trend-analysis] AnySearch evidence coverage rejected", {
+          const remainingBrandClaimIssues = getUnsupportedBrandClaimIssues(trendBuckets, brand);
+          if (remainingBrandClaimIssues.length) {
+            const rejectedTitles = new Set(remainingBrandClaimIssues.map((issue) => issue.title));
+            trendBuckets = trendBuckets.map((bucket) => ({
+              ...bucket,
+              items: bucket.items.filter((trend) => !rejectedTitles.has(String(trend.title || ""))),
+            }));
+            console.warn("[trend-analysis] unsafe brand claim trends filtered", {
               brandId: brand.id,
               batchNumber: batchIndex + 1,
-              issues: getAnySearchEvidenceCoverageIssues(trendBuckets, attempt.anySearchEvidence),
+              issues: remainingBrandClaimIssues,
+              remainingCounts: trendBuckets.map((bucket) => ({ key: bucket.key, count: bucket.items.length })),
             });
-            throw new Error("模型引用了无效 evidenceIds，或仅用营销/社交来源支撑了数字、政策、医学等硬事实。");
+            if (!hasUsableTrendBuckets(trendBuckets, selectedBucketMeta)) {
+              throw new Error("本批趋势均包含品牌档案未提供且无法安全改写的高风险卖点或信任背书。");
+            }
           }
-          if (!hasCompleteTrendBatchContentAssets(trendBuckets, expectedCount, selectedBucketMeta)) {
-            const totalIdeas = trendBuckets.reduce(
-              (sum, bucket) => sum + bucket.items.reduce((ideaSum, trend) => ideaSum + (trend.ideas || []).length, 0),
-              0,
-            );
-            const completeIdeas = trendBuckets.reduce(
-              (sum, bucket) => sum + bucket.items.reduce(
-                (ideaSum, trend) => ideaSum + (trend.ideas || []).filter((idea) => hasCompleteIdeaContentAssets(idea)).length,
-                0,
-              ),
-              0,
-            );
-            throw new Error(`模型未按结构返回完整 contentAssets：${completeIdeas}/${totalIdeas} 个选题可用。`);
+          const evidenceCoverageIssues = attempt.anySearchEvidence
+            ? getAnySearchEvidenceCoverageIssues(trendBuckets, attempt.anySearchEvidence)
+            : [];
+          if (evidenceCoverageIssues.length) {
+            const rejectedTitles = new Set(evidenceCoverageIssues.map((issue) => issue.title).filter(Boolean));
+            trendBuckets = trendBuckets.map((bucket) => ({
+              ...bucket,
+              items: bucket.items.filter((trend) => !rejectedTitles.has(String(trend.title || "").slice(0, 80))),
+            }));
+            console.warn("[trend-analysis] unverifiable trends filtered", {
+              brandId: brand.id,
+              batchNumber: batchIndex + 1,
+              issues: evidenceCoverageIssues,
+              remainingCounts: trendBuckets.map((bucket) => ({ key: bucket.key, count: bucket.items.length })),
+            });
+            if (!hasUsableTrendBuckets(trendBuckets, selectedBucketMeta)) {
+              throw new Error("本批趋势均缺少有效 evidenceIds，或使用弱来源支撑了数字、政策、医学等硬事实。");
+            }
           }
           batchCandidate = trendBuckets;
           break;
@@ -1125,17 +1193,21 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       }
     }
 
-    const trendBuckets = selectedBucketMeta.map((meta) => ({
+    const trendBuckets = selectedBucketMeta.map((meta, bucketIndex) => ({
       key: meta.key,
       title: meta.title,
       description: meta.description,
-      items: (mergedItemsByBucket.get(meta.key) || []).slice(0, TREND_ITEMS_PER_BUCKET),
+      items: (mergedItemsByBucket.get(meta.key) || []).slice(0, TREND_ITEMS_PER_BUCKET).map((trend, index) => ({
+        ...trend,
+        id: baseId + bucketIndex * 100 + index + 1,
+        rank: index + 1,
+      })),
     }));
     if (getDuplicateTrendIssues(trendBuckets).length) {
       throw new Error("文本模型分批结果合并后包含重复趋势。");
     }
-    if (!hasCompleteTrendBucketContentAssets(trendBuckets, selectedBucketMeta)) {
-      throw new Error("文本模型分批结果合并后仍未达到 10 条完整趋势。");
+    if (!hasUsableTrendBuckets(trendBuckets, selectedBucketMeta)) {
+      throw new Error("文本模型分批结果合并后没有可用趋势。");
     }
     return attachAnalysisWarnings(trendBuckets, getTrendBucketCountWarnings(trendBuckets));
   } catch (error) {
@@ -1185,15 +1257,53 @@ async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt) {
   };
 }
 
-async function ensureTrendIdeaContentAssets(_appConfig, _brand, trend, ideaIndex) {
+async function ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex, options = {}) {
   const idea = trend?.ideas?.[Number(ideaIndex)];
   if (!idea) {
     throw new Error("当前选题不存在，请重新生成或刷新页面后再试。");
   }
-  if (!hasCompleteIdeaContentAssets(idea)) {
-    throw new Error("当前选题缺少趋势分析时生成的完整内容资产，请先重新生成趋势分析或重新生成选题。");
+  if (hasCompleteIdeaContentAssets(idea)) {
+    return { idea, filled: false };
   }
-  return { idea, filled: false };
+
+  const textModelImpl = options.textModelImpl || callTextModelJson;
+  let retryFeedback = "";
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await textModelImpl(appConfig, {
+        systemPrompt: buildContentAssetEnrichmentSystemPrompt(),
+        userPrompt: buildContentAssetEnrichmentUserPrompt(brand, trend, idea, retryFeedback),
+        useSearch: false,
+        temperature: attempt === 0 ? 0.25 : 0.15,
+        timeoutMs: Number(options.textTimeoutMs || 120000),
+        retries: 2,
+        maxOutputTokens: Number(options.maxOutputTokens || 16384),
+        stream: appConfig.textProvider.apiStyle === "openai",
+      });
+      const rawAssets = result?.contentAssets || result?.content_assets || result?.idea?.contentAssets || result?.idea?.content_assets || result;
+      const contentAssets = normalizeIdeaContentAssets({ contentAssets: rawAssets });
+      const candidateIdea = { ...idea, contentAssets };
+      if (!hasCompleteIdeaContentAssets(candidateIdea)) {
+        throw new Error("模型未返回完整 contentAssets。");
+      }
+      const claimIssues = getUnsupportedBrandClaimIssues(
+        [{ key: trend.bucketKey || "xhs", items: [{ ...trend, ideas: [candidateIdea] }] }],
+        brand,
+      );
+      if (claimIssues.length) {
+        throw new Error("模型补充了品牌档案未提供的高风险卖点或信任背书。");
+      }
+      idea.contentAssets = contentAssets;
+      return { idea, filled: true };
+    } catch (error) {
+      lastError = error;
+      retryFeedback = String(error?.message || "").includes("高风险卖点")
+        ? "删除品牌档案未提供的认证、医学功效、专用人群或绝对安全声明，只使用输入中的品牌事实和选题场景。"
+        : "严格按 schema 输出 moments、xhsCarousel、wechatLongImage 三个完整对象。";
+    }
+  }
+  throw new Error(`当前选题的完整内容资产生成失败：${String(lastError?.message || "模型输出不完整")}`);
 }
 
 module.exports = {

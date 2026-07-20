@@ -350,8 +350,8 @@ test("includes Pgy evidence and category constraints in trend prompts", () => {
   assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
   assert.match(prompt, /Pgy bucket 只能引用已传入的标题、阅读、赞藏评、作者信息/);
   assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
-  assert.match(prompt, /小红书文案结尾去模板化/);
-  assert.match(prompt, /最多 1 条 publishCaption 可以使用评论区引导/);
+  assert.doesNotMatch(prompt, /小红书文案结尾去模板化/);
+  assert.doesNotMatch(prompt, /publishCaption 可以使用评论区引导/);
 
   const categoryOnlyPrompt = buildTrendAnalysisUserPrompt(brand, { xhsCategoryPath: "美妆/护肤" });
   assert.match(categoryOnlyPrompt, /小红书内容类目限定/);

@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fsp = require("fs/promises");
+const os = require("os");
 const path = require("path");
 
 const { DATA_DIR } = require("../src/server/config");
@@ -33,15 +34,19 @@ test("removeGenerationLocalFiles prunes empty generated image directories", asyn
 
 test("cleanupEmptyGeneratedImageDirs removes existing empty generated image folders", async () => {
   const ownerUserId = 990002;
-  const monthDir = path.join(DATA_DIR, "uploads", "generated-images", "users", String(ownerUserId), "2026", "04");
-  const userRoot = path.join(DATA_DIR, "uploads", "generated-images", "users", String(ownerUserId));
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "redbase-generated-cleanup-"));
+  const userRoot = path.join(tempRoot, "users", String(ownerUserId));
+  const monthDir = path.join(userRoot, "2026", "04");
 
-  await fsp.mkdir(monthDir, { recursive: true });
+  try {
+    await fsp.mkdir(monthDir, { recursive: true });
 
-  const result = await cleanupEmptyGeneratedImageDirs(userRoot);
+    const result = await cleanupEmptyGeneratedImageDirs(userRoot);
 
-  await assert.rejects(() => fsp.stat(monthDir), { code: "ENOENT" });
-  await assert.rejects(() => fsp.stat(path.dirname(monthDir)), { code: "ENOENT" });
-  assert.equal(result.deletedCount >= 2, true);
-  await fsp.rm(userRoot, { recursive: true, force: true });
+    await assert.rejects(() => fsp.stat(monthDir), { code: "ENOENT" });
+    await assert.rejects(() => fsp.stat(path.dirname(monthDir)), { code: "ENOENT" });
+    assert.equal(result.deletedCount >= 2, true);
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  }
 });

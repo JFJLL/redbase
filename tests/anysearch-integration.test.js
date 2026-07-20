@@ -35,6 +35,7 @@ const {
   hasValidAnySearchEvidenceCoverage,
   TREND_BUCKET_META,
   generateAiTrendSet,
+  ensureTrendIdeaContentAssets,
 } = require("../src/server/ai/trend-service");
 
 const brand = {
@@ -722,7 +723,7 @@ test("prunes expired evidence cache entries and enforces a size cap", async () =
   assert.equal(getAnySearchCacheSize(), 0);
 });
 
-test("generates AnySearch trends in two five-item model batches and merges ten complete trends", async () => {
+test("generates ten lean AnySearch trends in one model call", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const prompts = [];
@@ -752,8 +753,8 @@ test("generates AnySearch trends in two five-item model batches and merges ten c
       return {
         trendBuckets: [{
           key: "track",
-          items: Array.from({ length: 5 }, (_, index) => {
-            const label = `第${modelCalls}批趋势${index + 1}`;
+          items: Array.from({ length: 10 }, (_, index) => {
+            const label = `单批趋势${index + 1}`;
             return {
               stableKey: `batch-${modelCalls}-${index + 1}`,
               title: label,
@@ -771,15 +772,13 @@ test("generates AnySearch trends in two five-item model batches and merges ten c
     },
   });
 
-  assert.equal(modelCalls, 2);
-  assert.match(prompts[0], /第 1\/2 批/);
-  assert.match(prompts[1], /第 2\/2 批/);
-  assert.match(prompts[1], /前一批已使用的趋势标题/);
+  assert.equal(modelCalls, 1);
+  assert.doesNotMatch(prompts[0], /第 1\/2 批/);
   assert.equal(result[0].items.length, 10);
   assert.deepEqual(result[0].items.map((item) => item.id), [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010]);
 });
 
-test("rejects duplicate trends across AnySearch batches and retries before merging", async () => {
+test("rejects duplicate trends within the lean AnySearch result and retries", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const appConfig = {
@@ -792,11 +791,11 @@ test("rejects duplicate trends across AnySearch batches and retries before mergi
     },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   };
-  const makeBatch = (prefix, stablePrefix) => ({
+  const makeBatch = (prefix, stablePrefix, duplicateTitle = false) => ({
     trendBuckets: [{
       key: "track",
-      items: Array.from({ length: 5 }, (_, index) => {
-        const label = `${prefix}${index + 1}`;
+      items: Array.from({ length: 10 }, (_, index) => {
+        const label = duplicateTitle && index === 9 ? `${prefix}1` : `${prefix}${index + 1}`;
         return {
           stableKey: `${stablePrefix}-${index + 1}`,
           title: label,
@@ -817,19 +816,18 @@ test("rejects duplicate trends across AnySearch batches and retries before mergi
     anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
     textModelImpl: async () => {
       modelCalls += 1;
-      if (modelCalls === 1) return makeBatch("首批趋势", "first");
-      if (modelCalls === 2) return makeBatch("首批趋势", "duplicate-title");
+      if (modelCalls === 1) return makeBatch("重复趋势", "duplicate-title", true);
       return makeBatch("重试趋势", "retry");
     },
   });
 
-  assert.equal(modelCalls, 3);
+  assert.equal(modelCalls, 2);
   assert.equal(result[0].items.length, 10);
   assert.equal(new Set(result[0].items.map((item) => item.title)).size, 10);
-  assert.deepEqual(result[0].items.slice(5).map((item) => item.title), ["重试趋势1", "重试趋势2", "重试趋势3", "重试趋势4", "重试趋势5"]);
+  assert.deepEqual(result[0].items.map((item) => item.title), Array.from({ length: 10 }, (_, index) => `重试趋势${index + 1}`));
 });
 
-test("uses validation feedback and a corrective attempt for evidence and brand claim failures", async () => {
+test("uses validation feedback and neutralizes unsupported brand claims without discarding the batch", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const prompts = [];
@@ -846,7 +844,7 @@ test("uses validation feedback and a corrective attempt for evidence and brand c
   const makeBatch = (prefix, { withUnsupportedClaim = false, omitEvidenceIds = false } = {}) => ({
     trendBuckets: [{
       key: "track",
-      items: Array.from({ length: 5 }, (_, index) => {
+      items: Array.from({ length: 10 }, (_, index) => {
         const label = `${prefix}${index + 1}`;
         const ideas = [generatedIdeaFixture(`${label}A`), generatedIdeaFixture(`${label}B`)];
         if (withUnsupportedClaim && index === 0) {
@@ -875,16 +873,193 @@ test("uses validation feedback and a corrective attempt for evidence and brand c
       prompts.push(request.userPrompt);
       if (modelCalls === 1) return makeBatch("漏引趋势", { omitEvidenceIds: true });
       if (modelCalls === 2) return makeBatch("风险趋势", { withUnsupportedClaim: true });
-      if (modelCalls === 3) return makeBatch("安全首批");
-      return makeBatch("安全次批");
+      return makeBatch("安全结果");
     },
   });
 
-  assert.equal(modelCalls, 4);
+  assert.equal(modelCalls, 2);
   assert.match(prompts[1], /每条 trend 都要在 trend 对象内输出 evidenceIds 数组/);
-  assert.match(prompts[2], /删除品牌档案未明确提供的认证、医疗级、蓝光等级/);
   assert.equal(result[0].items.length, 10);
   assert.ok(result[0].items.every((item) => !JSON.stringify(item).includes("医疗级")));
+});
+
+test("filters an unsupported brand claim from idea copy even when the brand name is omitted", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  const appConfig = {
+    searchProvider: {
+      enabled: true,
+      socialEnabled: true,
+      minReliableEvidence: 2,
+      urlCheckEnabled: false,
+      cacheTtlMs: 0,
+    },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  };
+
+  const result = await generateAiTrendSet(appConfig, brand, 7500, {
+    bucketKey: "track",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      return {
+        trendBuckets: [{
+          key: "track",
+          items: Array.from({ length: 10 }, (_, index) => {
+            const label = `宣称扫描趋势${index + 1}`;
+            const ideas = [generatedIdeaFixture(`${label}A`), generatedIdeaFixture(`${label}B`)];
+            if (index === 0) ideas[0].hook = "医疗级护眼灯真的更靠谱吗";
+            return {
+              stableKey: `claim-scan-${index + 1}`,
+              title: label,
+              category: "赛道趋势",
+              summary: `${label}聚焦桌面照明的真实讨论方向。`,
+              score: 70 + index,
+              tags: ["#桌面照明", "#租房布置", "#居家办公"],
+              reason: `${label}与折叠桌面灯的小空间使用场景相关。`,
+              evidenceIds: ["S1"],
+              ideas,
+            };
+          }),
+        }],
+      };
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 9);
+  assert.ok(result[0].items.every((item) => !JSON.stringify(item).includes("医疗级")));
+});
+
+test("accepts lean trend ideas and fills complete content assets only when requested", async () => {
+  clearAnySearchCache();
+  let trendModelCalls = 0;
+  const appConfig = {
+    searchProvider: {
+      enabled: true,
+      socialEnabled: true,
+      minReliableEvidence: 2,
+      urlCheckEnabled: false,
+      cacheTtlMs: 0,
+    },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  };
+  const result = await generateAiTrendSet(appConfig, brand, 8000, {
+    bucketKey: "traffic",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
+    textModelImpl: async (_config, request) => {
+      trendModelCalls += 1;
+      assert.match(request.systemPrompt, /不要输出 contentAssets/);
+      const prefix = `精简批次${trendModelCalls}`;
+      return {
+        trendBuckets: [{
+          key: "traffic",
+          items: Array.from({ length: 10 }, (_, index) => {
+            const label = `${prefix}趋势${index + 1}`;
+            return {
+              stableKey: `${prefix}-${index + 1}`,
+              title: label,
+              category: "流量趋势",
+              summary: `${label}聚焦桌面照明内容表达。`,
+              score: 70 + index,
+              tags: ["#桌面照明", "#租房布置", "#居家办公"],
+              reason: `${label}与品牌使用场景相关。`,
+              evidenceIds: ["S1"],
+              ideas: [generatedIdeaFixture(`${label}A`), generatedIdeaFixture(`${label}B`)].map(({ contentAssets, ...idea }) => idea),
+            };
+          }),
+        }],
+      };
+    },
+  });
+
+  assert.equal(trendModelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.deepEqual(result[0].items[0].ideas[0].contentAssets, {});
+
+  let assetModelCalls = 0;
+  const trend = result[0].items[0];
+  const filled = await ensureTrendIdeaContentAssets(appConfig, brand, trend, 0, {
+    textModelImpl: async (_config, request) => {
+      assetModelCalls += 1;
+      assert.match(request.userPrompt, new RegExp(trend.ideas[0].title));
+      assert.match(request.systemPrompt, /小红书文案结尾去模板化/);
+      assert.match(request.systemPrompt, /最多 1 条 publishCaption 可以使用评论区引导/);
+      return { contentAssets: generatedIdeaFixture("按需补齐").contentAssets };
+    },
+  });
+
+  assert.equal(assetModelCalls, 1);
+  assert.equal(filled.filled, true);
+  assert.ok(filled.idea.contentAssets.moments.caption);
+  assert.equal((await ensureTrendIdeaContentAssets(appConfig, brand, trend, 0, {
+    textModelImpl: async () => {
+      throw new Error("complete assets must not call the model again");
+    },
+  })).filled, false);
+});
+
+test("filters individual unverifiable medical trends instead of failing the whole traffic bucket", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  const appConfig = {
+    searchProvider: {
+      enabled: true,
+      socialEnabled: true,
+      minReliableEvidence: 2,
+      urlCheckEnabled: false,
+      cacheTtlMs: 0,
+    },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  };
+  const socialOnlyEvidence = [
+    "## Query 1: social",
+    "### 1. 用户讨论",
+    "- **URL**: https://www.zhihu.com/question/123",
+    "- Source: zhihu.com 小快克儿童感冒用药家长讨论换季内容选题。",
+    "## Query 2: social",
+    "### 1. 微博讨论",
+    "- **URL**: https://m.weibo.cn/status/456",
+    "- Source: weibo.com 小快克儿童感冒用药家长讨论内容表达。",
+  ].join("\n");
+  const result = await generateAiTrendSet(appConfig, {
+    ...brand,
+    name: "小快克",
+    industry: "儿童健康",
+    audience: "儿童家长",
+    product: "儿童感冒用药",
+    description: "面向儿童家长的家庭健康品牌",
+  }, 9000, {
+    bucketKey: "traffic",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => socialOnlyEvidence },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      return {
+        trendBuckets: [{
+          key: "traffic",
+          items: Array.from({ length: 10 }, (_, index) => {
+            const label = index === 0 ? "治疗感冒的儿童用药指南" : `安全流量趋势${index + 1}`;
+            return {
+              stableKey: `traffic-${modelCalls}-${index + 1}`,
+              title: label,
+              category: "流量趋势",
+              summary: `${label}聚焦家长关注的内容表达方向。`,
+              score: 70 + index,
+              tags: ["#家庭健康", "#内容科普", "#家长关注"],
+              reason: `${label}可从真实家庭场景切入。`,
+              evidenceIds: ["S1"],
+              ideas: [generatedIdeaFixture(`${label}A`), generatedIdeaFixture(`${label}B`)].map(({ contentAssets, ...idea }) => idea),
+            };
+          }),
+        }],
+      };
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 9);
+  assert.ok(result[0].items.every((item) => !item.title.includes("治疗感冒")));
+  assert.deepEqual(result.analysisWarnings, [{ bucketKey: "traffic", bucketTitle: "流量热点趋势", expected: 10, actual: 9 }]);
 });
 
 test("prompts treat search snippets as untrusted evidence and enforce real evidence IDs", () => {

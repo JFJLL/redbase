@@ -22,6 +22,7 @@ export const state = {
   xhsCategoryStatus: "idle",
   xhsCategoryError: "",
   loading: false,
+  trendAnalysisLoadingKeys: [],
   currentUser: null,
   sessionToken: "",
   productImages: {},

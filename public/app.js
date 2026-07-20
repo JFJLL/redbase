@@ -1009,11 +1009,13 @@ function bindXhsCategorySelector() {
 
 function bindAnalysisButton() {
   document.getElementById("runTrendAnalysis").addEventListener("click", async () => {
+    const brandId = Number(state.selectedBrandId);
+    const bucketKey = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE;
+    if (!brandId || isTrendAnalysisLoading(brandId, bucketKey)) return;
+    setTrendAnalysisBusy(brandId, bucketKey, true);
     try {
-      const brand = await ensureBrandDetailLoaded();
+      const brand = await ensureBrandDetailLoaded(brandId);
       if (!brand) return;
-      setBusy(true);
-      const bucketKey = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE;
       const result = await request(`/api/brands/${brand.id}/analyses`, {
         method: "POST",
         body: JSON.stringify({
@@ -1023,14 +1025,15 @@ function bindAnalysisButton() {
       });
       updateCurrentUser(result.user);
       replaceBrand(result.brand);
-      state.selectedTrendMode = bucketKey;
-      state.selectedTrendId = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
+      if (Number(state.selectedBrandId) === Number(brand.id) && state.selectedTrendMode === bucketKey) {
+        state.selectedTrendId = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
+      }
       renderAll();
       showTrendAnalysisWarnings(result.warnings);
     } catch (error) {
       alert(formatTrendAnalysisError(error));
     } finally {
-      setBusy(false);
+      setTrendAnalysisBusy(brandId, bucketKey, false);
     }
   });
 }
@@ -1154,6 +1157,7 @@ function updateCurrentUser(user) {
 function clearSession() {
   state.sessionToken = "";
   state.currentUser = null;
+  state.trendAnalysisLoadingKeys = [];
   renderUser();
   closeAccountCenterModal();
 }
@@ -1179,6 +1183,23 @@ function setBusy(loading) {
   renderXhsCategorySelector();
 }
 
+function getTrendAnalysisLoadingKey(brandId, bucketKey) {
+  return `${Number(brandId) || 0}:${normalizeTrendBucketKey(bucketKey || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE}`;
+}
+
+function isTrendAnalysisLoading(brandId, bucketKey) {
+  return state.trendAnalysisLoadingKeys.includes(getTrendAnalysisLoadingKey(brandId, bucketKey));
+}
+
+function setTrendAnalysisBusy(brandId, bucketKey, loading) {
+  const key = getTrendAnalysisLoadingKey(brandId, bucketKey);
+  state.trendAnalysisLoadingKeys = loading
+    ? [...new Set([...state.trendAnalysisLoadingKeys, key])]
+    : state.trendAnalysisLoadingKeys.filter((item) => item !== key);
+  renderTrendAnalysisButton();
+  renderXhsCategorySelector();
+}
+
 function getSelectedTrendBucketLabel() {
   return getDefaultTrendBucket(state.selectedTrendMode)?.title || "当前维度";
 }
@@ -1189,11 +1210,15 @@ function renderTrendAnalysisButton() {
     const label = getSelectedTrendBucketLabel();
     const brand = getSelectedBrand();
     const waitingForBrand = Boolean(brand && !isBrandDetailLoaded(brand));
-    button.disabled = state.loading || waitingForBrand;
+    const bucketKey = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE;
+    const analysisLoading = Boolean(brand && isTrendAnalysisLoading(brand.id, bucketKey));
+    button.disabled = state.loading || waitingForBrand || analysisLoading;
     if (waitingForBrand) {
       button.innerHTML = `<span>加载品牌详情中...</span><small>稍后可生成</small>`;
-    } else if (state.loading) {
+    } else if (analysisLoading) {
       button.innerHTML = `<span>${escapeHtml(label)}生成中...</span>`;
+    } else if (state.loading) {
+      button.innerHTML = `<span>处理中...</span>`;
     } else {
       button.innerHTML = `<span>生成${escapeHtml(label)}</span><small>消耗 1 积分</small>`;
     }
@@ -1692,7 +1717,8 @@ function renderXhsCategorySelector() {
 
   select.innerHTML = `<option value="">全部内容类目</option>${renderXhsCategoryOptions(state.xhsCategories)}`;
   select.value = state.xhsCategoryPath || "";
-  select.disabled = state.loading || state.xhsCategoryStatus !== "ready";
+  const brand = getSelectedBrand();
+  select.disabled = state.loading || Boolean(brand && isTrendAnalysisLoading(brand.id, "xhs")) || state.xhsCategoryStatus !== "ready";
 
   if (state.xhsCategoryStatus === "loading") {
     status.textContent = "正在加载类目...";
@@ -2322,7 +2348,7 @@ function hasCompleteIdeaContentAssets(idea) {
 function renderIdeaContentAssets(idea) {
   const assets = idea?.contentAssets || {};
   if (!hasCompleteIdeaContentAssets(idea)) {
-    return `<div class="idea-asset-preview is-incomplete">内容生成不完整，请重新生成趋势分析或重新生成选题。</div>`;
+    return `<div class="idea-asset-preview is-incomplete">趋势和选题已生成。朋友圈、小红书和公众号的完整发布文案会在你首次生成对应内容时自动补齐。</div>`;
   }
   const moments = assets.moments || {};
   const carousel = assets.xhsCarousel || {};
