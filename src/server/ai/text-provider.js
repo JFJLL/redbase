@@ -57,6 +57,90 @@ function fetchJson(url, options = {}) {
   });
 }
 
+function extractTextFromOpenAIStream(raw) {
+  const parts = [];
+  let completed = false;
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload) continue;
+    if (payload === "[DONE]") {
+      completed = true;
+      continue;
+    }
+    let data;
+    try {
+      data = JSON.parse(payload);
+    } catch (_error) {
+      continue;
+    }
+    if (data?.error) {
+      throw new Error(data.error.message || data.error || "OpenAI-compatible stream failed");
+    }
+    const content = data?.choices?.[0]?.delta?.content;
+    if (typeof content === "string") parts.push(content);
+  }
+  if (!completed) throw new Error("OpenAI-compatible stream ended before [DONE].");
+  return parts.join("");
+}
+
+function fetchOpenAIText(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const transport = target.protocol === "https:" ? https : http;
+    const timeoutMs = Number(options.timeoutMs || 180000);
+    const request = transport.request(
+      target,
+      {
+        method: options.method || "POST",
+        headers: options.headers || {},
+      },
+      (response) => {
+        let raw = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          raw += chunk;
+        });
+        response.on("end", () => {
+          let data = null;
+          try {
+            data = raw ? JSON.parse(raw) : null;
+          } catch (_error) {
+            data = null;
+          }
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            const message = data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.statusCode}`;
+            const httpError = new Error(message);
+            httpError.statusCode = response.statusCode;
+            httpError.url = url;
+            httpError.rawBody = raw;
+            httpError.payload = data;
+            reject(httpError);
+            return;
+          }
+          try {
+            const contentType = String(response.headers["content-type"] || "").toLowerCase();
+            resolve(
+              contentType.includes("text/event-stream") || /^\s*data:/m.test(raw)
+                ? extractTextFromOpenAIStream(raw)
+                : extractTextFromOpenAIResponse(data),
+            );
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Request timeout: ${url}`));
+    });
+    request.on("error", reject);
+    if (options.body) request.write(options.body);
+    request.end();
+  });
+}
+
 async function fetchJsonNative(url, options = {}) {
   const controller = new AbortController();
   const timeoutMs = Number(options.timeoutMs || 180000);
@@ -129,7 +213,7 @@ function buildRetryOptions(options) {
   };
 }
 
-async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7, timeoutMs, retries, delayMs, maxOutputTokens }) {
+async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7, timeoutMs, retries, delayMs, maxOutputTokens, stream = false }) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.7;
@@ -192,6 +276,34 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
     return parseJsonFromModelText(extractTextFromAnthropicResponse(data));
   }
 
+  const requestBody = JSON.stringify({
+    model: provider.model,
+    temperature: modelTemperature,
+    response_format: { type: "json_object" },
+    ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
+    ...(stream ? { stream: true } : {}),
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  });
+  if (stream) {
+    const text = await withRetries(
+      () =>
+        fetchOpenAIText(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${provider.apiKey}`,
+          },
+          body: requestBody,
+          ...requestOptions,
+        }),
+      retryOptions,
+    );
+    return parseJsonFromModelText(text);
+  }
+
   const data = await withRetries(
     () =>
       fetchJson(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
@@ -200,16 +312,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
           "Content-Type": "application/json",
           Authorization: `Bearer ${provider.apiKey}`,
         },
-        body: JSON.stringify({
-          model: provider.model,
-          temperature: modelTemperature,
-          response_format: { type: "json_object" },
-          ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        }),
+        body: requestBody,
         ...requestOptions,
       }),
     retryOptions,
@@ -233,6 +336,8 @@ function buildTextProviderEndpoint(appConfig) {
 module.exports = {
   fetchJson,
   fetchJsonNative,
+  fetchOpenAIText,
+  extractTextFromOpenAIStream,
   extractTextFromOpenAIResponse,
   extractTextFromAnthropicResponse,
   extractTextFromGoogleResponse,

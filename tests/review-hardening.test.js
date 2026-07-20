@@ -386,6 +386,39 @@ test("wechat long image content accepts AI-generated brand-specific copy", () =>
   assert.equal(pack.outline.length, 4);
 });
 
+test("wechat long image content repairs a short model outline from the same generated pack", () => {
+  const pack = normalizeGeneratedWechatLongImagePack({
+    title: "小空间照明长图方案",
+    publishTitle: "桌面不够大，灯光也能更灵活",
+    intro: "租房与居家办公场景里，桌面空间有限，照明需要兼顾收纳、移动和实际使用体验。",
+    outline: ["先判断桌面真正需要照亮的区域", "再比较折叠收纳与移动使用场景"],
+    positioning: "帮助小空间用户建立桌面照明选择框架。",
+    cta: "保存这份清单，布置桌面前逐项核对。",
+    visualDirection: "小空间桌面与折叠灯的使用场景对比。",
+  });
+
+  assert.equal(pack.outline.length, 3);
+  assert.deepEqual(pack.outline.slice(0, 2), ["先判断桌面真正需要照亮的区域", "再比较折叠收纳与移动使用场景"]);
+  assert.match(pack.outline[2], /选择框架|逐项核对/);
+});
+
+test("xhs carousel reuses the generated publish caption when the redundant pack caption is omitted", () => {
+  const publishCaption = "小桌面也能有清楚的工作光线，从照明区域、折叠收纳和移动使用三个角度逐项检查。";
+  const pack = normalizeGeneratedXhsCarouselPack({
+    title: "小空间照明组图",
+    publishTitle: "桌面不够大，灯光怎么选",
+    publishCaption,
+    slides: [1, 2, 3, 4].map((index) => ({
+      pageLabel: `第 ${index} 张`,
+      title: `检查项 ${index}`,
+      copy: `第 ${index} 个小空间照明检查项，说明实际使用时需要关注的条件。`,
+      visualDirection: `小桌面照明检查场景 ${index}`,
+    })),
+  });
+
+  assert.equal(pack.caption, publishCaption);
+});
+
 test("image routes can consume content assets generated during trend analysis", () => {
   const contentAssets = {
     moments: {

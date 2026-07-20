@@ -122,3 +122,78 @@ test("calls an OpenAI-compatible chat completion and parses JSON content", async
   assert.deepEqual(received.body.messages.map((item) => item.role), ["system", "user"]);
   assert.equal("tools" in received.body, false);
 });
+
+test("streams long OpenAI-compatible JSON generations so active responses do not hit the idle timeout", async (t) => {
+  let receivedBody = null;
+  const server = http.createServer((request, response) => {
+    let raw = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      raw += chunk;
+    });
+    request.on("end", () => {
+      receivedBody = JSON.parse(raw);
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write('data:{"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n');
+      setTimeout(() => {
+        response.write('data:{"choices":[{"delta":{"content":"true}"}}]}\n\n');
+        response.end("data:[DONE]\n\n");
+      }, 25);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  const result = await callTextModelJson(
+    {
+      textProvider: {
+        apiStyle: "openai",
+        model: "deepseek/deepseek-v4-flash",
+        openaiBaseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: "fixture-key",
+        maxOutputTokens: 1024,
+      },
+    },
+    {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      retries: 1,
+      stream: true,
+    },
+  );
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(receivedBody.stream, true);
+});
+
+test("rejects an OpenAI-compatible stream that ends without the DONE marker", async (t) => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end('data:{"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  await assert.rejects(
+    callTextModelJson(
+      {
+        textProvider: {
+          apiStyle: "openai",
+          model: "deepseek/deepseek-v4-flash",
+          openaiBaseUrl: `http://127.0.0.1:${port}/v1`,
+          apiKey: "fixture-key",
+          maxOutputTokens: 1024,
+        },
+      },
+      {
+        systemPrompt: "Return JSON",
+        userPrompt: "ping",
+        retries: 1,
+        stream: true,
+      },
+    ),
+    /ended before \[DONE\]/,
+  );
+});

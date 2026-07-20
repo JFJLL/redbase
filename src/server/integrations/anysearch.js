@@ -14,10 +14,11 @@ const SOCIAL_SUB_DOMAIN = "social_media.social_media";
 const DEFAULT_MAX_RESULTS_PER_QUERY = 6;
 const DEFAULT_MAX_EVIDENCE = 8;
 const DEFAULT_MAX_SOCIAL_EVIDENCE = 2;
-const DEFAULT_MIN_RELIABLE_EVIDENCE = 2;
+const DEFAULT_MIN_EVIDENCE = 2;
 const DEFAULT_REQUEST_RETRIES = 2;
 const DEFAULT_DAILY_QUERY_LIMIT = 950;
 const DEFAULT_MAX_CACHE_ENTRIES = 100;
+const MAX_ANYSEARCH_RESPONSE_BYTES = 10 * 1024 * 1024;
 const evidenceCache = new Map();
 let dailyBudgetState = { date: "", keys: {} };
 
@@ -318,33 +319,6 @@ function buildAnySearchQueries(brand, bucketMeta, config = {}, now = new Date())
   return [...generalQueries, ...socialQueries].slice(0, 5);
 }
 
-function buildAnySearchAuthoritativeQueries(brand, bucketMeta, config = {}) {
-  const bucketKey = getBucketKey(bucketMeta);
-  const industry = truncateQueryValue(brand?.industry || "消费行业", 48);
-  const product = truncateQueryValue(String(brand?.product || industry).split(/\r?\n/)[0], 56);
-  const focusByBucket = {
-    traffic: "内容营销 平台趋势 消费者关注",
-    news: "政策 标准 行业动态 消费趋势",
-    social: "社会话题 生活方式 消费情绪",
-    track: "品类趋势 行业动态 消费决策",
-    crowd: "人群趋势 消费需求 使用场景",
-    xhs: "小红书 内容趋势 消费者关注",
-  };
-  const focus = focusByBucket[bucketKey] || focusByBucket.news;
-  const maxResults = Math.max(1, Math.min(10, Number(config.maxResultsPerQuery || DEFAULT_MAX_RESULTS_PER_QUERY)));
-  const domain = String(config.domain || GENERAL_DOMAIN);
-  const subDomain = String(config.subDomain || GENERAL_SUB_DOMAIN);
-  return [
-    `site:gov.cn ${industry} ${product} ${focus} 官方`,
-    `(site:people.com.cn OR site:xinhuanet.com OR site:ce.cn OR site:36kr.com) ${industry} ${product} ${focus}`,
-  ].map((query) => ({
-    query,
-    domain,
-    sub_domain: subDomain,
-    max_results: maxResults,
-  }));
-}
-
 function decodeBasicHtml(value) {
   return String(value || "")
     .replace(/<em>/gi, "")
@@ -458,48 +432,44 @@ function normalizeRelevancePhrase(value) {
     .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-function buildFieldRelevanceTerms(value) {
-  const stopTerms = new Set([
-    "品牌", "产品", "用户", "消费", "行业", "趋势", "内容", "关注", "提升", "核心",
-    "目标", "使用", "场景", "设计", "市场", "家庭", "生活", "专为",
-  ]);
-  const source = String(value || "").toLowerCase();
-  const phrases = new Set();
-  const terms = [];
-  let offset = 0;
-  for (const chunk of source.match(/[\p{Script=Han}]{2,}/gu) || []) {
-    const phrase = normalizeRelevancePhrase(chunk);
-    if (phrase.length <= 20 && !stopTerms.has(phrase)) phrases.add(phrase);
-    for (let index = 0; index < chunk.length - 1; index += 1) {
-      const term = chunk.slice(index, index + 2);
-      if (!stopTerms.has(term)) terms.push({ term, position: offset + index });
-    }
-    offset += chunk.length + 1;
-  }
-  for (const token of source.match(/[a-z0-9][a-z0-9.+-]{2,}/g) || []) {
-    const phrase = normalizeRelevancePhrase(token);
-    if (!stopTerms.has(phrase)) {
-      phrases.add(phrase);
-      terms.push({ term: phrase, position: offset });
-      offset += phrase.length + 1;
-    }
-  }
-  return { phrases: [...phrases], terms };
+function getMarketingRelevancePhrases(value) {
+  return [
+    ...(String(value || "").match(/[\p{Script=Han}]{2,}/gu) || []),
+    ...(String(value || "").toLowerCase().match(/[a-z0-9][a-z0-9.+-]{2,}/g) || []),
+  ]
+    .map(normalizeRelevancePhrase)
+    .filter((phrase) => phrase.length >= 2 && phrase.length <= 240);
 }
 
-function isEvidenceRelevantToBrand(item, brand) {
-  const haystack = normalizeRelevancePhrase(`${item?.title || ""} ${item?.snippet || ""}`);
-  const brandProfile = buildFieldRelevanceTerms(brand?.name);
-  const productProfile = buildFieldRelevanceTerms(brand?.product);
-  if (brandProfile.phrases.some((phrase) => phrase.length >= 2 && haystack.includes(phrase))) return true;
-  if (productProfile.phrases.some((phrase) => phrase.length >= 2 && haystack.includes(phrase))) return true;
+function getDistinctiveMarketingTerms(brand) {
+  const stopTerms = new Set([
+    "品牌", "产品", "用户", "消费", "行业", "趋势", "内容", "关注", "提升", "核心",
+    "目标", "使用", "场景", "设计", "市场", "家庭", "生活", "专为", "健康", "儿童",
+  ]);
+  const terms = new Set();
+  for (const value of [brand?.name, brand?.product, brand?.industry, brand?.audience]) {
+    for (const phrase of getMarketingRelevancePhrases(value)) {
+      if (/^[a-z0-9]/.test(phrase)) {
+        if (phrase.length >= 3 && !stopTerms.has(phrase)) terms.add(phrase);
+        continue;
+      }
+      for (let index = 0; index < phrase.length - 1; index += 1) {
+        const term = phrase.slice(index, index + 2);
+        if (!stopTerms.has(term) && !/\d/.test(term)) terms.add(term);
+      }
+    }
+  }
+  return [...terms];
+}
 
-  const matchedProductTerms = productProfile.terms.filter(({ term }) => haystack.includes(term));
-  if (matchedProductTerms.some(({ term }) => /^[a-z0-9]/.test(term) && term.length >= 5)) return true;
-  const hasSeparatedProductPair = matchedProductTerms.some((left, index) =>
-    matchedProductTerms.slice(index + 1).some((right) => Math.abs(left.position - right.position) >= 2),
-  );
-  return hasSeparatedProductPair;
+function isMarketingEvidenceRelevant(item, brand) {
+  const haystack = normalizeRelevancePhrase(`${item?.title || ""} ${item?.snippet || ""}`);
+  const strongPhrases = [brand?.name, brand?.product]
+    .flatMap(getMarketingRelevancePhrases)
+    .filter((phrase) => phrase.length >= 2 && phrase.length <= 24);
+  if (strongPhrases.some((phrase) => haystack.includes(phrase))) return true;
+  const matchedTerms = getDistinctiveMarketingTerms(brand).filter((term) => haystack.includes(term));
+  return new Set(matchedTerms).size >= 2;
 }
 
 function parseResultBlocks(sectionText, query, queryIndex) {
@@ -724,8 +694,51 @@ async function checkUrlAccessible(value, options = {}) {
   }
 }
 
+function requestAnySearchHttp(url, options = {}) {
+  const target = new URL(url);
+  const transport = target.protocol === "https:" ? https : http;
+  const body = options.body == null ? "" : String(options.body);
+  const headers = { ...(options.headers || {}) };
+  if (body && !Object.keys(headers).some((name) => name.toLowerCase() === "content-length")) {
+    headers["Content-Length"] = Buffer.byteLength(body);
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      target,
+      {
+        method: options.method || "GET",
+        headers,
+        signal: options.signal,
+      },
+      (response) => {
+        const chunks = [];
+        let totalBytes = 0;
+        response.on("data", (chunk) => {
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_ANYSEARCH_RESPONSE_BYTES) {
+            request.destroy(new Error("AnySearch response exceeded the size limit"));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
+          const raw = Buffer.concat(chunks).toString("utf8");
+          resolve({
+            ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
+            status: Number(response.statusCode || 0),
+            text: async () => raw,
+          });
+        });
+      },
+    );
+    request.on("error", reject);
+    request.end(body || undefined);
+  });
+}
+
 async function requestAnySearch(config, queries, options = {}) {
-  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const fetchImpl = options.fetchImpl || requestAnySearchHttp;
   if (typeof fetchImpl !== "function") throw createAnySearchError("ANYSEARCH_RUNTIME_ERROR", "当前运行环境不支持 AnySearch HTTP 请求。");
   const configuredRetries = Number(options.retries ?? config.retries);
   const retries = Number.isFinite(configuredRetries)
@@ -819,7 +832,7 @@ function buildCacheKey(config, queries, brand) {
     urlCheckEnabled: config.urlCheckEnabled !== false,
     maxEvidence: config.maxEvidence || DEFAULT_MAX_EVIDENCE,
     maxSocialEvidence: config.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE,
-    minReliableEvidence: config.minReliableEvidence || DEFAULT_MIN_RELIABLE_EVIDENCE,
+    minEvidence: config.minEvidence || config.minReliableEvidence || DEFAULT_MIN_EVIDENCE,
     maxSnippetChars: config.maxSnippetChars || 520,
   });
 }
@@ -891,45 +904,32 @@ function countReliableEvidence(evidence) {
 async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}) {
   const config = appConfig?.searchProvider || {};
   if (!config.enabled) throw createAnySearchError("ANYSEARCH_DISABLED", "AnySearch 搜索服务尚未启用。");
-  const initialQueries = buildAnySearchQueries(brand, bucketMeta, config, options.now || new Date());
+  const queries = buildAnySearchQueries(brand, bucketMeta, config, options.now || new Date());
   const cacheTtlMs = Math.max(0, Number(config.cacheTtlMs ?? 10 * 60 * 1000));
-  const cacheKey = buildCacheKey(config, initialQueries, brand);
+  const cacheKey = buildCacheKey(config, queries, brand);
   if (!options.skipCache && cacheTtlMs > 0) {
     const cached = getCachedEvidence(cacheKey, cacheTtlMs);
     if (cached) return cached;
   }
 
   const requestImpl = options.requestImpl || requestAnySearch;
-  let queries = [...initialQueries];
-  const markdown = await requestImpl(config, initialQueries, options);
-  let parsed = parseAnySearchMarkdown(markdown, initialQueries);
+  const markdown = await requestImpl(config, queries, options);
+  const parsed = parseAnySearchMarkdown(markdown, queries);
   const accessibilityCache = new Map();
-  const initialCandidates = prepareEvidence(parsed, config);
-  let normalized = dedupeEvidence(initialCandidates);
-  let accessible = await getAccessibleEvidence(normalized, config, options, accessibilityCache);
-  let evidence = selectEvidence(accessible, config);
-  let reliableCount = countReliableEvidence(evidence);
-  const minReliableEvidence = Math.max(1, Number(config.minReliableEvidence || DEFAULT_MIN_RELIABLE_EVIDENCE));
+  const normalized = normalizeEvidence(parsed, config)
+    .filter((item) => isMarketingEvidenceRelevant(item, brand));
+  const accessible = await getAccessibleEvidence(normalized, config, options, accessibilityCache);
+  const evidence = selectEvidence(accessible, config);
+  const reliableCount = countReliableEvidence(evidence);
+  const minEvidence = Math.max(
+    1,
+    Number(config.minEvidence || config.minReliableEvidence || DEFAULT_MIN_EVIDENCE),
+  );
 
-  if (reliableCount < minReliableEvidence) {
-    const authoritativeQueries = buildAnySearchAuthoritativeQueries(brand, bucketMeta, config);
-    const authoritativeMarkdown = await requestImpl(config, authoritativeQueries, options);
-    const authoritativeParsed = parseAnySearchMarkdown(authoritativeMarkdown, authoritativeQueries)
-      .map((item) => ({ ...item, queryIndex: item.queryIndex + initialQueries.length }));
-    queries = [...initialQueries, ...authoritativeQueries];
-    parsed = [...parsed, ...authoritativeParsed];
-    const relevantAuthoritativeCandidates = prepareEvidence(authoritativeParsed, config)
-      .filter((item) => isEvidenceRelevantToBrand(item, brand));
-    normalized = dedupeEvidence([...initialCandidates, ...relevantAuthoritativeCandidates]);
-    accessible = await getAccessibleEvidence(normalized, config, options, accessibilityCache);
-    evidence = selectEvidence(accessible, config);
-    reliableCount = countReliableEvidence(evidence);
-  }
-
-  if (reliableCount < minReliableEvidence) {
+  if (evidence.length < minEvidence) {
     throw createAnySearchError(
       "ANYSEARCH_INSUFFICIENT_EVIDENCE",
-      `AnySearch 已补充检索权威来源，但可验证来源仍不足：${reliableCount}/${minReliableEvidence}。`,
+      `AnySearch 返回的可验证营销/社交来源不足：${evidence.length}/${minEvidence}。`,
     );
   }
 
@@ -962,13 +962,13 @@ module.exports = {
   SOCIAL_DOMAIN,
   SOCIAL_SUB_DOMAIN,
   buildAnySearchQueries,
-  buildAnySearchAuthoritativeQueries,
   parseAnySearchMarkdown,
   normalizeEvidence,
   selectEvidence,
   isPrivateAddress,
   isSafePublicUrl,
   checkUrlAccessible,
+  requestAnySearchHttp,
   requestAnySearch,
   redactSensitiveText,
   isAnySearchQuotaExhaustion,

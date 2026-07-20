@@ -64,11 +64,12 @@ function normalizeGeneratedXhsCarouselPack(raw) {
   if (rawSlides.length !== XHS_CAROUSEL_SLIDE_COUNT) {
     throw new Error(`AI 内容生成结果必须包含 ${XHS_CAROUSEL_SLIDE_COUNT} 页组图。`);
   }
+  const publishCaption = getRequiredText(source, "publishCaption", "发布文案", 900);
   const pack = {
     title: getRequiredText(source, "title", "组图方案标题", 120),
     publishTitle: getRequiredText(source, "publishTitle", "发布标题", 120),
-    publishCaption: getRequiredText(source, "publishCaption", "发布文案", 900),
-    caption: getRequiredText(source, "caption", "组图说明", 500),
+    publishCaption,
+    caption: getText(source, "caption", 500) || publishCaption,
     slides: rawSlides.map((slide, index) => {
       const normalizedSlide = {
         pageLabel: getText(slide, "pageLabel", 24) || `第 ${index + 1} 张`,
@@ -112,19 +113,28 @@ function normalizeGeneratedWechatLongImagePack(raw) {
   if (!source || typeof source !== "object") {
     throw new Error("AI 内容生成结果不是有效对象。");
   }
-  const outline = Array.isArray(source.outline)
+  const intro = getRequiredText(source, "intro", "文章导语", 700);
+  const positioning = getRequiredText(source, "positioning", "长图定位", 500);
+  const cta = getRequiredText(source, "cta", "CTA", 260);
+  const outline = (Array.isArray(source.outline)
     ? source.outline.map((item) => normalizeChineseCopy(String(item || "").trim()).slice(0, 220)).filter(Boolean)
-    : [];
-  if (outline.length < 3 || outline.length > 5) {
+    : [])
+    .slice(0, 5);
+  for (const fallback of [positioning, cta, intro]) {
+    if (outline.length >= 3) break;
+    const item = normalizeChineseCopy(fallback).slice(0, 220);
+    if (item && !outline.includes(item)) outline.push(item);
+  }
+  if (outline.length < 3) {
     throw new Error("AI 内容生成结果必须包含 3 到 5 条公众号长图大纲。");
   }
   const pack = {
     title: getRequiredText(source, "title", "公众号长图方案标题", 120),
     publishTitle: getRequiredText(source, "publishTitle", "发布标题", 120),
-    intro: getRequiredText(source, "intro", "文章导语", 700),
+    intro,
     outline,
-    positioning: getRequiredText(source, "positioning", "长图定位", 500),
-    cta: getRequiredText(source, "cta", "CTA", 260),
+    positioning,
+    cta,
     visualDirection: getRequiredText(source, "visualDirection", "视觉方向", 300),
     style: getText(source, "style", 160) || "专业、清晰、克制、可信",
     composition: getText(source, "composition", 600) || "9:16 竖版长图，顶部标题区，中段信息摘要区，底部轻 CTA 区。",
