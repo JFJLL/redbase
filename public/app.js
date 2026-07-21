@@ -1068,7 +1068,7 @@ function clearTrendAnalysisRequestId(brandId, bucketKey) {
 
 function shouldResetTrendAnalysisRequestId(error) {
   const status = Number(error?.status || 0);
-  return status >= 400 && status !== 409;
+  return status >= 400 && status < 500 && status !== 408 && status !== 409;
 }
 
 function formatTrendAnalysisError(error) {

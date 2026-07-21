@@ -17,7 +17,7 @@ function extractFunction(source, name) {
   throw new Error(`Unable to extract ${name}`);
 }
 
-test("trend retries reuse an ambiguous request ID and rotate after terminal HTTP failures", () => {
+test("trend retries reuse an ambiguous request ID and rotate only after terminal client failures", () => {
   const source = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
   const names = [
     "getTrendAnalysisRequestKey",
@@ -44,10 +44,17 @@ test("trend retries reuse an ambiguous request ID and rotate after terminal HTTP
   const first = context.tracker.getOrCreateTrendAnalysisRequestId(7, "traffic");
   assert.equal(context.tracker.getOrCreateTrendAnalysisRequestId(7, "traffic"), first);
   assert.equal(context.tracker.shouldResetTrendAnalysisRequestId(new TypeError("socket closed")), false);
+  assert.equal(context.tracker.shouldResetTrendAnalysisRequestId({ status: 408 }), false);
   assert.equal(context.tracker.shouldResetTrendAnalysisRequestId({ status: 409 }), false);
-  assert.equal(context.tracker.shouldResetTrendAnalysisRequestId({ status: 500 }), true);
+  assert.equal(context.tracker.shouldResetTrendAnalysisRequestId({ status: 500 }), false);
+  assert.equal(context.tracker.shouldResetTrendAnalysisRequestId({ status: 504 }), false);
+  assert.equal(context.tracker.getOrCreateTrendAnalysisRequestId(7, "traffic"), first);
 
-  context.tracker.clearTrendAnalysisRequestId(7, "traffic");
+  const validationFailure = { status: 422 };
+  assert.equal(context.tracker.shouldResetTrendAnalysisRequestId(validationFailure), true);
+  if (context.tracker.shouldResetTrendAnalysisRequestId(validationFailure)) {
+    context.tracker.clearTrendAnalysisRequestId(7, "traffic");
+  }
   assert.notEqual(context.tracker.getOrCreateTrendAnalysisRequestId(7, "traffic"), first);
 });
 
