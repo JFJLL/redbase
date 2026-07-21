@@ -391,7 +391,7 @@ test("wechat long image content accepts AI-generated brand-specific copy", () =>
 test("trend analysis loading state is scoped by brand and bucket", () => {
   const appSource = readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
   const stateSource = readFileSync(path.join(__dirname, "../public/js/state.js"), "utf8");
-  const analysisHandler = appSource.slice(appSource.indexOf("function bindAnalysisButton"), appSource.indexOf("function showTrendAnalysisWarnings"));
+  const analysisHandler = appSource.slice(appSource.indexOf("function bindAnalysisButton"), appSource.indexOf("function formatTrendAnalysisError"));
 
   assert.match(stateSource, /trendAnalysisLoadingKeys:\s*\[\]/);
   assert.match(analysisHandler, /setTrendAnalysisBusy\(brandId, bucketKey, true\)/);
@@ -402,7 +402,12 @@ test("trend analysis loading state is scoped by brand and bucket", () => {
     "loading guard must be set before awaiting brand details to prevent duplicate analysis requests",
   );
   assert.doesNotMatch(analysisHandler, /setBusy\(true\)/);
+  assert.match(analysisHandler, /requestId/);
+  assert.match(analysisHandler, /generatedBucket\.items\?\.length !== 10/);
+  assert.match(analysisHandler, /mergeGeneratedTrendResult\(result\.brand, bucketKey\)/);
+  assert.doesNotMatch(analysisHandler, /showTrendAnalysisWarnings/);
   assert.match(appSource, /isTrendAnalysisLoading\(brand\.id, bucketKey\)/);
+  assert.match(appSource, /previousBucket\?\.items\?\.length \? previousBucket : incomingBucket/);
 });
 
 test("wechat long image content repairs a short model outline from the same generated pack", () => {

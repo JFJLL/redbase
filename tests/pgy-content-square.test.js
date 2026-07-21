@@ -347,7 +347,7 @@ test("includes Pgy evidence and category constraints in trend prompts", () => {
   assert.match(prompt, /trend\.summary 必须由 AI 总结/);
   assert.match(prompt, /早C晚A新手攻略/);
   assert.match(prompt, /跨趋势去重规则/);
-  assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
+  assert.match(prompt, /不要输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”/);
   assert.match(prompt, /Pgy bucket 只能引用已传入的标题、阅读、赞藏评、作者信息/);
   assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
   assert.doesNotMatch(prompt, /小红书文案结尾去模板化/);
@@ -407,7 +407,7 @@ test("idea regeneration user prompts include freshness and risk boundaries", () 
     "减少敏感风险",
   );
 
-  assert.match(prompt, /近期爆发、旧话题复燃、长尾稳定、品牌可用但非热点/);
+  assert.match(prompt, /不要输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”/);
   assert.match(prompt, /不能声称已核验正文、真实销量、医学结论或站外排名/);
   assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
   assert.match(prompt, /不要批量使用“评论区分享一下”“评论区聊聊”“你怎么看”/);

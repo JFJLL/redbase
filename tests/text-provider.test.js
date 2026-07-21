@@ -125,6 +125,7 @@ test("calls an OpenAI-compatible chat completion and parses JSON content", async
 
 test("streams long OpenAI-compatible JSON generations so active responses do not hit the idle timeout", async (t) => {
   let receivedBody = null;
+  const telemetry = [];
   const server = http.createServer((request, response) => {
     let raw = "";
     request.setEncoding("utf8");
@@ -137,6 +138,7 @@ test("streams long OpenAI-compatible JSON generations so active responses do not
       response.write('data:{"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n');
       setTimeout(() => {
         response.write('data:{"choices":[{"delta":{"content":"true}"}}]}\n\n');
+        response.write('data:{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}\n\n');
         response.end("data:[DONE]\n\n");
       }, 25);
     });
@@ -158,13 +160,23 @@ test("streams long OpenAI-compatible JSON generations so active responses do not
     {
       systemPrompt: "Return JSON",
       userPrompt: "ping",
-      retries: 1,
+      maxAttempts: 1,
       stream: true,
+      onTelemetry(event) {
+        telemetry.push(event);
+      },
     },
   );
 
   assert.deepEqual(result, { ok: true });
   assert.equal(receivedBody.stream, true);
+  assert.ok(telemetry.some((event) => event.type === "first-byte" && event.elapsedMs >= 0));
+  assert.deepEqual(telemetry.find((event) => event.type === "usage")?.usage, {
+    prompt_tokens: 12,
+    completion_tokens: 4,
+    total_tokens: 16,
+  });
+  assert.ok(telemetry.some((event) => event.type === "complete"));
 });
 
 test("retries a transient socket disconnect inside one streamed model call", async (t) => {
@@ -172,7 +184,7 @@ test("retries a transient socket disconnect inside one streamed model call", asy
   const server = http.createServer((_request, response) => {
     requestCount += 1;
     if (requestCount === 1) {
-      response.socket.destroy();
+      setTimeout(() => response.socket.destroy(), 10);
       return;
     }
     response.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -203,6 +215,52 @@ test("retries a transient socket disconnect inside one streamed model call", asy
 
   assert.deepEqual(result, { ok: true });
   assert.equal(requestCount, 2);
+});
+
+test("does not retry when a streamed response aborts after the first byte", async (t) => {
+  let requestCount = 0;
+  const telemetry = [];
+  const server = http.createServer((_request, response) => {
+    requestCount += 1;
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (requestCount === 1) {
+      response.write('data:{"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n');
+      setTimeout(() => response.socket.destroy(), 10);
+      return;
+    }
+    response.end('data:{"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\ndata:[DONE]\n\n');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  await assert.rejects(
+    callTextModelJson(
+      {
+        textProvider: {
+          apiStyle: "openai",
+          model: "deepseek/deepseek-v4-flash",
+          openaiBaseUrl: `http://127.0.0.1:${port}/v1`,
+          apiKey: "fixture-key",
+          maxOutputTokens: 1024,
+        },
+      },
+      {
+        systemPrompt: "Return JSON",
+        userPrompt: "ping",
+        maxAttempts: 2,
+        delayMs: 1,
+        stream: true,
+        onTelemetry(event) {
+          telemetry.push(event);
+        },
+      },
+    ),
+    /aborted/,
+  );
+
+  assert.equal(requestCount, 1);
+  assert.deepEqual(telemetry.filter((event) => event.type === "attempt").map((event) => event.attempt), [1]);
 });
 
 test("rejects an OpenAI-compatible stream that ends without the DONE marker", async (t) => {

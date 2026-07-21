@@ -11,7 +11,7 @@ import {
   SIDEBAR_COLLAPSED_KEY,
 } from "./js/config.js";
 import { state } from "./js/state.js";
-import { configureApiClient, pollImageJob, request } from "./js/api-client.js";
+import { configureApiClient, isStaleSessionRequest, pollImageJob, request } from "./js/api-client.js";
 import {
   authenticatedImageSrc,
   escapeHtml,
@@ -23,7 +23,13 @@ import {
   showToast,
 } from "./js/dom-utils.js";
 
-configureApiClient({ onUnauthorized: clearSession });
+let sessionEpoch = 0;
+
+configureApiClient({
+  onUnauthorized: clearSession,
+  getRequestContext: () => sessionEpoch,
+  isRequestContextCurrent: (requestEpoch) => requestEpoch === sessionEpoch,
+});
 
 let openBrandEditor = () => {};
 let pendingBrandDeleteId = null;
@@ -290,6 +296,7 @@ function updatePendingImageTask(taskId, updates) {
 
 async function resumePendingImageTasks() {
   if (state.resumingImageTasks || !state.sessionToken || !state.currentUser) return;
+  const resumeEpoch = sessionEpoch;
   const tasks = getCurrentUserPendingImageTasks();
   if (!tasks.length) return;
 
@@ -297,10 +304,13 @@ async function resumePendingImageTasks() {
   showToast(`发现 ${tasks.length} 个未完成图片任务，正在后台恢复。`);
   try {
     for (const task of tasks) {
+      if (resumeEpoch !== sessionEpoch) return;
       await resumePendingImageTask(task);
     }
   } finally {
-    state.resumingImageTasks = false;
+    if (resumeEpoch === sessionEpoch) {
+      state.resumingImageTasks = false;
+    }
   }
 }
 
@@ -320,6 +330,7 @@ async function resumePendingImageTask(task) {
     removePendingImageTask(task.id);
     showToast("一个历史图片任务已恢复完成。");
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     removePendingImageTask(task.id);
     showToast(`历史图片任务恢复失败：${error.message}`);
   }
@@ -885,11 +896,12 @@ function bindAuthModal() {
       applySession(result.user);
       registerForm.reset();
       document.getElementById("authModal").classList.remove("is-open");
-      await loadBrands();
+      if (!(await loadBrands())) return;
       switchPage("dashboard");
       switchTab(state.currentTab || "brands");
       resumePendingImageTasks();
     } catch (error) {
+      if (isStaleSessionRequest(error)) return;
       alert(error.message);
     }
   });
@@ -904,11 +916,12 @@ function bindAuthModal() {
       });
       applySession(result.user);
       document.getElementById("authModal").classList.remove("is-open");
-      await loadBrands();
+      if (!(await loadBrands())) return;
       switchPage("dashboard");
       switchTab(state.currentTab || "brands");
       resumePendingImageTasks();
     } catch (error) {
+      if (isStaleSessionRequest(error)) return;
       alert(error.message);
     }
   });
@@ -1009,6 +1022,7 @@ function bindXhsCategorySelector() {
 
 function bindAnalysisButton() {
   document.getElementById("runTrendAnalysis").addEventListener("click", async () => {
+    const analysisEpoch = sessionEpoch;
     const brandId = Number(state.selectedBrandId);
     const bucketKey = normalizeTrendBucketKey(state.selectedTrendMode || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE;
     if (!brandId || isTrendAnalysisLoading(brandId, bucketKey)) return;
@@ -1016,34 +1030,35 @@ function bindAnalysisButton() {
     try {
       const brand = await ensureBrandDetailLoaded(brandId);
       if (!brand) return;
+      const requestId = window.crypto?.randomUUID?.() || `trend-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const result = await request(`/api/brands/${brand.id}/analyses`, {
         method: "POST",
         body: JSON.stringify({
+          requestId,
           bucketKey,
           xhsCategoryPath: bucketKey === "xhs" ? state.xhsCategoryPath || "" : "",
         }),
       });
+      const generatedBucket = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey);
+      if (!generatedBucket || generatedBucket.items?.length !== 10) {
+        throw new Error("服务端未返回完整的 10 条趋势，本次结果未应用。");
+      }
+      const mergedBrand = mergeGeneratedTrendResult(result.brand, bucketKey);
       updateCurrentUser(result.user);
-      replaceBrand(result.brand);
+      replaceBrand(mergedBrand);
       if (Number(state.selectedBrandId) === Number(brand.id) && state.selectedTrendMode === bucketKey) {
-        state.selectedTrendId = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
+        state.selectedTrendId = getTrendBucketsForBrand(mergedBrand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
       }
       renderAll();
-      showTrendAnalysisWarnings(result.warnings);
     } catch (error) {
+      if (isStaleSessionRequest(error)) return;
       alert(formatTrendAnalysisError(error));
     } finally {
-      setTrendAnalysisBusy(brandId, bucketKey, false);
+      if (analysisEpoch === sessionEpoch) {
+        setTrendAnalysisBusy(brandId, bucketKey, false);
+      }
     }
   });
-}
-
-function showTrendAnalysisWarnings(warnings) {
-  if (!Array.isArray(warnings) || !warnings.length) return;
-  const detail = warnings
-    .map((item) => `${item.bucketTitle || item.bucketKey || "热点维度"} ${Number(item.actual || 0)}/${Number(item.expected || 10)}`)
-    .join("，");
-  showToast(`当前维度未满 10 条：${detail}。已先展示可用结果，可稍后重新生成该维度补齐。`, 10000);
 }
 
 function formatTrendAnalysisError(error) {
@@ -1114,16 +1129,6 @@ function bindLogout() {
       console.warn(error.message);
     }
     clearSession();
-    state.brands = [];
-    state.brandDetailLoadingId = null;
-    brandDetailRequests.clear();
-    state.generationHistory = [];
-    state.productImageLibrary = [];
-    state.productImages = {};
-    state.selectedBrandId = null;
-    state.selectedTrendId = null;
-    renderAll();
-    switchPage("landing");
   });
 }
 
@@ -1131,11 +1136,12 @@ async function restoreSession() {
   try {
     const result = await request("/api/session");
     applySession(result.user);
-    await loadBrands();
+    if (!(await loadBrands())) return;
     switchPage("dashboard");
     switchTab(state.currentTab);
     resumePendingImageTasks();
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     clearSession();
     switchPage("landing");
     renderUser();
@@ -1143,6 +1149,7 @@ async function restoreSession() {
 }
 
 function applySession(user) {
+  sessionEpoch += 1;
   state.sessionToken = "cookie";
   state.currentUser = user;
   renderUser();
@@ -1155,10 +1162,49 @@ function updateCurrentUser(user) {
 }
 
 function clearSession() {
+  sessionEpoch += 1;
   state.sessionToken = "";
   state.currentUser = null;
+  state.brands = [];
+  state.generationHistory = [];
+  state.generationHistoryFilters = {
+    q: "",
+    brandId: "",
+    type: "",
+    from: "",
+    to: "",
+  };
+  state.generationHistoryNeedsLatest = false;
+  state.selectedBrandId = null;
+  state.selectedTrendId = null;
+  state.selectedTrendMode = DEFAULT_TREND_MODE;
+  state.brandDetailLoadingId = null;
+  state.xhsCategoryPath = "";
+  state.xhsCategories = [];
+  state.xhsCategoryStatus = "idle";
+  state.xhsCategoryError = "";
   state.trendAnalysisLoadingKeys = [];
+  state.productImages = {};
+  state.productImageLibrary = [];
+  state.productImagePickerIdeaIndex = null;
+  state.brandLogoUsage = {};
+  state.editingIdeas = {};
+  state.styleReferences = {};
+  state.resumingImageTasks = false;
+  brandDetailRequests.clear();
+  dashboardScrollPositions.clear();
+  retriedHistoryImagePaths.clear();
+  historyImageSignatureRefreshInFlight = null;
+  if (historyFilterTimer) {
+    clearTimeout(historyFilterTimer);
+    historyFilterTimer = null;
+  }
+  document.querySelectorAll("[id$='Modal'].is-open").forEach((modal) => {
+    if (modal.id !== "authModal") modal.classList.remove("is-open");
+  });
   renderUser();
+  renderAll();
+  switchPage("landing");
   closeAccountCenterModal();
 }
 
@@ -1227,6 +1273,7 @@ function renderTrendAnalysisButton() {
 
 async function loadBrands() {
   if (!state.sessionToken) return;
+  const loadEpoch = sessionEpoch;
   try {
     setBusy(true);
     brandDetailRequests.clear();
@@ -1250,13 +1297,16 @@ async function loadBrands() {
     }
     renderAll();
     ensureBrandDetailLoaded(state.selectedBrandId).catch((error) => {
+      if (isStaleSessionRequest(error)) return;
       showToast(`品牌详情加载失败：${error.message}`, 8000);
     });
     loadXhsCategories();
+    return true;
   } catch (error) {
+    if (isStaleSessionRequest(error)) return false;
     throw new Error(`加载失败：${error.message}`);
   } finally {
-    setBusy(false);
+    if (loadEpoch === sessionEpoch) setBusy(false);
   }
 }
 
@@ -1268,6 +1318,7 @@ async function loadXhsCategories() {
   try {
     applyXhsCategoryResult(await request("/api/trends/xhs/categories"));
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     applyXhsCategoryResult({ error });
   }
   renderXhsCategorySelector();
@@ -1379,6 +1430,29 @@ function replaceBrand(nextBrand) {
   state.brands = state.brands.some((brand) => Number(brand.id) === Number(nextBrand.id))
     ? state.brands.map((brand) => (Number(brand.id) === Number(nextBrand.id) ? normalized : brand))
     : [normalized, ...state.brands];
+}
+
+function mergeGeneratedTrendResult(nextBrand, generatedBucketKey) {
+  const previous = state.brands.find((brand) => Number(brand.id) === Number(nextBrand?.id));
+  if (!isBrandDetailLoaded(previous)) return nextBrand;
+  const previousByKey = new Map(getTrendBucketsForBrand(previous).map((bucket) => [bucket.key, bucket]));
+  const incomingByKey = new Map(getTrendBucketsForBrand(nextBrand).map((bucket) => [bucket.key, bucket]));
+  const trends = DEFAULT_TREND_BUCKETS.map((bucket) => {
+    if (bucket.key === generatedBucketKey) return incomingByKey.get(bucket.key) || previousByKey.get(bucket.key) || { ...bucket, items: [] };
+    const previousBucket = previousByKey.get(bucket.key);
+    const incomingBucket = incomingByKey.get(bucket.key);
+    return previousBucket?.items?.length ? previousBucket : incomingBucket || previousBucket || { ...bucket, items: [] };
+  });
+  const analysesById = new Map();
+  for (const analysis of [...(nextBrand?.analyses || []), ...(previous?.analyses || [])]) {
+    const key = String(analysis?.id ?? `${analysis?.name || ""}-${analysis?.timestamp || ""}`);
+    if (!analysesById.has(key)) analysesById.set(key, analysis);
+  }
+  return {
+    ...nextBrand,
+    trends,
+    analyses: [...analysesById.values()].sort((left, right) => String(right?.timestamp || "").localeCompare(String(left?.timestamp || ""))),
+  };
 }
 
 async function deleteBrand(brandId) {
@@ -3084,6 +3158,7 @@ function bindImageEditActions(root) {
           openHistoryGeneration(Number(form.dataset.editGenerationId), Number(form.dataset.editSlideIndex || 0));
         }
       } catch (error) {
+        if (isStaleSessionRequest(error)) return;
         if (status) status.textContent = `改图失败：${error.message}`;
       } finally {
         button.disabled = false;
@@ -3163,6 +3238,7 @@ async function generateImageConcept(ideaIndex) {
     `;
     bindImageEditActions(imageResult);
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     if (pendingTaskId) removePendingImageTask(pendingTaskId);
     imageResult.innerHTML = `<div class="image-meta-card"><h3>生成失败</h3><div class="idea-copy">生图服务暂时不可用：${escapeHtml(error.message)}</div></div>`;
   }
@@ -3241,6 +3317,7 @@ async function generateWechatLongImage(ideaIndex) {
     `;
     bindImageEditActions(imageResult);
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     if (pendingTaskId) removePendingImageTask(pendingTaskId);
     imageResult.innerHTML = `<div class="image-meta-card"><h3>生成失败</h3><div class="idea-copy">${escapeHtml(error.message)}</div></div>`;
   }
@@ -3508,6 +3585,7 @@ async function generateXhsCarousel(ideaIndex) {
           error: "",
         };
       } catch (error) {
+        if (isStaleSessionRequest(error)) return;
         slide.isGenerating = false;
         slide.isQueued = false;
         slide.error = `生成失败：${error.message}`;
@@ -3560,6 +3638,7 @@ async function generateXhsCarousel(ideaIndex) {
           error: "",
         };
       } catch (error) {
+        if (isStaleSessionRequest(error)) return;
         slide.isEditing = false;
         slide.editQueued = false;
         slide.editOpen = true;
@@ -3630,6 +3709,7 @@ async function generateXhsCarousel(ideaIndex) {
 
     renderAndBind();
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     imageResult.innerHTML = `<div class="image-meta-card"><h3>生成失败</h3><div class="idea-copy">${escapeHtml(error.message)}</div></div>`;
   }
 }
@@ -3709,6 +3789,7 @@ async function generateStyleImage(ideaIndex) {
     `;
     bindImageEditActions(imageResult);
   } catch (error) {
+    if (isStaleSessionRequest(error)) return;
     if (pendingTaskId) removePendingImageTask(pendingTaskId);
     imageResult.innerHTML = `<div class="image-meta-card"><h3>生成失败</h3><div class="idea-copy">${escapeHtml(error.message)}</div></div>`;
   }

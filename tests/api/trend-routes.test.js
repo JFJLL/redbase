@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { Readable } = require("node:stream");
 
 process.env.REDBASE_DB_FILE = ":memory:";
 
@@ -128,6 +129,20 @@ function createReq(url, method = "GET", cookie = "") {
   };
 }
 
+function createJsonReq(url, payload, cookie = "") {
+  const body = JSON.stringify(payload);
+  const req = Readable.from([Buffer.from(body)]);
+  req.method = "POST";
+  req.url = url;
+  req.headers = {
+    host: "localhost:3013",
+    cookie,
+    "content-type": "application/json",
+    "content-length": String(Buffer.byteLength(body)),
+  };
+  return req;
+}
+
 function createRes() {
   return {
     statusCode: 0,
@@ -169,4 +184,52 @@ test("DELETE /api/brands/:brandId/analyses/:analysisId removes only owned analys
   const brand = findBrandByOwner(30, 1);
   assert.equal(brand.analyses.length, 0);
   assert.equal(brand.trends[0].items[0].title, "当前话题");
+});
+
+test("POST trend analysis returns exactly ten items and replays the same request without a second charge", async () => {
+  let modelCalls = 0;
+  const generated = [{
+    key: "traffic",
+    title: "流量热点趋势",
+    description: "流量内容形式",
+    items: Array.from({ length: 10 }, (_, index) => ({
+      ...makeTrend(300 + index, `流量趋势${index + 1}`),
+      bucketKey: "traffic",
+      bucketTitle: "流量热点趋势",
+      rank: index + 1,
+      score: 90 - index,
+    })),
+  }];
+  const postContext = {
+    appConfig: { security: { assetSigningSecret: "test-secret" } },
+    async generateAiTrendSet() {
+      modelCalls += 1;
+      return generated;
+    },
+  };
+  const payload = { requestId: "trend-api-request-1", bucketKey: "traffic" };
+
+  const firstRes = createRes();
+  await handleTrendRoutes(
+    postContext,
+    createJsonReq("/api/brands/30/analyses", payload, "redbase_session=trend-route-token"),
+    firstRes,
+    "/api/brands/30/analyses",
+  );
+  assert.equal(firstRes.statusCode, 200);
+  assert.equal(firstRes.body.brand.trends.find((bucket) => bucket.key === "traffic").items.length, 10);
+  assert.equal(firstRes.body.user.credits, 4);
+  assert.equal(modelCalls, 1);
+
+  const replayRes = createRes();
+  await handleTrendRoutes(
+    postContext,
+    createJsonReq("/api/brands/30/analyses", payload, "redbase_session=trend-route-token"),
+    replayRes,
+    "/api/brands/30/analyses",
+  );
+  assert.equal(replayRes.statusCode, 200);
+  assert.equal(replayRes.body.replayed, true);
+  assert.equal(replayRes.body.user.credits, 4);
+  assert.equal(modelCalls, 1);
 });
