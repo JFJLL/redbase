@@ -2,6 +2,7 @@ const { normalizeChineseCopy } = require("../utils");
 function buildMomentsGenerationPayload(job) {
   return {
     ...job.metadata,
+    aspectRatio: job.generationContext?.aspectRatio || job.metadata?.aspectRatio || "",
     title: job.metadata.title || "朋友圈图方案",
     imageUrl: job.imageUrl || "",
     previewUrl: job.imageUrl || "",
@@ -12,6 +13,7 @@ function buildMomentsGenerationPayload(job) {
 function buildGeneratedAssetPayload(job) {
   return {
     ...job.metadata,
+    aspectRatio: job.generationContext?.aspectRatio || job.metadata?.aspectRatio || "",
     imageUrl: job.imageUrl || "",
     previewUrl: job.imageUrl || "",
   };

@@ -32,6 +32,8 @@ export const state = {
   brandLogoUsage: {},
   editingIdeas: {},
   styleReferences: {},
+  aspectRatios: {},
+  openAspectRatioKey: "",
   sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
   resumingImageTasks: false,
 };

@@ -19,3 +19,4 @@ outputs/
 .claude/
 redbase-model-cost-estimate.md
 docs/
+.codegraph/
