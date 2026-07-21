@@ -102,6 +102,18 @@ function createSessionForUser(userId, token) {
   });
 }
 
+function migrateUserPhoneWithSession(userId, phone, token) {
+  return runTransaction(() => {
+    db.prepare("UPDATE users SET phone = ? WHERE id = ?").run(String(phone || ""), Number(userId));
+    insertSession({
+      token,
+      userId,
+      createdAt: new Date().toISOString(),
+    });
+    return findUserById(userId);
+  });
+}
+
 module.exports = {
   findUserById,
   findUserByPhone,
@@ -117,4 +129,5 @@ module.exports = {
   deleteVerificationCode,
   createUserWithSession,
   createSessionForUser,
+  migrateUserPhoneWithSession,
 };
