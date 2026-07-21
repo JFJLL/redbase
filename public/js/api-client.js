@@ -35,7 +35,9 @@ async function requestWithContext(url, options, requestContext) {
       onUnauthorized();
       assertCurrentRequestContext(requestContext);
     }
-    throw new Error(payload.error || "Request failed");
+    const error = new Error(payload.error || "Request failed");
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
