@@ -77,6 +77,7 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     sessionEpoch: 3,
     state,
     brandDetailRequests: new Map([[69, Promise.resolve()]]),
+    trendAnalysisRequestIds: new Map([["69:xhs", "request-1"]]),
     dashboardScrollPositions: new Map([["brands", 200]]),
     retriedHistoryImagePaths: new Set(["/private/image.png"]),
     historyImageSignatureRefreshInFlight: Promise.resolve(),
@@ -108,6 +109,7 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
   assert.equal(Object.keys(state.editingIdeas).length, 0);
   assert.equal(Object.keys(state.styleReferences).length, 0);
   assert.equal(context.brandDetailRequests.size, 0);
+  assert.equal(context.trendAnalysisRequestIds.size, 0);
   assert.equal(context.dashboardScrollPositions.size, 0);
   assert.equal(context.retriedHistoryImagePaths.size, 0);
   assert.equal(context.historyImageSignatureRefreshInFlight, null);
