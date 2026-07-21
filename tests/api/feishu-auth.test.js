@@ -7,7 +7,7 @@ process.env.REDBASE_DB_FILE = ":memory:";
 const { openDatabase } = require("../../src/server/db/connection");
 const { CONFIG_FILE, loadAppConfig } = require("../../src/server/config");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
-const { findUserByPhone } = require("../../src/server/db/repositories/auth-repository");
+const { findUserByPhone, insertUser } = require("../../src/server/db/repositories/auth-repository");
 const { handleAuthRoutes } = require("../../src/server/api/auth-routes");
 const {
   buildFeishuAccountPhone,
@@ -536,6 +536,17 @@ test("Feishu callbacks namespace identical open IDs by app and tenant", async ()
       },
     });
   };
+  const legacyPhone = buildFeishuAccountPhone("ou_same_across_apps");
+  const legacyUser = insertUser({
+    id: 90001,
+    name: "历史未归属飞书用户",
+    phone: legacyPhone,
+    password: "legacy-only",
+    accountType: "yimei",
+    department: "历史数据",
+    credits: 1,
+    createdAt: new Date().toISOString(),
+  });
 
   for (const app of ["yimei-scope", "hongmo-scope"]) {
     const state = Buffer.from(JSON.stringify({ app, next: "/" }), "utf8").toString("base64url");
@@ -560,9 +571,67 @@ test("Feishu callbacks namespace identical open IDs by app and tenant", async ()
   }));
   assert.ok(yimeiUser);
   assert.ok(hongmoUser);
+  assert.equal(findUserByPhone(legacyPhone).id, legacyUser.id);
+  assert.notEqual(yimeiUser.id, legacyUser.id);
+  assert.notEqual(hongmoUser.id, legacyUser.id);
   assert.notEqual(yimeiUser.id, hongmoUser.id);
   assert.equal(yimeiUser.name, "易美同号员工");
   assert.equal(hongmoUser.name, "弘摩同号员工");
+});
+
+test("Feishu callback migrates a legacy identity only for one app and one tenant", async () => {
+  const openId = "ou_single_app_legacy";
+  const legacyPhone = buildFeishuAccountPhone(openId);
+  const legacyUser = insertUser({
+    id: 90002,
+    name: "单应用历史用户",
+    phone: legacyPhone,
+    password: "legacy-only",
+    accountType: "yimei",
+    department: "历史数据",
+    credits: 7,
+    createdAt: new Date().toISOString(),
+  });
+  const fakeFetch = async (url) => {
+    if (String(url).includes("/oauth/token")) {
+      return jsonResponse({ access_token: "single-app-token" });
+    }
+    return jsonResponse({
+      code: 0,
+      data: {
+        open_id: openId,
+        tenant_key: "tenant_single",
+        name: "单应用历史用户",
+      },
+    });
+  };
+  const appConfig = {
+    security: { cookieSecure: false },
+    feishu: {
+      enabled: true,
+      baseUrl: "https://redbase.example",
+      apps: [
+        { key: "single", name: "单应用", appId: "cli_single", appSecret: "secret_single", tenantKeys: ["tenant_single"] },
+      ],
+    },
+  };
+  const state = Buffer.from(JSON.stringify({ app: "single", next: "/" }), "utf8").toString("base64url");
+  const res = createRes();
+
+  await handleAuthRoutes(
+    { appConfig, fetch: fakeFetch },
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    res,
+    "/api/auth/feishu/callback",
+  );
+
+  const scopedPhone = buildFeishuAccountPhone(openId, { appKey: "single", tenantKey: "tenant_single" });
+  const migratedUser = findUserByPhone(scopedPhone);
+  assert.equal(res.statusCode, 302);
+  assert.match(String(res.getHeader("set-cookie")), /redbase_session=/);
+  assert.equal(findUserByPhone(legacyPhone), null);
+  assert.equal(migratedUser.id, legacyUser.id);
+  assert.equal(migratedUser.credits, 7);
 });
 
 test("Feishu callback logs tenant mismatch for apps awaiting tenant key discovery", async () => {

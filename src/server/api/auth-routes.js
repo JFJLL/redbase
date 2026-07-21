@@ -16,6 +16,7 @@ const {
   upsertVerificationCode,
   createUserWithSession,
   createSessionForUser,
+  migrateUserPhoneWithSession,
   deleteSession,
 } = require("../db/repositories/auth-repository");
 
@@ -205,13 +206,15 @@ async function handleAuthRoutes(context, req, res, pathname) {
         tenantKey: userInfo.tenantKey,
       });
       let savedUser = findUserByPhone(phone);
-      const defaultAppKey = feishuConfig.apps[0]?.key || "";
-      if (!savedUser && feishuConfig.appKey === defaultAppKey) {
-        savedUser = findUserByPhone(buildFeishuAccountPhone(userInfo.openId));
-      }
       if (savedUser) {
         savedUser = createSessionForUser(savedUser.id, token);
-      } else {
+      } else if (feishuConfig.apps.length === 1 && feishuConfig.tenantKeys.length === 1) {
+        const legacyUser = findUserByPhone(buildFeishuAccountPhone(userInfo.openId));
+        if (legacyUser) {
+          savedUser = migrateUserPhoneWithSession(legacyUser.id, phone, token);
+        }
+      }
+      if (!savedUser) {
         savedUser = createUserWithSession({
           token,
           user: {
