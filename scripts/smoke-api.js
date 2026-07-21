@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 const BASE_URL = String(process.env.SMOKE_BASE_URL || "http://127.0.0.1:3013").replace(/\/+$/, "");
 const PHONE = process.env.SMOKE_PHONE || "13800000000";
 const PASSWORD = process.env.SMOKE_PASSWORD || "123456";
@@ -75,7 +77,11 @@ async function main() {
 
   let analysisStatus = "skipped";
   if (RUN_REAL_AI) {
-    const analysis = await request(`/api/brands/${brandId}/analyses`, { method: "POST", cookie });
+    const analysis = await request(`/api/brands/${brandId}/analyses`, {
+      method: "POST",
+      cookie,
+      body: JSON.stringify({ requestId: crypto.randomUUID(), bucketKey: "traffic" }),
+    });
     assert(analysis.response.status === 200, `real trend analysis failed: ${analysis.response.status} ${JSON.stringify(analysis.body)}`);
     analysisStatus = `ok:${(analysis.body.brand.trends || []).length}`;
   }
@@ -101,4 +107,3 @@ main().catch((error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });
-

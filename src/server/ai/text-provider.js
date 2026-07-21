@@ -57,7 +57,7 @@ function fetchJson(url, options = {}) {
   });
 }
 
-function extractTextFromOpenAIStream(raw) {
+function extractTextFromOpenAIStream(raw, onTelemetry) {
   const parts = [];
   let completed = false;
   for (const line of String(raw || "").split(/\r?\n/)) {
@@ -78,6 +78,9 @@ function extractTextFromOpenAIStream(raw) {
     if (data?.error) {
       throw new Error(data.error.message || data.error || "OpenAI-compatible stream failed");
     }
+    if (data?.usage && typeof onTelemetry === "function") {
+      onTelemetry({ type: "usage", usage: data.usage });
+    }
     const content = data?.choices?.[0]?.delta?.content;
     if (typeof content === "string") parts.push(content);
   }
@@ -87,6 +90,18 @@ function extractTextFromOpenAIStream(raw) {
 
 function fetchOpenAIText(url, options = {}) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const startedAt = Date.now();
     const target = new URL(url);
     const transport = target.protocol === "https:" ? https : http;
     const timeoutMs = Number(options.timeoutMs || 180000);
@@ -98,11 +113,31 @@ function fetchOpenAIText(url, options = {}) {
       },
       (response) => {
         let raw = "";
+        let receivedFirstByte = false;
         response.setEncoding("utf8");
+        const rejectInterruptedResponse = (sourceError) => {
+          const error = sourceError instanceof Error ? sourceError : new Error("OpenAI-compatible response was interrupted.");
+          if (receivedFirstByte) {
+            error.code = "EOPENAI_RESPONSE_INTERRUPTED";
+            error.retryable = false;
+          } else if (!error.code) {
+            error.code = "ECONNRESET";
+          }
+          error.statusCode = response.statusCode;
+          error.url = url;
+          rejectOnce(error);
+        };
+        response.on("aborted", () => rejectInterruptedResponse(new Error("OpenAI-compatible response was aborted.")));
+        response.on("error", rejectInterruptedResponse);
         response.on("data", (chunk) => {
+          if (!receivedFirstByte) {
+            receivedFirstByte = true;
+            options.onTelemetry?.({ type: "first-byte", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
+          }
           raw += chunk;
         });
         response.on("end", () => {
+          if (settled) return;
           let data = null;
           try {
             data = raw ? JSON.parse(raw) : null;
@@ -116,18 +151,20 @@ function fetchOpenAIText(url, options = {}) {
             httpError.url = url;
             httpError.rawBody = raw;
             httpError.payload = data;
-            reject(httpError);
+            rejectOnce(httpError);
             return;
           }
           try {
             const contentType = String(response.headers["content-type"] || "").toLowerCase();
-            resolve(
+            resolveOnce(
               contentType.includes("text/event-stream") || /^\s*data:/m.test(raw)
-                ? extractTextFromOpenAIStream(raw)
+                ? extractTextFromOpenAIStream(raw, options.onTelemetry)
                 : extractTextFromOpenAIResponse(data),
             );
+            if (data?.usage) options.onTelemetry?.({ type: "usage", usage: data.usage });
+            options.onTelemetry?.({ type: "complete", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
           } catch (error) {
-            reject(error);
+            rejectOnce(error);
           }
         });
       },
@@ -135,7 +172,7 @@ function fetchOpenAIText(url, options = {}) {
     request.setTimeout(timeoutMs, () => {
       request.destroy(new Error(`Request timeout: ${url}`));
     });
-    request.on("error", reject);
+    request.on("error", rejectOnce);
     if (options.body) request.write(options.body);
     request.end();
   });
@@ -207,13 +244,14 @@ function extractTextFromGoogleResponse(payload) {
 }
 
 function buildRetryOptions(options) {
+  const configuredMaxAttempts = options.maxAttempts ?? options.retries;
   return {
-    retries: Number.isFinite(Number(options.retries)) ? Math.max(1, Number(options.retries)) : 3,
+    retries: Number.isFinite(Number(configuredMaxAttempts)) ? Math.max(1, Number(configuredMaxAttempts)) : 3,
     delayMs: Number.isFinite(Number(options.delayMs)) ? Number(options.delayMs) : 1200,
   };
 }
 
-async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7, timeoutMs, retries, delayMs, maxOutputTokens, stream = false }) {
+async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7, timeoutMs, retries, maxAttempts, delayMs, maxOutputTokens, stream = false, onTelemetry }) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.7;
@@ -225,10 +263,14 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
   const requestOptions = {
     timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
   };
-  const retryOptions = buildRetryOptions({ retries, delayMs });
+  const retryOptions = buildRetryOptions({ retries, maxAttempts, delayMs });
+  const runWithRetries = (task) => withRetries((attempt) => {
+    onTelemetry?.({ type: "attempt", attempt });
+    return task(attempt);
+  }, retryOptions);
 
   if (provider.apiStyle === "google") {
-    const data = await withRetries(
+    const data = await runWithRetries(
       () =>
         fetchJsonNative(joinUrl(provider.baseUrl, `/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`), {
           method: "POST",
@@ -247,13 +289,12 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
           }),
           ...requestOptions,
         }),
-      retryOptions,
     );
     return parseJsonFromModelText(extractTextFromGoogleResponse(data));
   }
 
   if (provider.apiStyle === "anthropic") {
-    const data = await withRetries(
+    const data = await runWithRetries(
       () =>
         fetchJson(joinUrl(provider.anthropicBaseUrl, "/messages"), {
           method: "POST",
@@ -271,7 +312,6 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
           }),
           ...requestOptions,
         }),
-      retryOptions,
     );
     return parseJsonFromModelText(extractTextFromAnthropicResponse(data));
   }
@@ -288,7 +328,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
     ],
   });
   if (stream) {
-    const text = await withRetries(
+    const text = await runWithRetries(
       () =>
         fetchOpenAIText(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
           method: "POST",
@@ -297,14 +337,14 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
             Authorization: `Bearer ${provider.apiKey}`,
           },
           body: requestBody,
+          onTelemetry,
           ...requestOptions,
         }),
-      retryOptions,
     );
     return parseJsonFromModelText(text);
   }
 
-  const data = await withRetries(
+  const data = await runWithRetries(
     () =>
       fetchJson(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
         method: "POST",
@@ -315,7 +355,6 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
         body: requestBody,
         ...requestOptions,
       }),
-    retryOptions,
   );
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
 }

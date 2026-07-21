@@ -694,11 +694,17 @@ async function checkUrlAccessible(value, options = {}) {
   }
 }
 
-function requestAnySearchHttp(url, options = {}) {
+async function requestAnySearchHttp(url, options = {}) {
   const target = new URL(url);
   const transport = target.protocol === "https:" ? https : http;
   const body = options.body == null ? "" : String(options.body);
   const headers = { ...(options.headers || {}) };
+  let pinnedLookup = null;
+  if (!net.isIP(target.hostname) && !["localhost", "localhost.localdomain"].includes(target.hostname.toLowerCase())) {
+    const addresses = await resolvePublicAddresses(target.hostname, options.lookupImpl || dns.promises.lookup);
+    if (!addresses.length) throw new Error("AnySearch hostname does not resolve exclusively to public addresses");
+    pinnedLookup = createPinnedLookup(addresses[0].address, addresses[0].family);
+  }
   if (body && !Object.keys(headers).some((name) => name.toLowerCase() === "content-length")) {
     headers["Content-Length"] = Buffer.byteLength(body);
   }
@@ -710,6 +716,7 @@ function requestAnySearchHttp(url, options = {}) {
         method: options.method || "GET",
         headers,
         signal: options.signal,
+        ...(pinnedLookup ? { lookup: pinnedLookup } : {}),
       },
       (response) => {
         const chunks = [];
@@ -820,7 +827,7 @@ async function requestAnySearch(config, queries, options = {}) {
   throw lastError || createAnySearchError("ANYSEARCH_NETWORK_ERROR", "AnySearch 网络连接失败。");
 }
 
-function buildCacheKey(config, queries, brand) {
+function buildCacheKey(config, queries, brand, options = {}) {
   return JSON.stringify({
     baseUrl: config.baseUrl || ANYSEARCH_ENDPOINT,
     queries,
@@ -834,6 +841,7 @@ function buildCacheKey(config, queries, brand) {
     maxSocialEvidence: config.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE,
     minEvidence: config.minEvidence || config.minReliableEvidence || DEFAULT_MIN_EVIDENCE,
     maxSnippetChars: config.maxSnippetChars || 520,
+    allowSparseEvidence: options.allowSparseEvidence === true,
   });
 }
 
@@ -906,10 +914,10 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
   if (!config.enabled) throw createAnySearchError("ANYSEARCH_DISABLED", "AnySearch 搜索服务尚未启用。");
   const queries = buildAnySearchQueries(brand, bucketMeta, config, options.now || new Date());
   const cacheTtlMs = Math.max(0, Number(config.cacheTtlMs ?? 10 * 60 * 1000));
-  const cacheKey = buildCacheKey(config, queries, brand);
+  const cacheKey = buildCacheKey(config, queries, brand, options);
   if (!options.skipCache && cacheTtlMs > 0) {
     const cached = getCachedEvidence(cacheKey, cacheTtlMs);
-    if (cached) return cached;
+    if (cached) return { ...cached, cacheHit: true };
   }
 
   const requestImpl = options.requestImpl || requestAnySearch;
@@ -925,11 +933,12 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
     1,
     Number(config.minEvidence || config.minReliableEvidence || DEFAULT_MIN_EVIDENCE),
   );
+  const requiredEvidence = options.allowSparseEvidence ? 1 : minEvidence;
 
-  if (evidence.length < minEvidence) {
+  if (evidence.length < requiredEvidence) {
     throw createAnySearchError(
       "ANYSEARCH_INSUFFICIENT_EVIDENCE",
-      `AnySearch 返回的可验证营销/社交来源不足：${evidence.length}/${minEvidence}。`,
+      `AnySearch 返回的可验证营销/社交来源不足：${evidence.length}/${requiredEvidence}。`,
     );
   }
 
@@ -942,6 +951,7 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
     rawResultCount: parsed.length,
     reliableCount,
     retrievedAt: new Date().toISOString(),
+    cacheHit: false,
   };
   if (cacheTtlMs > 0) {
     const createdAt = Date.now();

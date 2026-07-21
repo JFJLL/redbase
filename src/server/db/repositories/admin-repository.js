@@ -55,11 +55,17 @@ function trySpendCreditsWithEvent({ userId, amount, event }) {
       return { spent: false, user: findUserById(userId), creditEvent: null };
     }
 
+    const reservationCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const result = db.prepare(`
       UPDATE users
       SET credits = credits - ?
-      WHERE id = ? AND credits >= ?
-    `).run(cost, Number(userId), cost);
+      WHERE id = ?
+        AND credits - COALESCE((
+          SELECT SUM(credit_cost)
+          FROM trend_analysis_requests
+          WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
+        ), 0) >= ?
+    `).run(cost, Number(userId), reservationCutoff, cost);
     if (result.changes !== 1) {
       return { spent: false, user: findUserById(userId), creditEvent: null };
     }

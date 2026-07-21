@@ -180,10 +180,42 @@ function initializeDatabaseSchema() {
       payload_json TEXT NOT NULL DEFAULT '{}',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS trend_analysis_requests (
+      request_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL,
+      bucket_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      credit_cost INTEGER NOT NULL,
+      analysis_id INTEGER,
+      credit_event_id INTEGER,
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (request_id, user_id, brand_id, bucket_key),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
+      FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE SET NULL,
+      FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
+    );
   `);
 }
 
 function ensureDatabaseIndexes() {
+  if (tableExists("trend_analysis_requests")) {
+    db.prepare(`
+      UPDATE trend_analysis_requests
+      SET status = 'failed', error = 'superseded duplicate reservation', updated_at = ?
+      WHERE status = 'reserved'
+        AND rowid NOT IN (
+          SELECT MIN(rowid)
+          FROM trend_analysis_requests
+          WHERE status = 'reserved'
+          GROUP BY user_id, brand_id, bucket_key
+        )
+    `).run(new Date().toISOString());
+  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_brands_owner_user_id ON brands(owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
@@ -198,6 +230,10 @@ function ensureDatabaseIndexes() {
     CREATE INDEX IF NOT EXISTS idx_product_images_owner_sha ON product_images(owner_user_id, sha256, deleted_at);
     CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_user_id ON image_jobs(owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_created ON image_jobs(owner_user_id, created_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_trend_analysis_requests_user_status ON trend_analysis_requests(user_id, status, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_trend_analysis_requests_active_bucket
+      ON trend_analysis_requests(user_id, brand_id, bucket_key)
+      WHERE status = 'reserved';
   `);
 }
 
@@ -319,6 +355,25 @@ function ensureSchemaUpgrades() {
       completed_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS trend_analysis_requests (
+      request_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL,
+      bucket_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      credit_cost INTEGER NOT NULL,
+      analysis_id INTEGER,
+      credit_event_id INTEGER,
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (request_id, user_id, brand_id, bucket_key),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
+      FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE SET NULL,
+      FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
+    );
   `);
 }
 
@@ -355,7 +410,8 @@ function hasCurrentStoreSchema() {
     tableExists("generations") &&
     tableExists("product_images") &&
     tableExists("image_jobs") &&
-    tableExists("credit_events")
+    tableExists("credit_events") &&
+    tableExists("trend_analysis_requests")
   );
 }
 

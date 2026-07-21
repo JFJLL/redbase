@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const util = require("util");
+const { jsonrepair } = require("jsonrepair");
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
 const LOG_DIR = path.join(ROOT_DIR, "logs");
@@ -275,7 +276,16 @@ function parseJsonFromModelText(text) {
 
   let lastError = null;
   for (const candidate of [...new Set(candidates.filter(Boolean))]) {
-    for (const next of [...new Set([candidate, repairLooseJson(candidate)])]) {
+    const looseCandidate = repairLooseJson(candidate);
+    const repairedCandidates = [candidate, looseCandidate];
+    for (const value of [candidate, looseCandidate]) {
+      try {
+        repairedCandidates.push(jsonrepair(value));
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    for (const next of [...new Set(repairedCandidates.filter(Boolean))]) {
       try {
         return JSON.parse(next);
       } catch (error) {
@@ -347,6 +357,7 @@ async function sleep(ms) {
 }
 
 function isRetriableNetworkError(error) {
+  if (error?.retryable === false) return false;
   const message = String(error?.message || "");
   const code = String(error?.code || "").toUpperCase();
   return (
