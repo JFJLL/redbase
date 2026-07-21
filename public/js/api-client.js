@@ -23,7 +23,9 @@ export async function request(url, options = {}) {
     if (response.status === 401) {
       onUnauthorized();
     }
-    throw new Error(payload.error || "Request failed");
+    const error = new Error(payload.error || "Request failed");
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }

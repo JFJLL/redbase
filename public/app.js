@@ -33,6 +33,7 @@ let historyImageSignatureRefreshInFlight = null;
 const dashboardScrollPositions = new Map();
 const retriedHistoryImagePaths = new Set();
 const brandDetailRequests = new Map();
+const trendAnalysisRequestIds = new Map();
 
 const HISTORY_TYPE_LABELS = new Map([
   ["moments", "朋友圈图文"],
@@ -1016,7 +1017,7 @@ function bindAnalysisButton() {
     try {
       const brand = await ensureBrandDetailLoaded(brandId);
       if (!brand) return;
-      const requestId = window.crypto?.randomUUID?.() || `trend-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const requestId = getOrCreateTrendAnalysisRequestId(brand.id, bucketKey);
       const result = await request(`/api/brands/${brand.id}/analyses`, {
         method: "POST",
         body: JSON.stringify({
@@ -1036,12 +1037,38 @@ function bindAnalysisButton() {
         state.selectedTrendId = getTrendBucketsForBrand(mergedBrand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
       }
       renderAll();
+      clearTrendAnalysisRequestId(brand.id, bucketKey);
     } catch (error) {
+      if (shouldResetTrendAnalysisRequestId(error)) {
+        clearTrendAnalysisRequestId(brandId, bucketKey);
+      }
       alert(formatTrendAnalysisError(error));
     } finally {
       setTrendAnalysisBusy(brandId, bucketKey, false);
     }
   });
+}
+
+function getTrendAnalysisRequestKey(brandId, bucketKey) {
+  return `${Number(brandId) || 0}:${normalizeTrendBucketKey(bucketKey || DEFAULT_TREND_MODE) || DEFAULT_TREND_MODE}`;
+}
+
+function getOrCreateTrendAnalysisRequestId(brandId, bucketKey) {
+  const key = getTrendAnalysisRequestKey(brandId, bucketKey);
+  const existing = trendAnalysisRequestIds.get(key);
+  if (existing) return existing;
+  const requestId = window.crypto?.randomUUID?.() || `trend-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  trendAnalysisRequestIds.set(key, requestId);
+  return requestId;
+}
+
+function clearTrendAnalysisRequestId(brandId, bucketKey) {
+  trendAnalysisRequestIds.delete(getTrendAnalysisRequestKey(brandId, bucketKey));
+}
+
+function shouldResetTrendAnalysisRequestId(error) {
+  const status = Number(error?.status || 0);
+  return status >= 400 && status !== 409;
 }
 
 function formatTrendAnalysisError(error) {
@@ -1156,6 +1183,7 @@ function clearSession() {
   state.sessionToken = "";
   state.currentUser = null;
   state.trendAnalysisLoadingKeys = [];
+  trendAnalysisRequestIds.clear();
   renderUser();
   closeAccountCenterModal();
 }
