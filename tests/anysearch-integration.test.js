@@ -37,6 +37,7 @@ const {
   generateAiTrendSet,
   ensureTrendIdeaContentAssets,
 } = require("../src/server/ai/trend-service");
+const { hasUnsupportedHardClaim } = require("../src/server/ai/trend-guardrails");
 
 const brand = {
   id: 1,
@@ -321,6 +322,14 @@ test("uses the native direct HTTP client when no fetch implementation is injecte
   assert.equal(requests[0].url, "/mcp");
   assert.equal(requests[0].authorization, "Bearer fixture-key");
   resetAnySearchBudget();
+});
+
+test("pins AnySearch HTTPS requests to a resolved public address for proxy-free servers", async () => {
+  const source = await fs.readFile(path.join(__dirname, "../src/server/integrations/anysearch.js"), "utf8");
+  const requestSource = source.slice(source.indexOf("async function requestAnySearchHttp"), source.indexOf("async function requestAnySearch(config"));
+  assert.match(requestSource, /resolvePublicAddresses\(target\.hostname/);
+  assert.match(requestSource, /lookup:\s*pinnedLookup/);
+  assert.doesNotMatch(requestSource, /HTTP_PROXY|HTTPS_PROXY|proxyAgent/i);
 });
 
 test("serializes same-process quota reservations before concurrent requests reach the network", async () => {
@@ -776,9 +785,126 @@ test("generates ten lean AnySearch trends in one model call", async () => {
   assert.doesNotMatch(prompts[0], /第 1\/2 批/);
   assert.equal(result[0].items.length, 10);
   assert.deepEqual(result[0].items.map((item) => item.id), [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010]);
+  assert.deepEqual(result[0].items.map((item) => item.score), [79, 78, 77, 76, 75, 74, 73, 72, 71, 70]);
+  assert.deepEqual(result[0].items.map((item) => item.rank), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
 
-test("rejects duplicate trends within the lean AnySearch result and retries", async () => {
+test("fills eight model trends to ten and repairs a missing second idea plus invalid evidence IDs", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  const appConfig = {
+    searchProvider: {
+      enabled: true,
+      socialEnabled: true,
+      minReliableEvidence: 2,
+      urlCheckEnabled: false,
+      cacheTtlMs: 0,
+    },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  };
+  const result = await generateAiTrendSet(appConfig, brand, 5500, {
+    bucketKey: "traffic",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      return {
+        trendBuckets: [{
+          key: "traffic",
+          items: Array.from({ length: 8 }, (_, index) => ({
+            stableKey: `short-${index}`,
+            title: `精简趋势${index + 1}`,
+            category: "流量趋势",
+            summary: index === 0 ? "旧话题复燃，但可以继续观察。" : `精简趋势${index + 1}的近期内容观察。`,
+            score: 90 - index,
+            tags: ["#桌面照明"],
+            reason: "适合品牌使用场景。",
+            evidenceIds: ["S99"],
+            ideas: index === 0
+              ? [generatedIdeaFixture("只有一条")]
+              : [generatedIdeaFixture(`方向${index}A`), generatedIdeaFixture(`方向${index}B`)],
+          })),
+        }],
+      };
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.ideas.length === 2));
+  assert.ok(result[0].items.every((item) => item.evidenceIds.length >= 1 && item.evidenceIds.every((id) => /^S[1-4]$/.test(id))));
+  assert.ok(result[0].items.every((item) => !JSON.stringify(item).includes("旧话题复燃")));
+  assert.deepEqual(result[0].items.map((item) => item.score), [...result[0].items.map((item) => item.score)].sort((a, b) => b - a));
+});
+
+test("returns ten trends when AnySearch has only one relevant evidence item", async () => {
+  clearAnySearchCache();
+  const sparseMarkdown = [
+    "## Query 1: sparse",
+    "### 1. 桌面照明场景讨论",
+    "- **URL**: https://www.zhihu.com/question/987",
+    "- Source: zhihu.com LightMate 折叠桌面灯与租房办公照明的用户讨论。",
+  ].join("\n");
+  let modelCalls = 0;
+  const result = await generateAiTrendSet({
+    searchProvider: {
+      enabled: true,
+      socialEnabled: true,
+      minReliableEvidence: 2,
+      urlCheckEnabled: false,
+      cacheTtlMs: 0,
+    },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 5800, {
+    bucketKey: "traffic",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => sparseMarkdown },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      return {
+        trendBuckets: [{
+          key: "traffic",
+          items: [{
+            stableKey: "sparse-model-item",
+            title: "桌面照明场景讨论",
+            category: "流量趋势",
+            summary: "租房办公人群正在讨论桌面照明场景。",
+            score: 82,
+            tags: ["#桌面照明"],
+            reason: "与折叠桌面灯的使用场景相关。",
+            evidenceIds: ["S1"],
+            ideas: [generatedIdeaFixture("稀疏证据 A")],
+          }],
+        }],
+      };
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.evidenceIds.length === 1));
+  assert.ok(result[0].items.every((item) => item.ideas.length === 2));
+});
+
+test("rejects a model response with no recognizable trend instead of charging for ten templates", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  await assert.rejects(
+    generateAiTrendSet({
+      searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+      textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+    }, brand, 5900, {
+      bucketKey: "traffic",
+      anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
+      textModelImpl: async () => {
+        modelCalls += 1;
+        return ["sorry", "no json"];
+      },
+    }),
+    /未能获取到可用热点/,
+  );
+  assert.equal(modelCalls, 1);
+});
+
+test("repairs duplicate trends locally without a second model call", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const appConfig = {
@@ -795,7 +921,7 @@ test("rejects duplicate trends within the lean AnySearch result and retries", as
     trendBuckets: [{
       key: "track",
       items: Array.from({ length: 10 }, (_, index) => {
-        const label = duplicateTitle && index === 9 ? `${prefix}1` : `${prefix}${index + 1}`;
+        const label = duplicateTitle && index === 9 ? `${prefix}1的同一人群场景` : `${prefix}${index + 1}`;
         return {
           stableKey: `${stablePrefix}-${index + 1}`,
           title: label,
@@ -821,13 +947,51 @@ test("rejects duplicate trends within the lean AnySearch result and retries", as
     },
   });
 
-  assert.equal(modelCalls, 2);
+  assert.equal(modelCalls, 1);
   assert.equal(result[0].items.length, 10);
   assert.equal(new Set(result[0].items.map((item) => item.title)).size, 10);
-  assert.deepEqual(result[0].items.map((item) => item.title), Array.from({ length: 10 }, (_, index) => `重试趋势${index + 1}`));
+  assert.equal(new Set(result[0].items.map((item) => item.stableKey)).size, 10);
 });
 
-test("uses validation feedback and neutralizes unsupported brand claims without discarding the batch", async () => {
+test("repairs short Chinese prefix-duplicate titles locally", async () => {
+  clearAnySearchCache();
+  const result = await generateAiTrendSet({
+    searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 6500, {
+    bucketKey: "traffic",
+    anySearchOptions: {
+      now: fixedNow,
+      requestImpl: async () => [
+        "## Query 2: social",
+        "### 1. LightMate 宝妈育儿技巧与桌面照明讨论",
+        "- **URL**: https://www.zhihu.com/question/989",
+        "- Source: zhihu.com LightMate 宝妈育儿技巧与桌面照明讨论。",
+      ].join("\n"),
+    },
+    textModelImpl: async () => ({
+      trendBuckets: [{
+        key: "traffic",
+        items: Array.from({ length: 10 }, (_, index) => ({
+          stableKey: `short-duplicate-${index}`,
+          title: index === 0 ? "宝妈育儿" : index === 1 ? "宝妈育儿技巧" : `桌面照明方向${index + 1}`,
+          category: "流量趋势",
+          summary: "围绕桌面照明的用户讨论方向。",
+          score: 80 - index,
+          tags: ["#桌面照明"],
+          reason: "从真实使用场景切入。",
+          evidenceIds: ["S1"],
+          ideas: [generatedIdeaFixture(`短标题${index}A`), generatedIdeaFixture(`短标题${index}B`)],
+        })),
+      }],
+    }),
+  });
+
+  assert.equal(result[0].items.length, 10);
+  assert.equal(result[0].items.filter((item) => item.title.includes("宝妈育儿")).length, 1);
+});
+
+test("repairs missing evidence and unsupported claims without a second model call", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const prompts = [];
@@ -871,15 +1035,13 @@ test("uses validation feedback and neutralizes unsupported brand claims without 
     textModelImpl: async (_config, request) => {
       modelCalls += 1;
       prompts.push(request.userPrompt);
-      if (modelCalls === 1) return makeBatch("漏引趋势", { omitEvidenceIds: true });
-      if (modelCalls === 2) return makeBatch("风险趋势", { withUnsupportedClaim: true });
-      return makeBatch("安全结果");
+      return makeBatch("漏引趋势", { omitEvidenceIds: true, withUnsupportedClaim: true });
     },
   });
 
-  assert.equal(modelCalls, 2);
-  assert.match(prompts[1], /每条 trend 都要在 trend 对象内输出 evidenceIds 数组/);
+  assert.equal(modelCalls, 1);
   assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.evidenceIds.length >= 1));
   assert.ok(result[0].items.every((item) => !JSON.stringify(item).includes("医疗级")));
 });
 
@@ -927,7 +1089,7 @@ test("filters an unsupported brand claim from idea copy even when the brand name
   });
 
   assert.equal(modelCalls, 1);
-  assert.equal(result[0].items.length, 9);
+  assert.equal(result[0].items.length, 10);
   assert.ok(result[0].items.every((item) => !JSON.stringify(item).includes("医疗级")));
 });
 
@@ -999,7 +1161,7 @@ test("accepts lean trend ideas and fills complete content assets only when reque
   })).filled, false);
 });
 
-test("filters individual unverifiable medical trends instead of failing the whole traffic bucket", async () => {
+test("rewrites individual unverifiable medical fields instead of dropping the trend", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const appConfig = {
@@ -1028,6 +1190,7 @@ test("filters individual unverifiable medical trends instead of failing the whol
     industry: "儿童健康",
     audience: "儿童家长",
     product: "儿童感冒用药",
+    knowledgeBase: "本品不宣称儿童专用。",
     description: "面向儿童家长的家庭健康品牌",
   }, 9000, {
     bucketKey: "traffic",
@@ -1039,6 +1202,8 @@ test("filters individual unverifiable medical trends instead of failing the whol
           key: "traffic",
           items: Array.from({ length: 10 }, (_, index) => {
             const label = index === 0 ? "治疗感冒的儿童用药指南" : `安全流量趋势${index + 1}`;
+            const ideas = [generatedIdeaFixture(`${label}A`), generatedIdeaFixture(`${label}B`)].map(({ contentAssets, ...idea }) => idea);
+            if (index === 0) ideas[0].summary = "围绕孩子感冒症状可快速缓解的说法制作内容。";
             return {
               stableKey: `traffic-${modelCalls}-${index + 1}`,
               title: label,
@@ -1048,7 +1213,7 @@ test("filters individual unverifiable medical trends instead of failing the whol
               tags: ["#家庭健康", "#内容科普", "#家长关注"],
               reason: `${label}可从真实家庭场景切入。`,
               evidenceIds: ["S1"],
-              ideas: [generatedIdeaFixture(`${label}A`), generatedIdeaFixture(`${label}B`)].map(({ contentAssets, ...idea }) => idea),
+              ideas,
             };
           }),
         }],
@@ -1057,9 +1222,174 @@ test("filters individual unverifiable medical trends instead of failing the whol
   });
 
   assert.equal(modelCalls, 1);
-  assert.equal(result[0].items.length, 9);
+  assert.equal(result[0].items.length, 10);
   assert.ok(result[0].items.every((item) => !item.title.includes("治疗感冒")));
-  assert.deepEqual(result.analysisWarnings, [{ bucketKey: "traffic", bucketTitle: "流量热点趋势", expected: 10, actual: 9 }]);
+  assert.ok(result[0].items.every((item) => !JSON.stringify(item).includes("快速缓解")));
+  assert.ok(result[0].items.every((item) => !hasUnsupportedHardClaim(item)));
+  assert.deepEqual(result.analysisWarnings, []);
+});
+
+test("does not let unrelated reliable web evidence authorize dosage or efficacy claims", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  const result = await generateAiTrendSet({
+    searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, {
+    ...brand,
+    name: "小快克",
+    industry: "儿童健康",
+    audience: "儿童家长",
+    product: "儿童感冒用药",
+  }, 10000, {
+    bucketKey: "traffic",
+    anySearchOptions: {
+      now: fixedNow,
+      requestImpl: async () => [
+        "## Query 2: social",
+        "### 1. 小快克夏季公益穿搭活动",
+        "- **URL**: https://www.ce.cn/fashion/123",
+        "- Source: ce.cn 小快克参与夏季公益穿搭活动，内容关注轻薄面料与防晒配色。",
+        "## Query 2: social",
+        "### 1. 穿搭讨论",
+        "- **URL**: https://www.zhihu.com/question/456",
+        "- Source: zhihu.com 用户讨论夏季穿搭。",
+      ].join("\n"),
+    },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      return {
+        trendBuckets: [{
+          key: "traffic",
+          items: Array.from({ length: 10 }, (_, index) => ({
+            stableKey: `unsafe-${index + 1}`,
+            title: index === 0 ? "每日服用2片可治疗感冒，三天见效" : `家庭场景内容方向 ${index + 1}`,
+            category: "流量趋势",
+            summary: index === 0 ? "孩子感冒症状可快速缓解。" : "围绕真实家庭场景整理信息。",
+            score: 90 - index,
+            tags: ["#家庭健康", "#内容科普", "#家长关注"],
+            reason: "从用户问题切入内容。",
+            evidenceIds: ["S1"],
+            ideas: [generatedIdeaFixture(`方向${index + 1}A`), generatedIdeaFixture(`方向${index + 1}B`)].map(({ contentAssets, ...idea }, ideaIndex) => ({
+              ...idea,
+              ...(index === 0 && ideaIndex === 0 ? { brandFit: "儿童专用配方更安全", audience: "感冒三天见效的儿童家长" } : {}),
+            })),
+          })),
+        }],
+      };
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => !hasUnsupportedHardClaim(item)));
+  assert.doesNotMatch(JSON.stringify(result[0].items), /每日服用2片|治疗感冒|三天见效|快速缓解|儿童专用配方更安全/);
+  assert.match(result[0].items[0].title, /小快克夏季公益穿搭活动/);
+});
+
+test("fully reconstructs model copy when no evidence is semantically related", async () => {
+  clearAnySearchCache();
+  const result = await generateAiTrendSet({
+    searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 10500, {
+    bucketKey: "traffic",
+    anySearchOptions: {
+      now: fixedNow,
+      requestImpl: async () => [
+        "## Query 2: social",
+        "### 1. LightMate 关注新能源汽车充电政策讨论",
+        "- **URL**: https://www.zhihu.com/question/987",
+        "- Source: 小红书中国经济网zhihu.com LightMate 关注新能源汽车充电政策与公共充电设施讨论。",
+      ].join("\n"),
+    },
+    textModelImpl: async () => ({
+      trendBuckets: [{
+        key: "traffic",
+        items: [{
+          stableKey: "unrelated-skincare",
+          title: "敏感肌面霜种草",
+          category: "夜间护肤",
+          summary: "围绕皮肤屏障修护设计种草内容。",
+          score: 88,
+          tags: ["#面霜", "#敏感肌"],
+          reason: "适合面霜种草与夜间护肤人群。",
+          evidenceIds: ["S1"],
+          ideas: [generatedIdeaFixture("敏感肌修护指南"), generatedIdeaFixture("夜间护肤清单")],
+        }],
+      }],
+    }),
+  });
+
+  const text = JSON.stringify(result[0].items);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.evidenceIds.length === 1));
+  assert.doesNotMatch(text, /面霜|敏感肌|皮肤屏障|夜间护肤/);
+  assert.match(result[0].items[0].title, /新能源汽车充电政策讨论/);
+});
+
+test("reconstructs an unrelated title even when its summary and ideas match the evidence", async () => {
+  clearAnySearchCache();
+  const result = await generateAiTrendSet({
+    searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 10600, {
+    bucketKey: "traffic",
+    anySearchOptions: {
+      now: fixedNow,
+      requestImpl: async () => [
+        "## Query 2: social",
+        "### 1. 小红书 LightMate 关注新能源汽车充电政策讨论",
+        "- **URL**: https://www.xiaohongshu.com/explore/988",
+        "- Source: xiaohongshu.com 小红书 LightMate 用户正在讨论新能源汽车充电政策与公共充电设施。",
+      ].join("\n"),
+    },
+    textModelImpl: async () => ({
+      trendBuckets: [{
+        key: "traffic",
+        items: [
+          {
+            stableKey: "related-title-unrelated-body",
+            title: "新能源汽车充电政策讨论",
+            category: "夜间护肤",
+            summary: "敏感肌面霜夜间修护指南。",
+            score: 100,
+            tags: ["#敏感肌", "#面霜"],
+            reason: "适合夜间护肤人群。",
+            evidenceIds: ["S1"],
+            ideas: [generatedIdeaFixture("敏感肌面霜"), generatedIdeaFixture("夜间护肤")].map((idea) => ({
+              ...idea,
+              angle: "皮肤屏障护理",
+            })),
+          },
+          ...[
+            "宝妈育儿",
+            "宝妈育儿政策解读",
+            "母婴行业讨论升温",
+            "教育政策观察",
+            "小红书：宝妈育儿指南",
+            "中国经济网：母婴消费指南",
+            "zhihu：母婴消费指南",
+          ].map((title, index) => ({
+            stableKey: `unrelated-title-related-body-${index}`,
+            title,
+            category: "流量趋势",
+            summary: "新能源汽车充电政策与公共充电设施讨论。",
+            score: 99 - index,
+            tags: ["#新能源汽车", "#充电政策"],
+            reason: "从公共充电设施的用户问题切入。",
+            evidenceIds: ["S1"],
+            ideas: [generatedIdeaFixture("新能源汽车充电政策"), generatedIdeaFixture("公共充电设施")],
+          })),
+        ],
+      }],
+    }),
+  });
+
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => !/宝妈育儿|母婴行业|教育政策|母婴消费/.test(item.title)));
+  assert.doesNotMatch(JSON.stringify(result[0].items), /敏感肌|面霜|夜间护肤/);
+  assert.match(result[0].items[0].title, /新能源汽车充电政策讨论/);
 });
 
 test("prompts treat search snippets as untrusted evidence and enforce real evidence IDs", () => {

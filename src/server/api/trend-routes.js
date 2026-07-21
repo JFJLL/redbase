@@ -2,6 +2,12 @@ const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
 const { trySpendCreditsWithEvent, refundCreditEventIfNeeded } = require("../db/repositories/admin-repository");
 const {
+  normalizeRequestId,
+  reserveTrendAnalysisRequest,
+  completeTrendAnalysisRequest,
+  failTrendAnalysisRequest,
+} = require("../db/repositories/trend-analysis-repository");
+const {
   findBrandByOwner,
   upsertBrandFull,
   allocateAnalysisAndTrendBase,
@@ -120,6 +126,11 @@ async function handleTrendRoutes(context, req, res, pathname) {
 
     const payload = await collectBody(req);
     const selectedBucket = resolveTrendBucketForRequest(payload.bucketKey || payload.trendBucketKey || payload.bucket);
+    const requestId = normalizeRequestId(payload.requestId);
+    if (!requestId) {
+      badRequest(res, "趋势分析请求标识无效，请刷新页面后重试。");
+      return true;
+    }
     const rawXhsCategoryPath = selectedBucket.key === "xhs" ? String(payload.xhsCategoryPath || "").trim() : "";
     if (rawXhsCategoryPath.length > PGY_MAX_CATEGORY_PATH_LENGTH) {
       badRequest(res, "小红书内容类目路径过长，请重新选择类目后再试。");
@@ -144,43 +155,83 @@ async function handleTrendRoutes(context, req, res, pathname) {
         return true;
       }
     }
-    const spendResult = trySpendCreditsWithEvent({
+    const reservation = reserveTrendAnalysisRequest({
+      requestId,
       userId: user.id,
-      amount: CREDIT_COSTS.analysis,
-      event: {
-        actionType: "analysis",
-        actionLabel: "AI 热点分析",
-        brandId: brand.id,
-        brandName: brand.name,
-        summary: `${brand.name} ${selectedBucket.title}`,
-      },
+      brandId: brand.id,
+      bucketKey: selectedBucket.key,
+      creditCost: CREDIT_COSTS.analysis,
     });
-    if (!spendResult.spent) {
-      const current = Number(spendResult.user?.credits || 0);
+    if (reservation.status === "completed") {
+      json(res, 200, {
+        brand: sanitizeBrand(reservation.brand, appConfig),
+        user: sanitizeUser(reservation.user),
+        warnings: [],
+        replayed: true,
+      });
+      return true;
+    }
+    if (reservation.status === "reserved" && reservation.existing) {
+      json(res, 409, { error: "这个趋势维度正在生成中，请等待当前请求完成。" });
+      return true;
+    }
+    if (reservation.status === "failed") {
+      badRequest(res, "上一次相同请求已结束，请重新点击生成。");
+      return true;
+    }
+    if (reservation.status === "invalid") {
+      badRequest(res, "趋势分析请求标识无效，请刷新页面后重试。");
+      return true;
+    }
+    if (reservation.status === "insufficient") {
+      const current = Number(reservation.user?.credits || 0) - Number(reservation.reservedCredits || 0);
       json(res, 402, { error: `积分不足，本次操作需要 ${CREDIT_COSTS.analysis} 积分，当前剩余 ${current} 积分。` });
       return true;
     }
     const { analysisId, trendBase } = allocateAnalysisAndTrendBase();
-    brand.analyses.unshift({
-      id: analysisId,
-      name: `${brand.name} - ${selectedBucket.title}`,
-      timestamp: formatTimestamp(),
-      trendSnapshot: [],
-    });
-    let analysisWarnings = [];
     let generatedTrends = [];
     try {
       generatedTrends = await generateAiTrendSet(brand, trendBase, {
         bucketKey: selectedBucket.key,
         xhsCategoryPath,
       });
-      analysisWarnings = Array.isArray(generatedTrends.analysisWarnings) ? generatedTrends.analysisWarnings : [];
-      brand.trends = mergeGeneratedTrendBucket(brand.trends, generatedTrends);
-    } catch (error) {
-      refundCreditEventIfNeeded({
-        creditEventId: spendResult.creditEvent.id,
+      const completion = completeTrendAnalysisRequest({
+        requestId,
         userId: user.id,
-        reason: error?.message || "trend analysis failed",
+        brandId: brand.id,
+        bucketKey: selectedBucket.key,
+        analysisId,
+        event: {
+          actionType: "analysis",
+          actionLabel: "AI 热点分析",
+          brandId: brand.id,
+          brandName: brand.name,
+          summary: `${brand.name} ${selectedBucket.title}`,
+        },
+        buildBrand(currentBrand) {
+          currentBrand.analyses.unshift({
+            id: analysisId,
+            name: `${currentBrand.name} - ${selectedBucket.title}`,
+            timestamp: formatTimestamp(),
+            trendSnapshot: cloneTrendBuckets(generatedTrends),
+          });
+          currentBrand.trends = mergeGeneratedTrendBucket(currentBrand.trends, generatedTrends);
+          return currentBrand;
+        },
+      });
+      json(res, 200, {
+        brand: sanitizeBrand(completion.brand, appConfig),
+        user: sanitizeUser(completion.user),
+        warnings: [],
+        replayed: completion.replayed,
+      });
+    } catch (error) {
+      failTrendAnalysisRequest({
+        requestId,
+        userId: user.id,
+        brandId: brand.id,
+        bucketKey: selectedBucket.key,
+        error: error?.message || "trend analysis failed",
       });
       console.warn("[trend-analysis] analysis failed for request", {
         userId: user.id,
@@ -193,13 +244,6 @@ async function handleTrendRoutes(context, req, res, pathname) {
       badRequest(res, error?.code ? getPgyPublicErrorMessage(error) : error?.message || "本次分析未能获取到可用热点，请稍后重试。");
       return true;
     }
-    brand.analyses[0].trendSnapshot = cloneTrendBuckets(generatedTrends);
-    const savedBrand = upsertBrandFull(brand);
-    json(res, 200, {
-      brand: sanitizeBrand(savedBrand, appConfig),
-      user: sanitizeUser(spendResult.user),
-      warnings: analysisWarnings,
-    });
     return true;
   }
 

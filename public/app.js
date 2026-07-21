@@ -1016,34 +1016,32 @@ function bindAnalysisButton() {
     try {
       const brand = await ensureBrandDetailLoaded(brandId);
       if (!brand) return;
+      const requestId = window.crypto?.randomUUID?.() || `trend-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const result = await request(`/api/brands/${brand.id}/analyses`, {
         method: "POST",
         body: JSON.stringify({
+          requestId,
           bucketKey,
           xhsCategoryPath: bucketKey === "xhs" ? state.xhsCategoryPath || "" : "",
         }),
       });
+      const generatedBucket = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey);
+      if (!generatedBucket || generatedBucket.items?.length !== 10) {
+        throw new Error("服务端未返回完整的 10 条趋势，本次结果未应用。");
+      }
+      const mergedBrand = mergeGeneratedTrendResult(result.brand, bucketKey);
       updateCurrentUser(result.user);
-      replaceBrand(result.brand);
+      replaceBrand(mergedBrand);
       if (Number(state.selectedBrandId) === Number(brand.id) && state.selectedTrendMode === bucketKey) {
-        state.selectedTrendId = getTrendBucketsForBrand(result.brand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
+        state.selectedTrendId = getTrendBucketsForBrand(mergedBrand).find((bucket) => bucket.key === bucketKey)?.items?.[0]?.id ?? null;
       }
       renderAll();
-      showTrendAnalysisWarnings(result.warnings);
     } catch (error) {
       alert(formatTrendAnalysisError(error));
     } finally {
       setTrendAnalysisBusy(brandId, bucketKey, false);
     }
   });
-}
-
-function showTrendAnalysisWarnings(warnings) {
-  if (!Array.isArray(warnings) || !warnings.length) return;
-  const detail = warnings
-    .map((item) => `${item.bucketTitle || item.bucketKey || "热点维度"} ${Number(item.actual || 0)}/${Number(item.expected || 10)}`)
-    .join("，");
-  showToast(`当前维度未满 10 条：${detail}。已先展示可用结果，可稍后重新生成该维度补齐。`, 10000);
 }
 
 function formatTrendAnalysisError(error) {
@@ -1379,6 +1377,29 @@ function replaceBrand(nextBrand) {
   state.brands = state.brands.some((brand) => Number(brand.id) === Number(nextBrand.id))
     ? state.brands.map((brand) => (Number(brand.id) === Number(nextBrand.id) ? normalized : brand))
     : [normalized, ...state.brands];
+}
+
+function mergeGeneratedTrendResult(nextBrand, generatedBucketKey) {
+  const previous = state.brands.find((brand) => Number(brand.id) === Number(nextBrand?.id));
+  if (!isBrandDetailLoaded(previous)) return nextBrand;
+  const previousByKey = new Map(getTrendBucketsForBrand(previous).map((bucket) => [bucket.key, bucket]));
+  const incomingByKey = new Map(getTrendBucketsForBrand(nextBrand).map((bucket) => [bucket.key, bucket]));
+  const trends = DEFAULT_TREND_BUCKETS.map((bucket) => {
+    if (bucket.key === generatedBucketKey) return incomingByKey.get(bucket.key) || previousByKey.get(bucket.key) || { ...bucket, items: [] };
+    const previousBucket = previousByKey.get(bucket.key);
+    const incomingBucket = incomingByKey.get(bucket.key);
+    return previousBucket?.items?.length ? previousBucket : incomingBucket || previousBucket || { ...bucket, items: [] };
+  });
+  const analysesById = new Map();
+  for (const analysis of [...(nextBrand?.analyses || []), ...(previous?.analyses || [])]) {
+    const key = String(analysis?.id ?? `${analysis?.name || ""}-${analysis?.timestamp || ""}`);
+    if (!analysesById.has(key)) analysesById.set(key, analysis);
+  }
+  return {
+    ...nextBrand,
+    trends,
+    analyses: [...analysesById.values()].sort((left, right) => String(right?.timestamp || "").localeCompare(String(left?.timestamp || ""))),
+  };
 }
 
 async function deleteBrand(brandId) {
