@@ -75,8 +75,14 @@ function verifyFeishuTenant(userInfo, tenantKey) {
   return expectedTenantKeys.includes(receivedTenantKey);
 }
 
-function buildFeishuAccountPhone(openId) {
-  return `feishu:${String(openId || "").trim()}`;
+function buildFeishuAccountPhone(openId, { appKey = "", tenantKey = "" } = {}) {
+  const normalizedOpenId = String(openId || "").trim();
+  const normalizedAppKey = String(appKey || "").trim();
+  const normalizedTenantKey = String(tenantKey || "").trim();
+  if (!normalizedAppKey && !normalizedTenantKey) {
+    return `feishu:${normalizedOpenId}`;
+  }
+  return `feishu:${encodeURIComponent(normalizedAppKey)}:${encodeURIComponent(normalizedTenantKey)}:${normalizedOpenId}`;
 }
 
 async function postJson(fetchImpl, url, payload, label) {

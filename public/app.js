@@ -25,6 +25,13 @@ import {
 
 let sessionEpoch = 0;
 
+function assertSessionEpoch(expectedEpoch) {
+  if (expectedEpoch === sessionEpoch) return;
+  const error = new Error("请求已因登录状态变化而取消");
+  error.code = "STALE_SESSION_REQUEST";
+  throw error;
+}
+
 configureApiClient({
   onUnauthorized: clearSession,
   getRequestContext: () => sessionEpoch,
@@ -70,7 +77,9 @@ async function init() {
 }
 
 async function uploadProductImage(file) {
+  const uploadEpoch = sessionEpoch;
   const dataUrl = await fileToDataUrl(file);
+  assertSessionEpoch(uploadEpoch);
   const result = await request("/api/product-images", {
     method: "POST",
     body: JSON.stringify({
@@ -83,7 +92,9 @@ async function uploadProductImage(file) {
 }
 
 async function uploadBrandLogo(brandId, file) {
+  const uploadEpoch = sessionEpoch;
   const dataUrl = await fileToDataUrl(file);
+  assertSessionEpoch(uploadEpoch);
   const result = await request(`/api/brands/${brandId}/logo`, {
     method: "POST",
     body: JSON.stringify({
@@ -595,6 +606,7 @@ function bindBrandModal() {
     if (event.target === modal) close();
   });
   logoInput?.addEventListener("change", async () => {
+    const readEpoch = sessionEpoch;
     const file = logoInput.files?.[0];
     if (!file) {
       pendingLogo = null;
@@ -608,9 +620,11 @@ function bindBrandModal() {
       return;
     }
     try {
+      const dataUrl = await fileToDataUrl(file);
+      assertSessionEpoch(readEpoch);
       pendingLogo = {
         name: file.name,
-        dataUrl: await fileToDataUrl(file),
+        dataUrl,
       };
       if (logoUploadText) logoUploadText.textContent = "重新选择 Logo";
       if (logoPreview) {
@@ -620,6 +634,7 @@ function bindBrandModal() {
         `;
       }
     } catch (error) {
+      if (isStaleSessionRequest(error)) return;
       pendingLogo = null;
       alert(`品牌 Logo 读取失败：${error.message}`);
     }
@@ -2309,6 +2324,7 @@ function renderIdeas() {
 
   root.querySelectorAll("[data-style-reference-image]").forEach((input) => {
     input.addEventListener("change", async () => {
+      const readEpoch = sessionEpoch;
       const ideaIndex = Number(input.dataset.styleReferenceImage);
       const file = input.files?.[0];
       if (!file) return;
@@ -2317,13 +2333,16 @@ function renderIdeas() {
         return;
       }
       try {
+        const dataUrl = await fileToDataUrl(file);
+        assertSessionEpoch(readEpoch);
         state.styleReferences[getIdeaProductKey(ideaIndex)] = {
           fileName: file.name,
-          dataUrl: await fileToDataUrl(file),
+          dataUrl,
           sizeBytes: file.size,
         };
         renderIdeas();
       } catch (error) {
+        if (isStaleSessionRequest(error)) return;
         alert(`风格参考图读取失败：${error.message}`);
       } finally {
         input.value = "";

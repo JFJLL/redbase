@@ -200,8 +200,15 @@ async function handleAuthRoutes(context, req, res, pathname) {
       }
 
       const token = randomToken();
-      const phone = buildFeishuAccountPhone(userInfo.openId);
+      const phone = buildFeishuAccountPhone(userInfo.openId, {
+        appKey: feishuConfig.appKey,
+        tenantKey: userInfo.tenantKey,
+      });
       let savedUser = findUserByPhone(phone);
+      const defaultAppKey = feishuConfig.apps[0]?.key || "";
+      if (!savedUser && feishuConfig.appKey === defaultAppKey) {
+        savedUser = findUserByPhone(buildFeishuAccountPhone(userInfo.openId));
+      }
       if (savedUser) {
         savedUser = createSessionForUser(savedUser.id, token);
       } else {

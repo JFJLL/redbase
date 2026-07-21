@@ -197,6 +197,35 @@ test("API client marks the current 401 request stale after clearing its session"
   assert.equal(unauthorizedCalls, 1);
 });
 
+test("file uploads stop when the account changes during local file reading", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
+  const assertSessionEpochSource = extractFunction(source, "assertSessionEpoch");
+  const uploadProductImageSource = extractFunction(source, "uploadProductImage");
+  let resolveFileRead;
+  let requestCalls = 0;
+  const context = {
+    sessionEpoch: 7,
+    fileToDataUrl: () => new Promise((resolve) => {
+      resolveFileRead = resolve;
+    }),
+    request: async () => {
+      requestCalls += 1;
+      return { image: { id: 1 } };
+    },
+    upsertProductImageLibrary: () => assert.fail("a stale upload must not update the new account library"),
+  };
+
+  vm.runInNewContext(
+    `${assertSessionEpochSource}; ${uploadProductImageSource}; globalThis.pending = uploadProductImage({ name: "old-account.png" });`,
+    context,
+  );
+  context.sessionEpoch = 8;
+  resolveFileRead("data:image/png;base64,old-account");
+
+  await assert.rejects(context.pending, (error) => error.code === "STALE_SESSION_REQUEST");
+  assert.equal(requestCalls, 0);
+});
+
 test("restoreSession ignores a stale startup request instead of clearing a newer login", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
   const restoreSessionSource = extractFunction(source, "restoreSession");
