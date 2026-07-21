@@ -139,6 +139,12 @@ async function handleAuthRoutes(context, req, res, pathname) {
       return true;
     }
 
+    console.log("[feishu-auth] authorize redirect", {
+      appKey: feishuConfig.appKey,
+      redirectUri: feishuConfig.redirectUri,
+      requestBaseUrl: getRequestBaseUrl(req),
+    });
+
     redirect(
       res,
       buildFeishuAuthorizeUrl({
@@ -185,8 +191,9 @@ async function handleAuthRoutes(context, req, res, pathname) {
       }
       if (!verifyFeishuTenant(userInfo, feishuConfig.tenantKeys)) {
         console.warn("[feishu-auth] tenant mismatch", {
-          receivedTenantKey: userInfo.tenantKey || "",
-          configuredTenantKeys: feishuConfig.tenantKeys,
+          appKey: feishuConfig.appKey,
+          receivedTenantPresent: Boolean(userInfo.tenantKey),
+          configuredTenantCount: feishuConfig.tenantKeys.length,
         });
         redirect(res, "/?authError=feishu_tenant");
         return true;
