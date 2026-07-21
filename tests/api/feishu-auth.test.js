@@ -355,7 +355,10 @@ test("Feishu callback creates a RedBase session for enterprise users", async () 
   assert.equal(res.getHeader("location"), "/");
   assert.match(String(res.getHeader("set-cookie")), /redbase_session=/);
 
-  const user = findUserByPhone(buildFeishuAccountPhone("ou_enterprise"));
+  const user = findUserByPhone(buildFeishuAccountPhone("ou_enterprise", {
+    appKey: "default",
+    tenantKey: "tenant_a",
+  }));
   assert.equal(user.name, "企业员工");
   assert.equal(user.accountType, "yimei");
   assert.equal(user.department, "飞书企业成员");
@@ -399,7 +402,10 @@ test("Feishu callback rejects users from other tenants", async () => {
   assert.equal(handled, true);
   assert.equal(res.statusCode, 302);
   assert.equal(res.getHeader("location"), "/?authError=feishu_tenant");
-  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_external")), null);
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_external", {
+    appKey: "default",
+    tenantKey: "tenant_b",
+  })), null);
 });
 
 test("Feishu callback prefers tenantKeys over legacy tenantKey", async () => {
@@ -441,7 +447,10 @@ test("Feishu callback prefers tenantKeys over legacy tenantKey", async () => {
   assert.equal(handled, true);
   assert.equal(res.statusCode, 302);
   assert.equal(res.getHeader("location"), "/?authError=feishu_tenant");
-  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_legacy")), null);
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_legacy", {
+    appKey: "default",
+    tenantKey: "tenant_legacy",
+  })), null);
 });
 
 test("Feishu callback uses the app selected in OAuth state", async () => {
@@ -493,7 +502,67 @@ test("Feishu callback uses the app selected in OAuth state", async () => {
     code: "oauth-code",
     redirect_uri: "https://redbase.example/api/auth/feishu/callback",
   });
-  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_hongmo")).name, "弘摩员工");
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_hongmo", {
+    appKey: "hongmo",
+    tenantKey: "tenant_hongmo",
+  })).name, "弘摩员工");
+});
+
+test("Feishu callbacks namespace identical open IDs by app and tenant", async () => {
+  const appConfig = {
+    security: { cookieSecure: false },
+    feishu: {
+      enabled: true,
+      baseUrl: "https://redbase.example",
+      apps: [
+        { key: "yimei-scope", name: "易美传播", appId: "cli_yimei_scope", appSecret: "secret_yimei", tenantKeys: ["tenant_yimei_scope"] },
+        { key: "hongmo-scope", name: "弘摩科技", appId: "cli_hongmo_scope", appSecret: "secret_hongmo", tenantKeys: ["tenant_hongmo_scope"] },
+      ],
+    },
+  };
+  const fakeFetch = async (url, options = {}) => {
+    if (String(url).includes("/oauth/token")) {
+      const request = JSON.parse(options.body);
+      return jsonResponse({ access_token: `token-${request.client_id}` });
+    }
+    const authorization = String(options.headers?.Authorization || "");
+    const isYimei = authorization.includes("cli_yimei_scope");
+    return jsonResponse({
+      code: 0,
+      data: {
+        open_id: "ou_same_across_apps",
+        tenant_key: isYimei ? "tenant_yimei_scope" : "tenant_hongmo_scope",
+        name: isYimei ? "易美同号员工" : "弘摩同号员工",
+      },
+    });
+  };
+
+  for (const app of ["yimei-scope", "hongmo-scope"]) {
+    const state = Buffer.from(JSON.stringify({ app, next: "/" }), "utf8").toString("base64url");
+    const res = createRes();
+    await handleAuthRoutes(
+      { appConfig, fetch: fakeFetch },
+      createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+      res,
+      "/api/auth/feishu/callback",
+    );
+    assert.equal(res.statusCode, 302);
+    assert.equal(res.getHeader("location"), "/");
+  }
+
+  const yimeiUser = findUserByPhone(buildFeishuAccountPhone("ou_same_across_apps", {
+    appKey: "yimei-scope",
+    tenantKey: "tenant_yimei_scope",
+  }));
+  const hongmoUser = findUserByPhone(buildFeishuAccountPhone("ou_same_across_apps", {
+    appKey: "hongmo-scope",
+    tenantKey: "tenant_hongmo_scope",
+  }));
+  assert.ok(yimeiUser);
+  assert.ok(hongmoUser);
+  assert.notEqual(yimeiUser.id, hongmoUser.id);
+  assert.equal(yimeiUser.name, "易美同号员工");
+  assert.equal(hongmoUser.name, "弘摩同号员工");
 });
 
 test("Feishu callback logs tenant mismatch for apps awaiting tenant key discovery", async () => {
@@ -535,5 +604,8 @@ test("Feishu callback logs tenant mismatch for apps awaiting tenant key discover
   assert.equal(handled, true);
   assert.equal(res.statusCode, 302);
   assert.equal(res.getHeader("location"), "/?authError=feishu_tenant");
-  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_pending")), null);
+  assert.equal(findUserByPhone(buildFeishuAccountPhone("ou_pending", {
+    appKey: "pending",
+    tenantKey: "tenant_pending",
+  })), null);
 });
