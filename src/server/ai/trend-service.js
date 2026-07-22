@@ -24,6 +24,11 @@ const {
   findUnsupportedHardClaims,
   isUnsupportedBrandClaimText,
 } = require("./trend-guardrails");
+const {
+  buildBrandIntelligence,
+  buildSafeBrandIntelligenceForMedicineTraffic,
+  formatBrandIntelligencePromptLines,
+} = require("./brand-profile-builder");
 
 const PGY_XHS_TREND_COUNT = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE;
 const TREND_ITEMS_PER_BUCKET = 10;
@@ -259,10 +264,11 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
   const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
   return [
     "你是资深小红书内容运营策略顾问，擅长品牌定位、热点适配判断与内容选题策划。",
-    "你的任务是根据完整品牌档案和当前 bucket 证据，快速输出热点趋势和选题骨架；完整发布文案与视觉资产会在用户实际生成内容时另行创建。",
+    "你的任务是根据完整品牌档案、品牌智能层结论和当前 bucket 证据，快速输出热点趋势和选题骨架；完整发布文案与视觉资产会在用户实际生成内容时另行创建。",
     "最高优先级：输入没有逐字提供的数字、热度/增长/收藏/互动强度、医学结论、适用性和品牌卖点一律不写；不能为了让文案更像营销趋势而补齐这些事实。",
     "任何来源未逐字支持的百分比、人数、排名和‘引发/激发/带动/促使用户互动或分享’都属于虚构结果，所有 title、summary、reason、ideas、hook 和 tags 一律禁止；可以改写成‘提供讨论入口’或‘设计征集动作’这类策略动作。",
-    "所有趋势要判断小红书内容机会和品牌适配度，但只能把它们写成策略判断与待验证方向，不能声称搜索、收藏、互动或扩散已经发生。",
+    "禁止停留在“是否适合品牌”的模糊判断。对每条趋势必须判断：是否强化品牌优势、是否创造新消费场景、是否避开竞品红海；场景与结合方式必须跟随品牌智能层，不同品牌应落到各自不同的消费场景。",
+    "所有趋势要基于品牌智能层做内容机会与差异化判断，但只能写成策略判断与待验证方向，不能声称搜索、收藏、互动或扩散已经发生。",
     "请只输出 JSON，不要输出 Markdown，不要补充解释。",
     'JSON 顶层结构必须是：{"trendBuckets":[...]}。',
     `trendBuckets 只输出当前请求的 ${selectedBucketMeta.length} 个对象，key 分别是 ${formatBucketKeys(selectedBucketMeta)}；不要额外生成其他 bucket，也不要输出任何品牌摘要字段。`,
@@ -424,7 +430,20 @@ function maskMedicineTrafficBrandName(value, brand, bucketMeta) {
   return text.split(String(brand.name)).join(MEDICINE_TRAFFIC_BRAND_ALIAS);
 }
 
-function buildTrendBrandContextLines(brand, bucketMeta) {
+function resolveBrandIntelligenceForPrompt(brand, bucketMeta, providedIntelligence = null) {
+  if (providedIntelligence && typeof providedIntelligence === "object") {
+    return providedIntelligence;
+  }
+  if (isMedicineTrafficPrompt(brand, bucketMeta)) {
+    return buildSafeBrandIntelligenceForMedicineTraffic(brand);
+  }
+  return buildBrandIntelligence(brand);
+}
+
+function buildTrendBrandContextLines(brand, bucketMeta, brandIntelligence = null) {
+  const intelligence = resolveBrandIntelligenceForPrompt(brand, bucketMeta, brandIntelligence);
+  const intelligenceLines = formatBrandIntelligencePromptLines(intelligence);
+
   if (!isMedicineTrafficPrompt(brand, bucketMeta)) {
     return [
       "品牌档案只定义品牌身份、受众和内容边界，不是当前趋势证据；热点事实与时效判断必须以本次 AnySearch/Pgy 证据为准。",
@@ -437,6 +456,7 @@ function buildTrendBrandContextLines(brand, bucketMeta) {
       `品牌资料库：${brand.knowledgeBase || "暂无补充资料"}`,
       `品牌资产标签：${(brand.assetTags || []).join("、") || "暂无"}`,
       "不得复制品牌档案中的历史年份、旧榜单、旧活动、价格或时效性结论；这些内容即使出现在品牌介绍/资料库，也不能进入本轮趋势文案。",
+      ...intelligenceLines,
     ];
   }
   return [
@@ -448,6 +468,7 @@ function buildTrendBrandContextLines(brand, bucketMeta) {
     `运营目标：${brand.goal}`,
     "本轮可用品牌事实：只有品牌名称、目标受众和内容发起者/整理者/共创方身份。",
     "品牌结合限制：idea.brandFit 只能写品牌如何发起、整理或共创内容，不得把健康、症状、药品、用药、护理、医生、药师、成分、营养品、保健品、功效或适用人群引入趋势。",
+    ...intelligenceLines,
   ];
 }
 
@@ -464,6 +485,11 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
   const categoryBlock = buildXhsCategoryPromptBlock(options.xhsCategoryPath || options.pgyEvidence?.categoryPath || "");
   const retryFeedback = String(options.retryFeedback || "").trim();
   const medicineBrand = isMedicineBrand(brand);
+  const brandIntelligence = resolveBrandIntelligenceForPrompt(
+    brand,
+    selectedBucketMeta,
+    options.brandIntelligence,
+  );
   const anySearchGenerationPlan = buildAnySearchGenerationPlan(
     options.anySearchEvidence,
     trendCount,
@@ -481,12 +507,12 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
       ]
     : [];
   return [
-    `请基于以下品牌信息，围绕小红书平台的热点话题与内容机会，只为用户当前点击的维度快速生成热点趋势和选题骨架。`,
+    `请基于以下品牌信息与品牌智能层，围绕小红书平台的热点话题与内容机会，只为用户当前点击的维度快速生成热点趋势和选题骨架。`,
     "",
     "当前 bucket 独立规则：",
     formatBucketPromptRules(selectedBucketMeta),
     "",
-    ...buildTrendBrandContextLines(brand, selectedBucketMeta),
+    ...buildTrendBrandContextLines(brand, selectedBucketMeta, brandIntelligence),
     ...(categoryBlock && !pgyEvidenceBlock ? ["", categoryBlock] : []),
     ...(pgyEvidenceBlock ? ["", pgyEvidenceBlock] : []),
     ...(anySearchEvidenceBlock ? ["", anySearchEvidenceBlock] : []),
@@ -505,8 +531,8 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
       : []),
     "3. 趋势名称要像真实小红书内容方向，而不是宏观行业报告标题。",
     medicineBrand
-      ? "4. 每条趋势都要解释品牌如何以家长沟通、信息核验或内容策划角色自然参与；不得为了品牌结合而新增感冒、用药、护理、功效或其他健康产品话题。"
-      : "4. 每条趋势都要解释为什么适合该品牌，尤其说明它和品牌、人群、内容场景之间的自然连接。",
+      ? "4. 对每条趋势判断：是否强化品牌作为内容发起/整理/共创方的优势、是否创造家长沟通或育儿相关新内容场景、是否避开功效/诊疗红海；不得为了品牌结合而新增感冒、用药、护理、功效或其他健康产品话题。"
+      : "4. 禁止停留在“是否适合品牌”的模糊判断。对每条趋势必须明确判断：是否强化品牌优势、是否创造新消费场景、是否避开竞品红海；reason 与 idea.brandFit 要落到品牌智能层中的竞争优势、购买触发场景与内容边界。",
     options.anySearchEvidence && !hasReliableWebEvidence
       ? "5. 本次只有网页内容样本/社交讨论样本，score 必须在 0-79 内按相对内容机会拉开差距；不得用热门、收藏、互动、增长或普遍性为分数找理由。"
       : "5. score 要按本批证据内的相对内容机会给出，不要所有趋势都给高分；80 分以上必须有网页事实片段明确支持。",
@@ -1587,10 +1613,20 @@ function buildTargetedTrendRepairUserPrompt(brand, options, repairPlan, trendBuc
     const safeValue = maskMedicineTrafficBrandName(String(value || "").slice(0, 300), brand, repairBucketMeta);
     return safeValue ? `${label}：${safeValue}` : "";
   }).filter(Boolean);
+  const repairIntelligence = resolveBrandIntelligenceForPrompt(
+    brand,
+    repairBucketMeta,
+    options.brandIntelligence,
+  );
+  const repairIntelligenceLines = formatBrandIntelligencePromptLines(repairIntelligence, {
+    includeJudgmentCriteria: true,
+  }).map((line) => maskMedicineTrafficBrandName(line, brand, repairBucketMeta));
   return [
     "请只重写下面未通过校验的趋势。已通过条目不会交给你改写。",
     ...leanBrandContext,
-    "品牌档案只限定身份、受众和表达边界，不是当前趋势证据；当前事实只能来自每条 requiredSourceEvidence。",
+    ...repairIntelligenceLines,
+    "品牌档案与品牌智能层只限定身份、受众和表达边界，不是当前趋势证据；当前事实只能来自每条 requiredSourceEvidence。",
+    "重写时仍须判断：是否强化品牌优势、是否创造新消费场景、是否避开竞品红海。",
     buildMedicineBrandSafetyPrompt(brand, repairBucketMeta),
     "",
     `已通过、不得重复的标题：${acceptedTitles.join("｜") || "无"}`,
@@ -2631,6 +2667,17 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
   const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   const textModelImpl = options.textModelImpl || callTextModelJson;
   const startedAt = Date.now();
+  // Brand Info → Brand Intelligence → Trend Analysis
+  const brandIntelligence = options.brandIntelligence
+    || (isMedicineTrafficPrompt(brand, selectedBucketMeta)
+      ? buildSafeBrandIntelligenceForMedicineTraffic(brand)
+      : buildBrandIntelligence(brand));
+  console.log("[trend-analysis] brand intelligence ready", {
+    brandId: brand.id,
+    brandName: brand.name,
+    brand_position: String(brandIntelligence.brand_position || "").slice(0, 80),
+    purchase_trigger: String(brandIntelligence.purchase_trigger || "").slice(0, 80),
+  });
   const resolvedPgyEvidence = await resolvePgyEvidenceForTrendAnalysis(appConfig, brand, selectedBucketMeta, options);
   const pgyEvidence = resolvedPgyEvidence && (resolvedPgyEvidence.notes || []).length >= TREND_ITEMS_PER_BUCKET
     ? resolvedPgyEvidence
@@ -2726,10 +2773,12 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         ? buildTargetedTrendRepairUserPrompt(brand, {
             pgyEvidence,
             anySearchEvidence,
+            brandIntelligence,
           }, repairPlan, candidateBuckets, lastValidationIssues)
         : buildTrendAnalysisUserPrompt(brand, {
             pgyEvidence,
             anySearchEvidence,
+            brandIntelligence,
             xhsCategoryPath: options.xhsCategoryPath,
             trendCount: TREND_ITEMS_PER_BUCKET,
             retryFeedback,
@@ -3104,4 +3153,7 @@ module.exports = {
   generateAiTrendSet,
   regenerateTrendIdeas,
   ensureTrendIdeaContentAssets,
+  buildBrandIntelligence,
+  buildSafeBrandIntelligenceForMedicineTraffic,
+  resolveBrandIntelligenceForPrompt,
 };
