@@ -29,10 +29,13 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       return true;
     }
     const categoryPath = normalizePgyCategoryPath(url.searchParams.get("categoryPath") || "");
+    const waitForFreshRaw = String(url.searchParams.get("waitForFresh") || "").trim().toLowerCase();
+    const waitForFresh = waitForFreshRaw === "1" || waitForFreshRaw === "true";
     try {
       const result = await getExcellentContents(context.appConfig, {
         source,
         categoryPath,
+        waitForFresh,
       });
       json(res, 200, result);
     } catch (error) {

@@ -47,6 +47,9 @@ const dashboardScrollPositions = new Map();
 const retriedHistoryImagePaths = new Set();
 const brandDetailRequests = new Map();
 const trendAnalysisRequestIds = new Map();
+let excellentFreshCheckTimer = null;
+let excellentFreshCheckKey = "";
+const excellentFreshCheckAttempted = new Set();
 const WECHAT_ASPECT_RATIO_WARNING_DISABLED_KEY = "redbase:wechat-aspect-ratio-warning-disabled";
 const IMAGE_ASPECT_RATIOS = ["21:9", "16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16", "9:21"];
 const KNOWN_ASPECT_RATIOS = new Set(["1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "21:9", "9:21", "16:9"]);
@@ -1258,6 +1261,7 @@ function clearSession() {
   state.styleReferences = {};
   state.resumingImageTasks = false;
   brandDetailRequests.clear();
+  clearExcellentFreshCheckState();
   if (typeof closeExcellentContentDetail === "function") closeExcellentContentDetail();
   if (typeof closeExcellentRemix === "function") closeExcellentRemix();
   dashboardScrollPositions.clear();
@@ -4019,6 +4023,41 @@ function setExcellentModalOpen(isOpen) {
   if (!isOpen) excellentDetailScrollLock = false;
 }
 
+function excellentContentCacheKey(source, categoryPath) {
+  return `${String(source || "xhs_hot")}::${String(categoryPath || "")}`;
+}
+
+function clearExcellentFreshCheckTimer() {
+  if (excellentFreshCheckTimer) {
+    clearTimeout(excellentFreshCheckTimer);
+    excellentFreshCheckTimer = null;
+  }
+  excellentFreshCheckKey = "";
+}
+
+function clearExcellentFreshCheckState() {
+  clearExcellentFreshCheckTimer();
+  excellentFreshCheckAttempted.clear();
+}
+
+function scheduleExcellentFreshCheck({ source, categoryPath, loadEpoch }) {
+  const key = excellentContentCacheKey(source, categoryPath);
+  if (excellentFreshCheckAttempted.has(key)) return;
+  if (excellentFreshCheckKey === key && excellentFreshCheckTimer) return;
+
+  clearExcellentFreshCheckTimer();
+  excellentFreshCheckKey = key;
+  excellentFreshCheckTimer = setTimeout(() => {
+    excellentFreshCheckTimer = null;
+    if (sessionEpoch !== loadEpoch) return;
+    if (!state.sessionToken) return;
+    if ((state.excellentContentFilters.source || "xhs_hot") !== source) return;
+    if ((state.excellentContentFilters.categoryPath || "") !== categoryPath) return;
+    excellentFreshCheckAttempted.add(key);
+    loadExcellentContents({ waitForFresh: true, preserveItems: true }).catch(() => {});
+  }, 900);
+}
+
 function renderExcellentCategoryOptions() {
   const select = document.getElementById("excellentCategoryFilter");
   if (!select) return;
@@ -4055,13 +4094,14 @@ function renderExcellentStatus() {
   if (state.excellentContentStatus === "loading" && state.excellentContents.length) {
     statusEl.hidden = false;
     statusEl.className = "excellent-status";
-    statusEl.textContent = "正在更新…";
+    statusEl.textContent = "正在获取最新内容…";
     return;
   }
   if (state.excellentContentStale && state.excellentContents.length) {
     statusEl.hidden = false;
     statusEl.className = "excellent-status";
-    statusEl.textContent = "当前展示最近一次成功数据，后台正在更新。";
+    statusEl.textContent =
+      state.excellentContentError || "当前展示最近一次成功数据，正在获取最新内容。";
     return;
   }
   if (state.excellentContentStatus === "error" && !state.excellentContents.length) {
@@ -4069,7 +4109,12 @@ function renderExcellentStatus() {
     statusEl.className = "excellent-status is-error";
     statusEl.innerHTML = `${escapeHtml(state.excellentContentError || "加载失败")} <button class="inline-link" id="reloadExcellentContents" type="button">重新加载</button>`;
     document.getElementById("reloadExcellentContents")?.addEventListener("click", () => {
-      loadExcellentContents({ force: true }).catch(() => {});
+      const key = excellentContentCacheKey(
+        state.excellentContentFilters.source || "xhs_hot",
+        state.excellentContentFilters.categoryPath || "",
+      );
+      excellentFreshCheckAttempted.delete(key);
+      loadExcellentContents({ waitForFresh: true, preserveItems: true }).catch(() => {});
     });
     return;
   }
@@ -4098,7 +4143,12 @@ function renderExcellentContents() {
   if (!items.length) {
     root.innerHTML = `<div class="excellent-empty"><strong>${state.excellentContentStatus === "error" ? "暂时无法加载优秀内容" : "暂无图文优秀内容"}</strong><p>${escapeHtml(state.excellentContentError || "换个类目试试，或稍后重新加载。")}</p><button class="primary-btn" id="reloadExcellentContentsEmpty" type="button">重新加载</button></div>`;
     document.getElementById("reloadExcellentContentsEmpty")?.addEventListener("click", () => {
-      loadExcellentContents({ force: true }).catch(() => {});
+      const key = excellentContentCacheKey(
+        state.excellentContentFilters.source || "xhs_hot",
+        state.excellentContentFilters.categoryPath || "",
+      );
+      excellentFreshCheckAttempted.delete(key);
+      loadExcellentContents({ waitForFresh: true, preserveItems: false }).catch(() => {});
     });
     return;
   }
@@ -4140,7 +4190,7 @@ function renderExcellentContents() {
     .join("");
 }
 
-async function loadExcellentContents({ force = false } = {}) {
+async function loadExcellentContents({ waitForFresh = false, preserveItems = true } = {}) {
   if (!state.sessionToken) return null;
   const requestId = ++state.excellentContentRequestId;
   const loadEpoch = sessionEpoch;
@@ -4148,13 +4198,16 @@ async function loadExcellentContents({ force = false } = {}) {
   const categoryPath = state.excellentContentFilters.categoryPath || "";
   const hadItems = state.excellentContents.length > 0;
   state.excellentContentStatus = "loading";
-  state.excellentContentError = "";
-  if (!hadItems || force) renderExcellentContents();
+  if (!(preserveItems && hadItems)) {
+    state.excellentContentError = "";
+  }
+  if (!hadItems || !preserveItems) renderExcellentContents();
   else renderExcellentStatus();
 
   try {
     const query = new URLSearchParams({ source });
     if (categoryPath) query.set("categoryPath", categoryPath);
+    if (waitForFresh) query.set("waitForFresh", "1");
     const result = await request(`/api/excellent-contents?${query.toString()}`);
     assertSessionEpoch(loadEpoch);
     if (requestId !== state.excellentContentRequestId) return null;
@@ -4162,11 +4215,27 @@ async function loadExcellentContents({ force = false } = {}) {
     state.excellentContentUpdatedAt = result.updatedAt || "";
     state.excellentContentStale = Boolean(result.stale);
     state.excellentContentStatus = state.excellentContents.length ? "ready" : "empty";
-    state.excellentContentError = "";
+    if (result.stale && result.lastError) {
+      state.excellentContentError = "当前展示最近一次成功数据，暂时未能更新。";
+    } else if (result.stale) {
+      state.excellentContentError = "";
+    } else {
+      state.excellentContentError = "";
+    }
     renderExcellentContents();
+    if (result.stale && !waitForFresh && state.excellentContents.length) {
+      scheduleExcellentFreshCheck({ source, categoryPath, loadEpoch });
+    }
     return result;
   } catch (error) {
     if (isStaleSessionRequest(error) || requestId !== state.excellentContentRequestId) return null;
+    if (preserveItems && hadItems) {
+      state.excellentContentStatus = "ready";
+      state.excellentContentStale = true;
+      state.excellentContentError = "当前展示最近一次成功数据，暂时未能更新。";
+      renderExcellentContents();
+      return null;
+    }
     state.excellentContentStatus = "error";
     state.excellentContentError = error.message || "优秀内容加载失败";
     renderExcellentContents();
@@ -4574,12 +4643,16 @@ function bindExcellentContentLibrary() {
   });
 
   document.getElementById("excellentCategoryFilter")?.addEventListener("change", (event) => {
+    clearExcellentFreshCheckTimer();
     state.excellentContentFilters.categoryPath = event.target.value || "";
-    loadExcellentContents({ force: true }).catch(() => {});
+    state.excellentContents = [];
+    loadExcellentContents({ waitForFresh: false, preserveItems: false }).catch(() => {});
   });
   document.getElementById("excellentSourceFilter")?.addEventListener("change", (event) => {
+    clearExcellentFreshCheckTimer();
     state.excellentContentFilters.source = event.target.value || "xhs_hot";
-    loadExcellentContents({ force: true }).catch(() => {});
+    state.excellentContents = [];
+    loadExcellentContents({ waitForFresh: false, preserveItems: false }).catch(() => {});
   });
 
   document.getElementById("closeExcellentContentModal")?.addEventListener("click", closeExcellentContentDetail);

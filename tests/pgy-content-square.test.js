@@ -173,6 +173,35 @@ test("normalizes Pgy hot notes into prompt-safe evidence", () => {
   assert.equal(notes[0].sourceKey, "xhs_hot");
 });
 
+test("imageCount keeps full total while imageUrls caps at 9", () => {
+  const images = Array.from({ length: 12 }, (_, index) => ({
+    imageUrl: `http://image.example/${index + 1}.jpg`,
+  }));
+  const notes = normalizePgyHotNotes(
+    [
+      {
+        noteInfo: {
+          noteId: "img12",
+          title: "十二图笔记",
+          noteType: 1,
+          noteImages: images,
+          likeNum: 1,
+          favNum: 1,
+          cmtNum: 1,
+        },
+        userInfo: { nickName: "作者", fansNum: 1 },
+      },
+    ],
+    "美妆",
+  );
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].imageUrls.length, 9);
+  assert.equal(notes[0].imageCount, 12);
+  assert.equal(notes[0].primaryCoverUrl, "https://image.example/1.jpg");
+  assert.equal(notes[0].coverUrls.length, 3);
+  assert.equal(notes[0].coverUrls[0], "https://image.example/1.jpg");
+});
+
 test("Pgy fetch returns typed empty-result errors", async () => {
   await assert.rejects(
     fetchPgyXhsHotNotes(appConfig, {

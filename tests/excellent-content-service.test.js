@@ -12,6 +12,8 @@ const { ensureStore } = require("../src/server/store");
 const {
   filterRankAndLimitNotes,
   getExcellentContents,
+  warmExcellentContentCache,
+  mapExcellentContentError,
   __resetExcellentContentInFlightForTests,
 } = require("../src/server/services/excellent-content-service");
 const {
@@ -20,6 +22,7 @@ const {
 } = require("../src/server/db/repositories/excellent-content-cache-repository");
 const { normalizeGeneratedXhsCarouselPack } = require("../src/server/ai/content-service");
 const { buildImagePrompt } = require("../src/server/ai/image-prompt-builder");
+const { getPgyPublicErrorMessage } = require("../src/server/integrations/pgy-content-square");
 
 function makeNote(id, { type = "image", like = 10, fav = 5, cmt = 1 } = {}) {
   return {
@@ -162,7 +165,49 @@ test("expired cache returns stale and refreshes in background", async () => {
   assert.ok(refreshed.items.some((item) => item.noteId === "new1"));
 });
 
-test("pgy failure with cache returns stale; without cache throws safe error", async () => {
+test("waitForFresh joins background refresh and returns fresh items", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  const oldItems = filterRankAndLimitNotes([makeNote("stale-item", { like: 5 })]);
+  const now = new Date();
+  const categoryPath = "内容类目#wait-fresh";
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot",
+    categoryPath,
+    items: oldItems,
+    fetchedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
+    expiresAt: new Date(now.getTime() - 1000).toISOString(),
+    lastError: "",
+  });
+
+  let fetchCount = 0;
+  const fetchImpl = async () => {
+    fetchCount += 1;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    return pgyPage([makeNote("fresh-a", { like: 90 }), makeNote("fresh-b", { like: 70 })]);
+  };
+  const appConfig = { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000, excellentContentCacheTtlMs: 3600000 } };
+
+  const stale = await getExcellentContents(appConfig, {
+    source: "xhs_hot",
+    categoryPath,
+    fetchImpl,
+  });
+  assert.equal(stale.stale, true);
+  assert.equal(stale.items[0].noteId, "stale-item");
+
+  const [freshA, freshB] = await Promise.all([
+    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, waitForFresh: true, fetchImpl }),
+    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, waitForFresh: true, fetchImpl }),
+  ]);
+  assert.equal(freshA.stale, false);
+  assert.equal(freshB.stale, false);
+  assert.equal(freshA.lastError, "");
+  assert.equal(freshA.items[0].noteId, "fresh-a");
+  assert.equal(fetchCount, 1);
+});
+
+test("pgy failure with allowStaleOnError true returns stale; false throws and keeps cache", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
   const items = filterRankAndLimitNotes([makeNote("cached", { like: 12 })]);
@@ -182,6 +227,7 @@ test("pgy failure with cache returns stale; without cache throws safe error", as
       source: "xhs_hot",
       categoryPath: "数码",
       forceRefresh: true,
+      allowStaleOnError: true,
       fetchImpl: async () => {
         throw new Error("network down");
       },
@@ -189,6 +235,28 @@ test("pgy failure with cache returns stale; without cache throws safe error", as
   );
   assert.equal(stale.stale, true);
   assert.equal(stale.items[0].noteId, "cached");
+  assert.ok(stale.lastError);
+
+  __resetExcellentContentInFlightForTests();
+  await assert.rejects(
+    () =>
+      getExcellentContents(
+        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+        {
+          source: "xhs_hot",
+          categoryPath: "数码",
+          forceRefresh: true,
+          allowStaleOnError: false,
+          fetchImpl: async () => {
+            throw Object.assign(new Error("fail"), { code: "PGY_UPSTREAM_ERROR" });
+          },
+        },
+      ),
+    (error) => Boolean(error?.message),
+  );
+  const kept = findExcellentContentCache("xhs_hot", "内容类目#数码");
+  assert.equal(kept.items[0].noteId, "cached");
+  assert.ok(kept.lastError);
 
   __resetExcellentContentInFlightForTests();
   await assert.rejects(
@@ -206,6 +274,56 @@ test("pgy failure with cache returns stale; without cache throws safe error", as
       ),
     (error) => Boolean(error?.message),
   );
+});
+
+test("warmExcellentContentCache fails on stale fallback and succeeds on fresh pull", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  const items = filterRankAndLimitNotes([makeNote("warm-old", { like: 11 })]);
+  const now = new Date();
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot",
+    categoryPath: "",
+    items,
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+    lastError: "",
+  });
+
+  await assert.rejects(
+    () =>
+      warmExcellentContentCache(
+        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+        {
+          categoryPath: "",
+          fetchImpl: async () => {
+            throw Object.assign(new Error("pgy down"), { code: "PGY_NETWORK_ERROR" });
+          },
+        },
+      ),
+    (error) => error.code === "PGY_NETWORK_ERROR" || Boolean(error?.message),
+  );
+  const kept = findExcellentContentCache("xhs_hot", "");
+  assert.equal(kept.items[0].noteId, "warm-old");
+
+  __resetExcellentContentInFlightForTests();
+  const success = await warmExcellentContentCache(
+    { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+    {
+      categoryPath: "",
+      fetchImpl: async () => pgyPage([makeNote("warm-new", { like: 50 })]),
+    },
+  );
+  assert.equal(success.stale, false);
+  assert.equal(success.lastError, "");
+  assert.equal(success.items[0].noteId, "warm-new");
+});
+
+test("excellent content empty-result message uses 7-day copy", () => {
+  const message = mapExcellentContentError({ code: "PGY_EMPTY_RESULT" });
+  assert.match(message, /近7日/);
+  assert.doesNotMatch(message, /近3日/);
+  assert.match(getPgyPublicErrorMessage({ code: "PGY_EMPTY_RESULT" }), /近3日/);
 });
 
 test("concurrent cold loads share one in-flight refresh", async () => {

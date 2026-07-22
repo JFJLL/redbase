@@ -18,6 +18,13 @@ const EXCELLENT_MAX_PAGES = 3;
 const EXCELLENT_LIMIT = 8;
 const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000;
 
+const EXCELLENT_PUBLIC_MESSAGES = {
+  PGY_EMPTY_RESULT: "当前类目近7日暂无可用图文内容，请切换类目或稍后重试。",
+  PGY_NETWORK_ERROR: "优秀内容暂时无法更新，请稍后重试。",
+  PGY_API_ERROR: "优秀内容暂时无法更新，请稍后重试。",
+  EXCELLENT_CONTENT_UNAVAILABLE: "优秀内容暂时不可用，请稍后重试。",
+};
+
 const inFlightRefreshes = new Map();
 
 function getExcellentContentCacheTtlMs(appConfig) {
@@ -44,6 +51,20 @@ function hasCacheItems(cache) {
 
 function engagementOf(note) {
   return Number(note?.metrics?.engagementCount || 0);
+}
+
+function mapExcellentContentError(error) {
+  const code = error?.code || "";
+  if (code && EXCELLENT_PUBLIC_MESSAGES[code]) {
+    return EXCELLENT_PUBLIC_MESSAGES[code];
+  }
+  if (code === "PGY_NOT_CONFIGURED" || code === "PGY_AUTH_EXPIRED") {
+    return getPgyPublicErrorMessage(error);
+  }
+  if (code) {
+    return getPgyPublicErrorMessage(error);
+  }
+  return String(error?.message || EXCELLENT_PUBLIC_MESSAGES.EXCELLENT_CONTENT_UNAVAILABLE).slice(0, 300);
 }
 
 function filterRankAndLimitNotes(notes) {
@@ -75,7 +96,6 @@ function filterRankAndLimitNotes(notes) {
 
 async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchImpl } = {}) {
   const collected = [];
-  let lastOrderBy = EXCELLENT_ORDER_BY;
   for (let pageNum = 1; pageNum <= EXCELLENT_MAX_PAGES; pageNum += 1) {
     const page = await fetchPgyXhsHotNotes(appConfig, {
       categoryPath,
@@ -88,12 +108,6 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchI
       noteType: 1,
       fetchImpl,
     });
-    lastOrderBy = page.orderBy || lastOrderBy;
-    if (lastOrderBy !== EXCELLENT_ORDER_BY) {
-      const error = new Error("蒲公英未接受互动量排序，已拒绝伪装为曝光量排序。");
-      error.code = "PGY_ORDER_BY_REJECTED";
-      throw error;
-    }
     collected.push(...(page.notes || []));
     const imageCount = filterRankAndLimitNotes(collected).length;
     if (imageCount >= EXCELLENT_LIMIT) break;
@@ -102,7 +116,7 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchI
   }
   const items = filterRankAndLimitNotes(collected);
   if (!items.length) {
-    const error = new Error("当前类目暂无可用的图文优秀内容。");
+    const error = new Error(EXCELLENT_PUBLIC_MESSAGES.PGY_EMPTY_RESULT);
     error.code = "PGY_EMPTY_RESULT";
     throw error;
   }
@@ -142,25 +156,28 @@ async function refreshExcellentContentCache(appConfig, { sourceKey, categoryPath
   return storeSuccessfulCache(appConfig, sourceKey, categoryPath, items);
 }
 
-function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
+function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
   const key = cacheKey(sourceKey, categoryPath);
-  if (inFlightRefreshes.has(key)) {
-    return inFlightRefreshes.get(key);
-  }
-  const promise = refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl })
-    .catch((error) => {
-      const message = error?.code ? getPgyPublicErrorMessage(error) : String(error?.message || "刷新失败");
-      try {
-        recordExcellentContentCacheError(sourceKey, categoryPath, message);
-      } catch (_error) {
-        // Ignore cache write failures during background refresh.
-      }
-      return null;
-    })
-    .finally(() => {
+  let promise = inFlightRefreshes.get(key);
+  if (!promise) {
+    promise = refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl }).finally(() => {
       inFlightRefreshes.delete(key);
     });
-  inFlightRefreshes.set(key, promise);
+    inFlightRefreshes.set(key, promise);
+  }
+  return promise;
+}
+
+function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
+  const promise = ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
+  promise.catch((error) => {
+    const message = mapExcellentContentError(error);
+    try {
+      recordExcellentContentCacheError(sourceKey, categoryPath, message);
+    } catch (_error) {
+      // Ignore cache write failures during background refresh.
+    }
+  });
   return promise;
 }
 
@@ -174,6 +191,9 @@ async function getExcellentContents(appConfig, options = {}) {
   }
   const categoryPath = normalizePgyCategoryPath(options.categoryPath || "");
   const forceRefresh = options.forceRefresh === true;
+  const waitForFresh = options.waitForFresh === true;
+  // Default true: user requests may fall back to last successful cache on Pgy failure.
+  const allowStaleOnError = options.allowStaleOnError !== false;
   const fetchImpl = options.fetchImpl;
   const cache = findExcellentContentCache(sourceKey, categoryPath);
 
@@ -186,7 +206,8 @@ async function getExcellentContents(appConfig, options = {}) {
     });
   }
 
-  if (!forceRefresh && hasCacheItems(cache)) {
+  // Stale-while-revalidate: return expired cache immediately and refresh in background.
+  if (!forceRefresh && !waitForFresh && hasCacheItems(cache)) {
     scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
     return buildResponse({
       items: cache.items,
@@ -196,18 +217,11 @@ async function getExcellentContents(appConfig, options = {}) {
     });
   }
 
-  const key = cacheKey(sourceKey, categoryPath);
+  // Cold cache, forceRefresh, or waitForFresh: await shared in-flight refresh.
   try {
-    let promise = inFlightRefreshes.get(key);
-    if (!promise) {
-      promise = refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl }).finally(() => {
-        inFlightRefreshes.delete(key);
-      });
-      inFlightRefreshes.set(key, promise);
-    }
-    const refreshed = await promise;
+    const refreshed = await ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
     if (!refreshed || !hasCacheItems(refreshed)) {
-      const error = new Error("当前类目暂无可用的图文优秀内容。");
+      const error = new Error(EXCELLENT_PUBLIC_MESSAGES.PGY_EMPTY_RESULT);
       error.code = "PGY_EMPTY_RESULT";
       throw error;
     }
@@ -218,13 +232,15 @@ async function getExcellentContents(appConfig, options = {}) {
       lastError: "",
     });
   } catch (error) {
+    const message = mapExcellentContentError(error);
     if (hasCacheItems(cache)) {
-      const message = error?.code ? getPgyPublicErrorMessage(error) : String(error?.message || "拉取失败");
       try {
         recordExcellentContentCacheError(sourceKey, categoryPath, message);
       } catch (_error) {
-        // keep going with stale cache
+        // keep going
       }
+    }
+    if (allowStaleOnError && hasCacheItems(cache)) {
       return buildResponse({
         items: cache.items,
         updatedAt: cache.fetchedAt,
@@ -232,9 +248,7 @@ async function getExcellentContents(appConfig, options = {}) {
         lastError: message,
       });
     }
-    const publicError = new Error(
-      error?.code ? getPgyPublicErrorMessage(error) : String(error?.message || "优秀内容暂时不可用，请稍后重试。"),
-    );
+    const publicError = new Error(message);
     publicError.code = error?.code || "EXCELLENT_CONTENT_UNAVAILABLE";
     publicError.statusCode = error?.statusCode || 502;
     throw publicError;
@@ -246,6 +260,7 @@ async function warmExcellentContentCache(appConfig, options = {}) {
     source: EXCELLENT_SOURCE_XHS_HOT,
     categoryPath: options.categoryPath || "",
     forceRefresh: true,
+    allowStaleOnError: false,
     fetchImpl: options.fetchImpl,
   });
 }
@@ -261,9 +276,11 @@ module.exports = {
   EXCELLENT_PAGE_SIZE,
   EXCELLENT_MAX_PAGES,
   EXCELLENT_LIMIT,
+  EXCELLENT_PUBLIC_MESSAGES,
   filterRankAndLimitNotes,
   getExcellentContents,
   warmExcellentContentCache,
   getExcellentContentCacheTtlMs,
+  mapExcellentContentError,
   __resetExcellentContentInFlightForTests,
 };

@@ -127,3 +127,38 @@ test("excellent contents returns cached items with metadata", async () => {
   assert.equal(res.body.windowDays, 7);
   assert.equal(res.body.sort, "engagement_desc");
 });
+
+test("excellent contents accepts waitForFresh query flag", async () => {
+  const now = new Date();
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot",
+    categoryPath: "",
+    items: [
+      {
+        id: "n2",
+        noteId: "n2",
+        title: "fresh flag note",
+        noteType: "image",
+        rank: 1,
+        metrics: { engagementCount: 4, likeCount: 2, favoriteCount: 1, commentCount: 1, readCount: 10 },
+        author: { nickname: "作者", fansCount: 1 },
+        imageUrls: ["https://img.example/2.jpg"],
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+    lastError: "",
+  });
+
+  const res = createRes();
+  const handled = await handleExcellentContentRoutes(
+    { appConfig: { pgy: { enabled: false } } },
+    createGetReq("/api/excellent-contents?source=xhs_hot&waitForFresh=1", "redbase_session=excellent-token"),
+    res,
+    "/api/excellent-contents",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.stale, false);
+  assert.equal(res.body.items[0].noteId, "n2");
+});

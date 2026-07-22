@@ -39,6 +39,8 @@ function createRes() {
 
 test("clearSession removes user-scoped dashboard data after a 401", () => {
   const source = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
+  const clearFreshTimerSource = extractFunction(source, "clearExcellentFreshCheckTimer");
+  const clearFreshStateSource = extractFunction(source, "clearExcellentFreshCheckState");
   const clearSessionSource = extractFunction(source, "clearSession");
   const calls = [];
   const state = {
@@ -62,6 +64,13 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     xhsCategories: [{ id: 1 }],
     xhsCategoryStatus: "ready",
     xhsCategoryError: "old error",
+    excellentContents: [{ noteId: "n1" }],
+    excellentContentFilters: { categoryPath: "美妆", source: "xhs_hot" },
+    excellentContentStatus: "ready",
+    excellentContentError: "old",
+    excellentContentUpdatedAt: "2026-07-01T00:00:00.000Z",
+    excellentContentStale: true,
+    excellentContentRequestId: 9,
     trendAnalysisLoadingKeys: ["69:xhs"],
     productImages: { 0: [{ id: 1 }] },
     productImageLibrary: [{ id: 1 }],
@@ -72,6 +81,7 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     resumingImageTasks: true,
   };
   const pendingFilterTimer = { id: 1 };
+  const pendingFreshTimer = { id: 2 };
   const context = {
     DEFAULT_TREND_MODE: "traffic",
     sessionEpoch: 3,
@@ -82,6 +92,9 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     retriedHistoryImagePaths: new Set(["/private/image.png"]),
     historyImageSignatureRefreshInFlight: Promise.resolve(),
     historyFilterTimer: pendingFilterTimer,
+    excellentFreshCheckTimer: pendingFreshTimer,
+    excellentFreshCheckKey: "xhs_hot::美妆",
+    excellentFreshCheckAttempted: new Set(["xhs_hot::美妆"]),
     clearTimeout: (timer) => calls.push(`clearTimeout:${timer.id}`),
     document: {
       querySelectorAll: () => [],
@@ -92,7 +105,10 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     closeAccountCenterModal: () => calls.push("closeAccountCenterModal"),
   };
 
-  vm.runInNewContext(`${clearSessionSource}; clearSession();`, context);
+  vm.runInNewContext(
+    `${clearFreshTimerSource}; ${clearFreshStateSource}; ${clearSessionSource}; clearSession();`,
+    context,
+  );
 
   assert.equal(state.sessionToken, "");
   assert.equal(state.currentUser, null);
@@ -104,6 +120,9 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
   assert.equal(state.generationHistoryFilters.from, "");
   assert.equal(state.generationHistoryFilters.to, "");
   assert.equal(state.xhsCategories.length, 0);
+  assert.equal(state.excellentContents.length, 0);
+  assert.equal(state.excellentContentStatus, "idle");
+  assert.equal(state.excellentContentRequestId, 0);
   assert.equal(state.productImageLibrary.length, 0);
   assert.equal(Object.keys(state.productImages).length, 0);
   assert.equal(Object.keys(state.editingIdeas).length, 0);
@@ -114,8 +133,12 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
   assert.equal(context.retriedHistoryImagePaths.size, 0);
   assert.equal(context.historyImageSignatureRefreshInFlight, null);
   assert.equal(context.historyFilterTimer, null);
+  assert.equal(context.excellentFreshCheckTimer, null);
+  assert.equal(context.excellentFreshCheckKey, "");
+  assert.equal(context.excellentFreshCheckAttempted.size, 0);
   assert.equal(context.sessionEpoch, 4);
   assert.deepEqual(calls, [
+    "clearTimeout:2",
     "clearTimeout:1",
     "renderUser",
     "renderAll",

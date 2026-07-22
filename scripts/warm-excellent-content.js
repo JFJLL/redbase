@@ -2,6 +2,7 @@
 /**
  * Warm shared excellent-content cache (default xhs_hot, all categories).
  * Safe to run before traffic switch. Does not print cookies or secrets.
+ * Exit 0 only when Pgy refresh succeeds with at least one fresh item.
  */
 const { loadAppConfig } = require("../src/server/config");
 const { ensureStore } = require("../src/server/store");
@@ -12,17 +13,21 @@ async function main() {
   await ensureStore();
   const result = await warmExcellentContentCache(appConfig, { categoryPath: "" });
   const count = Array.isArray(result?.items) ? result.items.length : 0;
+  const stale = Boolean(result?.stale);
+  const lastError = String(result?.lastError || "").slice(0, 300);
+  const ok = !stale && !lastError && count > 0;
   console.log(
     JSON.stringify({
-      ok: true,
+      ok,
       source: "xhs_hot",
       categoryPath: "",
       count,
       updatedAt: result?.updatedAt || "",
-      stale: Boolean(result?.stale),
+      stale,
+      lastError: lastError || undefined,
     }),
   );
-  if (count <= 0) {
+  if (!ok) {
     process.exitCode = 1;
   }
 }

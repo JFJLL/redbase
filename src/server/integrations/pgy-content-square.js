@@ -498,7 +498,7 @@ function normalizePgyHotNote(raw, index, categoryPath = "") {
   const allImageUrls = Array.isArray(note.noteImages)
     ? note.noteImages.map((image) => asHttps(image?.imageUrl)).filter(Boolean)
     : [];
-  // coverUrls stays capped for trend evidence; imageUrls is for excellent-content detail.
+  // Detail gallery caps at 9 images; imageCount keeps the real total for UI badges.
   const imageUrls = allImageUrls.slice(0, 9);
   const likeCount = Number(note.likeNum || 0);
   const favoriteCount = Number(note.favNum || 0);
@@ -517,10 +517,10 @@ function normalizePgyHotNote(raw, index, categoryPath = "") {
     title: String(note.title || "").replace(/\s+/g, " ").trim(),
     noteType: Number(note.noteType) === 2 ? "video" : "image",
     publishTime: String(note.notePublishTime || ""),
-    primaryCoverUrl: imageUrls[0] || "",
+    primaryCoverUrl: imageUrls[0] || allImageUrls[0] || "",
     coverUrls: allImageUrls.slice(0, 3),
     imageUrls,
-    imageCount: imageUrls.length,
+    imageCount: allImageUrls.length,
     videoUrl: note.videoUrl ? asHttps(note.videoUrl) : "",
     videoDurationSeconds: Number(note.videoDuration || 0),
     metrics: {
@@ -582,9 +582,10 @@ async function fetchPgyXhsHotNotes(appConfig, options = {}) {
     pageInfo: data?.pageInfoDto || null,
     total: Number(data?.total || data?.pageInfoDto?.total || notes.length),
     notes,
-    orderBy: payload.orderBy,
-    nd: payload.nd,
-    sort: payload.sort,
+    // Request-echo fields only — not confirmation that Pgy applied this sort.
+    requestedOrderBy: payload.orderBy,
+    requestedNd: payload.nd,
+    requestedSort: payload.sort,
   };
 }
 

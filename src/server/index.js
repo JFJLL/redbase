@@ -53,13 +53,25 @@ async function start() {
   console.log(`Server running at http://${HOST}:${PORT}`);
 
   // Best-effort warm of default excellent-content cache; never block startup.
+  // warmExcellentContentCache uses allowStaleOnError=false so stale fallback is not "complete".
   setImmediate(() => {
     try {
       const { warmExcellentContentCache } = require("./services/excellent-content-service");
       warmExcellentContentCache(appConfig)
         .then((result) => {
-          console.log(
-            `[excellent-content] warm complete items=${Array.isArray(result?.items) ? result.items.length : 0} updatedAt=${result?.updatedAt || ""}`,
+          const count = Array.isArray(result?.items) ? result.items.length : 0;
+          const stale = Boolean(result?.stale);
+          const lastError = String(result?.lastError || "");
+          if (!stale && !lastError && count > 0) {
+            console.log(
+              `[excellent-content] warm complete items=${count} updatedAt=${result?.updatedAt || ""}`,
+            );
+            return;
+          }
+          console.warn(
+            "[excellent-content] warm failed",
+            stale ? "stale" : "empty",
+            lastError ? String(lastError).slice(0, 160) : `items=${count}`,
           );
         })
         .catch((error) => {
