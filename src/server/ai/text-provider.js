@@ -525,6 +525,7 @@ async function callTextModelJson(appConfig, {
   maxResponseBytes,
   stream = false,
   onTelemetry,
+  budget = null,
 }) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
@@ -549,8 +550,37 @@ async function callTextModelJson(appConfig, {
       maxResponseBytes: Number.isFinite(Number(maxResponseBytes)) ? Number(maxResponseBytes) : undefined,
     };
   };
-  const retryOptions = buildRetryOptions({ retries, maxAttempts, delayMs });
+  // Cap transport attempts by remaining AI call budget so retries cannot exceed the shared limit.
+  const budgetRemaining = budget && typeof budget.remaining === "function"
+    ? budget.remaining()
+    : null;
+  if (budget && budgetRemaining != null && budgetRemaining <= 0) {
+    if (typeof budget.consume === "function") {
+      // consume() throws the canonical non-retryable budget error.
+      budget.consume();
+    }
+    const error = new Error("AI call budget exceeded");
+    error.code = "TREND_AI_CALL_BUDGET_EXCEEDED";
+    error.retryable = false;
+    error.partial = true;
+    error.reason = "AI call budget exceeded";
+    throw error;
+  }
+  const configuredAttempts = Number.isFinite(Number(maxAttempts))
+    ? Number(maxAttempts)
+    : (Number.isFinite(Number(retries)) ? Number(retries) : 3);
+  const retryOptions = buildRetryOptions({
+    retries,
+    maxAttempts: budgetRemaining == null
+      ? maxAttempts
+      : Math.min(configuredAttempts, Math.max(1, budgetRemaining)),
+    delayMs,
+  });
   const runWithRetries = (task) => withRetries((attempt) => {
+    // Every physical model HTTP attempt must consume one unit of the shared budget.
+    if (budget && typeof budget.consume === "function") {
+      budget.consume();
+    }
     onTelemetry?.({ type: "attempt", attempt });
     return task(attempt);
   }, retryOptions);

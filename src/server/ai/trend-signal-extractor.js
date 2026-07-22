@@ -4,7 +4,17 @@
  *
  * Deterministic extraction keeps this stage testable, cheap, and free of
  * another model round-trip before opportunity generation.
+ *
+ * When a model-backed extractor is introduced, every call must go through the
+ * shared AI call budget (budget.consume() before callTextModelJson).
  */
+
+const {
+  DEFAULT_BUDGETS,
+  createAiCallBudget,
+  isAiCallBudgetExceededError,
+  buildBudgetExceededPartial,
+} = require("./ai-call-budget");
 
 const EMPTY_PLATITUDE_PATTERNS = [
   /消费升级/i,
@@ -168,10 +178,69 @@ function dedupeSignals(signals) {
 }
 
 /**
- * @param {{ brand?: object, evidence?: array }} input
- * @returns {{ signals: Array<{keyword:string,change:string,consumer_language:string,consumer_need:string,confidence:number}> }}
+ * Optional model-backed extraction hook. Currently unused (deterministic path
+ * is preferred). Callers that enable it must share the parent AI call budget.
+ *
+ * @param {object} appConfig
+ * @param {{ budget?: object, textModelImpl?: Function, systemPrompt?: string, userPrompt?: string, maxAiCalls?: number }} options
+ */
+async function extractMarketSignalsWithModel(appConfig, options = {}) {
+  const { callTextModelJson } = require("./text-provider");
+  const budget = options.budget
+    || createAiCallBudget({
+      task: "signal_extraction",
+      maxCalls: options.maxAiCalls ?? DEFAULT_BUDGETS.signal_extraction,
+    });
+  if (budget.exhausted()) {
+    return {
+      ...buildBudgetExceededPartial(budget),
+      signals: [],
+    };
+  }
+  const textModelImpl = options.textModelImpl || callTextModelJson;
+  const usesProviderBudget = textModelImpl === callTextModelJson;
+  try {
+    // Injected mocks bypass text-provider; consume one unit here. Real provider
+    // consumes per physical attempt via the budget option.
+    if (!usesProviderBudget) {
+      budget.consume();
+    }
+    const result = await textModelImpl(appConfig, {
+      systemPrompt: options.systemPrompt || "Extract market signals as JSON: {\"signals\":[...]}",
+      userPrompt: options.userPrompt || "",
+      temperature: 0.1,
+      maxAttempts: Math.min(2, Math.max(1, budget.remaining())),
+      budget: usesProviderBudget ? budget : undefined,
+      stream: false,
+    });
+    const signals = Array.isArray(result?.signals) ? result.signals : [];
+    return { signals };
+  } catch (error) {
+    if (isAiCallBudgetExceededError(error)) {
+      return {
+        ...buildBudgetExceededPartial(budget),
+        signals: [],
+      };
+    }
+    throw error;
+  }
+}
+
+/**
+ * @param {{ brand?: object, evidence?: array, budget?: object }} input
+ * @returns {{ signals: Array<{keyword:string,change:string,consumer_language:string,consumer_need:string,confidence:number}>, partial?: boolean, reason?: string }}
  */
 function extractMarketSignals(input = {}) {
+  const budget = input?.budget || null;
+  // Deterministic path uses zero model calls. If a shared budget is already
+  // exhausted by earlier stages, surface a partial marker instead of inventing signals.
+  if (budget && typeof budget.exhausted === "function" && budget.exhausted()) {
+    return {
+      ...buildBudgetExceededPartial(budget),
+      signals: [],
+    };
+  }
+
   const brand = input?.brand && typeof input.brand === "object" ? input.brand : {};
   const evidence = Array.isArray(input?.evidence) ? input.evidence : [];
   const signals = dedupeSignals(
@@ -197,12 +266,18 @@ function pgyNotesToSignalEvidence(pgyEvidence) {
   }));
 }
 
-function extractMarketSignalsFromSources({ brand, anySearchEvidence = null, pgyEvidence = null } = {}) {
+function extractMarketSignalsFromSources({
+  brand,
+  anySearchEvidence = null,
+  pgyEvidence = null,
+  budget = null,
+} = {}) {
   const anySearchItems = Array.isArray(anySearchEvidence?.evidence) ? anySearchEvidence.evidence : [];
   const pgyItems = pgyNotesToSignalEvidence(pgyEvidence);
   return extractMarketSignals({
     brand,
     evidence: anySearchItems.length ? anySearchItems : pgyItems,
+    budget,
   });
 }
 
@@ -237,6 +312,7 @@ module.exports = {
   EMPTY_PLATITUDE_PATTERNS,
   extractMarketSignals,
   extractMarketSignalsFromSources,
+  extractMarketSignalsWithModel,
   formatMarketSignalsPromptBlock,
   isEmptyPlatitude,
   pgyNotesToSignalEvidence,
