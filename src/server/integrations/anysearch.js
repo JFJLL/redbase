@@ -725,6 +725,23 @@ const TRAFFIC_MARKETING_SIGNAL_PATTERNS = [
   /(?:内容形式|内容方向|内容创作|标题|封面|图文|短视频|评论区|互动方式|话题表达|生活场景|讨论场景)/i,
 ];
 
+// Prefer evidence that already encodes market/consumer change language so the
+// downstream signal extractor can form concrete opportunity cards.
+const MARKET_CHANGE_EVIDENCE_PATTERNS = [
+  /(?:从.{2,12}(?:转向|变为|变成|迁移到)|增长|下降|升温|降温|崛起|兴起|替代|分流|迁移|重构|分化)/i,
+  /(?:用户|消费者|家长|宝妈).{0,8}(?:开始|更|正在|转向|偏好|吐槽|焦虑|纠结|求)/i,
+  /(?:痛点|避坑|对比|核验|从.+到|转向|迁移)/i,
+];
+
+function getMarketChangeEvidenceScore(item) {
+  const text = `${item?.title || ""} ${item?.snippet || ""}`;
+  let score = 0;
+  for (const pattern of MARKET_CHANGE_EVIDENCE_PATTERNS) {
+    if (pattern.test(text)) score += 2;
+  }
+  return score;
+}
+
 const MEDICAL_INSTRUCTION_SIGNAL_PATTERN = /(?:怎么防|怎么治|如何治疗|治疗方案|治愈|诊断|药方|偏方|处方|服药|吃药|喂药|用药指导|用药清单|药箱|备药|剂量|用量|药物搭配|说明书|临床指南|速通攻略|必读手册)/i;
 const HEALTH_PRODUCT_ADVERTORIAL_PATTERN = /(?:有没有|求|靠谱).{0,12}(?:益生菌|保健品|营养品|健康产品|药品).{0,10}(?:推荐|公司)|(?:认准|宝藏).{0,12}(?:企业|品牌|产品)/i;
 
@@ -764,8 +781,14 @@ function sortEvidenceForSelection(items, options = {}) {
   return [...items].sort((left, right) => {
     const leftMarketingScore = preferMarketingContent ? getTrafficMarketingSignalScore(left) * 3 : 0;
     const rightMarketingScore = preferMarketingContent ? getTrafficMarketingSignalScore(right) * 3 : 0;
-    const leftScore = (preferRecent ? left.trustScore * 4 + getEvidenceFreshnessScore(left, now) : left.trustScore) + leftMarketingScore;
-    const rightScore = (preferRecent ? right.trustScore * 4 + getEvidenceFreshnessScore(right, now) : right.trustScore) + rightMarketingScore;
+    const leftChangeScore = getMarketChangeEvidenceScore(left);
+    const rightChangeScore = getMarketChangeEvidenceScore(right);
+    const leftScore = (preferRecent ? left.trustScore * 4 + getEvidenceFreshnessScore(left, now) : left.trustScore)
+      + leftMarketingScore
+      + leftChangeScore;
+    const rightScore = (preferRecent ? right.trustScore * 4 + getEvidenceFreshnessScore(right, now) : right.trustScore)
+      + rightMarketingScore
+      + rightChangeScore;
     return rightScore - leftScore || String(right.publishedAt).localeCompare(String(left.publishedAt)) || left.queryIndex - right.queryIndex;
   });
 }
@@ -1353,6 +1376,7 @@ module.exports = {
   sortEvidenceForSelection,
   isMarketingEvidenceRelevant,
   getTrafficMarketingSignalScore,
+  getMarketChangeEvidenceScore,
   isTrafficMarketingEvidenceRelevant,
   isMedicineTrafficMarketingEvidenceRelevant,
   isChildFamilySearchProfile,
