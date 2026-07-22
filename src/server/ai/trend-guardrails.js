@@ -308,10 +308,181 @@ function isEmptyMarketingPlatitude(value) {
   return EMPTY_MARKETING_PLATITUDE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+/** Minimum model self-score accepted for a trend card. Below this → filter/rewrite. */
+const TREND_SELF_SCORE_MIN = 70;
+
+/**
+ * Banned “correct but useless” industry-report platitudes.
+ * If a trend can apply to any industry, it is invalid brand strategy output.
+ */
+const INVALID_GENERIC_TREND_PHRASES = [
+  "消费者越来越关注健康",
+  "年轻人追求品质生活",
+  "消费升级趋势明显",
+  "用户越来越重视体验",
+];
+
+const INVALID_GENERIC_TREND_PATTERNS = [
+  /消费者越来越关注健康/i,
+  /年轻人追求品质生活/i,
+  /消费升级趋势明显/i,
+  /用户越来越重视体验/i,
+  /(?:消费者|用户|年轻人|大众).{0,10}(?:越来越|更加|日益).{0,16}(?:关注|重视|追求).{0,16}(?:健康|品质|体验|生活|性价比)/i,
+  /(?:消费升级|品质生活|健康意识|体验经济).{0,12}(?:趋势|明显|增强|提升|加深)/i,
+  /(?:各行各业|任何行业|所有品牌|通用趋势).{0,12}(?:都|均可|都可以)/i,
+  /(?:行业整体|市场整体|大盘).{0,12}(?:向好|复苏|升级|回暖)/i,
+];
+
+function collectTrendStrategyCopy(trend) {
+  if (typeof trend === "string") return [trend];
+  if (!trend || typeof trend !== "object") return [];
+  const texts = [
+    trend.title,
+    trend.summary,
+    trend.reason,
+    trend.category,
+    trend.market_change,
+    trend.consumer_shift,
+    trend.why_now,
+    trend.brand_opportunity,
+    trend.content_direction,
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  for (const idea of trend.ideas || []) {
+    for (const field of ["title", "summary", "angle", "brandFit", "audience", "hook"]) {
+      const value = String(idea?.[field] || "").trim();
+      if (value) texts.push(value);
+    }
+  }
+  return texts;
+}
+
+function findInvalidGenericTrendMatch(text) {
+  const source = String(text || "").normalize("NFKC").trim();
+  if (!source) return "";
+  for (const phrase of INVALID_GENERIC_TREND_PHRASES) {
+    if (source.includes(phrase)) return phrase;
+  }
+  for (const pattern of INVALID_GENERIC_TREND_PATTERNS) {
+    const match = source.match(pattern);
+    if (match?.[0]) return match[0];
+  }
+  return "";
+}
+
+/**
+ * True when copy is a generic industry report platitude rather than a
+ * brand-specific growth opportunity (any-industry applicable = invalid).
+ */
+function isInvalidGenericTrendText(value) {
+  return Boolean(findInvalidGenericTrendMatch(value));
+}
+
+function findInvalidGenericTrendCopy(trend) {
+  for (const text of collectTrendStrategyCopy(trend)) {
+    const claim = findInvalidGenericTrendMatch(text);
+    if (claim) return { claim, text: text.slice(0, 120) };
+  }
+  return null;
+}
+
+function hasInvalidGenericTrendCopy(trend) {
+  return Boolean(findInvalidGenericTrendCopy(trend));
+}
+
+function normalizeSelfScore(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.round(numeric) : null;
+}
+
+/**
+ * Extract model self-scores. Accepts snake_case and camelCase.
+ * @returns {{ novelty_score: number|null, brand_fit_score: number|null, actionability_score: number|null }}
+ */
+function extractTrendSelfScores(trend) {
+  if (!trend || typeof trend !== "object") {
+    return { novelty_score: null, brand_fit_score: null, actionability_score: null };
+  }
+  return {
+    novelty_score: normalizeSelfScore(
+      trend.novelty_score ?? trend.noveltyScore ?? trend.scores?.novelty_score ?? trend.scores?.novelty,
+    ),
+    brand_fit_score: normalizeSelfScore(
+      trend.brand_fit_score ?? trend.brandFitScore ?? trend.scores?.brand_fit_score ?? trend.scores?.brand_fit,
+    ),
+    actionability_score: normalizeSelfScore(
+      trend.actionability_score
+      ?? trend.actionabilityScore
+      ?? trend.scores?.actionability_score
+      ?? trend.scores?.actionability,
+    ),
+  };
+}
+
+/**
+ * Returns a validation issue for self-scores.
+ * - No scores at all: skip (legacy fixtures / pre-existing cards), unless requireSelfScores.
+ * - Any score present: all three required, each 0-100, each >= minScore (default 70).
+ */
+function getTrendSelfScoreIssue(trend, options = {}) {
+  const minScore = Number.isFinite(Number(options.minScore))
+    ? Number(options.minScore)
+    : TREND_SELF_SCORE_MIN;
+  const scores = extractTrendSelfScores(trend);
+  const entries = [
+    ["novelty_score", scores.novelty_score],
+    ["brand_fit_score", scores.brand_fit_score],
+    ["actionability_score", scores.actionability_score],
+  ];
+  const provided = entries.filter(([, value]) => value != null);
+  if (!provided.length) {
+    if (!options.requireSelfScores) return null;
+    return {
+      reason: "invalid-self-score",
+      field: "novelty_score",
+      actual: null,
+      claim: "novelty_score、brand_fit_score、actionability_score 均为必填",
+    };
+  }
+  for (const [field, value] of entries) {
+    if (!Number.isInteger(value) || value < 0 || value > 100) {
+      return {
+        reason: "invalid-self-score",
+        field,
+        actual: value,
+        claim: `${field} 必须是 0-100 的整数`,
+      };
+    }
+  }
+  for (const [field, value] of entries) {
+    if (value < minScore) {
+      return {
+        reason: "low-self-score",
+        field,
+        actual: value,
+        claim: `${field}=${value} 低于 ${minScore}，自动过滤`,
+      };
+    }
+  }
+  return null;
+}
+
+function passesTrendSelfScoreGate(trend, options = {}) {
+  return getTrendSelfScoreIssue(trend, options) == null;
+}
+
 module.exports = {
   HIGH_RISK_BRAND_CLAIM_PATTERNS,
   EMPTY_MARKETING_PLATITUDE_PATTERNS,
+  INVALID_GENERIC_TREND_PATTERNS,
+  INVALID_GENERIC_TREND_PHRASES,
+  TREND_SELF_SCORE_MIN,
   collectTrendClaimTexts,
+  collectTrendStrategyCopy,
+  extractTrendSelfScores,
+  findInvalidGenericTrendCopy,
+  findInvalidGenericTrendMatch,
   findPositiveClaimMatch,
   findPositiveClaimMatchDetails,
   findPositiveClaimMatches,
@@ -320,10 +491,15 @@ module.exports = {
   findUnsupportedHardClaims,
   findUnsupportedHardClaimText,
   findUnsupportedHardClaimTexts,
+  getTrendSelfScoreIssue,
+  hasInvalidGenericTrendCopy,
   hasPositiveBrandSupport,
   hasUnsupportedHardClaim,
   hasUnsupportedHardClaimText,
+  isInvalidGenericTrendText,
   findPositiveBrandClaimMatch,
   isUnsupportedBrandClaimText,
   isEmptyMarketingPlatitude,
+  normalizeSelfScore,
+  passesTrendSelfScoreGate,
 };
