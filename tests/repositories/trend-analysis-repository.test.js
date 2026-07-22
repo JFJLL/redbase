@@ -8,6 +8,7 @@ const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/s
 const { insertUser, findUserById } = require("../../src/server/db/repositories/auth-repository");
 const { insertBrand } = require("../../src/server/db/repositories/brand-repository");
 const { trySpendCreditsWithEvent } = require("../../src/server/db/repositories/admin-repository");
+const { TREND_ANALYSIS_RESERVATION_TTL_MS } = require("../../src/server/db/repositories/core-repository");
 const {
   reserveTrendAnalysisRequest,
   completeTrendAnalysisRequest,
@@ -192,4 +193,66 @@ test("active bucket reservations block alternate request IDs and protect frozen 
   });
   assert.equal(releasedSpend.spent, true);
   assert.equal(findUserById(72).credits, 0);
+});
+
+test("active trend work remains reserved for the full bounded generation window", () => {
+  insertUser({
+    id: 73,
+    name: "Long Trend Reservation Tester",
+    phone: "13910000073",
+    password: "hash",
+    accountType: "customer",
+    credits: 1,
+    createdAt: new Date().toISOString(),
+  });
+  insertBrand({
+    id: 83,
+    ownerUserId: 73,
+    name: "Long Running Trend",
+    industry: "内容运营",
+    audience: "品牌运营人员",
+    description: "长请求冻结测试品牌",
+    product: "内容运营服务",
+    goal: "防止运行中的请求被提前回收",
+    knowledgeBase: "",
+    assetTags: [],
+  });
+  const startedAt = new Date();
+  const firstIdentity = { requestId: "long-reservation-0001", userId: 73, brandId: 83, bucketKey: "traffic" };
+  assert.equal(reserveTrendAnalysisRequest({
+    ...firstIdentity,
+    creditCost: 1,
+    now: startedAt,
+  }).status, "reserved");
+
+  const duplicateBeforeDeadline = reserveTrendAnalysisRequest({
+    requestId: "long-reservation-0002",
+    userId: 73,
+    brandId: 83,
+    bucketKey: "traffic",
+    creditCost: 1,
+    now: new Date(startedAt.getTime() + TREND_ANALYSIS_RESERVATION_TTL_MS - 1),
+  });
+  assert.equal(duplicateBeforeDeadline.status, "reserved");
+  assert.equal(duplicateBeforeDeadline.existing, true);
+  assert.equal(duplicateBeforeDeadline.request.request_id, firstIdentity.requestId);
+
+  const replacementAfterDeadline = reserveTrendAnalysisRequest({
+    requestId: "long-reservation-0003",
+    userId: 73,
+    brandId: 83,
+    bucketKey: "traffic",
+    creditCost: 1,
+    now: new Date(startedAt.getTime() + TREND_ANALYSIS_RESERVATION_TTL_MS + 1),
+  });
+  assert.equal(replacementAfterDeadline.status, "reserved");
+  assert.equal(replacementAfterDeadline.existing, false);
+  assert.equal(replacementAfterDeadline.request.request_id, "long-reservation-0003");
+  failTrendAnalysisRequest({
+    requestId: "long-reservation-0003",
+    userId: 73,
+    brandId: 83,
+    bucketKey: "traffic",
+    error: "fixture complete",
+  });
 });

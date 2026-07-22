@@ -88,6 +88,8 @@ function initializeDatabaseSchema() {
       custom_prompt TEXT NOT NULL,
       system_prompt TEXT NOT NULL,
       tags_json TEXT NOT NULL DEFAULT '[]',
+      evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+      evidence_snapshot_json TEXT NOT NULL DEFAULT '[]',
       position INTEGER NOT NULL,
       FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
       FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
@@ -268,6 +270,12 @@ function ensureSchemaUpgrades() {
     if (!hasColumn("trends", "bucket_description")) {
       db.exec("ALTER TABLE trends ADD COLUMN bucket_description TEXT NOT NULL DEFAULT '从跨平台高讨论度内容里筛选可被品牌借势的热点方向。'");
     }
+    if (!hasColumn("trends", "evidence_ids_json")) {
+      db.exec("ALTER TABLE trends ADD COLUMN evidence_ids_json TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!hasColumn("trends", "evidence_snapshot_json")) {
+      db.exec("ALTER TABLE trends ADD COLUMN evidence_snapshot_json TEXT NOT NULL DEFAULT '[]'");
+    }
   }
 
   if (tableExists("analyses") && !hasColumn("analyses", "brand_brief_json")) {
@@ -404,6 +412,8 @@ function hasCurrentStoreSchema() {
     hasColumn("trends", "bucket_title") &&
     hasColumn("trends", "bucket_description") &&
     hasColumn("trends", "tags_json") &&
+    hasColumn("trends", "evidence_ids_json") &&
+    hasColumn("trends", "evidence_snapshot_json") &&
     hasColumn("ideas", "trend_row_id") &&
     hasColumn("ideas", "tags_json") &&
     hasColumn("ideas", "content_assets_json") &&

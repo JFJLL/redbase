@@ -122,7 +122,7 @@ function hydrateBrandContent(brands) {
   }
 
   const trendRows = db.prepare(`
-    SELECT row_id, trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json
+    SELECT row_id, trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, evidence_ids_json, evidence_snapshot_json
     FROM trends
     WHERE brand_id IN (${placeholders})
     ORDER BY brand_id DESC, scope ASC, analysis_id ASC, bucket_key ASC, position ASC
@@ -141,6 +141,8 @@ function hydrateBrandContent(brands) {
       summary: row.summary,
       score: row.score,
       tags: safeParseArray(row.tags_json),
+      evidenceIds: safeParseArray(row.evidence_ids_json),
+      evidence: safeParseArray(row.evidence_snapshot_json),
       reason: row.reason,
       customPrompt: row.custom_prompt || "",
       ideas: readIdeasForTrendRow(row.row_id),
@@ -280,8 +282,8 @@ function insertBrandContent(brand) {
 function insertTrendBuckets(brandId, analysisId, scope, buckets) {
   const insertTrend = db.prepare(`
     INSERT INTO trends (
-      trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, evidence_ids_json, evidence_snapshot_json, position
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertIdea = db.prepare(`
     INSERT INTO ideas (trend_row_id, idea_index, title, summary, angle, brand_fit, audience, hook, tags_json, content_assets_json)
@@ -307,6 +309,8 @@ function insertTrendBuckets(brandId, analysisId, scope, buckets) {
       trend.customPrompt || "",
       "",
       JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
+      JSON.stringify(Array.isArray(trend.evidenceIds) ? trend.evidenceIds : []),
+      JSON.stringify(Array.isArray(trend.evidence) ? trend.evidence : []),
       trendPosition,
     );
     for (const [ideaIndex, idea] of (trend.ideas || []).entries()) {

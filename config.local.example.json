@@ -29,7 +29,7 @@
     "minReliableEvidence": 2,
     "maxSnippetChars": 520,
     "timeoutMs": 30000,
-    "retries": 2,
+    "retries": 3,
     "retryDelayMs": 350,
     "dailyQueryLimit": 950,
     "dailyUsageFile": "data/anysearch-usage.json",

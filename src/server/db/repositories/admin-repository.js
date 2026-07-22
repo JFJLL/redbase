@@ -1,6 +1,6 @@
 const { getDbProxy } = require("../connection");
 const { safeParseArray, safeParseObject } = require("../snapshot-utils");
-const { allocateCounter, runTransaction } = require("./core-repository");
+const { TREND_ANALYSIS_RESERVATION_TTL_MS, allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
 const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
 
@@ -55,7 +55,7 @@ function trySpendCreditsWithEvent({ userId, amount, event }) {
       return { spent: false, user: findUserById(userId), creditEvent: null };
     }
 
-    const reservationCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
     const result = db.prepare(`
       UPDATE users
       SET credits = credits - ?

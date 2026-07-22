@@ -346,6 +346,8 @@ function groupTrendRows(rows, target) {
       summary: trend.summary,
       score: trend.score,
       tags: trend.tags,
+      evidenceIds: Array.isArray(trend.evidenceIds) ? trend.evidenceIds : [],
+      evidence: Array.isArray(trend.evidence) ? trend.evidence : [],
       reason: trend.reason,
       customPrompt: trend.customPrompt,
       ideas: trend.ideas,

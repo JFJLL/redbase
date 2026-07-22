@@ -56,7 +56,7 @@ const DEFAULT_APP_CONFIG = {
     minReliableEvidence: 2,
     maxSnippetChars: 520,
     timeoutMs: 30000,
-    retries: 2,
+    retries: 3,
     retryDelayMs: 350,
     dailyQueryLimit: 950,
     dailyUsageFile: "data/anysearch-usage.json",
@@ -275,7 +275,10 @@ function loadAppConfig() {
       ),
       maxSnippetChars: Number(process.env.ANYSEARCH_MAX_SNIPPET_CHARS || merged.searchProvider?.maxSnippetChars || 520),
       timeoutMs: Number(process.env.ANYSEARCH_TIMEOUT_MS || merged.searchProvider?.timeoutMs || 30000),
-      retries: Number(process.env.ANYSEARCH_RETRIES || merged.searchProvider?.retries || 2),
+      // AnySearch currently resolves to four CDN edges and one edge can be
+      // unreachable from mainland direct-connect servers. Keep enough retries
+      // to visit every resolved edge even when an older config file says 1/2.
+      retries: Math.max(3, Number(process.env.ANYSEARCH_RETRIES || merged.searchProvider?.retries || 3)),
       retryDelayMs: Number(process.env.ANYSEARCH_RETRY_DELAY_MS || merged.searchProvider?.retryDelayMs || 350),
       dailyQueryLimit: Number(
         process.env.ANYSEARCH_DAILY_QUERY_LIMIT || merged.searchProvider?.dailyQueryLimit || 950,

@@ -90,6 +90,21 @@ test("targeted idea asset updates preserve assets written by concurrent requests
       score: 80,
       reason: "用于数据库回归测试。",
       tags: ["#并发测试"],
+      evidenceIds: ["S1", "S2"],
+      evidence: [{
+        provider: "anysearch",
+        id: "S1",
+        title: "可核验证据",
+        url: "https://www.ce.cn/evidence",
+        source: "ce.cn",
+        host: "www.ce.cn",
+        publishedAt: "2026-07-20",
+        snippet: "用于证明趋势与公开来源的关联。",
+        sourceType: "web",
+        platformType: "",
+        trustLevel: "medium",
+        retrievedAt: "2026-07-21T00:00:00.000Z",
+      }],
       ideas: [0, 1].map((ideaIndex) => ({
         title: `选题 ${ideaIndex + 1}`,
         summary: "测试摘要",
@@ -108,9 +123,13 @@ test("targeted idea asset updates preserve assets written by concurrent requests
   assert.equal(updateCurrentTrendIdeaContentAssets(10, 1, 1001, 1, { marker: "second" }), true);
   assert.equal(updateCurrentTrendIdeaContentAssets(10, 2, 1001, 0, { marker: "wrong-owner" }), false);
 
-  const persistedIdeas = findBrandByOwner(10, 1).trends[0].items[0].ideas;
+  const persistedTrend = findBrandByOwner(10, 1).trends[0].items[0];
+  const persistedIdeas = persistedTrend.ideas;
   assert.equal(persistedIdeas[0].contentAssets.marker, "first");
   assert.equal(persistedIdeas[1].contentAssets.marker, "second");
+  assert.deepEqual(persistedTrend.evidenceIds, ["S1", "S2"]);
+  assert.equal(persistedTrend.evidence[0].url, "https://www.ce.cn/evidence");
+  assert.equal(persistedTrend.evidence[0].snippet, "用于证明趋势与公开来源的关联。");
 });
 
 test("generation repository upserts, scopes by owner, and searches combinations", () => {

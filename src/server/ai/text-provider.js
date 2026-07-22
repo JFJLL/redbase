@@ -1,22 +1,244 @@
 const http = require("http");
 const https = require("https");
+const dns = require("dns");
+const net = require("net");
 const { joinUrl, assertConfigured, parseJsonFromModelText, withRetries } = require("../utils");
+
+const DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024;
+let runningHubAddressCursor = 0;
+
+function isRunningHubHostname(hostname) {
+  const normalized = String(hostname || "").toLowerCase();
+  return normalized === "runninghub.ai" || normalized.endsWith(".runninghub.ai");
+}
+
+function createPinnedTextProviderLookup(address, family = net.isIP(address)) {
+  return (_hostname, options, callback) => {
+    const lookupOptions = typeof options === "object" && options ? options : {};
+    const done = typeof options === "function" ? options : callback;
+    if (lookupOptions.all) {
+      done(null, [{ address, family }]);
+      return;
+    }
+    done(null, address, family);
+  };
+}
+
+function isUnsafeTextProviderAddress(address) {
+  const normalized = String(address || "").toLowerCase().split("%")[0];
+  if (!normalized) return true;
+  const embeddedIpv4 = normalized.match(/(?:^|:)(\d{1,3}(?:\.\d{1,3}){3})$/)?.[1];
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    const parts = normalized.split(".").map(Number);
+    return (
+      parts[0] === 0 ||
+      parts[0] === 10 ||
+      (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+      parts[0] === 127 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 0 && (parts[2] === 0 || parts[2] === 2)) ||
+      (parts[0] === 192 && parts[1] === 88 && parts[2] === 99) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19 || (parts[1] === 51 && parts[2] === 100))) ||
+      (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) ||
+      parts[0] >= 224
+    );
+  }
+  if (ipVersion === 6) {
+    // An embedded public IPv4 address does not make the surrounding IPv6
+    // transition/documentation prefix globally routable. Check the complete
+    // IPv6 address first and use the embedded address only as an extra reject.
+    if (embeddedIpv4 && isUnsafeTextProviderAddress(embeddedIpv4)) return true;
+    const hextets = normalized.split(":");
+    const firstHextet = Number.parseInt(hextets[0] || "0", 16);
+    const secondHextet = Number.parseInt(hextets[1] || "0", 16);
+    return (
+      // Public model endpoints have no reason to resolve to transition, local,
+      // documentation, or protocol-assignment space. Restricting IPv6 to the
+      // routable 2000::/3 block also rejects IPv4-mapped and local NAT64 forms.
+      (firstHextet & 0xe000) !== 0x2000 ||
+      // IETF protocol assignments (Teredo, benchmarking, ORCHID, etc.).
+      (firstHextet === 0x2001 && secondHextet <= 0x01ff) ||
+      // Documentation address space.
+      (firstHextet === 0x2001 && secondHextet === 0x0db8) ||
+      // Deprecated 6to4 transition space.
+      firstHextet === 0x2002 ||
+      // Deprecated 6bone and the newer documentation prefix.
+      firstHextet === 0x3ffe ||
+      (firstHextet === 0x3fff && secondHextet <= 0x0fff)
+    );
+  }
+  return true;
+}
+
+function createRunningHubDnsError(message, cause) {
+  const error = new Error(message);
+  error.code = "TEXT_PROVIDER_DNS_ERROR";
+  if (cause) error.cause = cause;
+  return error;
+}
+
+async function resolveRunningHubAddresses(target, lookupImpl = dns.promises.lookup, options = {}) {
+  if (!isRunningHubHostname(target?.hostname)) return [];
+  const timeoutMs = Math.max(1, Math.min(10000, Number(options.timeoutMs || 5000)));
+  let timer = null;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(createRunningHubDnsError("RunningHub DNS lookup timed out.")),
+        timeoutMs,
+      );
+    });
+    const resolved = await Promise.race([
+      Promise.resolve().then(() => lookupImpl(target.hostname, { all: true, verbatim: true })),
+      timeout,
+    ]);
+    const rawAddresses = Array.isArray(resolved) ? resolved : [resolved];
+    if (!rawAddresses.length || rawAddresses.some((item) => isUnsafeTextProviderAddress(item?.address || item))) {
+      throw createRunningHubDnsError("RunningHub DNS did not return exclusively public addresses.");
+    }
+    const addresses = [...new Map(rawAddresses
+      .filter((item) => net.isIP(item?.address || item))
+      .map((item) => {
+        const address = String(item?.address || item);
+        return [address, { address, family: Number(item?.family || net.isIP(address)) }];
+      })).values()];
+    if (!addresses.length) throw createRunningHubDnsError("RunningHub DNS returned no usable public address.");
+    return addresses;
+  } catch (error) {
+    if (error?.code === "TEXT_PROVIDER_DNS_ERROR") throw error;
+    throw createRunningHubDnsError("RunningHub DNS lookup failed.", error);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function getTextProviderResponseLimit(options = {}) {
+  const configured = Number(options.maxResponseBytes || DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES);
+  return Math.max(1, Math.min(
+    DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES,
+    Number.isFinite(configured) ? configured : DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES,
+  ));
+}
+
+function createTextProviderResponseTooLargeError(url) {
+  const error = new Error("Text provider response exceeded the size limit.");
+  error.code = "TEXT_PROVIDER_RESPONSE_TOO_LARGE";
+  error.retryable = false;
+  error.url = url;
+  return error;
+}
+
+async function readFetchResponseText(response, url, maxResponseBytes) {
+  const declaredLength = Number(response?.headers?.get?.("content-length") || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+    await response?.body?.cancel?.().catch?.(() => {});
+    throw createTextProviderResponseTooLargeError(url);
+  }
+  if (!response?.body?.getReader) {
+    const raw = await response.text();
+    if (Buffer.byteLength(raw) > maxResponseBytes) throw createTextProviderResponseTooLargeError(url);
+    return raw;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.length;
+      if (totalBytes > maxResponseBytes) {
+        await reader.cancel().catch(() => {});
+        throw createTextProviderResponseTooLargeError(url);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function buildTextProviderRequestOptions(target, options = {}) {
+  const hostname = String(target?.hostname || "").toLowerCase();
+  const isRunningHub = isRunningHubHostname(hostname);
+  return {
+    method: options.method || "GET",
+    headers: options.headers || {},
+    ...(typeof options.lookup === "function" ? { lookup: options.lookup } : {}),
+    ...(target.protocol === "https:" && isRunningHub ? { maxVersion: "TLSv1.2" } : {}),
+  };
+}
+
+function createRequestTimeoutError(url) {
+  const error = new Error(`Request timeout: ${url}`);
+  error.code = "ETIMEDOUT";
+  return error;
+}
+
+function redactProviderSensitiveText(value) {
+  return String(value || "")
+    .replace(/\b(?:as_sk_|sk-)[a-z0-9_-]+\b/gi, "[redacted]")
+    .replace(/\b(authorization)\s*[:=]\s*(?:bearer\s+)?[^\s,;"'}]+/gi, "$1=[redacted]")
+    .replace(/\b(bearer)(?:\s+|\s*[:=]\s*)[^\s,;"'}]+/gi, "$1 [redacted]")
+    .replace(/\b(api[_-]?key|x-api-key|x-goog-api-key|token)\s*[:=]\s*[^\s,;"'}]+/gi, "$1=[redacted]");
+}
+
+function redactProviderPayload(value) {
+  if (value == null) return value;
+  try {
+    return JSON.parse(redactProviderSensitiveText(JSON.stringify(value)));
+  } catch (_error) {
+    return null;
+  }
+}
 
 function fetchJson(url, options = {}) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let responseStarted = false;
+    let deadlineTimer = null;
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadlineTimer);
+      resolve(value);
+    };
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadlineTimer);
+      reject(error);
+    };
     const target = new URL(url);
     const transport = target.protocol === "https:" ? https : http;
     const timeoutMs = Number(options.timeoutMs || 180000);
+    const maxResponseBytes = getTextProviderResponseLimit(options);
+    const startedAt = Date.now();
     const request = transport.request(
       target,
-      {
-        method: options.method || "GET",
-        headers: options.headers || {},
-      },
+      buildTextProviderRequestOptions(target, options),
       (response) => {
+        responseStarted = true;
+        options.onTelemetry?.({ type: "first-byte", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
         let raw = "";
+        let totalBytes = 0;
         response.setEncoding("utf8");
         response.on("data", (chunk) => {
+          if (settled) return;
+          totalBytes += Buffer.byteLength(chunk);
+          if (totalBytes > maxResponseBytes) {
+            const error = createTextProviderResponseTooLargeError(url);
+            rejectOnce(error);
+            response.destroy(error);
+            request.destroy();
+            return;
+          }
           raw += chunk;
         });
         response.on("end", () => {
@@ -28,26 +250,43 @@ function fetchJson(url, options = {}) {
           }
 
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            const message = data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.statusCode}`;
+            const message = redactProviderSensitiveText(data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.statusCode}`);
             const httpError = new Error(message);
             httpError.statusCode = response.statusCode;
             httpError.url = url;
-            httpError.rawBody = raw;
-            httpError.payload = data;
-            reject(httpError);
+            httpError.rawBody = redactProviderSensitiveText(raw);
+            httpError.payload = redactProviderPayload(data);
+            httpError.retryable = false;
+            rejectOnce(httpError);
             return;
           }
 
-          resolve(data);
+          if (data?.usage) options.onTelemetry?.({ type: "usage", usage: data.usage });
+          options.onTelemetry?.({ type: "complete", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
+          resolveOnce(data);
+        });
+        response.on("aborted", () => {
+          const error = new Error("HTTP response was aborted.");
+          error.retryable = false;
+          rejectOnce(error);
+        });
+        response.on("error", (error) => {
+          error.retryable = false;
+          rejectOnce(error);
         });
       },
     );
 
-    request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error(`Request timeout: ${url}`));
-    });
+    const abortForTimeout = () => {
+      const error = createRequestTimeoutError(url);
+      if (responseStarted) error.retryable = false;
+      rejectOnce(error);
+      request.destroy();
+    };
+    deadlineTimer = setTimeout(abortForTimeout, timeoutMs);
+    request.setTimeout(timeoutMs, abortForTimeout);
 
-    request.on("error", reject);
+    request.on("error", rejectOnce);
 
     if (options.body) {
       request.write(options.body);
@@ -91,38 +330,40 @@ function extractTextFromOpenAIStream(raw, onTelemetry) {
 function fetchOpenAIText(url, options = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let deadlineTimer = null;
+    let receivedFirstByte = false;
+    let responseStarted = false;
     const resolveOnce = (value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadlineTimer);
       resolve(value);
     };
     const rejectOnce = (error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadlineTimer);
       reject(error);
     };
     const startedAt = Date.now();
     const target = new URL(url);
     const transport = target.protocol === "https:" ? https : http;
     const timeoutMs = Number(options.timeoutMs || 180000);
+    const maxResponseBytes = getTextProviderResponseLimit(options);
     const request = transport.request(
       target,
-      {
-        method: options.method || "POST",
-        headers: options.headers || {},
-      },
+      buildTextProviderRequestOptions(target, { ...options, method: options.method || "POST" }),
       (response) => {
+        responseStarted = true;
         let raw = "";
-        let receivedFirstByte = false;
+        let totalBytes = 0;
         response.setEncoding("utf8");
         const rejectInterruptedResponse = (sourceError) => {
           const error = sourceError instanceof Error ? sourceError : new Error("OpenAI-compatible response was interrupted.");
-          if (receivedFirstByte) {
+          if (!error.code) {
             error.code = "EOPENAI_RESPONSE_INTERRUPTED";
-            error.retryable = false;
-          } else if (!error.code) {
-            error.code = "ECONNRESET";
           }
+          error.retryable = false;
           error.statusCode = response.statusCode;
           error.url = url;
           rejectOnce(error);
@@ -130,9 +371,18 @@ function fetchOpenAIText(url, options = {}) {
         response.on("aborted", () => rejectInterruptedResponse(new Error("OpenAI-compatible response was aborted.")));
         response.on("error", rejectInterruptedResponse);
         response.on("data", (chunk) => {
+          if (settled) return;
           if (!receivedFirstByte) {
             receivedFirstByte = true;
             options.onTelemetry?.({ type: "first-byte", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
+          }
+          totalBytes += Buffer.byteLength(chunk);
+          if (totalBytes > maxResponseBytes) {
+            const error = createTextProviderResponseTooLargeError(url);
+            rejectOnce(error);
+            response.destroy(error);
+            request.destroy();
+            return;
           }
           raw += chunk;
         });
@@ -145,12 +395,13 @@ function fetchOpenAIText(url, options = {}) {
             data = null;
           }
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            const message = data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.statusCode}`;
+            const message = redactProviderSensitiveText(data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.statusCode}`);
             const httpError = new Error(message);
             httpError.statusCode = response.statusCode;
             httpError.url = url;
-            httpError.rawBody = raw;
-            httpError.payload = data;
+            httpError.rawBody = redactProviderSensitiveText(raw);
+            httpError.payload = redactProviderPayload(data);
+            httpError.retryable = false;
             rejectOnce(httpError);
             return;
           }
@@ -164,14 +415,23 @@ function fetchOpenAIText(url, options = {}) {
             if (data?.usage) options.onTelemetry?.({ type: "usage", usage: data.usage });
             options.onTelemetry?.({ type: "complete", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
           } catch (error) {
+            error.retryable = false;
             rejectOnce(error);
           }
         });
       },
     );
-    request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error(`Request timeout: ${url}`));
-    });
+    const abortForTimeout = () => {
+      const error = createRequestTimeoutError(url);
+      if (responseStarted) {
+        error.code = "EOPENAI_RESPONSE_TIMEOUT";
+        error.retryable = false;
+      }
+      rejectOnce(error);
+      request.destroy();
+    };
+    deadlineTimer = setTimeout(abortForTimeout, timeoutMs);
+    request.setTimeout(timeoutMs, abortForTimeout);
     request.on("error", rejectOnce);
     if (options.body) request.write(options.body);
     request.end();
@@ -190,7 +450,7 @@ async function fetchJsonNative(url, options = {}) {
       body: options.body || undefined,
       signal: controller.signal,
     });
-    const raw = await response.text();
+    const raw = await readFetchResponseText(response, url, getTextProviderResponseLimit(options));
     let data = null;
     try {
       data = raw ? JSON.parse(raw) : null;
@@ -199,12 +459,13 @@ async function fetchJsonNative(url, options = {}) {
     }
 
     if (!response.ok) {
-      const message = data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.status}`;
+      const message = redactProviderSensitiveText(data?.error?.message || data?.error || data?.message || raw || `HTTP ${response.status}`);
       const httpError = new Error(message);
       httpError.statusCode = response.status;
       httpError.url = url;
-      httpError.rawBody = raw;
-      httpError.payload = data;
+      httpError.rawBody = redactProviderSensitiveText(raw);
+      httpError.payload = redactProviderPayload(data);
+      httpError.retryable = false;
       throw httpError;
     }
 
@@ -251,7 +512,20 @@ function buildRetryOptions(options) {
   };
 }
 
-async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearch = false, temperature = 0.7, timeoutMs, retries, maxAttempts, delayMs, maxOutputTokens, stream = false, onTelemetry }) {
+async function callTextModelJson(appConfig, {
+  systemPrompt,
+  userPrompt,
+  useSearch = false,
+  temperature = 0.7,
+  timeoutMs,
+  retries,
+  maxAttempts,
+  delayMs,
+  maxOutputTokens,
+  maxResponseBytes,
+  stream = false,
+  onTelemetry,
+}) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.7;
@@ -260,8 +534,20 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
     : Number.isFinite(Number(provider.maxOutputTokens))
       ? Number(provider.maxOutputTokens)
       : null;
-  const requestOptions = {
-    timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
+  const totalTimeoutMs = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Number(timeoutMs)) : null;
+  const requestDeadlineAt = totalTimeoutMs ? Date.now() + totalTimeoutMs : null;
+  const getAttemptRequestOptions = () => {
+    const remainingMs = requestDeadlineAt ? requestDeadlineAt - Date.now() : null;
+    if (remainingMs != null && remainingMs <= 0) {
+      const error = new Error("Text provider request deadline exceeded.");
+      error.code = "ETIMEDOUT";
+      error.retryable = false;
+      throw error;
+    }
+    return {
+      timeoutMs: remainingMs == null ? undefined : Math.max(1, remainingMs),
+      maxResponseBytes: Number.isFinite(Number(maxResponseBytes)) ? Number(maxResponseBytes) : undefined,
+    };
   };
   const retryOptions = buildRetryOptions({ retries, maxAttempts, delayMs });
   const runWithRetries = (task) => withRetries((attempt) => {
@@ -287,7 +573,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
               ...(outputTokenLimit ? { maxOutputTokens: outputTokenLimit } : {}),
             },
           }),
-          ...requestOptions,
+          ...getAttemptRequestOptions(),
         }),
     );
     return parseJsonFromModelText(extractTextFromGoogleResponse(data));
@@ -310,7 +596,7 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
             temperature: modelTemperature,
             messages: [{ role: "user", content: userPrompt }],
           }),
-          ...requestOptions,
+          ...getAttemptRequestOptions(),
         }),
     );
     return parseJsonFromModelText(extractTextFromAnthropicResponse(data));
@@ -327,10 +613,29 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
       { role: "user", content: userPrompt },
     ],
   });
+  const openAIUrl = joinUrl(provider.openaiBaseUrl, "/chat/completions");
+  const openAITarget = new URL(openAIUrl);
+  const dnsTimeoutMs = requestDeadlineAt
+    ? Math.max(1, Math.min(5000, requestDeadlineAt - Date.now()))
+    : 5000;
+  const runningHubAddresses = await resolveRunningHubAddresses(
+    openAITarget,
+    dns.promises.lookup,
+    { timeoutMs: dnsTimeoutMs },
+  );
+  const addressStartIndex = runningHubAddresses.length
+    ? runningHubAddressCursor++ % runningHubAddresses.length
+    : 0;
+  const getAttemptNetworkOptions = (attempt) => {
+    if (!runningHubAddresses.length) return {};
+    const selected = runningHubAddresses[(addressStartIndex + Math.max(0, Number(attempt || 1) - 1)) % runningHubAddresses.length];
+    onTelemetry?.({ type: "route", attempt, address: selected.address, family: selected.family });
+    return { lookup: createPinnedTextProviderLookup(selected.address, selected.family) };
+  };
   if (stream) {
     const text = await runWithRetries(
-      () =>
-        fetchOpenAIText(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
+      (attempt) =>
+        fetchOpenAIText(openAIUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -338,22 +643,25 @@ async function callTextModelJson(appConfig, { systemPrompt, userPrompt, useSearc
           },
           body: requestBody,
           onTelemetry,
-          ...requestOptions,
+          ...getAttemptNetworkOptions(attempt),
+          ...getAttemptRequestOptions(),
         }),
     );
     return parseJsonFromModelText(text);
   }
 
   const data = await runWithRetries(
-    () =>
-      fetchJson(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
+    (attempt) =>
+      fetchJson(openAIUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${provider.apiKey}`,
         },
         body: requestBody,
-        ...requestOptions,
+        onTelemetry,
+        ...getAttemptNetworkOptions(attempt),
+        ...getAttemptRequestOptions(),
       }),
   );
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
@@ -373,6 +681,7 @@ function buildTextProviderEndpoint(appConfig) {
 }
 
 module.exports = {
+  DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES,
   fetchJson,
   fetchJsonNative,
   fetchOpenAIText,
@@ -382,4 +691,7 @@ module.exports = {
   extractTextFromGoogleResponse,
   callTextModelJson,
   buildTextProviderEndpoint,
+  buildTextProviderRequestOptions,
+  createPinnedTextProviderLookup,
+  resolveRunningHubAddresses,
 };

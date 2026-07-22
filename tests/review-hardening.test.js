@@ -9,6 +9,7 @@ const { buildImageJobResponse } = require("../src/server/ai/image-jobs");
 const { DEFAULT_APP_CONFIG, loadAppConfig } = require("../src/server/config");
 const { applyCorsHeaders, validateCorsConfigForStartup } = require("../src/server/cors");
 const { handleHealthRoutes } = require("../src/server/api/health-routes");
+const { getTrendAnalysisPublicErrorMessage } = require("../src/server/api/trend-routes");
 const helpers = require("../src/server/api/helpers");
 const { isAdminUser, findTrendItem, isRenderableGeneration } = helpers;
 const { bindRouteScope } = require("../src/server/api/route-scope");
@@ -27,6 +28,28 @@ test("text provider defaults use the selected OpenAI-compatible DeepSeek endpoin
   assert.equal(DEFAULT_APP_CONFIG.textProvider.model, "deepseek/deepseek-v4-flash");
   assert.equal(DEFAULT_APP_CONFIG.textProvider.openaiBaseUrl, "https://llm.runninghub.ai/v1");
   assert.equal(DEFAULT_APP_CONFIG.textProvider.anthropicBaseUrl, "");
+});
+
+test("trend routes preserve actionable AnySearch and model validation errors", () => {
+  assert.equal(getTrendAnalysisPublicErrorMessage({
+    code: "ANYSEARCH_NETWORK_ERROR",
+    message: "AnySearch 网络连接失败。",
+  }), "热点搜索服务暂时无法连接，请稍后重试。本次结果未保存，也不会扣积分。");
+  assert.doesNotMatch(getTrendAnalysisPublicErrorMessage({
+    code: "ANYSEARCH_NETWORK_ERROR",
+    message: "AnySearch 网络连接失败。",
+  }), /AnySearch|网络连接失败/);
+  assert.match(getTrendAnalysisPublicErrorMessage({
+    code: "TREND_MODEL_VALIDATION_FAILED",
+    message: "模型连续 3 次未返回完整趋势。",
+  }), /模型连续 3 次/);
+  assert.match(getTrendAnalysisPublicErrorMessage({ code: "PGY_TIMEOUT" }), /小红书热点数据/);
+  const internalMessage = getTrendAnalysisPublicErrorMessage({
+    code: "SQLITE_CONSTRAINT",
+    message: "UNIQUE constraint failed: trend_analysis_requests.request_id",
+  });
+  assert.equal(internalMessage, "本次分析未能获取到可用热点，请稍后重试。");
+  assert.doesNotMatch(internalMessage, /SQLITE|constraint|trend_analysis_requests/i);
 });
 
 test("production enables secure cookies unless explicitly disabled", () => {
@@ -408,6 +431,23 @@ test("trend analysis loading state is scoped by brand and bucket", () => {
   assert.doesNotMatch(analysisHandler, /showTrendAnalysisWarnings/);
   assert.match(appSource, /isTrendAnalysisLoading\(brand\.id, bucketKey\)/);
   assert.match(appSource, /previousBucket\?\.items\?\.length \? previousBucket : incomingBucket/);
+  assert.match(appSource, /message\.includes\("热点搜索服务"\)/);
+});
+
+test("trend display sorts every loaded bucket by score and refreshes visible ranks", () => {
+  const appSource = readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
+  const sortHelper = appSource.slice(
+    appSource.indexOf("function sortTrendItemsForDisplay"),
+    appSource.indexOf("function getTrendBucketsForBrand"),
+  );
+  const bucketHelper = appSource.slice(
+    appSource.indexOf("function getTrendBucketsForBrand"),
+    appSource.indexOf("function firstTrendBucket"),
+  );
+
+  assert.match(sortHelper, /right\.score - left\.score/);
+  assert.match(sortHelper, /rank:\s*index \+ 1/);
+  assert.match(bucketHelper, /items:\s*sortTrendItemsForDisplay\(bucket\.items\)/);
 });
 
 test("wechat long image content repairs a short model outline from the same generated pack", () => {

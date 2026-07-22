@@ -15,12 +15,18 @@ const DEFAULT_MAX_RESULTS_PER_QUERY = 6;
 const DEFAULT_MAX_EVIDENCE = 8;
 const DEFAULT_MAX_SOCIAL_EVIDENCE = 2;
 const DEFAULT_MIN_EVIDENCE = 2;
-const DEFAULT_REQUEST_RETRIES = 2;
+// CloudFront currently returns four A records; trying all four prevents three
+// unhealthy edges from masking the still-healthy fourth address.
+const DEFAULT_REQUEST_RETRIES = 3;
 const DEFAULT_DAILY_QUERY_LIMIT = 950;
 const DEFAULT_MAX_CACHE_ENTRIES = 100;
 const MAX_ANYSEARCH_RESPONSE_BYTES = 10 * 1024 * 1024;
 const evidenceCache = new Map();
 let dailyBudgetState = { date: "", keys: {} };
+let anySearchAddressCursor = 0;
+const anySearchAddressCooldowns = new Map();
+const DEFAULT_ANYSEARCH_CONNECT_TIMEOUT_MS = 6000;
+const DEFAULT_ANYSEARCH_ADDRESS_COOLDOWN_MS = 5 * 60 * 1000;
 
 const HIGH_TRUST_HOSTS = [
   "gov.cn",
@@ -80,7 +86,9 @@ function createAnySearchError(code, message, cause) {
 function redactSensitiveText(value) {
   return String(value || "")
     .replace(/\bas_sk_[a-z0-9_-]+\b/gi, "[redacted]")
-    .replace(/\b(?:api[_-]?key|authorization|token|bearer)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]");
+    .replace(/\b(authorization)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\b(bearer)(?:\s+|\s*[:=]\s*)[^\s,;]+/gi, "$1 [redacted]")
+    .replace(/\b(api[_-]?key|token)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]");
 }
 
 function isAnySearchQuotaExhaustion(statusCode, data, raw = "") {
@@ -250,15 +258,56 @@ function getBucketKey(bucketMeta) {
   return String(source?.key || source || "news").trim().toLowerCase();
 }
 
+function buildCategorySearchText(brand) {
+  const aliases = [];
+  if (isChildFamilySearchProfile(brand)) {
+    aliases.push("母婴", "儿童健康", "家长");
+  }
+  if (isMedicineSearchProfile(brand)) {
+    aliases.push("家庭健康", "健康信息沟通");
+  }
+  const categoryTerms = aliases.length ? aliases : [brand?.industry];
+  return truncateQueryValue([...new Set(categoryTerms.filter(Boolean))].join(" "), 100);
+}
+
+function isChildFamilySearchProfile(brand) {
+  return /(?:儿童|小儿|宝宝|婴幼儿|母婴|育儿|家长)/i.test(
+    [brand?.industry, brand?.product, brand?.audience, brand?.description]
+      .map((value) => String(value || ""))
+      .join(" "),
+  );
+}
+
+function isMedicineSearchProfile(brand) {
+  return /(?:药品|用药|感冒药|医药|制药|OTC|医疗器械)/i.test(
+    [brand?.industry, brand?.product, brand?.description].map((value) => String(value || "")).join(" "),
+  );
+}
+
+function buildTrafficMarketingCategoryText(brand) {
+  if (isChildFamilySearchProfile(brand)) {
+    return "母婴 育儿 家长";
+  }
+  return buildCategorySearchText(brand);
+}
+
+function isSafeTrafficEvidenceForMedicineBrand(item) {
+  const text = `${item?.title || ""} ${item?.snippet || ""}`;
+  return !/(?:药品|用药|感冒|发烧|咳嗽|症状|疾病|医疗|医学|诊疗|医生|药师|营养品|保健品|奶粉|乳铁蛋白|DHA|心理健康|黄疸|治疗|预防|功效|配方|成分)/i.test(text);
+}
+
 function buildGeneralQueryTexts(brand, bucketKey, now = new Date()) {
   const date = formatShanghaiDate(now);
+  const month = date.replace(/\d+日$/, "");
   const industry = truncateQueryValue(brand?.industry || "消费行业");
   const product = truncateQueryValue(brand?.product || industry);
   const audience = truncateQueryValue(brand?.audience || "目标消费者");
+  const categorySearch = buildCategorySearchText(brand) || industry;
+  const trafficCategorySearch = buildTrafficMarketingCategoryText(brand) || categorySearch;
   const byBucket = {
     traffic: [
-      `${date} 小红书 ${industry} ${product} 最近30天 热门内容形式 标题 封面 种草趋势`,
-      `${date} ${industry} ${product} 内容营销 案例 用户互动 趋势 最近30天`,
+      `${month} 小红书 ${trafficCategorySearch} 品牌 内容营销 社媒运营 案例 内容形式 用户洞察 最近30天`,
+      `${month} ${trafficCategorySearch} 消费者沟通 用户情绪 内容创作 社交媒体 品牌营销 最近30天`,
     ],
     news: [
       `${date} ${industry} ${product} 最近30天 新闻 政策 标准 消费趋势`,
@@ -286,7 +335,8 @@ function buildGeneralQueryTexts(brand, bucketKey, now = new Date()) {
 
 function buildSocialQueryTypes(bucketKey) {
   if (bucketKey === "social") return ["weibo", "zhihu"];
-  if (["traffic", "track", "crowd", "xhs"].includes(bucketKey)) return ["zhihu"];
+  if (bucketKey === "traffic") return ["weibo", "zhihu"];
+  if (["track", "crowd", "xhs"].includes(bucketKey)) return ["zhihu"];
   return [];
 }
 
@@ -303,11 +353,13 @@ function buildAnySearchQueries(brand, bucketMeta, config = {}, now = new Date())
   }));
   const socialTypes = config.socialEnabled === false ? [] : buildSocialQueryTypes(bucketKey);
   const socialKeyword = truncateQueryValue(
-    `${brand?.industry || ""} ${brand?.product || ""} ${brand?.audience || ""}`,
+    bucketKey === "traffic"
+      ? `${buildTrafficMarketingCategoryText(brand)} 品牌内容 家长讨论 用户情绪`
+      : `${brand?.industry || ""} ${brand?.product || ""} ${brand?.audience || ""}`,
     120,
   );
   const socialQueries = socialTypes.map((type) => ({
-    query: `${socialKeyword} ${bucketKey === "traffic" ? "内容趋势" : "用户讨论"}`.trim(),
+    query: `${socialKeyword} ${bucketKey === "traffic" ? "社媒内容观察" : "用户讨论"}`.trim(),
     domain: String(config.socialDomain || SOCIAL_DOMAIN),
     sub_domain: String(config.socialSubDomain || SOCIAL_SUB_DOMAIN),
     sub_domain_params: {
@@ -390,14 +442,20 @@ function isPrivateAddress(address) {
     );
   }
   if (ipVersion === 6) {
-    const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
+    if (embeddedIpv4 && isPrivateAddress(embeddedIpv4)) return true;
+    const hextets = normalized.split(":");
+    const firstHextet = Number.parseInt(hextets[0] || "0", 16);
+    const secondHextet = Number.parseInt(hextets[1] || "0", 16);
     return (
-      normalized === "::" ||
-      normalized === "::1" ||
-      (firstHextet & 0xfe00) === 0xfc00 ||
-      (firstHextet & 0xffc0) === 0xfe80 ||
-      (firstHextet & 0xffc0) === 0xfec0 ||
-      (firstHextet & 0xff00) === 0xff00
+      // Evidence URLs have no reason to resolve to transition, mapped, local,
+      // documentation, or protocol-assignment space. Only global 2000::/3
+      // addresses may be pinned for an outbound verification request.
+      (firstHextet & 0xe000) !== 0x2000 ||
+      (firstHextet === 0x2001 && secondHextet <= 0x01ff) ||
+      (firstHextet === 0x2001 && secondHextet === 0x0db8) ||
+      firstHextet === 0x2002 ||
+      firstHextet === 0x3ffe ||
+      (firstHextet === 0x3fff && secondHextet <= 0x0fff)
     );
   }
   return true;
@@ -462,6 +520,20 @@ function getDistinctiveMarketingTerms(brand) {
   return [...terms];
 }
 
+function getMarketingConceptClusters(brand) {
+  const profileText = [brand?.name, brand?.product, brand?.industry, brand?.audience, brand?.description]
+    .map((value) => String(value || ""))
+    .join(" ");
+  const clusters = [];
+  if (/(?:儿童|小儿|宝宝|婴幼儿|母婴|育儿|家长)/i.test(profileText)) {
+    clusters.push(["儿童", "孩子", "宝宝", "家长", "父母", "育儿", "母婴", "少儿", "儿科", "婴儿"]);
+  }
+  if (/(?:药品|用药|感冒药|医药|制药|OTC|医疗器械)/i.test(profileText)) {
+    clusters.push(["健康", "科普", "用药", "药品", "感冒", "护理", "养护", "家庭健康"]);
+  }
+  return clusters;
+}
+
 function isMarketingEvidenceRelevant(item, brand) {
   const haystack = normalizeRelevancePhrase(`${item?.title || ""} ${item?.snippet || ""}`);
   const strongPhrases = [brand?.name, brand?.product]
@@ -469,7 +541,12 @@ function isMarketingEvidenceRelevant(item, brand) {
     .filter((phrase) => phrase.length >= 2 && phrase.length <= 24);
   if (strongPhrases.some((phrase) => haystack.includes(phrase))) return true;
   const matchedTerms = getDistinctiveMarketingTerms(brand).filter((term) => haystack.includes(term));
-  return new Set(matchedTerms).size >= 2;
+  if (new Set(matchedTerms).size >= 2) return true;
+  const conceptClusters = getMarketingConceptClusters(brand);
+  if (!conceptClusters.length) return false;
+  const clusterMatches = conceptClusters.map((terms) => terms.filter((term) => haystack.includes(term)));
+  if (clusterMatches.every((matches) => matches.length >= 1)) return true;
+  return conceptClusters.length === 1 && clusterMatches[0].length >= 2;
 }
 
 function parseResultBlocks(sectionText, query, queryIndex) {
@@ -519,6 +596,26 @@ function looksLikeBrokenPage(item) {
   return /(?:页面不见了|页面不存在|网页不存在|page not found|404 not found|404 error)/i.test(`${title} ${excerpt}`);
 }
 
+function normalizeEvidencePublishedAt(explicitValue, snippet) {
+  const explicit = cleanSnippet(explicitValue || "", 80);
+  const source = `${explicit} ${String(snippet || "")}`;
+  const numericDate = source.match(/\b(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?(?!\d)/);
+  if (numericDate) {
+    const [, year, month, day] = numericDate;
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  const englishDate = source.match(/发布时间\s*[:：]\s*([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+[+-]\d{4}\s+20\d{2})/);
+  if (englishDate) {
+    const parsed = new Date(englishDate[1]);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  if (explicit) {
+    const parsed = new Date(explicit);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  return "";
+}
+
 function prepareEvidence(items, options = {}) {
   const maxSnippetChars = Math.max(200, Math.min(800, Number(options.maxSnippetChars || 520)));
   return (Array.isArray(items) ? items : [])
@@ -536,7 +633,7 @@ function prepareEvidence(items, options = {}) {
       return {
         title,
         url,
-        publishedAt: cleanSnippet(item?.publishedAt || "", 80),
+        publishedAt: normalizeEvidencePublishedAt(item?.publishedAt, item?.snippet),
         source: sanitizeEvidenceText(item?.source || parsed.hostname, 100),
         host: parsed.hostname.toLowerCase(),
         snippet: sanitizeEvidenceText(item?.snippet || "", maxSnippetChars),
@@ -569,11 +666,76 @@ function normalizeEvidence(items, options = {}) {
   return dedupeEvidence(prepareEvidence(items, options));
 }
 
+function getEvidenceFreshnessScore(item, now = new Date()) {
+  if (!item?.publishedAt) return 0;
+  const publishedAt = new Date(`${item.publishedAt}T00:00:00.000+08:00`);
+  const reference = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(publishedAt.getTime()) || Number.isNaN(reference.getTime())) return 0;
+  const ageDays = (reference.getTime() - publishedAt.getTime()) / 86400000;
+  if (ageDays < -7) return -2;
+  if (ageDays <= 45) return 5;
+  if (ageDays <= 120) return 3;
+  if (ageDays <= 365) return 1;
+  return -4;
+}
+
+const TRAFFIC_MARKETING_SIGNAL_PATTERNS = [
+  /(?:小红书|社交媒体|社媒|内容营销|品牌营销|社媒运营|营销案例|品牌观察|品牌.{0,6}活动|公益.{0,6}活动|活动传播|爆文|笔记|创作者|博主|达人|种草|传播策略)/i,
+  /(?:用户洞察|消费洞察|消费者|消费趋势|用户讨论|家长讨论|家长热议|消费情绪|内容需求|舆论场|沟通矛盾)/i,
+  /(?:内容形式|内容方向|内容创作|标题|封面|图文|短视频|评论区|互动方式|话题表达|生活场景|讨论场景)/i,
+];
+
+const MEDICAL_INSTRUCTION_SIGNAL_PATTERN = /(?:怎么防|怎么治|如何治疗|治疗方案|治愈|诊断|药方|偏方|处方|服药|吃药|喂药|用药指导|用药清单|药箱|备药|剂量|用量|药物搭配|说明书|临床指南|速通攻略|必读手册)/i;
+const HEALTH_PRODUCT_ADVERTORIAL_PATTERN = /(?:有没有|求|靠谱).{0,12}(?:益生菌|保健品|营养品|健康产品|药品).{0,10}(?:推荐|公司)|(?:认准|宝藏).{0,12}(?:企业|品牌|产品)/i;
+
+function getTrafficMarketingSignalScore(item) {
+  const url = String(item?.url || "");
+  if (/\/user\/profile\//i.test(url)) return -100;
+  const title = String(item?.title || "");
+  const text = `${title} ${item?.snippet || ""}`;
+  let score = 0;
+  for (const pattern of TRAFFIC_MARKETING_SIGNAL_PATTERNS) {
+    if (pattern.test(title)) score += 4;
+    else if (pattern.test(text)) score += 2;
+  }
+  if (item?.sourceType === "social" && /(?:讨论|热议|吐槽|焦虑|困扰|情绪|需求|问答|争议)/i.test(text)) score += 2;
+  if (MEDICAL_INSTRUCTION_SIGNAL_PATTERN.test(text)) score -= 5;
+  if (HEALTH_PRODUCT_ADVERTORIAL_PATTERN.test(text)) score -= 5;
+  return score;
+}
+
+function isTrafficMarketingEvidenceRelevant(item) {
+  return getTrafficMarketingSignalScore(item) > 0;
+}
+
+function isMedicineTrafficMarketingEvidenceRelevant(item, brand = null) {
+  const text = `${item?.title || ""} ${item?.snippet || ""}`;
+  if (!isTrafficMarketingEvidenceRelevant(item) || !isSafeTrafficEvidenceForMedicineBrand(item)) return false;
+  if (!brand || isChildFamilySearchProfile(brand)) {
+    return /(?:母婴|育儿|家长|父母|亲子|儿童|孩子|宝宝|婴幼儿)/i.test(text);
+  }
+  return isMarketingEvidenceRelevant(item, brand);
+}
+
+function sortEvidenceForSelection(items, options = {}) {
+  const preferRecent = Boolean(options.preferRecent);
+  const preferMarketingContent = Boolean(options.preferMarketingContent);
+  const now = options.now || new Date();
+  return [...items].sort((left, right) => {
+    const leftMarketingScore = preferMarketingContent ? getTrafficMarketingSignalScore(left) * 3 : 0;
+    const rightMarketingScore = preferMarketingContent ? getTrafficMarketingSignalScore(right) * 3 : 0;
+    const leftScore = (preferRecent ? left.trustScore * 4 + getEvidenceFreshnessScore(left, now) : left.trustScore) + leftMarketingScore;
+    const rightScore = (preferRecent ? right.trustScore * 4 + getEvidenceFreshnessScore(right, now) : right.trustScore) + rightMarketingScore;
+    return rightScore - leftScore || String(right.publishedAt).localeCompare(String(left.publishedAt)) || left.queryIndex - right.queryIndex;
+  });
+}
+
 function selectEvidence(items, options = {}) {
   const maxEvidence = Math.max(3, Math.min(12, Number(options.maxEvidence || DEFAULT_MAX_EVIDENCE)));
   const maxSocial = Math.max(0, Math.min(3, Number(options.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE)));
-  const social = items.filter((item) => item.sourceType === "social").slice(0, maxSocial);
-  const web = items.filter((item) => item.sourceType !== "social").slice(0, maxEvidence - social.length);
+  const ranked = sortEvidenceForSelection(items, options);
+  const social = ranked.filter((item) => item.sourceType === "social").slice(0, maxSocial);
+  const web = ranked.filter((item) => item.sourceType !== "social").slice(0, maxEvidence - social.length);
   return [...web, ...social]
     .sort((left, right) => right.trustScore - left.trustScore || left.queryIndex - right.queryIndex)
     .slice(0, maxEvidence)
@@ -594,9 +756,51 @@ function isAccessibleStatus(status) {
   return (normalized >= 200 && normalized < 400) || [401, 403, 405, 501].includes(normalized);
 }
 
-async function resolvePublicAddresses(hostname, lookupImpl = dns.promises.lookup) {
+function createAnySearchAbortError(message) {
+  const error = new Error(message);
+  error.name = "AbortError";
+  error.code = "ABORT_ERR";
+  return error;
+}
+
+function awaitWithAnySearchAbort(value, options = {}) {
+  const signal = options.signal;
+  const timeoutMs = Number(options.timeoutMs || 0);
+  if (signal?.aborted) return Promise.reject(createAnySearchAbortError("AnySearch DNS lookup was aborted"));
+  if (!signal && !(timeoutMs > 0)) return Promise.resolve(value);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout = null;
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+    const finish = (callback, result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(result);
+    };
+    const onAbort = () => finish(reject, createAnySearchAbortError("AnySearch DNS lookup was aborted"));
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    if (timeoutMs > 0) {
+      timeout = setTimeout(
+        () => finish(reject, createAnySearchAbortError("AnySearch DNS lookup timed out")),
+        timeoutMs,
+      );
+    }
+    Promise.resolve(value).then(
+      (result) => finish(resolve, result),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
+async function resolvePublicAddresses(hostname, lookupImpl = dns.promises.lookup, options = {}) {
   if (net.isIP(hostname)) return isPrivateAddress(hostname) ? [] : [{ address: hostname, family: net.isIP(hostname) }];
-  const result = await lookupImpl(hostname, { all: true, verbatim: true });
+  const lookup = Promise.resolve().then(() => lookupImpl(hostname, { all: true, verbatim: true }));
+  const result = await awaitWithAnySearchAbort(lookup, options);
   const addresses = Array.isArray(result) ? result : [result];
   if (!addresses.length || addresses.some((item) => isPrivateAddress(item?.address || item))) return [];
   return addresses.map((item) => ({
@@ -605,8 +809,8 @@ async function resolvePublicAddresses(hostname, lookupImpl = dns.promises.lookup
   }));
 }
 
-async function resolvePublicHostname(hostname, lookupImpl = dns.promises.lookup) {
-  return (await resolvePublicAddresses(hostname, lookupImpl)).length > 0;
+async function resolvePublicHostname(hostname, lookupImpl = dns.promises.lookup, options = {}) {
+  return (await resolvePublicAddresses(hostname, lookupImpl, options)).length > 0;
 }
 
 function createPinnedLookup(address, family = net.isIP(address)) {
@@ -621,9 +825,52 @@ function createPinnedLookup(address, family = net.isIP(address)) {
   };
 }
 
+function getEligibleAnySearchAddresses(addresses, now = Date.now()) {
+  const normalized = (Array.isArray(addresses) ? addresses : [])
+    .filter((item) => item?.address)
+    .sort((left, right) => Number(left.family || 0) - Number(right.family || 0) || String(left.address).localeCompare(String(right.address)));
+  const healthy = normalized.filter((item) => Number(anySearchAddressCooldowns.get(item.address) || 0) <= now);
+  return healthy.length ? healthy : normalized;
+}
+
+function markAnySearchAddressUnhealthy(address, now = Date.now(), cooldownMs = DEFAULT_ANYSEARCH_ADDRESS_COOLDOWN_MS) {
+  if (!address) return;
+  anySearchAddressCooldowns.set(String(address), now + Math.max(1000, Number(cooldownMs) || DEFAULT_ANYSEARCH_ADDRESS_COOLDOWN_MS));
+}
+
+function resetAnySearchAddressHealth() {
+  anySearchAddressCooldowns.clear();
+  anySearchAddressCursor = 0;
+}
+
+function selectAnySearchAddress(addresses, cursor = anySearchAddressCursor, now = Date.now()) {
+  if (!Array.isArray(addresses) || !addresses.length) return null;
+  const eligible = getEligibleAnySearchAddresses(addresses, now);
+  return eligible[Math.abs(Number(cursor) || 0) % eligible.length] || null;
+}
+
+function buildAnySearchRequestOptions(target, options = {}, pinnedLookup = null) {
+  const hostname = String(target?.hostname || "").toLowerCase();
+  const needsAnySearchTlsCompatibility = target.protocol === "https:" &&
+    (hostname === "api.anysearch.com" || hostname.endsWith(".anysearch.com"));
+  return {
+    method: options.method || "GET",
+    headers: options.headers || {},
+    signal: options.signal,
+    ...(options.agent !== undefined ? { agent: options.agent } : {}),
+    ...(pinnedLookup ? { lookup: pinnedLookup } : {}),
+    // AnySearch's CDN currently resets Node TLS 1.3 POST connections. Scope the
+    // compatibility limit to this integration instead of weakening global TLS.
+    ...(needsAnySearchTlsCompatibility ? { maxVersion: options.tlsMaxVersion || "TLSv1.2" } : {}),
+  };
+}
+
 async function requestPinnedUrl(value, options = {}) {
   const parsed = new URL(value);
-  const addresses = await resolvePublicAddresses(parsed.hostname, options.lookupImpl || dns.promises.lookup);
+  const addresses = await resolvePublicAddresses(parsed.hostname, options.lookupImpl || dns.promises.lookup, {
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
   if (!addresses.length) throw new Error("URL hostname does not resolve exclusively to public addresses");
   const pinned = addresses[0];
   const transport = parsed.protocol === "https:" ? https : http;
@@ -668,7 +915,7 @@ async function checkUrlAccessible(value, options = {}) {
     for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
       const parsed = new URL(currentUrl);
       if (SOCIAL_HOSTS.some((host) => hostMatches(parsed.hostname, host))) {
-        return resolvePublicHostname(parsed.hostname, lookupImpl);
+        return resolvePublicHostname(parsed.hostname, lookupImpl, { signal: controller.signal, timeoutMs });
       }
       const response = await requestPinnedUrl(currentUrl, {
         method: "HEAD",
@@ -700,25 +947,54 @@ async function requestAnySearchHttp(url, options = {}) {
   const body = options.body == null ? "" : String(options.body);
   const headers = { ...(options.headers || {}) };
   let pinnedLookup = null;
+  let pinnedAddress = null;
   if (!net.isIP(target.hostname) && !["localhost", "localhost.localdomain"].includes(target.hostname.toLowerCase())) {
-    const addresses = await resolvePublicAddresses(target.hostname, options.lookupImpl || dns.promises.lookup);
+    const addresses = await resolvePublicAddresses(target.hostname, options.lookupImpl || dns.promises.lookup, {
+      signal: options.signal,
+      timeoutMs: Math.max(1000, Number(options.connectTimeoutMs || DEFAULT_ANYSEARCH_CONNECT_TIMEOUT_MS)),
+    });
     if (!addresses.length) throw new Error("AnySearch hostname does not resolve exclusively to public addresses");
-    pinnedLookup = createPinnedLookup(addresses[0].address, addresses[0].family);
+    pinnedAddress = selectAnySearchAddress(addresses);
+    anySearchAddressCursor = (anySearchAddressCursor + 1) % Number.MAX_SAFE_INTEGER;
+    pinnedLookup = createPinnedLookup(pinnedAddress.address, pinnedAddress.family);
   }
   if (body && !Object.keys(headers).some((name) => name.toLowerCase() === "content-length")) {
     headers["Content-Length"] = Buffer.byteLength(body);
   }
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let responseStarted = false;
+    let connectionReady = false;
+    let connectTimer = null;
+    const clearConnectTimer = () => {
+      if (connectTimer) clearTimeout(connectTimer);
+      connectTimer = null;
+    };
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      clearConnectTimer();
+      if (!connectionReady && pinnedAddress?.address) markAnySearchAddressUnhealthy(pinnedAddress.address);
+      if (error) {
+        if (pinnedAddress?.address) error.anySearchAddress = pinnedAddress.address;
+        error.anySearchStage = responseStarted ? "response" : connectionReady ? "headers" : "connect";
+      }
+      reject(error);
+    };
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      clearConnectTimer();
+      resolve(value);
+    };
     const request = transport.request(
       target,
-      {
-        method: options.method || "GET",
-        headers,
-        signal: options.signal,
-        ...(pinnedLookup ? { lookup: pinnedLookup } : {}),
-      },
+      buildAnySearchRequestOptions(target, { ...options, headers }, pinnedLookup),
       (response) => {
+        responseStarted = true;
+        connectionReady = true;
+        clearConnectTimer();
         const chunks = [];
         let totalBytes = 0;
         response.on("data", (chunk) => {
@@ -731,15 +1007,38 @@ async function requestAnySearchHttp(url, options = {}) {
         });
         response.on("end", () => {
           const raw = Buffer.concat(chunks).toString("utf8");
-          resolve({
+          resolveOnce({
             ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
             status: Number(response.statusCode || 0),
             text: async () => raw,
           });
         });
+        response.on("aborted", () => rejectOnce(new Error("AnySearch response was aborted")));
+        response.on("error", rejectOnce);
       },
     );
-    request.on("error", reject);
+    request.on("socket", (socket) => {
+      const isSecure = target.protocol === "https:";
+      const readyEvent = isSecure ? "secureConnect" : "connect";
+      const socketIsAlreadyReady = request.reusedSocket === true || (
+        !socket.connecting && (!isSecure || socket.secureConnecting === false)
+      );
+      if (socketIsAlreadyReady) {
+        connectionReady = true;
+        clearConnectTimer();
+        return;
+      }
+      connectTimer = setTimeout(() => {
+        const error = new Error("AnySearch connection timed out");
+        error.code = "ETIMEDOUT";
+        request.destroy(error);
+      }, Math.max(1000, Number(options.connectTimeoutMs || DEFAULT_ANYSEARCH_CONNECT_TIMEOUT_MS)));
+      socket.once(readyEvent, () => {
+        connectionReady = true;
+        clearConnectTimer();
+      });
+    });
+    request.on("error", rejectOnce);
     request.end(body || undefined);
   });
 }
@@ -757,6 +1056,7 @@ async function requestAnySearch(config, queries, options = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(config.timeoutMs || 30000)));
     let reservation = null;
+    let responseReceived = false;
     try {
       // A timeout/5xx can happen after AnySearch processed the batch, so every outbound attempt
       // reserves query units on the least-used key. This keeps each key's 950-unit ceiling fail-closed.
@@ -780,7 +1080,9 @@ async function requestAnySearch(config, queries, options = {}) {
           },
         }),
         signal: controller.signal,
+        connectTimeoutMs: Number(config.connectTimeoutMs || DEFAULT_ANYSEARCH_CONNECT_TIMEOUT_MS),
       });
+      responseReceived = true;
       const raw = await response.text();
       let data;
       try {
@@ -813,10 +1115,22 @@ async function requestAnySearch(config, queries, options = {}) {
       if (reservation && ["ANYSEARCH_QUOTA_EXHAUSTED", "ANYSEARCH_KEY_REJECTED"].includes(lastError.code)) {
         markAnySearchKeyExhausted(config, reservation.keyId, options.now || new Date());
       }
+      const failureStage = String(error?.anySearchStage || error?.cause?.anySearchStage || "");
+      const requestMayHaveReachedServer = responseReceived || ["headers", "response"].includes(failureStage);
       const retryable =
-        ["ANYSEARCH_TIMEOUT", "ANYSEARCH_NETWORK_ERROR"].includes(lastError.code) ||
-        (lastError.code === "ANYSEARCH_API_ERROR" && (lastError.statusCode === 429 || lastError.statusCode >= 500)) ||
+        (!requestMayHaveReachedServer && ["ANYSEARCH_TIMEOUT", "ANYSEARCH_NETWORK_ERROR"].includes(lastError.code)) ||
+        (lastError.code === "ANYSEARCH_API_ERROR" && lastError.statusCode === 429) ||
         (["ANYSEARCH_QUOTA_EXHAUSTED", "ANYSEARCH_KEY_REJECTED"].includes(lastError.code) && reservation?.keyCount > 1);
+      if (["ANYSEARCH_TIMEOUT", "ANYSEARCH_NETWORK_ERROR"].includes(lastError.code)) {
+        console.warn("[anysearch] direct request attempt failed", {
+          attempt: attempt + 1,
+          maxAttempts: retries + 1,
+          code: lastError.code,
+          transportCode: String(error?.code || error?.cause?.code || "UNKNOWN").slice(0, 40),
+          stage: String(error?.anySearchStage || error?.cause?.anySearchStage || "unknown").slice(0, 20),
+          address: String(error?.anySearchAddress || error?.cause?.anySearchAddress || "").slice(0, 64),
+        });
+      }
       if (!retryable || attempt >= retries) throw lastError;
       const delayMs = Math.max(0, Math.min(2000, Number(options.retryDelayMs ?? config.retryDelayMs ?? 350))) * (attempt + 1);
       if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -835,6 +1149,10 @@ function buildCacheKey(config, queries, brand, options = {}) {
       name: normalizeRelevancePhrase(brand?.name),
       industry: normalizeRelevancePhrase(brand?.industry),
       product: normalizeRelevancePhrase(brand?.product),
+      audience: normalizeRelevancePhrase(brand?.audience),
+      description: normalizeRelevancePhrase(brand?.description),
+      medicineProfile: isMedicineSearchProfile(brand),
+      childFamilyProfile: isChildFamilySearchProfile(brand),
     },
     urlCheckEnabled: config.urlCheckEnabled !== false,
     maxEvidence: config.maxEvidence || DEFAULT_MAX_EVIDENCE,
@@ -924,10 +1242,22 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
   const markdown = await requestImpl(config, queries, options);
   const parsed = parseAnySearchMarkdown(markdown, queries);
   const accessibilityCache = new Map();
+  const bucketKey = getBucketKey(bucketMeta);
+  const medicineTraffic = bucketKey === "traffic" && isMedicineSearchProfile(brand);
   const normalized = normalizeEvidence(parsed, config)
-    .filter((item) => isMarketingEvidenceRelevant(item, brand));
-  const accessible = await getAccessibleEvidence(normalized, config, options, accessibilityCache);
-  const evidence = selectEvidence(accessible, config);
+    .filter((item) => medicineTraffic
+      ? isMedicineTrafficMarketingEvidenceRelevant(item, brand)
+      : isMarketingEvidenceRelevant(item, brand));
+  const bucketRelevant = bucketKey === "traffic"
+    ? normalized.filter(isTrafficMarketingEvidenceRelevant)
+    : normalized;
+  const accessible = await getAccessibleEvidence(bucketRelevant, config, options, accessibilityCache);
+  const evidence = selectEvidence(accessible, {
+    ...config,
+    now: options.now || new Date(),
+    preferRecent: ["traffic", "news", "social"].includes(bucketKey),
+    preferMarketingContent: bucketKey === "traffic",
+  });
   const reliableCount = countReliableEvidence(evidence);
   const minEvidence = Math.max(
     1,
@@ -974,7 +1304,15 @@ module.exports = {
   buildAnySearchQueries,
   parseAnySearchMarkdown,
   normalizeEvidence,
+  normalizeEvidencePublishedAt,
   selectEvidence,
+  sortEvidenceForSelection,
+  isMarketingEvidenceRelevant,
+  getTrafficMarketingSignalScore,
+  isTrafficMarketingEvidenceRelevant,
+  isMedicineTrafficMarketingEvidenceRelevant,
+  isChildFamilySearchProfile,
+  isSafeTrafficEvidenceForMedicineBrand,
   isPrivateAddress,
   isSafePublicUrl,
   checkUrlAccessible,
@@ -984,6 +1322,10 @@ module.exports = {
   isAnySearchQuotaExhaustion,
   sanitizeEvidenceText,
   createPinnedLookup,
+  selectAnySearchAddress,
+  markAnySearchAddressUnhealthy,
+  resetAnySearchAddressHealth,
+  buildAnySearchRequestOptions,
   getSafeRedirectUrl,
   isAccessibleStatus,
   consumeAnySearchBudget,

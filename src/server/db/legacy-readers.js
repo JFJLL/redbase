@@ -83,7 +83,7 @@ function readStoreFromCurrentSchema() {
   }
 
   const trendRows = db.prepare(`
-    SELECT row_id, trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json
+    SELECT row_id, trend_id, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, evidence_ids_json, evidence_snapshot_json
     FROM trends
     ORDER BY brand_id DESC, scope ASC, analysis_id ASC, bucket_key ASC, position ASC
   `).all();
@@ -100,6 +100,8 @@ function readStoreFromCurrentSchema() {
       summary: row.summary,
       score: row.score,
       tags: safeParseArray(row.tags_json),
+      evidenceIds: safeParseArray(row.evidence_ids_json),
+      evidence: safeParseArray(row.evidence_snapshot_json),
       reason: row.reason,
       customPrompt: row.custom_prompt || "",
       ideas: readIdeasForTrendRow(row.row_id),

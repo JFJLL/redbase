@@ -34,6 +34,24 @@ function mergeGeneratedTrendBucket(existingBuckets, generatedBuckets) {
   ];
 }
 
+function getTrendAnalysisPublicErrorMessage(error) {
+  const code = String(error?.code || "");
+  if (["ANYSEARCH_NETWORK_ERROR", "ANYSEARCH_TIMEOUT"].includes(code)) {
+    return "热点搜索服务暂时无法连接，请稍后重试。本次结果未保存，也不会扣积分。";
+  }
+  if (["ANYSEARCH_QUOTA_EXHAUSTED", "ANYSEARCH_DAILY_LIMIT", "ANYSEARCH_KEY_REJECTED"].includes(code)) {
+    return "热点搜索服务当前不可用，请稍后重试或联系管理员。本次结果未保存，也不会扣积分。";
+  }
+  if (code.startsWith("ANYSEARCH_")) {
+    return "热点来源暂时不可用，请稍后重试。本次结果未保存，也不会扣积分。";
+  }
+  if (code.startsWith("TREND_")) {
+    return String(error?.message || "本次分析未能获取到可用热点，请稍后重试。");
+  }
+  if (code.startsWith("PGY_")) return getPgyPublicErrorMessage(error);
+  return "本次分析未能获取到可用热点，请稍后重试。";
+}
+
 async function handleTrendRoutes(context, req, res, pathname) {
   const {
     appConfig,
@@ -239,9 +257,9 @@ async function handleTrendRoutes(context, req, res, pathname) {
         brandName: brand.name,
         bucketKey: selectedBucket.key,
         code: error?.code || "UNKNOWN",
-        message: error?.code ? getPgyPublicErrorMessage(error) : error?.message || "unknown error",
+        message: getTrendAnalysisPublicErrorMessage(error),
       });
-      badRequest(res, error?.code ? getPgyPublicErrorMessage(error) : error?.message || "本次分析未能获取到可用热点，请稍后重试。");
+      badRequest(res, getTrendAnalysisPublicErrorMessage(error));
       return true;
     }
     return true;
@@ -342,5 +360,6 @@ async function handleTrendRoutes(context, req, res, pathname) {
 }
 
 module.exports = {
+  getTrendAnalysisPublicErrorMessage,
   handleTrendRoutes,
 };

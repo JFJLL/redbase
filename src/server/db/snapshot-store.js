@@ -138,8 +138,8 @@ async function writeStore(data) {
   const insertAnalysis = db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, brand_brief_json, position) VALUES (?, ?, ?, ?, ?, ?)");
   const insertTrend = db.prepare(`
     INSERT INTO trends (
-      trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, position
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      trend_id, stable_key, brand_id, analysis_id, scope, bucket_key, bucket_title, bucket_description, rank, title, category, summary, score, reason, custom_prompt, system_prompt, tags_json, evidence_ids_json, evidence_snapshot_json, position
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertIdea = db.prepare(`
     INSERT INTO ideas (
@@ -331,6 +331,8 @@ async function writeStore(data) {
               trend.customPrompt || "",
               "",
               JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
+              JSON.stringify(Array.isArray(trend.evidenceIds) ? trend.evidenceIds : []),
+              JSON.stringify(Array.isArray(trend.evidence) ? trend.evidence : []),
               trendPosition,
           );
 
@@ -370,6 +372,8 @@ async function writeStore(data) {
             trend.customPrompt || "",
             "",
           JSON.stringify(Array.isArray(trend.tags) ? trend.tags : []),
+          JSON.stringify(Array.isArray(trend.evidenceIds) ? trend.evidenceIds : []),
+          JSON.stringify(Array.isArray(trend.evidence) ? trend.evidence : []),
           trendPosition,
         );
 

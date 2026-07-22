@@ -1109,6 +1109,15 @@ function shouldResetTrendAnalysisRequestId(error) {
 
 function formatTrendAnalysisError(error) {
   const message = String(error?.message || "");
+  if (message.includes("热点搜索服务") || message.includes("热点来源暂时不可用")) {
+    return [
+      "热点搜索服务暂时不可用，请稍后重试。",
+      "",
+      "服务器这次没有拿到可核验的趋势来源，结果不会保存，也不会扣积分。",
+      "",
+      "请稍后再次点击当前维度的生成按钮；其他维度不受影响。",
+    ].join("\n");
+  }
   if (message.includes("contentAssets") || message.includes("内容资产")) {
     return [
       "当前维度的趋势和选题已经开始生成，但模型没有按结构完整返回内容资产，本次结果未保存。",
@@ -1602,6 +1611,17 @@ function getDefaultTrendBucket(key) {
   return DEFAULT_TREND_BUCKETS.find((bucket) => bucket.key === normalizeTrendBucketKey(key)) || null;
 }
 
+function sortTrendItemsForDisplay(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item, index) => ({
+      item,
+      index,
+      score: Number.isFinite(Number(item?.score)) ? Number(item.score) : -1,
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map(({ item }, index) => ({ ...item, rank: index + 1 }));
+}
+
 function getTrendBucketsForBrand(brand) {
   const bucketsByKey = new Map(
     DEFAULT_TREND_BUCKETS.map((bucket) => [
@@ -1619,7 +1639,9 @@ function getTrendBucketsForBrand(brand) {
     if (!base) continue;
     bucketsByKey.set(key, {
       ...base,
-      items: Array.isArray(bucket.items) ? bucket.items : [],
+      // Historical snapshots may predate the server-side score ordering. Keep
+      // every display and selection path consistent without mutating storage.
+      items: sortTrendItemsForDisplay(bucket.items),
     });
   }
 

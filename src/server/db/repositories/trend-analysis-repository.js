@@ -1,12 +1,10 @@
 const { getDbProxy } = require("../connection");
-const { runTransaction } = require("./core-repository");
+const { TREND_ANALYSIS_RESERVATION_TTL_MS, runTransaction } = require("./core-repository");
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
 const { findBrandByOwner, upsertBrandFull } = require("./brand-repository");
 
 const db = getDbProxy();
-const RESERVATION_TTL_MS = 15 * 60 * 1000;
-
 function normalizeRequestId(value) {
   const requestId = String(value || "").trim();
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)) return "";
@@ -23,7 +21,7 @@ function findTrendAnalysisRequest({ requestId, userId, brandId, bucketKey }) {
 }
 
 function expireStaleReservations(userId, nowMs) {
-  const cutoff = new Date(nowMs - RESERVATION_TTL_MS).toISOString();
+  const cutoff = new Date(nowMs - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
   db.prepare(`
     UPDATE trend_analysis_requests
     SET status = 'failed', error = 'reservation expired', updated_at = ?

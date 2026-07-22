@@ -69,6 +69,26 @@ function sanitizeIdea(idea, fallbackAudience, fallbackTag) {
   };
 }
 
+function sanitizeTrendEvidence(item) {
+  return {
+    provider: String(item?.provider || ""),
+    id: String(item?.id || ""),
+    title: String(item?.title || ""),
+    url: String(item?.url || ""),
+    source: String(item?.source || ""),
+    host: String(item?.host || ""),
+    publishedAt: String(item?.publishedAt || ""),
+    snippet: String(item?.snippet || ""),
+    sourceType: String(item?.sourceType || ""),
+    platformType: String(item?.platformType || ""),
+    trustLevel: String(item?.trustLevel || ""),
+    retrievedAt: String(item?.retrievedAt || ""),
+    ...(item?.metrics && typeof item.metrics === "object" && !Array.isArray(item.metrics)
+      ? { metrics: sanitizePayloadForClient(item.metrics) }
+      : {}),
+  };
+}
+
 function sanitizeTrend(trend) {
   return {
     id: trend.id,
@@ -79,6 +99,8 @@ function sanitizeTrend(trend) {
     summary: trend.summary,
     score: trend.score,
     tags: normalizeTags(trend.tags),
+    evidenceIds: Array.isArray(trend.evidenceIds) ? trend.evidenceIds.map((item) => String(item || "")) : [],
+    evidence: Array.isArray(trend.evidence) ? trend.evidence.map((item) => sanitizeTrendEvidence(item)) : [],
     reason: trend.reason,
     ideas: Array.isArray(trend.ideas) ? trend.ideas.map((idea) => sanitizeIdea(idea)) : [],
     customPrompt: trend.customPrompt || "",

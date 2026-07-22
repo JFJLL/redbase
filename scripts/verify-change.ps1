@@ -33,9 +33,9 @@ function Resolve-RepoPath {
 function Get-ChangedFiles {
     param([string]$Root)
     $items = [Collections.Generic.List[string]]::new()
-    $tracked = @(& git -C $Root diff --name-only --diff-filter=ACMRTUXB HEAD -- 2>$null)
+    $tracked = @(& git -C $Root diff --name-only --diff-filter=ACMRTUXBD HEAD -- 2>$null)
     if ($LASTEXITCODE -ne 0) {
-        $tracked = @(& git -C $Root diff --name-only --diff-filter=ACMRTUXB -- 2>$null)
+        $tracked = @(& git -C $Root diff --name-only --diff-filter=ACMRTUXBD -- 2>$null)
     }
     $untracked = @(& git -C $Root ls-files --others --exclude-standard 2>$null)
     foreach ($item in @($tracked) + @($untracked)) {
