@@ -4,6 +4,14 @@ const {
   hasVolatileTrendPrice,
 } = require("../trend-copy-quality");
 const { callTextModelJson } = require("./text-provider");
+const {
+  DEFAULT_BUDGETS,
+  createAiCallBudget,
+  isAiCallBudgetExceededError,
+  buildBudgetExceededPartial,
+  throwBudgetExceeded,
+  BUDGET_EXCEEDED_REASON,
+} = require("./ai-call-budget");
 const { normalizeIdeaContentAssets, hasCompleteIdeaContentAssets } = require("./content-service");
 const {
   DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
@@ -2911,8 +2919,15 @@ async function generateAiTrendSet(appConfig, brand, baseId, options = {}) {
 async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, options = {}) {
   const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   const textModelImpl = options.textModelImpl || callTextModelJson;
+  const usesProviderBudget = textModelImpl === callTextModelJson;
+  const aiBudget = options.aiCallBudget || createAiCallBudget({
+    task: "trend_analysis",
+    maxCalls: options.maxAiCalls ?? DEFAULT_BUDGETS.trend_analysis,
+  });
   const startedAt = Date.now();
   // Brand Info → Brand Intelligence → Trend Analysis
+  // Brand intelligence is currently deterministic (0 model calls). A future
+  // model-backed path must consume from aiBudget / brand_intelligence budget.
   const brandIntelligence = options.brandIntelligence
     || (isMedicineTrafficPrompt(brand, selectedBucketMeta)
       ? buildSafeBrandIntelligenceForMedicineTraffic(brand)
@@ -2922,6 +2937,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     brandName: brand.name,
     brand_position: String(brandIntelligence.brand_position || "").slice(0, 80),
     purchase_trigger: String(brandIntelligence.purchase_trigger || "").slice(0, 80),
+    aiBudget: aiBudget.snapshot(),
   });
   const resolvedPgyEvidence = await resolvePgyEvidenceForTrendAnalysis(appConfig, brand, selectedBucketMeta, options);
   const pgyEvidence = resolvedPgyEvidence && (resolvedPgyEvidence.notes || []).length >= TREND_ITEMS_PER_BUCKET
@@ -2966,13 +2982,18 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       });
     }
     // Evidence Normalize -> Signal Extraction -> Trend Opportunity Generation
+    // Deterministic signal extraction uses 0 model calls but still shares the budget marker.
     const marketSignals = options.marketSignals
-      || extractMarketSignalsFromSources({ brand, anySearchEvidence, pgyEvidence });
+      || extractMarketSignalsFromSources({ brand, anySearchEvidence, pgyEvidence, budget: aiBudget });
+    if (marketSignals?.partial && marketSignals?.reason === BUDGET_EXCEEDED_REASON) {
+      throwBudgetExceeded(aiBudget);
+    }
     console.log("[trend-analysis] market signals extracted", {
       brandId: brand.id,
       brandName: brand.name,
       signalCount: marketSignals?.signals?.length || 0,
       sampleKeywords: (marketSignals?.signals || []).slice(0, 3).map((item) => item.keyword),
+      aiBudget: aiBudget.snapshot(),
     });
     const modelTiming = {
       requestedAt: new Date().toISOString(),
@@ -2987,6 +3008,9 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       validationFailures: 0,
       normalizationMs: 0,
       citationReferencesResolved: 0,
+      aiCallsUsed: 0,
+      aiCallsRemaining: aiBudget.remaining(),
+      aiCallBudget: aiBudget.maxCalls,
     };
     const validationNow = options.anySearchOptions?.now || anySearchEvidence?.retrievedAt || pgyEvidence?.retrievedAt || new Date();
     const fullGenerationSystemPrompt = buildTrendAnalysisSystemPrompt(selectedBucketMeta, { trendCount: TREND_ITEMS_PER_BUCKET });
@@ -2994,6 +3018,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     let trendBuckets = null;
     let candidateBuckets = null;
     let lastValidationIssues = [];
+    let budgetExceeded = false;
     const modelDeadlineAt = Date.now() + Math.max(
       1000,
       Number(options.trendModelBudgetMs || TREND_ANALYSIS_MODEL_BUDGET_MS),
@@ -3004,6 +3029,18 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       ?? MAX_TARGETED_TREND_REPAIRS_PER_REQUEST;
 
     for (let generationAttempt = 0; generationAttempt < TREND_GENERATION_ATTEMPTS; generationAttempt += 1) {
+      // Shared AI call budget: stop generation/repair retries once exhausted.
+      if (aiBudget.exhausted()) {
+        budgetExceeded = true;
+        console.warn("[trend-analysis] AI call budget exhausted; stopping generation retries", {
+          brandId: brand.id,
+          brandName: brand.name,
+          generationAttempt: generationAttempt + 1,
+          ...aiBudget.snapshot(),
+        });
+        break;
+      }
+
       const requiresFullRegeneration = shouldRegenerateEntireTrendBatch(
         lastValidationIssues,
         candidateBuckets,
@@ -3049,6 +3086,10 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         modelTiming.fullRegenerationRequests += 1;
       }
       let requestTransportAttempts = 0;
+      const transportAttemptsAllowed = Math.min(
+        TREND_MODEL_TRANSPORT_ATTEMPTS,
+        Math.max(1, aiBudget.remaining()),
+      );
       console.log("[trend-analysis] calling single-bucket text model", {
         brandId: brand.id,
         brandName: brand.name,
@@ -3060,6 +3101,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         evidenceProvider: anySearchEvidence ? "anysearch" : "pgy",
         evidenceCount: anySearchEvidence?.evidence?.length || pgyEvidence?.notes?.length || 0,
         userPromptLength: userPrompt.length,
+        transportAttemptsAllowed,
+        aiBudget: aiBudget.snapshot(),
       });
       const modelStartedAt = Date.now();
       const configuredOutputTokens = Number(options.trendMaxOutputTokens || Math.min(
@@ -3077,6 +3120,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       const configuredRequestTimeoutMs = Number(options.textTimeoutMs || requestTimeoutLimitMs);
       let result;
       try {
+        // Injected mocks bypass text-provider budget accounting; consume one
+        // logical call here. Real callTextModelJson consumes each transport attempt.
+        if (!usesProviderBudget) {
+          aiBudget.consume();
+        }
         result = await textModelImpl(appConfig, {
           systemPrompt,
           userPrompt,
@@ -3088,13 +3136,15 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             remainingModelBudgetMs,
           )),
           // A logical generation may retry only pre-completion transport errors;
-          // callTextModelJson shares this one timeout across all physical attempts.
-          maxAttempts: TREND_MODEL_TRANSPORT_ATTEMPTS,
+          // callTextModelJson shares this one timeout across all physical attempts
+          // and is further capped by the remaining AI call budget.
+          maxAttempts: transportAttemptsAllowed,
           delayMs: 5000,
           maxOutputTokens: requestMaxOutputTokens,
           // The browser still receives one atomic JSON result. Streaming only keeps
           // the server-to-RunningHub connection active during the long 10-card decode.
           stream: true,
+          budget: usesProviderBudget ? aiBudget : undefined,
           onTelemetry(event) {
             if (event.type === "attempt") requestTransportAttempts = Math.max(requestTransportAttempts, Number(event.attempt || 0));
             if (event.type === "first-byte" && modelTiming.ttfbMs == null) modelTiming.ttfbMs = event.elapsedMs;
@@ -3104,10 +3154,25 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       } catch (error) {
         modelTiming.requestMs += Date.now() - modelStartedAt;
         modelTiming.transportAttempts += Math.max(1, requestTransportAttempts);
+        modelTiming.aiCallsUsed = aiBudget.snapshot().calls_used;
+        modelTiming.aiCallsRemaining = aiBudget.remaining();
+        if (isAiCallBudgetExceededError(error)) {
+          budgetExceeded = true;
+          console.warn("[trend-analysis] AI call budget exceeded during model request", {
+            brandId: brand.id,
+            brandName: brand.name,
+            generationAttempt: generationAttempt + 1,
+            requestMode,
+            ...aiBudget.snapshot(),
+          });
+          break;
+        }
         throw error;
       }
       modelTiming.requestMs += Date.now() - modelStartedAt;
       modelTiming.transportAttempts += Math.max(1, requestTransportAttempts);
+      modelTiming.aiCallsUsed = aiBudget.snapshot().calls_used;
+      modelTiming.aiCallsRemaining = aiBudget.remaining();
       const normalizationStartedAt = Date.now();
       let repairIssues = [];
       if (repairPlan) {
@@ -3202,16 +3267,38 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         issueCount: validationIssues.length,
         issueReasons: [...new Set(validationIssues.map((issue) => issue.reason))],
         examples: validationIssues.slice(0, 5),
+        aiBudget: aiBudget.snapshot(),
       });
+      if (aiBudget.exhausted()) {
+        budgetExceeded = true;
+        console.warn("[trend-analysis] AI call budget exhausted after validation failure; no further repair", {
+          brandId: brand.id,
+          brandName: brand.name,
+          ...aiBudget.snapshot(),
+        });
+        break;
+      }
       if (generationAttempt >= 1 && !canUseFinalFieldScopedTrendRepair(validationIssues)) break;
     }
 
     if (!trendBuckets) {
+      if (budgetExceeded || aiBudget.exhausted()) {
+        const partial = buildBudgetExceededPartial(aiBudget);
+        console.warn("[trend-analysis] AI call budget exceeded; partial stop without complete trends", {
+          brandId: brand.id,
+          brandName: brand.name,
+          modelRequests: modelTiming.modelRequests,
+          ...partial,
+        });
+        // Required shape is attached on the error as partial + reason (and partialResult).
+        throwBudgetExceeded(aiBudget);
+      }
       const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。`);
       validationError.code = "TREND_MODEL_VALIDATION_FAILED";
       validationError.issues = lastValidationIssues;
       throw validationError;
     }
+    const budgetSnap = aiBudget.snapshot();
     const metrics = {
       searchDurationMs,
       modelRequestMs: modelTiming.requestMs,
@@ -3225,6 +3312,9 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       validationFailures: modelTiming.validationFailures,
       normalizationMs: modelTiming.normalizationMs,
       citationReferencesResolved: modelTiming.citationReferencesResolved,
+      aiCallsUsed: budgetSnap.calls_used,
+      aiCallsRemaining: budgetSnap.calls_remaining,
+      aiCallBudget: budgetSnap.maxCalls,
       localRepairMs: 0,
       repairedFields: 0,
       filled: 0,
@@ -3239,6 +3329,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       ...metrics,
     });
     Object.defineProperty(trendBuckets, "analysisMetrics", { value: metrics, enumerable: false, configurable: true });
+    Object.defineProperty(trendBuckets, "aiCallBudget", { value: budgetSnap, enumerable: false, configurable: true });
     try {
       const evaluationRun = recordAiRun({
         task: EVALUATION_TASKS.TREND_ANALYSIS,
@@ -3256,6 +3347,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           modelAttempts: metrics.modelAttempts,
           validationFailures: metrics.validationFailures,
           targetedRepairRequests: metrics.targetedRepairRequests,
+          aiCallsUsed: metrics.aiCallsUsed,
+          aiCallsRemaining: metrics.aiCallsRemaining,
           auto_quality_score: estimateTrendAutoQualityScore(metrics, true),
         },
       });
@@ -3272,6 +3365,22 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     }
     return attachAnalysisWarnings(trendBuckets, []);
   } catch (error) {
+    if (isAiCallBudgetExceededError(error)) {
+      console.warn("[trend-analysis] AI call budget exceeded", {
+        brandId: brand.id,
+        brandName: brand.name,
+        bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
+        ...aiBudget.snapshot(),
+        partial: true,
+        reason: BUDGET_EXCEEDED_REASON,
+      });
+      // Re-throw so the API fails the request without saving or charging credits.
+      // partial/reason match the required budget-exceeded contract.
+      if (!error.partial) error.partial = true;
+      if (!error.reason) error.reason = BUDGET_EXCEEDED_REASON;
+      if (!error.code) error.code = "TREND_AI_CALL_BUDGET_EXCEEDED";
+      throw error;
+    }
     console.warn("[trend-analysis] failed without template fallback", {
       brandId: brand.id,
       brandName: brand.name,
@@ -3292,6 +3401,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
           errorCode: error?.code || "",
           errorMessage: String(error?.message || "unknown error").slice(0, 300),
+          aiCallsUsed: aiBudget.snapshot().calls_used,
+          aiCallsRemaining: aiBudget.remaining(),
         },
       });
     } catch (evaluationError) {
@@ -3445,6 +3556,8 @@ async function ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex, 
 module.exports = {
   PGY_XHS_TREND_COUNT,
   TREND_BUCKET_META,
+  DEFAULT_BUDGETS,
+  createAiCallBudget,
   buildBrandGrowthStrategyPrompt,
   buildTrendAnalysisSystemPrompt,
   buildTrendAnalysisUserPrompt,
