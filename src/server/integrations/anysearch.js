@@ -5,6 +5,10 @@ const https = require("node:https");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const {
+  getExplicitTrendYears: getExplicitYears,
+  hasVolatileTrendPrice,
+} = require("../trend-copy-quality");
 
 const ANYSEARCH_ENDPOINT = "https://api.anysearch.com/mcp";
 const GENERAL_DOMAIN = "general";
@@ -679,6 +683,42 @@ function getEvidenceFreshnessScore(item, now = new Date()) {
   return -4;
 }
 
+const BRACKET_PAIRS = { "(": ")", "（": "）", "[": "]", "【": "】", "《": "》", "“": "”", "‘": "’" };
+const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS));
+
+function stripAllowedBracketIdioms(value) {
+  return String(value || "")
+    .replace(/[:;]-?[)）]/g, "")
+    .replace(/[\[(]\s*-?\d+(?:\.\d+)?\s*[,，]\s*-?\d+(?:\.\d+)?\s*[\])]/g, "");
+}
+
+function hasMalformedSearchTitlePunctuation(value) {
+  const text = stripAllowedBracketIdioms(String(value || "").normalize("NFKC"));
+  if (/[（(]\s*[:：]/u.test(text)) return true;
+  const stack = [];
+  for (const character of text) {
+    if (BRACKET_PAIRS[character]) stack.push(BRACKET_PAIRS[character]);
+    else if (BRACKET_CLOSERS.has(character) && stack.pop() !== character) return true;
+  }
+  return stack.length > 0;
+}
+
+function isPriceLedSearchTitle(value) {
+  return hasVolatileTrendPrice(value);
+}
+
+function isCurrentTrendEvidenceUsable(item, now = new Date()) {
+  const reference = now instanceof Date ? now : new Date(now);
+  const currentYear = Number(formatShanghaiDate(Number.isNaN(reference.getTime()) ? new Date() : reference).match(/\d{4}/)?.[0]);
+  const title = String(item?.title || "");
+  if (isPriceLedSearchTitle(title) || hasMalformedSearchTitlePunctuation(title)) return false;
+
+  const titleYears = getExplicitYears(title);
+  if (titleYears.some((year) => year < currentYear) && !titleYears.includes(currentYear)) return false;
+
+  return true;
+}
+
 const TRAFFIC_MARKETING_SIGNAL_PATTERNS = [
   /(?:小红书|社交媒体|社媒|内容营销|品牌营销|社媒运营|营销案例|品牌观察|品牌.{0,6}活动|公益.{0,6}活动|活动传播|爆文|笔记|创作者|博主|达人|种草|传播策略)/i,
   /(?:用户洞察|消费洞察|消费者|消费趋势|用户讨论|家长讨论|家长热议|消费情绪|内容需求|舆论场|沟通矛盾)/i,
@@ -1251,7 +1291,11 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
   const bucketRelevant = bucketKey === "traffic"
     ? normalized.filter(isTrafficMarketingEvidenceRelevant)
     : normalized;
-  const accessible = await getAccessibleEvidence(bucketRelevant, config, options, accessibilityCache);
+  const currentTrendEvidence = bucketRelevant.filter((item) => isCurrentTrendEvidenceUsable(
+    item,
+    options.now || new Date(),
+  ));
+  const accessible = await getAccessibleEvidence(currentTrendEvidence, config, options, accessibilityCache);
   const evidence = selectEvidence(accessible, {
     ...config,
     now: options.now || new Date(),

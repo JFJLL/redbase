@@ -1,4 +1,8 @@
 const { normalizeTags, sanitizeIdea } = require("../utils");
+const {
+  getExplicitTrendYears: getTrendExplicitYears,
+  hasVolatileTrendPrice,
+} = require("../trend-copy-quality");
 const { callTextModelJson } = require("./text-provider");
 const { normalizeIdeaContentAssets, hasCompleteIdeaContentAssets } = require("./content-service");
 const {
@@ -186,9 +190,11 @@ function getShanghaiDateParts(value = new Date()) {
 }
 
 function buildTrendFreshnessPrompt(now = new Date()) {
-  const { isoDate } = getShanghaiDateParts(now);
+  const { year, isoDate } = getShanghaiDateParts(now);
   return [
     `当前日期（北京时间）：${isoDate}。所有“当前、近期、正在、大促节点”等时效判断都必须以这个日期为准。`,
+    `当前趋势的用户可见文案不得出现早于 ${year} 年的年份；历史材料只能帮助理解背景，不能成为本轮趋势标题、摘要、理由或选题。`,
+    "不得输出商品价格、促销价、券后价、套餐金额或其他会随时间变化的交易金额；也不得复制搜索标题里的畸形括号、孤立冒号等残缺标点。",
     "新颖度与时效判断：只保留当前证据能够支持的近期讨论、内容形式变化、用户需求变化或当下营销窗口。",
     "不要输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”等内部判断标签，也不要把常识性老话题包装成近期热点。",
     "618、双11、双12等活动不在其实际营销窗口时，只能明确写成复盘或历史案例，不能称为当前节点、当下机会或近期大促。",
@@ -359,6 +365,7 @@ function buildAnySearchEvidencePromptBlock(searchEvidence) {
     "3. ‘社交讨论样本’只用于判断讨论、情绪、人群观点和内容表达，不能单独支撑数字、政策、标准或医学/功效结论。",
     "4. 如果证据不足以证明近期爆发，只能写成当前可观察的内容形式、讨论样本或待验证营销机会；不得伪装成已证实热点，也不得拿长期常识填充。",
     "4.1 除非‘网页事实片段’逐字支持，否则任何字段都不得写“爆款、热门、持续升温、高频、互动高、收藏率高、搜索量大、流量极高、最大痛点、普遍”等强度结论。",
+    "4.2 历史年份、旧榜单和旧活动不能转写成当前趋势；商品价格、促销金额和搜索标题中的残缺标点不得进入任何用户可见字段。",
     ...(!hasReliableWebEvidence
       ? [
           "5. 本次没有‘网页事实片段’：所有字段都不得写销量、份额、排名、增长数字、政策规定、行业标准、医学功效或剂量事实；只能写用户讨论、内容表达、使用场景和待验证方向。",
@@ -420,6 +427,7 @@ function maskMedicineTrafficBrandName(value, brand, bucketMeta) {
 function buildTrendBrandContextLines(brand, bucketMeta) {
   if (!isMedicineTrafficPrompt(brand, bucketMeta)) {
     return [
+      "品牌档案只定义品牌身份、受众和内容边界，不是当前趋势证据；热点事实与时效判断必须以本次 AnySearch/Pgy 证据为准。",
       `品牌名称：${brand.name}`,
       `行业：${brand.industry}`,
       `目标受众：${brand.audience}`,
@@ -428,6 +436,7 @@ function buildTrendBrandContextLines(brand, bucketMeta) {
       `运营目标：${brand.goal}`,
       `品牌资料库：${brand.knowledgeBase || "暂无补充资料"}`,
       `品牌资产标签：${(brand.assetTags || []).join("、") || "暂无"}`,
+      "不得复制品牌档案中的历史年份、旧榜单、旧活动、价格或时效性结论；这些内容即使出现在品牌介绍/资料库，也不能进入本轮趋势文案。",
     ];
   }
   return [
@@ -513,6 +522,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     "11. 十条趋势必须使用不同的主路线、用户场景和 idea 执行动作，不得同义改写；证据不足 10 条时允许复用来源专名，但复用项仍必须遵守各自槽位的不同唯一机制。",
     `12. 当前北京时间日期为 ${getShanghaiDateParts(options.validationNow || options.anySearchEvidence?.retrievedAt || new Date()).isoDate}；只有证据明确支持时才能写近期或当前。`,
     "12.1 不得输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”等内部判断标签，也不得把历史常识包装成当前热点。",
+    "12.2 用户可见文案不得出现早于当前年份的年份；不得输出商品价格、促销价、券后价或套餐金额；不得出现‘（：’‘(:’等畸形标点。",
     "13. 网页内容样本/社交讨论样本只支持内容方向，不支持数字、强度、政策、医学或功效事实。",
     "14. 健康、儿童、药品、医疗和政策内容不得给答案、建议、疗效、安全性、适用性或购买推荐。",
     buildMedicineBrandSafetyPrompt(brand, selectedBucketMeta),
@@ -1027,6 +1037,7 @@ function isGenericTrendReason(value) {
     /(?:该|本)?方向.{0,16}(?:源于|基于).{0,40}(?:缺乏|没有).{0,16}(?:热度|数据|支撑)/i,
     /(?:缺乏|没有).{0,16}(?:热度|数据).{0,24}(?:适合|属于).{0,16}(?:待验证|内容实验|营销机会)/i,
     /适合(?:作为)?(?:待验证方向|内容实验)/i,
+    /(?:该|本)?方向.{0,12}只引用.{0,20}(?:搜索结果|讨论背景).{0,24}(?:分析范围|用户场景|内容形式)/i,
   ].some((pattern) => pattern.test(text));
 }
 
@@ -1183,6 +1194,69 @@ function getUnsupportedHardClaimIssues(trendBuckets) {
   return issues;
 }
 
+const TREND_PUNCTUATION_PAIRS = { "(": ")", "（": "）", "[": "]", "【": "】", "《": "》", "“": "”", "‘": "’" };
+const TREND_PUNCTUATION_CLOSERS = new Set(Object.values(TREND_PUNCTUATION_PAIRS));
+
+function stripAllowedTrendPunctuationIdioms(value) {
+  return String(value || "")
+    .replace(/[:;]-?[)）]/g, "")
+    .replace(/[\[(]\s*-?\d+(?:\.\d+)?\s*[,，]\s*-?\d+(?:\.\d+)?\s*[\])]/g, "");
+}
+
+function hasMalformedTrendPunctuation(value) {
+  const text = stripAllowedTrendPunctuationIdioms(String(value || "").normalize("NFKC"));
+  if (/[（(]\s*[:：]/u.test(text)) return true;
+  const stack = [];
+  for (const character of text) {
+    if (TREND_PUNCTUATION_PAIRS[character]) stack.push(TREND_PUNCTUATION_PAIRS[character]);
+    else if (TREND_PUNCTUATION_CLOSERS.has(character) && stack.pop() !== character) return true;
+  }
+  return stack.length > 0;
+}
+
+function getTrendCopyQualityIssues(trendBuckets, validationNow = new Date()) {
+  const currentYear = getShanghaiDateParts(validationNow).year;
+  const issues = [];
+  for (const bucket of trendBuckets || []) {
+    for (const [trendIndex, trend] of (bucket.items || []).entries()) {
+      for (const entry of getBrandClaimTextEntries(trend)) {
+        const pastYears = getTrendExplicitYears(entry.text).filter((year) => year < currentYear);
+        if (pastYears.length) {
+          issues.push({
+            bucketKey: bucket.key,
+            trendIndex,
+            title: String(trend.title || "").slice(0, 80),
+            reason: "past-year-copy",
+            field: entry.field,
+            claim: [...new Set(pastYears)].join("、"),
+          });
+        }
+        if (hasVolatileTrendPrice(entry.text)) {
+          issues.push({
+            bucketKey: bucket.key,
+            trendIndex,
+            title: String(trend.title || "").slice(0, 80),
+            reason: "volatile-price-copy",
+            field: entry.field,
+            claim: entry.text.slice(0, 120),
+          });
+        }
+        if (hasMalformedTrendPunctuation(entry.text)) {
+          issues.push({
+            bucketKey: bucket.key,
+            trendIndex,
+            title: String(trend.title || "").slice(0, 80),
+            reason: "malformed-punctuation",
+            field: entry.field,
+            claim: entry.text.slice(0, 120),
+          });
+        }
+      }
+    }
+  }
+  return issues;
+}
+
 function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, brand, pgyEvidence, validationNow = new Date()) {
   return [
     ...getTrendStructureIssues(trendBuckets, bucketMeta),
@@ -1196,6 +1270,7 @@ function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, b
     ...getUnsupportedBrandClaimIssues(trendBuckets, brand),
     ...getMedicineSafetyIssues(trendBuckets, brand),
     ...getStaleMarketingWindowIssues(trendBuckets, validationNow),
+    ...getTrendCopyQualityIssues(trendBuckets, validationNow),
   ];
 }
 
@@ -1232,6 +1307,15 @@ function formatTrendRetryFeedback(issues) {
   }
   if (reasons.has("stale-marketing-window")) {
     feedback.push("删除已经过期的当前营销节点；如确有内容价值，只能明确改成历史复盘或案例拆解，不能继续写成当下热点。 ");
+  }
+  if (reasons.has("past-year-copy")) {
+    feedback.push("删除所有早于当前年份的年份、旧榜单和旧活动表述；本轮是当前趋势，不得把品牌档案或搜索来源里的历史材料复制到用户可见文案。 ");
+  }
+  if (reasons.has("volatile-price-copy")) {
+    feedback.push("删除商品价格、促销价、券后价、套餐金额等易变交易信息，改写成不依赖具体金额的用户问题、使用场景或内容机制。 ");
+  }
+  if (reasons.has("malformed-punctuation")) {
+    feedback.push("重写残缺标点：括号、书名号和引号必须成对，不得出现‘（：’‘(:’或冒号紧邻闭括号等畸形结构。 ");
   }
   if (reasons.has("inline-evidence-reference")) {
     feedback.push("用户可见文案不得手写 S 编号；来源只通过 evidenceIds 字段关联，title、summary、reason 和 ideas 都要写成自然语言。 ");
@@ -1363,6 +1447,9 @@ const FIELD_SCOPED_TREND_REPAIR_REASONS = new Set([
   "unsupported-brand-claim",
   "unsafe-medicine-guidance",
   "stale-marketing-window",
+  "past-year-copy",
+  "volatile-price-copy",
+  "malformed-punctuation",
   "ungrounded-title",
   "ungrounded-reason",
   "generic-reason",
@@ -1439,9 +1526,6 @@ function canUseFinalFieldScopedTrendRepair(issues, maxItems = 4) {
 }
 
 function buildTargetedTrendRepairUserPrompt(brand, options, repairPlan, trendBuckets, issues) {
-  const pgyEvidenceBlock = buildPgyEvidencePromptBlock(options.pgyEvidence);
-  const anySearchEvidenceBlock = buildAnySearchEvidencePromptBlock(options.anySearchEvidence);
-  const medicineBrand = isMedicineBrand(brand);
   const repairBucketMeta = repairPlan.map(({ bucket }) => bucket);
   const anySearchById = new Map(
     (options.anySearchEvidence?.evidence || []).map((item) => [String(item?.id || "").toUpperCase(), item]),
@@ -1494,19 +1578,26 @@ function buildTargetedTrendRepairUserPrompt(brand, options, repairPlan, trendBuc
   const acceptedTitles = (trendBuckets || []).flatMap((bucket) => (bucket.items || [])
     .filter((_item, trendIndex) => !repairKeys.has(`${bucket.key}:${trendIndex}`))
     .map((item) => maskMedicineTrafficBrandName(item.title, brand, repairBucketMeta)));
+  const leanBrandContext = [
+    ["品牌", brand?.name],
+    ["行业", brand?.industry],
+    ["受众", brand?.audience],
+    ["目标", brand?.goal],
+  ].map(([label, value]) => {
+    const safeValue = maskMedicineTrafficBrandName(String(value || "").slice(0, 300), brand, repairBucketMeta);
+    return safeValue ? `${label}：${safeValue}` : "";
+  }).filter(Boolean);
   return [
     "请只重写下面未通过校验的趋势。已通过条目不会交给你改写。",
-    ...buildTrendBrandContextLines(brand, repairBucketMeta),
+    ...leanBrandContext,
+    "品牌档案只限定身份、受众和表达边界，不是当前趋势证据；当前事实只能来自每条 requiredSourceEvidence。",
     buildMedicineBrandSafetyPrompt(brand, repairBucketMeta),
-    ...(pgyEvidenceBlock ? ["", pgyEvidenceBlock] : []),
-    ...(anySearchEvidenceBlock ? ["", anySearchEvidenceBlock] : []),
     "",
     `已通过、不得重复的标题：${acceptedTitles.join("｜") || "无"}`,
     `待重写条目（必须按数组顺序返回 ${repairItems.length} 条）：`,
     JSON.stringify(repairItems),
     "",
-    "服务端校验反馈：",
-    formatTrendRetryFeedback((issues || []).map(({ claim: _claim, ...issue }) => issue)),
+    "validationErrors 已逐条列出服务端校验问题；只修这些问题，不要扩写新的事实或效果判断。",
     "fieldsToRewrite 是本条唯一允许改写的字段路径；preservedContext 中其他字段必须逐字复制到完整 item，不得顺手改写。fieldsToRewrite 为 [\"*\"] 时才完整重写。",
     "requiredRoute 是该槽位唯一允许的内容机制；两条 ideas 都必须在此机制内部采用不同场景或步骤，不能切换成其他互动机制。",
     "每个待重写条目的 title、summary 和 reason 都必须自然保留 requiredSourceEvidence 的 title/excerpt 里至少一个具体事件、问题或表达形式；reason 首句必须写出与 title 相同的来源专名或独特短语，但用户可见文案不得写 S 编号。",

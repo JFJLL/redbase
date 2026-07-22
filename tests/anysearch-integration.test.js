@@ -4,6 +4,10 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const {
+  getExplicitTrendYears,
+  hasVolatileTrendPrice,
+} = require("../src/server/trend-copy-quality");
 
 const {
   GENERAL_SUB_DOMAIN,
@@ -1906,6 +1910,8 @@ test("keeps four invalid cards in one targeted model repair", async () => {
 
   assert.equal(modelCalls, 2);
   assert.ok(requests.slice(1).every((request) => /只重写服务端指出的不合格字段/.test(request.systemPrompt)));
+  assert.ok(requests[1].userPrompt.length < 12000, `repair prompt too large: ${requests[1].userPrompt.length}`);
+  assert.doesNotMatch(requests[1].userPrompt, /AnySearch 搜索证据（必须/);
   assert.equal(result.analysisMetrics.fullRegenerationRequests, 0);
   assert.equal(result.analysisMetrics.targetedRepairRequests, 1);
   assert.equal(result[0].items.filter((item) => item.title.includes("小批真实模型修复")).length, 4);
@@ -3424,6 +3430,7 @@ test("rejects generic recommendation reasons while preserving source-specific an
   assert.equal(isGenericTrendReason("S4展示活动有效性，当前可复制，增加品牌互动。"), true);
   assert.equal(isGenericTrendReason("报告显示家长需要场景化营养指导，内容贴近需求。"), true);
   assert.equal(isGenericTrendReason("Babycare用户共同体具有较高内容价值，能够帮助品牌触达目标用户并提升互动，值得持续关注和布局。"), true);
+  assert.equal(isGenericTrendReason("该方向只引用当前搜索结果中的讨论背景，并以用户场景和内容形式为分析范围。"), true);
   assert.equal(isGenericTrendReason(
     "数英案例记录了妈妈博主问答、站内话题与非药品奖品三种参与机制，但案例来自2021年，只适合作为历史形式拆解。",
   ), false);
@@ -3461,6 +3468,315 @@ test("rejects generic recommendation reasons while preserving source-specific an
     assert.ok(issues.some((issue) => issue.trendIndex === 0 && issue.reason === "ungrounded-reason"), reason);
   }
 
+});
+
+test("rejects past-year, volatile-price, and malformed-punctuation copy before persistence", () => {
+  const batch = generatedTrendBatch("时效与格式校验", { bucketKey: "traffic" });
+  batch.trendBuckets[0].items[0].title = "2025年牛奶乳品推荐榜：消费者选择观察";
+  batch.trendBuckets[0].items[1].title = "特仑苏全脂纯牛奶250ml 12盒2件75.8元：评论观点回应";
+  batch.trendBuckets[0].items[2].title = "乳品消费场景（：家庭早餐讨论";
+  batch.trendBuckets[0].items[3].title = "二〇二五年乳品营销观察";
+  batch.trendBuckets[0].items[3].summary = "二零二五年乳品内容复盘。";
+  batch.trendBuckets[0].items[3].reason = "２０２５年乳品内容复盘涉及家庭早餐场景，但不应进入当前趋势文案。";
+  batch.trendBuckets[0].items[4].title = "25年乳品营销观察";
+  batch.trendBuckets[0].items[5].title = "两件七十五元乳品促销观察";
+  batch.trendBuckets[0].items[5].summary = "两件75块的促销内容观察。";
+  batch.trendBuckets[0].items[5].reason = "RMB 75.8 的乳品套餐被当成话题，但价格会随交易时间变化，不适合进入选题。";
+  batch.trendBuckets[0].items[6].title = "乳品2件仅75.8的促销观察";
+  batch.trendBuckets[0].items[6].summary = "成本几千的小红书运营案例不应成为价格型选题。";
+  batch.trendBuckets[0].items[7].title = "新品）家庭早餐（";
+  batch.trendBuckets[0].items[8].title = "新品（家庭[早餐）讨论]";
+  batch.trendBuckets[0].items[9].summary = "乳品消费（家庭早餐讨论";
+  batch.trendBuckets[0].items[0].summary = "二○二五年LightMate内容营销榜单不应进入当前趋势。";
+  batch.trendBuckets[0].items[1].summary = "2025双11LightMate内容营销复盘不应进入当前趋势。";
+  batch.trendBuckets[0].items[2].summary = "2025Q4 LightMate内容营销观察不应进入当前趋势。";
+  batch.trendBuckets[0].items[4].summary = "LightMate售价一百块内容营销观察。";
+  batch.trendBuckets[0].items[6].reason = "LightMate到手几十块内容营销观察。";
+  batch.trendBuckets[0].items[7].summary = "LightMate折叠桌面灯￥七十五内容营销观察。";
+  batch.trendBuckets[0].items[8].summary = "LightMate折叠桌面灯ＲＭＢ ７５．８内容营销观察。";
+  batch.trendBuckets[0].items[0].reason = "2025-双11营销复盘不应进入当前趋势。";
+  batch.trendBuckets[0].items[1].reason = "2025｜双11营销复盘不应进入当前趋势。";
+  batch.trendBuckets[0].items[2].reason = "2025·Q4内容营销观察不应进入当前趋势。";
+  batch.trendBuckets[0].items[3].reason = "２０２５年乳品内容复盘与券后75内容营销观察都不应进入当前趋势。";
+  batch.trendBuckets[0].items[4].reason = "低至75内容营销观察不应进入当前趋势。";
+  batch.trendBuckets[0].items[9].reason = "75包邮内容营销观察不应进入当前趋势。";
+
+  const issues = getTrendGenerationIssues(
+    batch.trendBuckets,
+    TREND_BUCKET_META.filter((meta) => meta.key === "traffic"),
+    null,
+    brand,
+    null,
+    new Date("2026-07-22T04:00:00.000Z"),
+  );
+
+  assert.ok(issues.some((issue) => issue.trendIndex === 0 && issue.field === "title" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 1 && issue.field === "title" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 2 && issue.field === "title" && issue.reason === "malformed-punctuation"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 3 && issue.field === "title" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 3 && issue.field === "summary" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 3 && issue.field === "reason" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 4 && issue.field === "title" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 5 && issue.field === "title" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 5 && issue.field === "summary" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 5 && issue.field === "reason" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 6 && issue.field === "title" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 6 && issue.field === "summary" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 7 && issue.field === "title" && issue.reason === "malformed-punctuation"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 8 && issue.field === "title" && issue.reason === "malformed-punctuation"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 9 && issue.field === "summary" && issue.reason === "malformed-punctuation"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 0 && issue.field === "summary" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 1 && issue.field === "summary" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 2 && issue.field === "summary" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 4 && issue.field === "summary" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 6 && issue.field === "reason" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 7 && issue.field === "summary" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 8 && issue.field === "summary" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 0 && issue.field === "reason" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 1 && issue.field === "reason" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 2 && issue.field === "reason" && issue.reason === "past-year-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 3 && issue.field === "reason" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 4 && issue.field === "reason" && issue.reason === "volatile-price-copy"));
+  assert.ok(issues.some((issue) => issue.trendIndex === 9 && issue.field === "reason" && issue.reason === "volatile-price-copy"));
+
+  const safeBatch = generatedTrendBatch("非误报校验", { bucketKey: "traffic" });
+  safeBatch.trendBuckets[0].items[0].title = "品牌创立20周年的内容栏目观察";
+  safeBatch.trendBuckets[0].items[1].title = "1920×1080竖屏内容营销观察";
+  safeBatch.trendBuckets[0].items[2].title = "新品微笑 :) 内容观察";
+  safeBatch.trendBuckets[0].items[3].title = "数学区间[0,1)内容观察";
+  safeBatch.trendBuckets[0].items[4].title = "3元组内容结构观察";
+  safeBatch.trendBuckets[0].items[5].title = "一块桌面空间的整理观察";
+  safeBatch.trendBuckets[0].items[6].title = "两块区域的照明对比";
+  safeBatch.trendBuckets[0].items[7].title = "只要3步完成桌面整理";
+  safeBatch.trendBuckets[0].items[8].title = "仅一盏灯的小空间改造";
+  safeBatch.trendBuckets[0].items[9].title = "投入3小时完成内容拍摄";
+  safeBatch.trendBuckets[0].items[0].summary = "三元乳业内容营销观察";
+  safeBatch.trendBuckets[0].items[1].summary = "三元锂电池内容营销观察";
+  safeBatch.trendBuckets[0].items[2].summary = "二元关系内容分析";
+  safeBatch.trendBuckets[0].items[3].summary = "投入3轮A/B测试";
+  safeBatch.trendBuckets[0].items[4].summary = "预算3套内容方案";
+  safeBatch.trendBuckets[0].items[5].summary = "成本3项拆解";
+  safeBatch.trendBuckets[0].items[6].summary = "到手一份运营清单";
+  const safeIssues = getTrendGenerationIssues(
+    safeBatch.trendBuckets,
+    TREND_BUCKET_META.filter((meta) => meta.key === "traffic"),
+    null,
+    brand,
+    null,
+    new Date("2026-07-22T04:00:00.000Z"),
+  ).filter((issue) => ["past-year-copy", "volatile-price-copy", "malformed-punctuation"].includes(issue.reason));
+  assert.deepEqual(safeIssues, []);
+});
+
+test("filters only stale-title, price-led, and malformed search results without dropping current context", async () => {
+  clearAnySearchCache();
+  const result = await fetchAnySearchEvidence({
+    searchProvider: {
+      enabled: true,
+      socialEnabled: false,
+      minEvidence: 1,
+      maxEvidence: 12,
+      urlCheckEnabled: false,
+      cacheTtlMs: 0,
+    },
+  }, brand, [{ key: "traffic" }], {
+    now: new Date("2026-07-22T04:00:00.000Z"),
+    allowSparseEvidence: true,
+    requestImpl: async () => [
+      "## Query 1: general",
+      "### 1. LightMate ２０２５年消费者内容营销榜单",
+      "- **URL**: https://www.ce.cn/old-ranking",
+      "- Published: 2025-12-20 Source: ce.cn LightMate折叠桌面灯消费者内容营销榜单。",
+      "### 2. LightMate折叠桌面灯两件七十五元促销观察",
+      "- **URL**: https://www.ce.cn/price-listing",
+      "- Published: 2026-07-20 Source: ce.cn 消费者围绕价格和促销内容讨论。",
+      "### 3. LightMate折叠桌面灯（：消费者评论区观察",
+      "- **URL**: https://www.ce.cn/broken-title",
+      "- Published: 2026-07-20 Source: ce.cn 消费者围绕评论区内容形式交流。",
+      "### 4. 2026年LightMate小空间桌面内容营销观察",
+      "- **URL**: https://www.ce.cn/current-topic",
+      "- Published: 2026-07-20 Source: ce.cn 消费者讨论折叠桌面灯的小空间摆位和内容形式。",
+      "### 5. 2026年LightMate消费者内容复盘",
+      "- **URL**: https://www.ce.cn/current-comparison",
+      "- Published: 2026-07-21 Source: ce.cn 文章对比2025年用户反馈，并用75元预算案例解释内容选择。",
+      "### 6. LightMate 1920×1080竖屏内容营销观察",
+      "- **URL**: https://www.ce.cn/video-format",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论竖屏视频的内容形式。",
+      "### 7. 二○二五年LightMate内容营销榜单",
+      "- **URL**: https://www.ce.cn/chinese-old-year",
+      "- Published: 2026-07-21 Source: ce.cn 历史内容营销榜单。",
+      "### 8. 2025双11LightMate内容营销复盘",
+      "- **URL**: https://www.ce.cn/double-eleven-old-year",
+      "- Published: 2026-07-21 Source: ce.cn 历史内容营销复盘。",
+      "### 9. 2025Q4 LightMate内容营销观察",
+      "- **URL**: https://www.ce.cn/quarter-old-year",
+      "- Published: 2026-07-21 Source: ce.cn 历史内容营销观察。",
+      "### 10. LightMate售价一百块内容营销观察",
+      "- **URL**: https://www.ce.cn/chinese-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+      "### 11. LightMate到手几十块内容营销观察",
+      "- **URL**: https://www.ce.cn/approximate-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+      "### 12. LightMate折叠桌面灯￥七十五内容营销观察",
+      "- **URL**: https://www.ce.cn/currency-chinese-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+      "### 13. LightMate折叠桌面灯ＲＭＢ ７５．８内容营销观察",
+      "- **URL**: https://www.ce.cn/fullwidth-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+      "### 14. LightMate 3元组内容结构观察",
+      "- **URL**: https://www.ce.cn/triple-structure",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论三段式内容结构。",
+      "### 15. 2025-双11营销复盘",
+      "- **URL**: https://www.ce.cn/separated-old-year-1",
+      "- Published: 2026-07-21 Source: ce.cn 历史内容营销复盘。",
+      "### 16. 2025｜双11营销复盘",
+      "- **URL**: https://www.ce.cn/separated-old-year-2",
+      "- Published: 2026-07-21 Source: ce.cn 历史内容营销复盘。",
+      "### 17. 2025·Q4内容营销观察",
+      "- **URL**: https://www.ce.cn/separated-old-year-3",
+      "- Published: 2026-07-21 Source: ce.cn 历史内容营销观察。",
+      "### 18. LightMate一块桌面空间的整理观察",
+      "- **URL**: https://www.ce.cn/desktop-space",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论小空间桌面整理内容。",
+      "### 19. LightMate两块区域的照明对比",
+      "- **URL**: https://www.ce.cn/lighting-zones",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论照明区域对比内容。",
+      "### 20. LightMate只要3步完成桌面整理",
+      "- **URL**: https://www.ce.cn/three-steps",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论桌面整理步骤。",
+      "### 21. LightMate仅一盏灯的小空间改造",
+      "- **URL**: https://www.ce.cn/one-lamp",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论小空间照明内容。",
+      "### 22. LightMate投入3小时完成内容拍摄",
+      "- **URL**: https://www.ce.cn/three-hours",
+      "- Published: 2026-07-21 Source: ce.cn 创作者讨论内容拍摄流程。",
+      "### 23. LightMate三元乳业内容营销观察",
+      "- **URL**: https://www.ce.cn/sanyuan-brand",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论乳业品牌内容营销。",
+      "### 24. LightMate三元锂电池内容营销观察",
+      "- **URL**: https://www.ce.cn/lithium-battery",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论锂电池品类内容。",
+      "### 25. LightMate二元关系内容分析",
+      "- **URL**: https://www.ce.cn/binary-relationship",
+      "- Published: 2026-07-21 Source: ce.cn 消费者讨论内容关系分析。",
+      "### 26. LightMate投入3轮A/B测试",
+      "- **URL**: https://www.ce.cn/ab-test",
+      "- Published: 2026-07-21 Source: ce.cn 创作者讨论社媒运营内容测试流程。",
+      "### 27. LightMate预算3套内容方案",
+      "- **URL**: https://www.ce.cn/content-plans",
+      "- Published: 2026-07-21 Source: ce.cn 创作者讨论内容营销方案数量。",
+      "### 28. LightMate成本3项拆解",
+      "- **URL**: https://www.ce.cn/cost-items",
+      "- Published: 2026-07-21 Source: ce.cn 创作者讨论内容形式拆解维度。",
+      "### 29. LightMate到手一份运营清单",
+      "- **URL**: https://www.ce.cn/operation-checklist",
+      "- Published: 2026-07-21 Source: ce.cn 创作者讨论社媒运营清单。",
+      "### 30. LightMate券后75内容营销观察",
+      "- **URL**: https://www.ce.cn/coupon-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+      "### 31. LightMate低至75内容营销观察",
+      "- **URL**: https://www.ce.cn/low-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+      "### 32. LightMate75包邮内容营销观察",
+      "- **URL**: https://www.ce.cn/free-shipping-price",
+      "- Published: 2026-07-21 Source: ce.cn 当前促销内容观察。",
+    ].join("\n"),
+  });
+
+  assert.deepEqual(result.evidence.map((item) => item.title).sort(), [
+    "2026年LightMate小空间桌面内容营销观察",
+    "2026年LightMate消费者内容复盘",
+    "LightMate 1920×1080竖屏内容营销观察",
+    "LightMate 3元组内容结构观察",
+    "LightMate一块桌面空间的整理观察",
+    "LightMate两块区域的照明对比",
+    "LightMate只要3步完成桌面整理",
+    "LightMate仅一盏灯的小空间改造",
+    "LightMate投入3小时完成内容拍摄",
+    "LightMate三元乳业内容营销观察",
+    "LightMate三元锂电池内容营销观察",
+    "LightMate成本3项拆解",
+  ].sort());
+});
+
+test("shared currentness and price policy distinguishes transactions from business quantities", () => {
+  const prices = [
+    "特仑苏全脂纯牛奶250ml 12盒2件75.8元",
+    "LightMate售价一百块内容营销观察",
+    "LightMate到手几十块内容营销观察",
+    "LightMate折叠桌面灯￥七十五内容营销观察",
+    "LightMate折叠桌面灯ＲＭＢ ７５．８内容营销观察",
+    "券后75内容营销观察",
+    "低至75内容营销观察",
+    "75包邮内容营销观察",
+    "活动价75内容营销观察",
+    "秒杀价75内容营销观察",
+    "会员价75内容营销观察",
+    "现价75内容营销观察",
+    "优惠后75内容营销观察",
+    "补贴后75内容营销观察",
+    "75起内容营销观察",
+    "人均75内容营销观察",
+    "桌面灯七十五元",
+    "七十五元/件",
+    "客单价75",
+    "价格75",
+    "报价75",
+    "预算3000",
+    "投入5000做投放",
+    "75块包邮",
+  ];
+  const businessQuantities = [
+    "三元乳业内容营销观察",
+    "三元锂电池内容营销观察",
+    "二元关系内容分析",
+    "投入3轮A/B测试",
+    "预算3套内容方案",
+    "成本3项拆解",
+    "到手一份运营清单",
+    "一块桌面空间的整理观察",
+    "两块区域的照明对比",
+    "只要3步完成桌面整理",
+    "仅一盏灯的小空间改造",
+    "投入3小时完成内容拍摄",
+    "3元组内容结构观察",
+    "三元材料内容营销观察",
+    "三元催化内容营销观察",
+    "四元数内容分析",
+    "二元对立内容分析",
+    "预算3档方案",
+    "投入3台设备",
+    "成本下降3%",
+    "价格3档策略",
+    "客单价分3层",
+    "议题共编：与用户一起选定情感消费话题",
+    "来和编辑一起写一篇小红书",
+    "2026元旦营销趋势",
+    "2026元宵节营销观察",
+    "只要3招提升互动",
+    "仅三点内容建议",
+    "仅3倍互动提升",
+  ];
+  for (const value of prices) assert.equal(hasVolatileTrendPrice(value), true, value);
+  for (const value of businessQuantities) assert.equal(hasVolatileTrendPrice(value), false, value);
+  for (const value of [
+    "2025-双11营销复盘",
+    "2025｜双11营销复盘",
+    "2025·Q4内容营销观察",
+    "2025（双11）营销复盘",
+    "2025.双11营销复盘",
+    "2025#双11营销复盘",
+    "2025「双11」营销复盘",
+    "2025小红书营销观察",
+    "2025营销趋势报告",
+    "2025届毕业季",
+    "2025春夏趋势",
+    "2025上半年消费报告",
+    "二○二五年营销复盘",
+  ]) {
+    assert.deepEqual(getExplicitTrendYears(value), [2025], value);
+  }
+  assert.deepEqual(getExplicitTrendYears("1920×1080竖屏内容营销观察"), []);
 });
 
 test("field-scoped tag repairs cannot create sparse arrays that pass validation", () => {
@@ -3591,6 +3907,9 @@ test("prompts treat search snippets as untrusted evidence and enforce real evide
   assert.match(prompt, /stableKey 必须为 "slot-01"；evidenceIds 必须恰好为 \["S1"\]/);
   assert.match(prompt, /stableKey 必须为 "slot-02"；evidenceIds 必须恰好为 \["S2"\]/);
   assert.match(prompt, /stableKey 必须为 "slot-03"；evidenceIds 必须恰好为 \["S1"\]/);
+  assert.match(prompt, /品牌档案只定义品牌身份、受众和内容边界，不是当前趋势证据/);
+  assert.match(prompt, /不得复制品牌档案中的历史年份/);
+  assert.match(prompt, /不得输出商品价格、促销价、券后价或套餐金额/);
 
   const medicineBrand = {
     ...brand,
