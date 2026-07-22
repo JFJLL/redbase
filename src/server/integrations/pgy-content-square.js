@@ -83,16 +83,24 @@ function normalizePgyCategoryPath(value, parentValue = "") {
   return `${PGY_ROOT_CATEGORY}#${normalizedRaw}`.slice(0, PGY_MAX_CATEGORY_PATH_LENGTH);
 }
 
-function buildPgyHotNotesPayload({ categoryPath = "", pageSize = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE, pageNum = 1, nd = "3" } = {}) {
+function buildPgyHotNotesPayload({
+  categoryPath = "",
+  pageSize = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
+  pageNum = 1,
+  nd = "3",
+  orderBy,
+  sort,
+} = {}) {
   const payload = {
     searchWord: "",
     pageSize: Number(pageSize) || DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
     pageNum: Number(pageNum) || 1,
     platform: 1,
     bizType: "1",
-    orderBy: "premium_imp_num",
-    nd: String(nd || "3"),
-    sort: "desc",
+    // Defaults preserve existing trend-analysis behavior unless callers override.
+    orderBy: orderBy == null || orderBy === "" ? "premium_imp_num" : String(orderBy),
+    nd: String(nd == null || nd === "" ? "3" : nd),
+    sort: sort == null || sort === "" ? "desc" : String(sort),
   };
   const normalizedCategoryPath = normalizePgyCategoryPath(categoryPath);
   if (normalizedCategoryPath) {
@@ -482,25 +490,31 @@ function asHttps(url) {
 function normalizePgyHotNote(raw, index, categoryPath = "") {
   const note = raw?.noteInfo || {};
   const user = raw?.userInfo || {};
-  const imageUrls = Array.isArray(note.noteImages)
+  const allImageUrls = Array.isArray(note.noteImages)
     ? note.noteImages.map((image) => asHttps(image?.imageUrl)).filter(Boolean)
     : [];
+  // coverUrls stays capped for trend evidence; imageUrls is for excellent-content detail.
+  const imageUrls = allImageUrls.slice(0, 9);
   const likeCount = Number(note.likeNum || 0);
   const favoriteCount = Number(note.favNum || 0);
   const commentCount = Number(note.cmtNum || 0);
   const noteId = String(note.noteId || "").trim();
 
   return {
+    id: noteId,
     source: "pgy_content_square",
+    sourceKey: "xhs_hot",
     sourceBucket: "xhs",
     categoryPath: normalizePgyCategoryPath(categoryPath),
     exposureRank: index + 1,
+    rank: index + 1,
     noteId,
     title: String(note.title || "").replace(/\s+/g, " ").trim(),
     noteType: Number(note.noteType) === 2 ? "video" : "image",
     publishTime: String(note.notePublishTime || ""),
     primaryCoverUrl: imageUrls[0] || "",
-    coverUrls: imageUrls.slice(0, 3),
+    coverUrls: allImageUrls.slice(0, 3),
+    imageUrls,
     imageCount: imageUrls.length,
     videoUrl: note.videoUrl ? asHttps(note.videoUrl) : "",
     videoDurationSeconds: Number(note.videoDuration || 0),
@@ -540,6 +554,8 @@ async function fetchPgyXhsHotNotes(appConfig, options = {}) {
     pageSize: options.pageSize || DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
     pageNum: options.pageNum || 1,
     nd: options.nd || "3",
+    orderBy: options.orderBy,
+    sort: options.sort,
   });
   const data = await withRetries(
     () =>
@@ -560,6 +576,9 @@ async function fetchPgyXhsHotNotes(appConfig, options = {}) {
     pageInfo: data?.pageInfoDto || null,
     total: Number(data?.total || data?.pageInfoDto?.total || notes.length),
     notes,
+    orderBy: payload.orderBy,
+    nd: payload.nd,
+    sort: payload.sort,
   };
 }
 

@@ -70,7 +70,9 @@ function normalizeGeneratedXhsCarouselPack(raw) {
     publishTitle: getRequiredText(source, "publishTitle", "发布标题", 120),
     publishCaption,
     caption: getText(source, "caption", 500) || publishCaption,
+    aspectRatio: getText(source, "aspectRatio", 16) || "3:4",
     slides: rawSlides.map((slide, index) => {
+      const remixBrief = normalizeRemixBrief(slide?.remixBrief || source.remixBrief);
       const normalizedSlide = {
         pageLabel: getText(slide, "pageLabel", 24) || `第 ${index + 1} 张`,
         title: getRequiredText(slide, "title", `第 ${index + 1} 页标题`, 120),
@@ -79,16 +81,69 @@ function normalizeGeneratedXhsCarouselPack(raw) {
         style: getText(slide, "style", 160) || "小红书组图封面页，清晰、真实、适合收藏",
         composition: getText(slide, "composition", 500) || "竖版信息图，标题清楚，留白充足，画面有连续组图统一性。",
         prompt: getText(slide, "prompt", 1800),
+        aspectRatio: getText(slide, "aspectRatio", 16) || getText(source, "aspectRatio", 16) || "3:4",
         previewUrl: "",
       };
+      if (remixBrief) {
+        normalizedSlide.remixBrief = remixBrief;
+      }
       return normalizedSlide;
     }),
   };
+  const packRemixBrief = normalizeRemixBrief(source.remixBrief);
+  if (packRemixBrief) {
+    pack.remixBrief = packRemixBrief;
+  }
+  const sourceTemplate = normalizeSourceTemplate(source.sourceTemplate);
+  if (sourceTemplate) {
+    pack.sourceTemplate = sourceTemplate;
+  }
   pack.slides = pack.slides.map((slide) => ({
     ...slide,
     prompt: slide.prompt || buildXhsSlidePrompt({ packTitle: pack.title, publishTitle: pack.publishTitle, slide }),
   }));
   return pack;
+}
+
+function compactRemixText(value, maxLength = 240) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizeRemixBrief(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const learningFocus = Array.isArray(raw.learningFocus)
+    ? raw.learningFocus.map((item) => compactRemixText(item, 40)).filter(Boolean).slice(0, 8)
+    : [];
+  const brief = {
+    sourceType: compactRemixText(raw.sourceType, 40) || "excellent_content",
+    sourceNoteId: compactRemixText(raw.sourceNoteId, 80),
+    sourceTitle: compactRemixText(raw.sourceTitle, 120),
+    sourceCategoryPath: compactRemixText(raw.sourceCategoryPath, 180),
+    sourceImageCount: Math.max(0, Math.min(99, Number(raw.sourceImageCount) || 0)),
+    sourceEngagementCount: Math.max(0, Number(raw.sourceEngagementCount) || 0),
+    learningFocus,
+    pageTask: compactRemixText(raw.pageTask, 200),
+    pageTitle: compactRemixText(raw.pageTitle, 120),
+    pageCopy: compactRemixText(raw.pageCopy, 300),
+    originalityGuard: compactRemixText(raw.originalityGuard, 400),
+  };
+  // Never allow sourceUrl or secrets into prompt metadata.
+  delete brief.sourceUrl;
+  return brief;
+}
+
+function normalizeSourceTemplate(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const noteId = compactRemixText(raw.noteId || raw.sourceNoteId, 80);
+  return {
+    noteId,
+    title: compactRemixText(raw.title, 120),
+    sourceUrl: compactRemixText(raw.sourceUrl || raw.noteUrl, 300),
+    source: compactRemixText(raw.source, 40) || "xhs_hot",
+  };
 }
 
 function normalizeGeneratedImageConceptMetadata(raw) {
@@ -207,6 +262,8 @@ function buildWechatLongImagePackFromIdea(idea) {
 module.exports = {
   XHS_CAROUSEL_SLIDE_COUNT,
   normalizeGeneratedXhsCarouselPack,
+  normalizeRemixBrief,
+  normalizeSourceTemplate,
   normalizeGeneratedImageConceptMetadata,
   normalizeGeneratedWechatLongImagePack,
   normalizeIdeaContentAssets,

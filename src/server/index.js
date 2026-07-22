@@ -51,6 +51,29 @@ async function start() {
   });
 
   console.log(`Server running at http://${HOST}:${PORT}`);
+
+  // Best-effort warm of default excellent-content cache; never block startup.
+  setImmediate(() => {
+    try {
+      const { warmExcellentContentCache } = require("./services/excellent-content-service");
+      warmExcellentContentCache(appConfig)
+        .then((result) => {
+          console.log(
+            `[excellent-content] warm complete items=${Array.isArray(result?.items) ? result.items.length : 0} updatedAt=${result?.updatedAt || ""}`,
+          );
+        })
+        .catch((error) => {
+          console.warn(
+            "[excellent-content] warm skipped",
+            error?.code || "UNKNOWN",
+            error?.message ? String(error.message).slice(0, 160) : "unknown",
+          );
+        });
+    } catch (error) {
+      console.warn("[excellent-content] warm unavailable", error?.message || error);
+    }
+  });
+
   return server;
 }
 

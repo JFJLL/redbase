@@ -308,7 +308,38 @@ function buildImagePrompt(input = {}) {
   const negatives = [...NEGATIVE_CORE, ...(template.extraNegatives || [])];
   const layer5 = [`【负面约束】`, `不要：${negatives.join("、")}`].join("\n");
 
-  return [layer1, layer2, layer3, layer4, layer5].join("\n\n");
+  const basePrompt = [layer1, layer2, layer3, layer4, layer5].join("\n\n");
+  const remixLayer = buildRemixBriefLayer(input.remixBrief || input.metadata?.remixBrief);
+  return remixLayer ? `${basePrompt}\n\n${remixLayer}` : basePrompt;
+}
+
+/**
+ * Append controlled remix context only when a sanitized remixBrief is present.
+ * Never includes sourceUrl, cookies, or free-form secrets.
+ */
+function buildRemixBriefLayer(rawBrief) {
+  if (!rawBrief || typeof rawBrief !== "object" || Array.isArray(rawBrief)) return "";
+  const sourceTitle = compactText(rawBrief.sourceTitle, 80);
+  const pageTask = compactText(rawBrief.pageTask, 160);
+  const pageTitle = compactText(rawBrief.pageTitle, 80);
+  const pageCopy = compactText(rawBrief.pageCopy, 200);
+  const learningFocus = Array.isArray(rawBrief.learningFocus)
+    ? rawBrief.learningFocus.map((item) => compactText(item, 40)).filter(Boolean).slice(0, 6)
+    : [];
+  const originalityGuard =
+    compactText(rawBrief.originalityGuard, 320) ||
+    "只学习参考笔记的信息节奏、页面角色和内容方法；不得复制原文、原图人物、原品牌、原Logo、水印、具体版式和可识别视觉资产；生成全新的原创内容与画面。";
+  const lines = [
+    "【优秀内容仿写上下文】",
+    sourceTitle ? `参考案例标题：${sourceTitle}` : "",
+    pageTask ? `本页页面任务：${pageTask}` : "",
+    pageTitle ? `本页标题重点：${pageTitle}` : "",
+    pageCopy ? `本页文案重点：${pageCopy}` : "",
+    learningFocus.length ? `学习重点：${learningFocus.join("、")}` : "",
+    `原创保护：${originalityGuard}`,
+  ].filter(Boolean);
+  if (lines.length <= 2) return "";
+  return lines.join("\n");
 }
 
 /**
@@ -329,6 +360,7 @@ module.exports = {
   SCENE_CORE,
   NEGATIVE_CORE,
   buildImagePrompt,
+  buildRemixBriefLayer,
   resolveImagePromptContext,
   shouldSkipStructuredPrompt,
   normalizeContentType,

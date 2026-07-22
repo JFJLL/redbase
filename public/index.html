@@ -206,6 +206,7 @@
             <button class="sidebar-item is-active" data-tab="brands"><span class="sidebar-item-icon">品</span><span class="sidebar-item-label">品牌档案</span></button>
             <button class="sidebar-item" data-tab="trends"><span class="sidebar-item-icon">趋</span><span class="sidebar-item-label">趋势分析</span></button>
             <button class="sidebar-item" data-tab="ideas"><span class="sidebar-item-icon">选</span><span class="sidebar-item-label">内容选题</span></button>
+            <button class="sidebar-item" data-tab="excellent"><span class="sidebar-item-icon">优</span><span class="sidebar-item-label">优秀内容</span></button>
             <button class="sidebar-item" data-tab="history"><span class="sidebar-item-icon">历</span><span class="sidebar-item-label">历史生成</span></button>
           </nav>
         </div>
@@ -341,6 +342,40 @@
             <div class="idea-prompt-meta" id="ideaPromptMeta">当前使用默认系统提示词生成。</div>
           </div>
           <div class="idea-cards" id="ideaList"></div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="excellent">
+          <header class="panel-header excellent-panel-header">
+            <div>
+              <div class="panel-icon-title">
+                <span class="panel-icon excellent-panel-icon">优</span>
+                <h1 class="panel-title">优秀内容</h1>
+              </div>
+              <p class="panel-subtitle">发现近期高互动的小红书图文，从优秀案例开始一键仿图文。</p>
+            </div>
+          </header>
+
+          <div class="excellent-toolbar" aria-label="优秀内容筛选">
+            <label>
+              <span>类目</span>
+              <select id="excellentCategoryFilter">
+                <option value="">全部内容类目</option>
+              </select>
+            </label>
+            <label>
+              <span>内容来源</span>
+              <select id="excellentSourceFilter">
+                <option value="xhs_hot">小红书热门</option>
+              </select>
+            </label>
+            <div class="excellent-meta" id="excellentContentMeta" aria-live="polite">
+              <span>近7日</span>
+              <span>按互动量排序</span>
+            </div>
+          </div>
+
+          <div class="excellent-status" id="excellentContentStatus" hidden></div>
+          <div class="excellent-content-grid" id="excellentContentGrid"></div>
         </section>
 
         <section class="tab-panel" data-tab-panel="history">
@@ -579,6 +614,33 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260512-account-history-expiry"></script>
+    <div class="modal-mask" id="excellentContentModal">
+      <div class="modal-panel excellent-detail-modal-panel" role="dialog" aria-modal="true" aria-labelledby="excellentContentModalTitle">
+        <button class="modal-close excellent-floating-close" id="closeExcellentContentModal" type="button" aria-label="关闭详情">×</button>
+        <div id="excellentContentDetail"></div>
+      </div>
+    </div>
+
+    <div class="modal-mask" id="excellentRemixModal">
+      <div class="modal-panel excellent-remix-modal-panel" role="dialog" aria-modal="true" aria-labelledby="excellentRemixTitle">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">一键仿图文</div>
+            <h2 id="excellentRemixTitle">基于优秀内容生成原创组图方案</h2>
+            <p>选择品牌、趋势和选题，学习参考笔记的结构节奏，生成 4 页原创小红书图文。</p>
+          </div>
+          <button class="modal-close" id="closeExcellentRemixModal" type="button">×</button>
+        </div>
+        <form id="excellentRemixForm">
+          <div id="excellentRemixBody" class="excellent-remix-form"></div>
+          <div class="form-actions">
+            <button class="secondary-btn" id="cancelExcellentRemixModal" type="button">取消</button>
+            <button class="primary-btn" id="submitExcellentRemix" type="submit">一键仿图文</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js?v=20260722-excellent-content"></script>
   </body>
 </html>

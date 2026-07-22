@@ -201,6 +201,16 @@ function initializeDatabaseSchema() {
       FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE SET NULL,
       FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS excellent_content_cache (
+      source_key TEXT NOT NULL,
+      category_path TEXT NOT NULL,
+      items_json TEXT NOT NULL DEFAULT '[]',
+      fetched_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_error TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (source_key, category_path)
+    );
   `);
 }
 
@@ -236,6 +246,8 @@ function ensureDatabaseIndexes() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_trend_analysis_requests_active_bucket
       ON trend_analysis_requests(user_id, brand_id, bucket_key)
       WHERE status = 'reserved';
+    CREATE INDEX IF NOT EXISTS idx_excellent_content_cache_expires
+      ON excellent_content_cache(expires_at);
   `);
 }
 
@@ -382,6 +394,16 @@ function ensureSchemaUpgrades() {
       FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE SET NULL,
       FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS excellent_content_cache (
+      source_key TEXT NOT NULL,
+      category_path TEXT NOT NULL,
+      items_json TEXT NOT NULL DEFAULT '[]',
+      fetched_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_error TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (source_key, category_path)
+    );
   `);
 }
 
@@ -421,7 +443,8 @@ function hasCurrentStoreSchema() {
     tableExists("product_images") &&
     tableExists("image_jobs") &&
     tableExists("credit_events") &&
-    tableExists("trend_analysis_requests")
+    tableExists("trend_analysis_requests") &&
+    tableExists("excellent_content_cache")
   );
 }
 

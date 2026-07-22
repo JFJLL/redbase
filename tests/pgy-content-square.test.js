@@ -112,6 +112,26 @@ test("builds Pgy hot note payload with category and exposure sort", () => {
   assert.equal(DEFAULT_PGY_HOT_NOTES_PAGE_SIZE, 10);
 });
 
+test("builds excellent-content Pgy payload with engagement sort overrides", () => {
+  const payload = buildPgyHotNotesPayload({
+    categoryPath: "美妆/护肤",
+    pageSize: 20,
+    pageNum: 1,
+    nd: "7",
+    orderBy: "premium_engage_num",
+    sort: "desc",
+  });
+  assert.equal(payload.orderBy, "premium_engage_num");
+  assert.equal(payload.nd, "7");
+  assert.equal(payload.sort, "desc");
+  assert.equal(payload.pageSize, 20);
+  assert.equal(payload.pageNum, 1);
+  assert.equal(payload.noteContentCategory, "内容类目#美妆#护肤");
+  // Default trend behavior remains exposure sort.
+  assert.equal(buildPgyHotNotesPayload().orderBy, "premium_imp_num");
+  assert.equal(buildPgyHotNotesPayload().nd, "3");
+});
+
 test("normalizes Pgy hot notes into prompt-safe evidence", () => {
   const notes = normalizePgyHotNotes(
     [
@@ -141,6 +161,12 @@ test("normalizes Pgy hot notes into prompt-safe evidence", () => {
   assert.equal(notes[0].noteUrl, "https://www.xiaohongshu.com/explore/abc123");
   assert.equal(notes[0].primaryCoverUrl, "https://image.example/cover.jpg");
   assert.equal(notes[0].metrics.engagementCount, 392);
+  assert.equal(notes[0].noteId, "abc123");
+  assert.equal(typeof notes[0].noteId, "string");
+  assert.equal(notes[0].id, "abc123");
+  assert.deepEqual(notes[0].imageUrls, ["https://image.example/cover.jpg"]);
+  assert.equal(notes[0].noteType, "image");
+  assert.equal(notes[0].sourceKey, "xhs_hot");
 });
 
 test("Pgy fetch returns typed empty-result errors", async () => {

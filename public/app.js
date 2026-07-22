@@ -74,6 +74,7 @@ async function init() {
   bindBusinessQuoteModal();
   bindAnalysisButton();
   bindXhsCategorySelector();
+  bindExcellentContentLibrary();
   bindIdeaPromptActions();
   bindHistoryFilters();
   bindLogout();
@@ -1238,6 +1239,16 @@ function clearSession() {
   state.xhsCategories = [];
   state.xhsCategoryStatus = "idle";
   state.xhsCategoryError = "";
+  state.excellentContents = [];
+  state.excellentContentFilters = {
+    categoryPath: "",
+    source: "xhs_hot",
+  };
+  state.excellentContentStatus = "idle";
+  state.excellentContentError = "";
+  state.excellentContentUpdatedAt = "";
+  state.excellentContentStale = false;
+  state.excellentContentRequestId = 0;
   state.trendAnalysisLoadingKeys = [];
   state.productImages = {};
   state.productImageLibrary = [];
@@ -1247,6 +1258,8 @@ function clearSession() {
   state.styleReferences = {};
   state.resumingImageTasks = false;
   brandDetailRequests.clear();
+  if (typeof closeExcellentContentDetail === "function") closeExcellentContentDetail();
+  if (typeof closeExcellentRemix === "function") closeExcellentRemix();
   dashboardScrollPositions.clear();
   retriedHistoryImagePaths.clear();
   historyImageSignatureRefreshInFlight = null;
@@ -1359,6 +1372,8 @@ async function loadBrands() {
       showToast(`品牌详情加载失败：${error.message}`, 8000);
     });
     loadXhsCategories();
+    // Prefetch excellent content in the background; never block workspace entry.
+    prefetchExcellentContents().catch(() => {});
     return true;
   } catch (error) {
     if (isStaleSessionRequest(error)) return false;
@@ -1470,6 +1485,7 @@ function applyXhsCategoryResult(result) {
     state.xhsCategoryPath = "";
     state.xhsCategoryStatus = "error";
     state.xhsCategoryError = result.error.message || "小红书内容类目暂时不可用";
+    renderExcellentCategoryOptions();
     return;
   }
 
@@ -1480,6 +1496,7 @@ function applyXhsCategoryResult(result) {
   if (state.xhsCategoryPath && !validValues.has(state.xhsCategoryPath)) {
     state.xhsCategoryPath = "";
   }
+  renderExcellentCategoryOptions();
 }
 
 function replaceBrand(nextBrand) {
@@ -1787,6 +1804,19 @@ function switchTab(tab) {
   if (tab === "history") {
     refreshGenerationHistoryOnHistoryTab();
   }
+  if (tab === "excellent") {
+    if (state.excellentContentStatus === "idle") {
+      loadExcellentContents().catch((error) => {
+        if (!isStaleSessionRequest(error)) {
+          state.excellentContentError = error.message || "加载失败";
+          state.excellentContentStatus = "error";
+          renderExcellentContents();
+        }
+      });
+    } else {
+      renderExcellentContents();
+    }
+  }
 }
 
 function renderUser() {
@@ -1888,6 +1918,7 @@ function renderAll() {
   renderTrends();
   renderIdeas();
   renderGenerationHistory();
+  renderExcellentContents();
 }
 
 function renderBrands() {
@@ -3661,23 +3692,57 @@ async function generateXhsCarousel(ideaIndex) {
   const brand = getSelectedBrand();
   const trend = getSelectedTrend();
   if (!brand || !trend) return;
-  const aspectRatio = getResolvedIdeaAspectRatio(ideaIndex, "xhsCarousel");
+  await generateXhsCarouselForContext({
+    brand,
+    trend,
+    idea: trend.ideas?.[ideaIndex],
+    ideaIndex,
+    productImages: getSelectedProductImages(ideaIndex),
+    useBrandLogo: isBrandLogoEnabled(ideaIndex),
+    aspectRatio: getResolvedIdeaAspectRatio(ideaIndex, "xhsCarousel"),
+  });
+}
+
+async function generateXhsCarouselForContext({
+  brand,
+  trend,
+  idea,
+  ideaIndex,
+  productImages,
+  useBrandLogo,
+  carouselPack: customCarouselPack = null,
+  sourceCase = null,
+  aspectRatio = "3:4",
+} = {}) {
+  if (!brand || !trend) return;
+  const resolvedIdeaIndex = Number(ideaIndex);
+  const resolvedIdea = idea || trend.ideas?.[resolvedIdeaIndex];
+  if (!resolvedIdea) return;
 
   const imageResult = openAssetModal({
-    kicker: "AI 小红书组图",
-    title: "小红书组图内容包",
-    description: "先检查每张图的视觉方向、风格和构图，再选择单张或一键生成四张图。",
-    loadingTitle: "正在准备小红书组图方案...",
-    loadingCopy: "正在整理 4 张组图页面的视觉方向、风格和构图建议。",
+    kicker: sourceCase ? "一键仿图文" : "AI 小红书组图",
+    title: sourceCase ? "优秀内容仿图文方案" : "小红书组图内容包",
+    description: sourceCase
+      ? "基于参考笔记节奏生成 4 页原创组图，可继续单张或一键生图。"
+      : "先检查每张图的视觉方向、风格和构图，再选择单张或一键生成四张图。",
+    loadingTitle: sourceCase ? "正在准备仿图文方案..." : "正在准备小红书组图方案...",
+    loadingCopy: sourceCase
+      ? "正在基于参考案例与当前选题整理 4 页原创页面。"
+      : "正在整理 4 张组图页面的视觉方向、风格和构图建议。",
   });
 
   try {
-    const idea = trend.ideas?.[ideaIndex];
-    if (!idea) throw new Error("当前选题不存在，请重新生成或刷新页面后再试。");
-    const previewResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/preview`, {
-      method: "POST",
-      body: JSON.stringify({ aspectRatio }),
-    });
+    const previewBody = { aspectRatio };
+    if (customCarouselPack && typeof customCarouselPack === "object") {
+      previewBody.carouselPack = customCarouselPack;
+    }
+    const previewResult = await request(
+      `/api/brands/${brand.id}/trends/${trend.id}/ideas/${resolvedIdeaIndex}/xhs-carousel/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify(previewBody),
+      },
+    );
     updateCurrentUser(previewResult.user);
     const previewPack = previewResult.carouselPack;
     if (!previewPack || !Array.isArray(previewPack.slides)) {
@@ -3686,9 +3751,11 @@ async function generateXhsCarousel(ideaIndex) {
     const pack = {
       ...previewPack,
       aspectRatio,
-      carouselGroupId: previewPack.carouselGroupId || createXhsCarouselGroupId(brand.id, trend.id, ideaIndex),
+      carouselGroupId: previewPack.carouselGroupId || createXhsCarouselGroupId(brand.id, trend.id, resolvedIdeaIndex),
       slides: enrichXhsCarouselSlides(previewPack),
     };
+    const selectedProductImages = Array.isArray(productImages) ? productImages : getSelectedProductImages(resolvedIdeaIndex);
+    const selectedUseBrandLogo = typeof useBrandLogo === "boolean" ? useBrandLogo : isBrandLogoEnabled(resolvedIdeaIndex);
     const flags = {
       isGeneratingAll: false,
       completed: false,
@@ -3702,7 +3769,7 @@ async function generateXhsCarousel(ideaIndex) {
 
     const completeIfReady = async () => {
       if (flags.completed || !pack.slides.every(hasXhsCarouselSlideImage)) return;
-      const completeResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/complete`, {
+      const completeResult = await request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${resolvedIdeaIndex}/xhs-carousel/complete`, {
         method: "POST",
         body: JSON.stringify({ carouselPack: pack, creditEventId: flags.creditEventId }),
       });
@@ -3714,7 +3781,7 @@ async function generateXhsCarousel(ideaIndex) {
         renderGenerationHistory();
       }
       flags.completed = true;
-      showToast("小红书组图已全部生成并写入历史生成。");
+      showToast(sourceCase ? "仿图文组图已全部生成并写入历史生成。" : "小红书组图已全部生成并写入历史生成。");
     };
 
     const getNextRunnableTaskIndex = () => {
@@ -3778,13 +3845,13 @@ async function generateXhsCarousel(ideaIndex) {
       renderAndBind();
       try {
         const result = await runImageJobSubmission(() =>
-          request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${ideaIndex}/xhs-carousel/slides/${slideIndex}`, {
+          request(`/api/brands/${brand.id}/trends/${trend.id}/ideas/${resolvedIdeaIndex}/xhs-carousel/slides/${slideIndex}`, {
             method: "POST",
             body: JSON.stringify({
               carouselPack: pack,
               slide,
-              productImages: getSelectedProductImages(ideaIndex),
-              useBrandLogo: isBrandLogoEnabled(ideaIndex),
+              productImages: selectedProductImages,
+              useBrandLogo: selectedUseBrandLogo,
               aspectRatio,
             }),
           }),
@@ -3929,6 +3996,614 @@ async function generateXhsCarousel(ideaIndex) {
     if (isStaleSessionRequest(error)) return;
     imageResult.innerHTML = `<div class="image-meta-card"><h3>生成失败</h3><div class="idea-copy">${escapeHtml(error.message)}</div></div>`;
   }
+}
+
+let excellentRemixState = null;
+let excellentDetailScrollLock = false;
+
+function formatCompactMetric(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num <= 0) return "0";
+  if (num >= 10000) return `${(num / 10000).toFixed(num >= 100000 ? 0 : 1)}万`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
+  return String(Math.round(num));
+}
+
+function findExcellentContentById(noteId) {
+  const target = String(noteId || "");
+  return (state.excellentContents || []).find((item) => String(item.noteId || item.id) === target) || null;
+}
+
+function setExcellentModalOpen(isOpen) {
+  document.body.classList.toggle("excellent-modal-open", Boolean(isOpen));
+  if (!isOpen) excellentDetailScrollLock = false;
+}
+
+function renderExcellentCategoryOptions() {
+  const select = document.getElementById("excellentCategoryFilter");
+  if (!select) return;
+  const previous = state.excellentContentFilters.categoryPath || "";
+  select.innerHTML = `<option value="">全部内容类目</option>${renderXhsCategoryOptions(state.xhsCategories)}`;
+  select.value = previous;
+}
+
+function renderExcellentContentMeta() {
+  const meta = document.getElementById("excellentContentMeta");
+  if (!meta) return;
+  const parts = [
+    `<span>近7日</span>`,
+    `<span>按互动量排序</span>`,
+  ];
+  if (state.excellentContentUpdatedAt) {
+    const label = new Date(state.excellentContentUpdatedAt).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    parts.push(`<span>更新 ${escapeHtml(label)}</span>`);
+  }
+  if (state.excellentContentStale) {
+    parts.push(`<span class="is-stale">缓存可能已过期</span>`);
+  }
+  meta.innerHTML = parts.join("");
+}
+
+function renderExcellentStatus() {
+  const statusEl = document.getElementById("excellentContentStatus");
+  if (!statusEl) return;
+  if (state.excellentContentStatus === "loading" && state.excellentContents.length) {
+    statusEl.hidden = false;
+    statusEl.className = "excellent-status";
+    statusEl.textContent = "正在更新…";
+    return;
+  }
+  if (state.excellentContentStale && state.excellentContents.length) {
+    statusEl.hidden = false;
+    statusEl.className = "excellent-status";
+    statusEl.textContent = "当前展示最近一次成功数据，后台正在更新。";
+    return;
+  }
+  if (state.excellentContentStatus === "error" && !state.excellentContents.length) {
+    statusEl.hidden = false;
+    statusEl.className = "excellent-status is-error";
+    statusEl.innerHTML = `${escapeHtml(state.excellentContentError || "加载失败")} <button class="inline-link" id="reloadExcellentContents" type="button">重新加载</button>`;
+    document.getElementById("reloadExcellentContents")?.addEventListener("click", () => {
+      loadExcellentContents({ force: true }).catch(() => {});
+    });
+    return;
+  }
+  statusEl.hidden = true;
+  statusEl.textContent = "";
+}
+
+function renderExcellentContents() {
+  const root = document.getElementById("excellentContentGrid");
+  if (!root) return;
+  renderExcellentCategoryOptions();
+  renderExcellentContentMeta();
+  renderExcellentStatus();
+
+  const sourceSelect = document.getElementById("excellentSourceFilter");
+  if (sourceSelect) sourceSelect.value = state.excellentContentFilters.source || "xhs_hot";
+  const categorySelect = document.getElementById("excellentCategoryFilter");
+  if (categorySelect) categorySelect.value = state.excellentContentFilters.categoryPath || "";
+
+  if (state.excellentContentStatus === "loading" && !state.excellentContents.length) {
+    root.innerHTML = `<div class="excellent-skeleton-grid">${Array.from({ length: 8 }).map(() => `<div class="excellent-skeleton-card"></div>`).join("")}</div>`;
+    return;
+  }
+
+  const items = state.excellentContents || [];
+  if (!items.length) {
+    root.innerHTML = `<div class="excellent-empty"><strong>${state.excellentContentStatus === "error" ? "暂时无法加载优秀内容" : "暂无图文优秀内容"}</strong><p>${escapeHtml(state.excellentContentError || "换个类目试试，或稍后重新加载。")}</p><button class="primary-btn" id="reloadExcellentContentsEmpty" type="button">重新加载</button></div>`;
+    document.getElementById("reloadExcellentContentsEmpty")?.addEventListener("click", () => {
+      loadExcellentContents({ force: true }).catch(() => {});
+    });
+    return;
+  }
+
+  root.innerHTML = items
+    .map((item) => {
+      const noteId = String(item.noteId || item.id || "");
+      const cover = safeImageSrc(item.primaryCoverUrl || item.imageUrls?.[0] || item.coverUrls?.[0] || "");
+      const imageCount = Number(item.imageCount || item.imageUrls?.length || 0);
+      const engagement = Number(item.metrics?.engagementCount || 0);
+      return `
+        <article class="excellent-note-card" data-note-id="${escapeHtml(noteId)}">
+          <button class="excellent-note-cover" data-excellent-detail="${escapeHtml(noteId)}" type="button">
+            ${
+              cover
+                ? `<img src="${cover}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'excellent-cover-fallback',textContent:'封面加载失败'}))" />`
+                : `<div class="excellent-cover-fallback">暂无封面</div>`
+            }
+            <span class="excellent-note-rank">TOP ${escapeHtml(String(item.rank || ""))}</span>
+            ${imageCount > 1 ? `<span class="excellent-note-count">${imageCount}图</span>` : ""}
+          </button>
+          <div class="excellent-note-body">
+            <button class="excellent-note-title" data-excellent-detail="${escapeHtml(noteId)}" type="button">${escapeHtml(item.title || "未命名笔记")}</button>
+            <div class="excellent-note-author">${escapeHtml(item.author?.nickname || "未知作者")}</div>
+            <div class="excellent-note-metrics">
+              <span>总互动 <strong>${formatCompactMetric(engagement)}</strong></span>
+              <span>赞 ${formatCompactMetric(item.metrics?.likeCount)}</span>
+              <span>藏 ${formatCompactMetric(item.metrics?.favoriteCount)}</span>
+              <span>评 ${formatCompactMetric(item.metrics?.commentCount)}</span>
+            </div>
+            <div class="excellent-note-actions">
+              <a href="${escapeHtml(item.noteUrl || "#")}" target="_blank" rel="noopener noreferrer" data-excellent-external>查看原笔记</a>
+              <button data-excellent-remix="${escapeHtml(noteId)}" type="button">一键仿图文</button>
+            </div>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function loadExcellentContents({ force = false } = {}) {
+  if (!state.sessionToken) return null;
+  const requestId = ++state.excellentContentRequestId;
+  const loadEpoch = sessionEpoch;
+  const source = state.excellentContentFilters.source || "xhs_hot";
+  const categoryPath = state.excellentContentFilters.categoryPath || "";
+  const hadItems = state.excellentContents.length > 0;
+  state.excellentContentStatus = "loading";
+  state.excellentContentError = "";
+  if (!hadItems || force) renderExcellentContents();
+  else renderExcellentStatus();
+
+  try {
+    const query = new URLSearchParams({ source });
+    if (categoryPath) query.set("categoryPath", categoryPath);
+    const result = await request(`/api/excellent-contents?${query.toString()}`);
+    assertSessionEpoch(loadEpoch);
+    if (requestId !== state.excellentContentRequestId) return null;
+    state.excellentContents = Array.isArray(result.items) ? result.items : [];
+    state.excellentContentUpdatedAt = result.updatedAt || "";
+    state.excellentContentStale = Boolean(result.stale);
+    state.excellentContentStatus = state.excellentContents.length ? "ready" : "empty";
+    state.excellentContentError = "";
+    renderExcellentContents();
+    return result;
+  } catch (error) {
+    if (isStaleSessionRequest(error) || requestId !== state.excellentContentRequestId) return null;
+    state.excellentContentStatus = "error";
+    state.excellentContentError = error.message || "优秀内容加载失败";
+    renderExcellentContents();
+    throw error;
+  }
+}
+
+async function prefetchExcellentContents() {
+  if (!state.sessionToken) return;
+  if (state.excellentContentStatus === "ready" || state.excellentContentStatus === "loading") return;
+  try {
+    await loadExcellentContents();
+  } catch (_error) {
+    // Prefetch failures must not impact workspace entry.
+  }
+}
+
+function openExcellentContentDetail(noteId) {
+  const item = findExcellentContentById(noteId);
+  if (!item) return;
+  const detail = document.getElementById("excellentContentDetail");
+  const modal = document.getElementById("excellentContentModal");
+  if (!detail || !modal) return;
+  const images = Array.isArray(item.imageUrls) && item.imageUrls.length
+    ? item.imageUrls
+    : [item.primaryCoverUrl, ...(item.coverUrls || [])].filter(Boolean);
+  const safeImages = images.map((src) => safeImageSrc(src)).filter(Boolean);
+  detail.innerHTML = `
+    <div class="excellent-detail-layout">
+      <section class="excellent-detail-gallery">
+        ${
+          safeImages.length
+            ? safeImages
+                .map(
+                  (src, index) =>
+                    `<img src="${src}" alt="${escapeHtml(item.title || "笔记")} 第 ${index + 1} 张" loading="lazy" referrerpolicy="no-referrer" />`,
+                )
+                .join("")
+            : `<div class="excellent-cover-fallback">暂无图片</div>`
+        }
+        <div class="excellent-detail-gallery-meta">${safeImages.length ? `共 ${safeImages.length} 张图片` : "暂无图片"}</div>
+      </section>
+      <aside class="excellent-detail-copy">
+        <h2 id="excellentContentModalTitle">${escapeHtml(item.title || "未命名笔记")}</h2>
+        <div class="excellent-detail-meta">
+          <div>作者：${escapeHtml(item.author?.nickname || "未知作者")}</div>
+          <div>类目：${escapeHtml(item.categoryPath || "全部内容类目")}</div>
+          <div>发布时间：${escapeHtml(item.publishTime || "-")}</div>
+        </div>
+        <div class="excellent-detail-metrics">
+          <div><strong>${formatCompactMetric(item.metrics?.readCount)}</strong><span>阅读</span></div>
+          <div><strong>${formatCompactMetric(item.metrics?.likeCount)}</strong><span>点赞</span></div>
+          <div><strong>${formatCompactMetric(item.metrics?.favoriteCount)}</strong><span>收藏</span></div>
+          <div><strong>${formatCompactMetric(item.metrics?.commentCount)}</strong><span>评论</span></div>
+          <div><strong>${formatCompactMetric(item.metrics?.engagementCount)}</strong><span>总互动</span></div>
+        </div>
+        <div class="excellent-detail-actions">
+          <a href="${escapeHtml(item.noteUrl || "#")}" target="_blank" rel="noopener noreferrer">查看原笔记</a>
+          <button class="primary-btn excellent-detail-remix" data-excellent-remix="${escapeHtml(String(item.noteId || item.id))}" type="button">一键仿图文</button>
+        </div>
+      </aside>
+    </div>
+  `;
+  detail.querySelector("[data-excellent-remix]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    openExcellentRemix(event.currentTarget.dataset.excellentRemix);
+  });
+  modal.classList.add("is-open");
+  excellentDetailScrollLock = true;
+  setExcellentModalOpen(true);
+}
+
+function closeExcellentContentDetail() {
+  document.getElementById("excellentContentModal")?.classList.remove("is-open");
+  if (!document.getElementById("excellentRemixModal")?.classList.contains("is-open")) {
+    setExcellentModalOpen(false);
+  }
+}
+
+function flattenRemixTrends(brand) {
+  return getTrendBucketsForBrand(brand).flatMap((bucket) =>
+    (bucket.items || []).map((trend) => ({
+      bucketKey: bucket.key,
+      bucketTitle: bucket.title || bucket.key,
+      trend,
+    })),
+  );
+}
+
+async function openExcellentRemix(noteId) {
+  const item = findExcellentContentById(noteId);
+  if (!item) return;
+  closeExcellentContentDetail();
+  excellentRemixState = {
+    noteId: String(item.noteId || item.id),
+    brandId: state.selectedBrandId || state.brands[0]?.id || null,
+    trendId: null,
+    ideaIndex: 0,
+    productImageIds: [],
+    useBrandLogo: true,
+    focus: ["structure", "visual"],
+    loadingBrand: false,
+  };
+  document.getElementById("excellentRemixModal")?.classList.add("is-open");
+  setExcellentModalOpen(true);
+  renderExcellentRemix();
+  if (excellentRemixState.brandId) {
+    excellentRemixState.loadingBrand = true;
+    renderExcellentRemix();
+    try {
+      await ensureBrandDetailLoaded(excellentRemixState.brandId);
+    } catch (error) {
+      if (!isStaleSessionRequest(error)) showToast(`品牌详情加载失败：${error.message}`);
+    } finally {
+      if (excellentRemixState) {
+        excellentRemixState.loadingBrand = false;
+        renderExcellentRemix();
+      }
+    }
+  }
+}
+
+function closeExcellentRemix() {
+  document.getElementById("excellentRemixModal")?.classList.remove("is-open");
+  excellentRemixState = null;
+  if (!document.getElementById("excellentContentModal")?.classList.contains("is-open")) {
+    setExcellentModalOpen(false);
+  }
+}
+
+function renderExcellentRemix() {
+  const root = document.getElementById("excellentRemixBody");
+  const submitButton = document.getElementById("submitExcellentRemix");
+  if (!root) return;
+  if (!excellentRemixState) {
+    root.innerHTML = "";
+    if (submitButton) submitButton.disabled = true;
+    return;
+  }
+  const item = findExcellentContentById(excellentRemixState.noteId);
+  const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
+  const brandReady = brand && isBrandDetailLoaded(brand);
+  const trends = brandReady ? flattenRemixTrends(brand) : [];
+  if (!trends.some((entry) => Number(entry.trend.id) === Number(excellentRemixState.trendId))) {
+    excellentRemixState.trendId = trends[0]?.trend.id || null;
+    excellentRemixState.ideaIndex = 0;
+  }
+  const selectedTrendEntry = trends.find((entry) => Number(entry.trend.id) === Number(excellentRemixState.trendId));
+  const ideas = selectedTrendEntry?.trend?.ideas || [];
+  if (!ideas[excellentRemixState.ideaIndex]) excellentRemixState.ideaIndex = 0;
+  const cover = safeImageSrc(item?.primaryCoverUrl || item?.imageUrls?.[0] || "");
+  const canSubmit = Boolean(brand && brandReady && selectedTrendEntry && ideas.length && !excellentRemixState.loadingBrand);
+  if (submitButton) submitButton.disabled = !canSubmit;
+
+  const emptyState = !state.brands.length
+    ? `<div class="excellent-remix-empty"><strong>还没有品牌档案</strong><p>请先创建品牌，再回来完成一键仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-brand type="button">去品牌档案</button></div></div>`
+    : !brandReady && excellentRemixState.loadingBrand
+      ? `<div class="excellent-remix-empty"><strong>正在加载品牌详情…</strong><p>请稍候。</p></div>`
+      : !trends.length
+        ? `<div class="excellent-remix-empty"><strong>当前品牌还没有趋势</strong><p>请先在趋势分析中生成热点，再回到这里仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-trends type="button">去趋势分析</button></div></div>`
+        : !ideas.length
+          ? `<div class="excellent-remix-empty"><strong>当前趋势还没有选题</strong><p>请先在内容选题页生成选题，再回来仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-ideas type="button">去内容选题</button></div></div>`
+          : "";
+
+  root.innerHTML = `
+    <div class="excellent-remix-template">
+      ${cover ? `<img src="${cover}" alt="" referrerpolicy="no-referrer" />` : `<div class="excellent-cover-fallback">暂无封面</div>`}
+      <div>
+        <span>参考笔记</span>
+        <strong>${escapeHtml(item?.title || "优秀内容")}</strong>
+        <p>${escapeHtml(item?.author?.nickname || "未知作者")} · 总互动 ${formatCompactMetric(item?.metrics?.engagementCount)}</p>
+      </div>
+    </div>
+    ${
+      emptyState ||
+      `<div class="excellent-remix-grid">
+        <label><span>1. 选择品牌</span><select data-remix-field="brand">${state.brands.map((entry) => `<option value="${entry.id}" ${Number(entry.id) === Number(excellentRemixState.brandId) ? "selected" : ""}>${escapeHtml(entry.name)}</option>`).join("")}</select></label>
+        <label><span>2. 选择趋势</span><select data-remix-field="trend">${trends.map((entry) => `<option value="${entry.trend.id}" ${Number(entry.trend.id) === Number(excellentRemixState.trendId) ? "selected" : ""}>${escapeHtml(entry.bucketTitle)} · ${escapeHtml(entry.trend.title)}</option>`).join("")}</select></label>
+        <label class="excellent-remix-wide"><span>3. 选择选题</span><select data-remix-field="idea">${ideas.map((idea, index) => `<option value="${index}" ${index === excellentRemixState.ideaIndex ? "selected" : ""}>${escapeHtml(idea.title)}</option>`).join("")}</select></label>
+      </div>`
+    }
+    <section class="excellent-remix-options">
+      <h3>想重点学习什么</h3>
+      <div class="excellent-check-row">
+        ${[["structure", "信息结构"], ["visual", "视觉语言"], ["hook", "封面钩子"], ["conversion", "收藏转化"]].map(([value, label]) => `<label><input data-remix-focus="${value}" type="checkbox" ${excellentRemixState.focus.includes(value) ? "checked" : ""} /><span>${label}</span></label>`).join("")}
+      </div>
+    </section>
+    <section class="excellent-remix-options">
+      <h3>产品与品牌素材</h3>
+      <label class="excellent-logo-check"><input data-remix-logo type="checkbox" ${brand?.logo && excellentRemixState.useBrandLogo ? "checked" : ""} ${brand?.logo ? "" : "disabled"} /><span>${brand?.logo ? "在合适页面使用品牌 Logo" : "当前品牌还没有 Logo"}</span></label>
+      <div class="excellent-product-picker">
+        ${
+          state.productImageLibrary.length
+            ? state.productImageLibrary
+                .map(
+                  (image) =>
+                    `<label><input data-remix-product="${image.id}" type="checkbox" ${excellentRemixState.productImageIds.includes(image.id) ? "checked" : ""} /><img src="${authenticatedImageSrc(image.url)}" alt="${escapeHtml(image.originalName || "产品图")}" /><span>${escapeHtml(image.originalName || "产品图")}</span></label>`,
+                )
+                .join("")
+            : `<p>还没有上传过产品图，仍可先生成图文方案。</p>`
+        }
+      </div>
+    </section>
+    <div class="excellent-originality-note">只学习参考笔记的信息节奏、页面角色和内容方法；不会复制原文、原图人物、原品牌、原 Logo、水印或具体版式。</div>
+  `;
+
+  root.querySelector("[data-remix-go-brand]")?.addEventListener("click", () => {
+    closeExcellentRemix();
+    switchTab("brands");
+  });
+  root.querySelector("[data-remix-go-trends]")?.addEventListener("click", () => {
+    closeExcellentRemix();
+    switchTab("trends");
+  });
+  root.querySelector("[data-remix-go-ideas]")?.addEventListener("click", () => {
+    closeExcellentRemix();
+    switchTab("ideas");
+  });
+}
+
+async function handleExcellentRemixChange(event) {
+  if (!excellentRemixState) return;
+  const field = event.target.dataset.remixField;
+  if (field === "brand") {
+    excellentRemixState.brandId = Number(event.target.value);
+    excellentRemixState.trendId = null;
+    excellentRemixState.ideaIndex = 0;
+    excellentRemixState.loadingBrand = true;
+    renderExcellentRemix();
+    try {
+      await ensureBrandDetailLoaded(excellentRemixState.brandId);
+    } catch (error) {
+      if (!isStaleSessionRequest(error)) showToast(`品牌详情加载失败：${error.message}`);
+    } finally {
+      if (excellentRemixState) {
+        excellentRemixState.loadingBrand = false;
+        renderExcellentRemix();
+      }
+    }
+    return;
+  }
+  if (field === "trend") {
+    excellentRemixState.trendId = Number(event.target.value);
+    excellentRemixState.ideaIndex = 0;
+    renderExcellentRemix();
+    return;
+  }
+  if (field === "idea") {
+    excellentRemixState.ideaIndex = Number(event.target.value);
+    return;
+  }
+  if (event.target.dataset.remixFocus) {
+    const value = event.target.dataset.remixFocus;
+    excellentRemixState.focus = event.target.checked
+      ? [...new Set([...excellentRemixState.focus, value])]
+      : excellentRemixState.focus.filter((item) => item !== value);
+    return;
+  }
+  if (event.target.hasAttribute("data-remix-logo")) {
+    excellentRemixState.useBrandLogo = event.target.checked;
+    return;
+  }
+  if (event.target.dataset.remixProduct) {
+    const imageId = Number(event.target.dataset.remixProduct);
+    excellentRemixState.productImageIds = event.target.checked
+      ? [...new Set([...excellentRemixState.productImageIds, imageId])].slice(0, MAX_SELECTED_PRODUCT_IMAGES)
+      : excellentRemixState.productImageIds.filter((id) => id !== imageId);
+  }
+}
+
+function buildExcellentRemixPack(item, brand, trend, idea, focus) {
+  const focusLabels = {
+    structure: "信息结构",
+    visual: "视觉语言",
+    hook: "封面钩子",
+    conversion: "收藏转化",
+  };
+  const focusText = (focus || []).map((key) => focusLabels[key] || key).filter(Boolean).join("、") || "信息结构";
+  const originalityGuard =
+    "只学习参考笔记的信息节奏、页面角色和内容方法；不得复制原文、原图人物、原品牌、原Logo、水印、具体版式和可识别视觉资产；生成全新的原创内容与画面。";
+  const productPoint = String(brand.product || brand.description || "产品核心价值").split(/[。；\n]/)[0].slice(0, 42);
+  const existingSlides = idea.contentAssets?.xhsCarousel?.slides || [];
+  const pageDefs = [
+    {
+      pageTask: "封面钩子，强调第一眼点击理由",
+      title: idea.hook || idea.title || `先看这篇：${String(trend.title || "").slice(0, 12)}`,
+      copy: `如果你最近在关注${String(trend.title || "这个话题").slice(0, 16)}，这篇值得先收藏。`,
+    },
+    {
+      pageTask: "用户场景或真实问题",
+      title: `真实场景里的问题`,
+      copy: idea.summary || trend.summary || `很多人在这个场景里容易踩坑。`,
+    },
+    {
+      pageTask: "品牌或产品解决方式",
+      title: `${brand.name} 的解法`,
+      copy: idea.brandFit || productPoint,
+    },
+    {
+      pageTask: "总结、行动清单或收藏理由",
+      title: "收藏这份行动清单",
+      copy: `适合 ${idea.audience || brand.audience || "目标用户"}：先记下重点，再按自己的场景调整。`,
+    },
+  ];
+  const slides = pageDefs.map((page, index) => {
+    const source = existingSlides[index] || {};
+    const title = String(source.title || page.title).slice(0, 30);
+    const copy = String(source.copy || page.copy).slice(0, 150);
+    const remixBrief = {
+      sourceType: "excellent_content",
+      sourceNoteId: String(item.noteId || item.id || ""),
+      sourceTitle: String(item.title || "").slice(0, 120),
+      sourceCategoryPath: String(item.categoryPath || ""),
+      sourceImageCount: Number(item.imageCount || item.imageUrls?.length || 0),
+      sourceEngagementCount: Number(item.metrics?.engagementCount || 0),
+      learningFocus: [...(focus || [])],
+      pageTask: page.pageTask,
+      pageTitle: title,
+      pageCopy: copy,
+      originalityGuard,
+    };
+    return {
+      pageLabel: `第 ${index + 1} 张`,
+      title,
+      copy,
+      visualDirection: `围绕${brand.name}与选题「${idea.title}」做原创表达，学习重点：${focusText}。`,
+      style: "小红书图文编辑感，少量短文字、强层级、真实生活气质。",
+      composition: `${page.pageTask}；3:4 竖图，一页只讲一个重点，标题克制，产品自然出现。`,
+      prompt: "",
+      remixBrief,
+      aspectRatio: "3:4",
+    };
+  });
+  const publishTitle = idea.contentAssets?.xhsCarousel?.publishTitle || idea.title;
+  const baseCaption = idea.contentAssets?.xhsCarousel?.publishCaption || idea.summary || "";
+  const tags = [...new Set([...(idea.tags || []), trend.title].filter(Boolean))].slice(0, 5);
+  return {
+    title: publishTitle,
+    publishTitle,
+    caption: baseCaption,
+    publishCaption: `${baseCaption}\n\n这次把重点拆成 4 张图：先讲场景，再给方法，最后留一份可以直接收藏的行动清单。\n\n${tags.map((tag) => `#${String(tag).replace(/^#/, "")}`).join(" ")}`.trim(),
+    aspectRatio: "3:4",
+    sourceTemplate: {
+      noteId: String(item.noteId || item.id || ""),
+      title: item.title || "",
+      sourceUrl: item.noteUrl || "",
+      source: "xhs_hot",
+    },
+    remixBrief: {
+      sourceType: "excellent_content",
+      sourceNoteId: String(item.noteId || item.id || ""),
+      sourceTitle: String(item.title || "").slice(0, 120),
+      sourceCategoryPath: String(item.categoryPath || ""),
+      sourceImageCount: Number(item.imageCount || item.imageUrls?.length || 0),
+      sourceEngagementCount: Number(item.metrics?.engagementCount || 0),
+      learningFocus: [...(focus || [])],
+      originalityGuard,
+    },
+    slides,
+  };
+}
+
+async function submitExcellentRemix(event) {
+  event.preventDefault();
+  if (!excellentRemixState) return;
+  const snapshot = { ...excellentRemixState, focus: [...excellentRemixState.focus], productImageIds: [...excellentRemixState.productImageIds] };
+  const item = findExcellentContentById(snapshot.noteId);
+  const brand = state.brands.find((entry) => Number(entry.id) === Number(snapshot.brandId));
+  if (!item || !brand) return;
+  await ensureBrandDetailLoaded(brand.id);
+  const selectedTrendEntry = flattenRemixTrends(brand).find((entry) => Number(entry.trend.id) === Number(snapshot.trendId));
+  const trend = selectedTrendEntry?.trend;
+  const idea = trend?.ideas?.[snapshot.ideaIndex];
+  if (!trend || !idea) {
+    showToast("请先选择有效的趋势和选题。");
+    return;
+  }
+  const carouselPack = buildExcellentRemixPack(item, brand, trend, idea, snapshot.focus);
+  const productImages = state.productImageLibrary.filter((image) => snapshot.productImageIds.includes(image.id));
+  closeExcellentRemix();
+  await generateXhsCarouselForContext({
+    brand,
+    trend,
+    idea,
+    ideaIndex: snapshot.ideaIndex,
+    productImages,
+    useBrandLogo: Boolean(snapshot.useBrandLogo && brand.logo),
+    carouselPack,
+    sourceCase: item,
+    aspectRatio: "3:4",
+  });
+}
+
+function bindExcellentContentLibrary() {
+  const grid = document.getElementById("excellentContentGrid");
+  grid?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-excellent-external]")) return;
+    const remixButton = event.target.closest("[data-excellent-remix]");
+    if (remixButton) {
+      openExcellentRemix(remixButton.dataset.excellentRemix);
+      return;
+    }
+    const detailButton = event.target.closest("[data-excellent-detail]");
+    if (detailButton) openExcellentContentDetail(detailButton.dataset.excellentDetail);
+  });
+
+  document.getElementById("excellentCategoryFilter")?.addEventListener("change", (event) => {
+    state.excellentContentFilters.categoryPath = event.target.value || "";
+    loadExcellentContents({ force: true }).catch(() => {});
+  });
+  document.getElementById("excellentSourceFilter")?.addEventListener("change", (event) => {
+    state.excellentContentFilters.source = event.target.value || "xhs_hot";
+    loadExcellentContents({ force: true }).catch(() => {});
+  });
+
+  document.getElementById("closeExcellentContentModal")?.addEventListener("click", closeExcellentContentDetail);
+  document.getElementById("excellentContentModal")?.addEventListener("click", (event) => {
+    if (event.target.id === "excellentContentModal") closeExcellentContentDetail();
+  });
+  document.getElementById("closeExcellentRemixModal")?.addEventListener("click", closeExcellentRemix);
+  document.getElementById("cancelExcellentRemixModal")?.addEventListener("click", closeExcellentRemix);
+  document.getElementById("excellentRemixModal")?.addEventListener("click", (event) => {
+    if (event.target.id === "excellentRemixModal") closeExcellentRemix();
+  });
+  document.getElementById("excellentRemixBody")?.addEventListener("change", handleExcellentRemixChange);
+  document.getElementById("excellentRemixForm")?.addEventListener("submit", submitExcellentRemix);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (document.getElementById("excellentRemixModal")?.classList.contains("is-open")) {
+      closeExcellentRemix();
+      return;
+    }
+    if (document.getElementById("excellentContentModal")?.classList.contains("is-open")) {
+      closeExcellentContentDetail();
+    }
+  });
 }
 
 async function generateStyleImage(ideaIndex) {

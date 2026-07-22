@@ -842,14 +842,23 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 
     let carouselPack;
     try {
-      carouselPack = buildXhsCarouselPackFromIdea(idea);
-    } catch (error) {
-      try {
-        carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(xhsCarouselPreviewMatch[3])));
-      } catch (fillError) {
-        contentAssetsUnavailable(res, fillError);
+      if (payload.carouselPack && typeof payload.carouselPack === "object") {
+        const { normalizeGeneratedXhsCarouselPack } = require("../ai/content-service");
+        carouselPack = normalizeGeneratedXhsCarouselPack(payload.carouselPack);
+      } else {
+        try {
+          carouselPack = buildXhsCarouselPackFromIdea(idea);
+        } catch (error) {
+          carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(xhsCarouselPreviewMatch[3])));
+        }
+      }
+    } catch (fillError) {
+      if (payload.carouselPack && typeof payload.carouselPack === "object") {
+        badRequest(res, fillError.message || "自定义组图方案校验失败。");
         return true;
       }
+      contentAssetsUnavailable(res, fillError);
+      return true;
     }
     carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
     json(res, 200, {
@@ -1107,6 +1116,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             pageLabel: slide.pageLabel,
             copy: slide.copy,
             aspectRatio,
+            ...(slide.remixBrief && typeof slide.remixBrief === "object" ? { remixBrief: slide.remixBrief } : {}),
           },
         }),
     });

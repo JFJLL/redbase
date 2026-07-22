@@ -43,7 +43,11 @@ function applyStructuredImagePrompt(metadata, { brand, trend, idea } = {}) {
     platform: base.platform,
     objective: base.objective,
   });
-  const prompt = buildImagePrompt(context);
+  const prompt = buildImagePrompt({
+    ...context,
+    remixBrief: base.remixBrief,
+    metadata: base,
+  });
   return {
     ...base,
     contentType: context.contentType,

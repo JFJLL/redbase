@@ -7,6 +7,7 @@ const { handleProductImageRoutes } = require("./api/product-image-routes");
 const { handleBrandRoutes } = require("./api/brand-routes");
 const { handleTrendRoutes } = require("./api/trend-routes");
 const { handleImageGenerationRoutes } = require("./api/image-generation-routes");
+const { handleExcellentContentRoutes } = require("./api/excellent-content-routes");
 
 const routeHandlers = [
   handleHealthRoutes,
@@ -16,6 +17,7 @@ const routeHandlers = [
   handleProductImageRoutes,
   handleBrandRoutes,
   handleTrendRoutes,
+  handleExcellentContentRoutes,
   handleImageGenerationRoutes,
 ];
 
