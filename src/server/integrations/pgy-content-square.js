@@ -90,6 +90,7 @@ function buildPgyHotNotesPayload({
   nd = "3",
   orderBy,
   sort,
+  noteType,
 } = {}) {
   const payload = {
     searchWord: "",
@@ -102,6 +103,10 @@ function buildPgyHotNotesPayload({
     nd: String(nd == null || nd === "" ? "3" : nd),
     sort: sort == null || sort === "" ? "desc" : String(sort),
   };
+  // Pgy noteType: 1 = image/text notes, 2 = video. Only set when caller asks.
+  if (noteType === 1 || noteType === 2 || noteType === "1" || noteType === "2") {
+    payload.noteType = Number(noteType);
+  }
   const normalizedCategoryPath = normalizePgyCategoryPath(categoryPath);
   if (normalizedCategoryPath) {
     payload.noteContentCategory = normalizedCategoryPath;
@@ -556,6 +561,7 @@ async function fetchPgyXhsHotNotes(appConfig, options = {}) {
     nd: options.nd || "3",
     orderBy: options.orderBy,
     sort: options.sort,
+    noteType: options.noteType,
   });
   const data = await withRetries(
     () =>

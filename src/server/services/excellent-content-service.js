@@ -84,6 +84,8 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchI
       nd: String(EXCELLENT_WINDOW_DAYS),
       orderBy: EXCELLENT_ORDER_BY,
       sort: EXCELLENT_SORT,
+      // Request image/text notes only; engage ranking otherwise floods with videos.
+      noteType: 1,
       fetchImpl,
     });
     lastOrderBy = page.orderBy || lastOrderBy;
