@@ -91,7 +91,7 @@ test("excellent contents rejects invalid source", async () => {
 test("excellent contents returns cached items with metadata", async () => {
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "xhs_hot",
+    sourceKey: "professional",
     categoryPath: "",
     items: [
       {
@@ -113,7 +113,7 @@ test("excellent contents returns cached items with metadata", async () => {
   const res = createRes();
   const handled = await handleExcellentContentRoutes(
     { appConfig: { pgy: { enabled: false } } },
-    createGetReq("/api/excellent-contents?source=xhs_hot", "redbase_session=excellent-token"),
+    createGetReq("/api/excellent-contents?source=professional", "redbase_session=excellent-token"),
     res,
     "/api/excellent-contents",
   );
@@ -131,7 +131,7 @@ test("excellent contents returns cached items with metadata", async () => {
 test("excellent contents accepts waitForFresh query flag", async () => {
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "xhs_hot",
+    sourceKey: "professional",
     categoryPath: "",
     items: [
       {
@@ -153,7 +153,7 @@ test("excellent contents accepts waitForFresh query flag", async () => {
   const res = createRes();
   const handled = await handleExcellentContentRoutes(
     { appConfig: { pgy: { enabled: false } } },
-    createGetReq("/api/excellent-contents?source=xhs_hot&waitForFresh=1", "redbase_session=excellent-token"),
+    createGetReq("/api/excellent-contents?source=professional&waitForFresh=1", "redbase_session=excellent-token"),
     res,
     "/api/excellent-contents",
   );

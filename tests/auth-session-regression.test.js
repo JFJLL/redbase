@@ -65,7 +65,7 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     xhsCategoryStatus: "ready",
     xhsCategoryError: "old error",
     excellentContents: [{ noteId: "n1" }],
-    excellentContentFilters: { categoryPath: "美妆", source: "xhs_hot" },
+    excellentContentFilters: { categoryPath: "美妆", source: "professional" },
     excellentContentStatus: "ready",
     excellentContentError: "old",
     excellentContentUpdatedAt: "2026-07-01T00:00:00.000Z",
@@ -93,8 +93,8 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     historyImageSignatureRefreshInFlight: Promise.resolve(),
     historyFilterTimer: pendingFilterTimer,
     excellentFreshCheckTimer: pendingFreshTimer,
-    excellentFreshCheckKey: "xhs_hot::美妆",
-    excellentFreshCheckAttempted: new Set(["xhs_hot::美妆"]),
+    excellentFreshCheckKey: "professional::美妆",
+    excellentFreshCheckAttempted: new Set(["professional::美妆"]),
     clearTimeout: (timer) => calls.push(`clearTimeout:${timer.id}`),
     document: {
       querySelectorAll: () => [],
@@ -387,3 +387,4 @@ test("Feishu start logs the selected app and exact redirect URI without credenti
   ]]);
   assert.doesNotMatch(JSON.stringify(entries), /cli_test|secret_test|tenant_test/);
 });
+

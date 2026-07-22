@@ -1,7 +1,8 @@
 const { bindRouteScope } = require("./route-scope");
 const { findUserBySessionToken } = require("../db/repositories/auth-repository");
 const {
-  EXCELLENT_SOURCE_XHS_HOT,
+  EXCELLENT_SOURCE_DEFAULT,
+  getExcellentContentSource,
   getExcellentContents,
 } = require("../services/excellent-content-service");
 const { normalizePgyCategoryPath } = require("../integrations/pgy-content-square");
@@ -23,8 +24,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/excellent-contents") {
     if (!requireUser()) return true;
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    const source = String(url.searchParams.get("source") || EXCELLENT_SOURCE_XHS_HOT).trim() || EXCELLENT_SOURCE_XHS_HOT;
-    if (source !== EXCELLENT_SOURCE_XHS_HOT) {
+    const sourceRaw = String(url.searchParams.get("source") || EXCELLENT_SOURCE_DEFAULT).trim() || EXCELLENT_SOURCE_DEFAULT;
+    if (!getExcellentContentSource(sourceRaw)) {
       badRequest(res, "暂不支持该内容来源。");
       return true;
     }
@@ -33,7 +34,7 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     const waitForFresh = waitForFreshRaw === "1" || waitForFreshRaw === "true";
     try {
       const result = await getExcellentContents(context.appConfig, {
-        source,
+        source: sourceRaw,
         categoryPath,
         waitForFresh,
       });

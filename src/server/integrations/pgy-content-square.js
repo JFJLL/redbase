@@ -91,6 +91,7 @@ function buildPgyHotNotesPayload({
   orderBy,
   sort,
   noteType,
+  contentType,
 } = {}) {
   const payload = {
     searchWord: "",
@@ -106,6 +107,10 @@ function buildPgyHotNotesPayload({
   // Pgy noteType: 1 = image/text notes, 2 = video. Only set when caller asks.
   if (noteType === 1 || noteType === 2 || noteType === "1" || noteType === "2") {
     payload.noteType = Number(noteType);
+  }
+  // contentType is the Pgy "内容来源" filter (专业号/博主合作/明星等). Trend analysis leaves it unset.
+  if (contentType != null && contentType !== "") {
+    payload.contentType = String(contentType);
   }
   const normalizedCategoryPath = normalizePgyCategoryPath(categoryPath);
   if (normalizedCategoryPath) {
@@ -562,6 +567,7 @@ async function fetchPgyXhsHotNotes(appConfig, options = {}) {
     orderBy: options.orderBy,
     sort: options.sort,
     noteType: options.noteType,
+    contentType: options.contentType,
   });
   const data = await withRetries(
     () =>

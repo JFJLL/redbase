@@ -9,7 +9,19 @@ const {
   recordExcellentContentCacheError,
 } = require("../db/repositories/excellent-content-cache-repository");
 
-const EXCELLENT_SOURCE_XHS_HOT = "xhs_hot";
+// Board remains 小红书热门 (bizType=1). "source" is Pgy 内容来源 (contentType codes).
+const EXCELLENT_CONTENT_SOURCES = Object.freeze([
+  { value: "professional", label: "专业号笔记", contentType: "6" },
+  { value: "kol", label: "博主合作笔记", contentType: "1" },
+  { value: "celebrity", label: "明星合作笔记", contentType: "2" },
+  { value: "buyer", label: "买手笔记", contentType: "5" },
+  { value: "employee", label: "员工笔记", contentType: "3" },
+  { value: "owner", label: "主理人笔记", contentType: "11" },
+  { value: "user", label: "用户笔记", contentType: "12" },
+]);
+const EXCELLENT_SOURCE_DEFAULT = "professional";
+// Backward-compatible alias used by older warm scripts/tests.
+const EXCELLENT_SOURCE_XHS_HOT = EXCELLENT_SOURCE_DEFAULT;
 const EXCELLENT_WINDOW_DAYS = 7;
 const EXCELLENT_ORDER_BY = "premium_engage_num";
 const EXCELLENT_SORT = "desc";
@@ -17,6 +29,15 @@ const EXCELLENT_PAGE_SIZE = 20;
 const EXCELLENT_MAX_PAGES = 3;
 const EXCELLENT_LIMIT = 8;
 const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000;
+
+function getExcellentContentSource(sourceValue) {
+  const value = String(sourceValue || "").trim();
+  // Legacy value from first V1 implementation.
+  if (value === "xhs_hot" || !value) {
+    return EXCELLENT_CONTENT_SOURCES.find((item) => item.value === EXCELLENT_SOURCE_DEFAULT);
+  }
+  return EXCELLENT_CONTENT_SOURCES.find((item) => item.value === value) || null;
+}
 
 const EXCELLENT_PUBLIC_MESSAGES = {
   PGY_EMPTY_RESULT: "当前类目近7日暂无可用图文内容，请切换类目或稍后重试。",
@@ -80,7 +101,7 @@ function filterRankAndLimitNotes(notes) {
       id: noteId,
       noteId,
       source: note.source || "pgy_content_square",
-      sourceKey: note.sourceKey || EXCELLENT_SOURCE_XHS_HOT,
+      sourceKey: note.sourceKey || EXCELLENT_SOURCE_DEFAULT,
     });
   }
   imageNotes.sort((a, b) => {
@@ -94,7 +115,7 @@ function filterRankAndLimitNotes(notes) {
   }));
 }
 
-async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchImpl } = {}) {
+async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", contentType = "6", sourceKey = EXCELLENT_SOURCE_DEFAULT, fetchImpl } = {}) {
   const collected = [];
   for (let pageNum = 1; pageNum <= EXCELLENT_MAX_PAGES; pageNum += 1) {
     const page = await fetchPgyXhsHotNotes(appConfig, {
@@ -106,9 +127,16 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchI
       sort: EXCELLENT_SORT,
       // Request image/text notes only; engage ranking otherwise floods with videos.
       noteType: 1,
+      // Pgy 内容来源 (专业号/博主合作/明星等).
+      contentType: String(contentType),
       fetchImpl,
     });
-    collected.push(...(page.notes || []));
+    collected.push(
+      ...(page.notes || []).map((note) => ({
+        ...note,
+        sourceKey,
+      })),
+    );
     const imageCount = filterRankAndLimitNotes(collected).length;
     if (imageCount >= EXCELLENT_LIMIT) break;
     const pageNotes = Array.isArray(page.notes) ? page.notes : [];
@@ -123,12 +151,13 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", fetchI
   return items;
 }
 
-function buildResponse({ items, updatedAt, stale = false, lastError = "" }) {
+function buildResponse({ items, updatedAt, stale = false, lastError = "", source = EXCELLENT_SOURCE_DEFAULT } = {}) {
   return {
     items: Array.isArray(items) ? items : [],
     filters: {
-      sources: [{ value: EXCELLENT_SOURCE_XHS_HOT, label: "小红书热门" }],
+      sources: EXCELLENT_CONTENT_SOURCES.map((item) => ({ value: item.value, label: item.label })),
     },
+    source,
     updatedAt: updatedAt || "",
     stale: Boolean(stale),
     windowDays: EXCELLENT_WINDOW_DAYS,
@@ -151,16 +180,26 @@ function storeSuccessfulCache(appConfig, sourceKey, categoryPath, items) {
   });
 }
 
-async function refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
-  const items = await fetchExcellentNotesFromPgy(appConfig, { categoryPath, fetchImpl });
+async function refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, contentType, fetchImpl } = {}) {
+  const items = await fetchExcellentNotesFromPgy(appConfig, {
+    categoryPath,
+    contentType,
+    sourceKey,
+    fetchImpl,
+  });
   return storeSuccessfulCache(appConfig, sourceKey, categoryPath, items);
 }
 
-function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
+function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl } = {}) {
   const key = cacheKey(sourceKey, categoryPath);
   let promise = inFlightRefreshes.get(key);
   if (!promise) {
-    promise = refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl }).finally(() => {
+    promise = refreshExcellentContentCache(appConfig, {
+      sourceKey,
+      categoryPath,
+      contentType,
+      fetchImpl,
+    }).finally(() => {
       inFlightRefreshes.delete(key);
     });
     inFlightRefreshes.set(key, promise);
@@ -168,8 +207,8 @@ function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fet
   return promise;
 }
 
-function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
-  const promise = ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
+function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl } = {}) {
+  const promise = ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl });
   promise.catch((error) => {
     const message = mapExcellentContentError(error);
     try {
@@ -182,13 +221,15 @@ function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchIm
 }
 
 async function getExcellentContents(appConfig, options = {}) {
-  const sourceKey = String(options.source || EXCELLENT_SOURCE_XHS_HOT).trim() || EXCELLENT_SOURCE_XHS_HOT;
-  if (sourceKey !== EXCELLENT_SOURCE_XHS_HOT) {
+  const sourceDef = getExcellentContentSource(options.source);
+  if (!sourceDef) {
     const error = new Error("暂不支持该内容来源。");
     error.code = "INVALID_SOURCE";
     error.statusCode = 400;
     throw error;
   }
+  const sourceKey = sourceDef.value;
+  const contentType = sourceDef.contentType;
   const categoryPath = normalizePgyCategoryPath(options.categoryPath || "");
   const forceRefresh = options.forceRefresh === true;
   const waitForFresh = options.waitForFresh === true;
@@ -203,23 +244,30 @@ async function getExcellentContents(appConfig, options = {}) {
       updatedAt: cache.fetchedAt,
       stale: false,
       lastError: cache.lastError,
+      source: sourceKey,
     });
   }
 
   // Stale-while-revalidate: return expired cache immediately and refresh in background.
   if (!forceRefresh && !waitForFresh && hasCacheItems(cache)) {
-    scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
+    scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl });
     return buildResponse({
       items: cache.items,
       updatedAt: cache.fetchedAt,
       stale: true,
       lastError: cache.lastError,
+      source: sourceKey,
     });
   }
 
   // Cold cache, forceRefresh, or waitForFresh: await shared in-flight refresh.
   try {
-    const refreshed = await ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
+    const refreshed = await ensureExcellentContentRefresh(appConfig, {
+      sourceKey,
+      categoryPath,
+      contentType,
+      fetchImpl,
+    });
     if (!refreshed || !hasCacheItems(refreshed)) {
       const error = new Error(EXCELLENT_PUBLIC_MESSAGES.PGY_EMPTY_RESULT);
       error.code = "PGY_EMPTY_RESULT";
@@ -230,6 +278,7 @@ async function getExcellentContents(appConfig, options = {}) {
       updatedAt: refreshed.fetchedAt,
       stale: false,
       lastError: "",
+      source: sourceKey,
     });
   } catch (error) {
     const message = mapExcellentContentError(error);
@@ -246,6 +295,7 @@ async function getExcellentContents(appConfig, options = {}) {
         updatedAt: cache.fetchedAt,
         stale: true,
         lastError: message,
+        source: sourceKey,
       });
     }
     const publicError = new Error(message);
@@ -257,7 +307,7 @@ async function getExcellentContents(appConfig, options = {}) {
 
 async function warmExcellentContentCache(appConfig, options = {}) {
   return getExcellentContents(appConfig, {
-    source: EXCELLENT_SOURCE_XHS_HOT,
+    source: options.source || EXCELLENT_SOURCE_DEFAULT,
     categoryPath: options.categoryPath || "",
     forceRefresh: true,
     allowStaleOnError: false,
@@ -270,6 +320,8 @@ function __resetExcellentContentInFlightForTests() {
 }
 
 module.exports = {
+  EXCELLENT_CONTENT_SOURCES,
+  EXCELLENT_SOURCE_DEFAULT,
   EXCELLENT_SOURCE_XHS_HOT,
   EXCELLENT_WINDOW_DAYS,
   EXCELLENT_ORDER_BY,
@@ -277,6 +329,7 @@ module.exports = {
   EXCELLENT_MAX_PAGES,
   EXCELLENT_LIMIT,
   EXCELLENT_PUBLIC_MESSAGES,
+  getExcellentContentSource,
   filterRankAndLimitNotes,
   getExcellentContents,
   warmExcellentContentCache,
