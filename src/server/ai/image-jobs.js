@@ -1,8 +1,44 @@
 const { randomId, assertConfigured, withRetries } = require("../utils");
 const { fetchJson } = require("./text-provider");
+const {
+  buildImagePrompt,
+  resolveImagePromptContext,
+  shouldSkipStructuredPrompt,
+} = require("./image-prompt-builder");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Replace free-form AI prompts with the fixed commercial image-prompt engine.
+ * Image edits keep the user prompt as-is.
+ */
+function applyStructuredImagePrompt(metadata, { brand, trend, idea } = {}) {
+  const base = metadata && typeof metadata === "object" ? { ...metadata } : {};
+  if (shouldSkipStructuredPrompt(base)) {
+    return base;
+  }
+  const context = resolveImagePromptContext({
+    brand,
+    product: base.product,
+    idea,
+    metadata: base,
+    trend,
+    contentType: base.contentType,
+    platform: base.platform,
+    objective: base.objective,
+  });
+  const prompt = buildImagePrompt(context);
+  return {
+    ...base,
+    contentType: context.contentType,
+    platform: context.platform,
+    objective: context.objective,
+    product: context.product,
+    prompt,
+    promptEngine: "image-prompt-builder",
+  };
+}
 
 function buildImageConceptMetadata({ brand, trend, idea }) {
   throw new Error("朋友圈图文案必须先由 AI 内容服务根据品牌档案生成。");
@@ -211,7 +247,12 @@ async function createImageJob(
   const localSourceImages = normalizeImageInputs(sourceImages);
   const sourceUrls = normalizeSourceImageUrls(sourceImageUrls);
   const useReferenceImages = referenceImages.length > 0 || logoImages.length > 0 || styleImages.length > 0;
-  const metadata = withImageReferencePrompt(providedMetadata || buildImageConceptMetadata({ brand, trend, idea }), {
+  const structuredMetadata = applyStructuredImagePrompt(providedMetadata || buildImageConceptMetadata({ brand, trend, idea }), {
+    brand,
+    trend,
+    idea,
+  });
+  const metadata = withImageReferencePrompt(structuredMetadata, {
     productImages: referenceImages,
     logoImages,
     styleImages,
@@ -549,6 +590,7 @@ module.exports = {
   IMAGE_JOB_TIMEOUT_MS,
   IMAGE_JOB_HTTP_TIMEOUT_MS,
   buildImageConceptMetadata,
+  applyStructuredImagePrompt,
   createImageJob,
   resolveImageJob,
   buildImageJobResponse,
