@@ -29,6 +29,12 @@ const {
   buildSafeBrandIntelligenceForMedicineTraffic,
   formatBrandIntelligencePromptLines,
 } = require("./brand-profile-builder");
+const {
+  TASKS: EVALUATION_TASKS,
+  PROMPT_VERSIONS,
+  recordAiRun,
+  estimateTrendAutoQualityScore,
+} = require("./evaluation");
 
 const PGY_XHS_TREND_COUNT = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE;
 const TREND_ITEMS_PER_BUCKET = 10;
@@ -2968,6 +2974,37 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       ...metrics,
     });
     Object.defineProperty(trendBuckets, "analysisMetrics", { value: metrics, enumerable: false, configurable: true });
+    try {
+      const evaluationRun = recordAiRun({
+        task: EVALUATION_TASKS.TREND_ANALYSIS,
+        model: String(appConfig?.textProvider?.model || ""),
+        prompt_version: PROMPT_VERSIONS.trend_analysis,
+        latency: metrics.totalDurationMs,
+        success: true,
+        // quality_score is reserved for human rateGeneration(1-5); auto hints stay in metadata.
+        quality_score: null,
+        metadata: {
+          brandId: brand.id,
+          brandName: brand.name,
+          bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
+          generated: metrics.generated,
+          modelAttempts: metrics.modelAttempts,
+          validationFailures: metrics.validationFailures,
+          targetedRepairRequests: metrics.targetedRepairRequests,
+          auto_quality_score: estimateTrendAutoQualityScore(metrics, true),
+        },
+      });
+      Object.defineProperty(trendBuckets, "evaluationRunId", {
+        value: evaluationRun.id,
+        enumerable: false,
+        configurable: true,
+      });
+    } catch (evaluationError) {
+      console.warn("[trend-analysis] evaluation record failed", {
+        brandId: brand.id,
+        message: evaluationError?.message || "unknown error",
+      });
+    }
     return attachAnalysisWarnings(trendBuckets, []);
   } catch (error) {
     console.warn("[trend-analysis] failed without template fallback", {
@@ -2976,6 +3013,27 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
       reason: error?.message || "empty model result",
     });
+    try {
+      recordAiRun({
+        task: EVALUATION_TASKS.TREND_ANALYSIS,
+        model: String(appConfig?.textProvider?.model || ""),
+        prompt_version: PROMPT_VERSIONS.trend_analysis,
+        latency: Date.now() - startedAt,
+        success: false,
+        quality_score: null,
+        metadata: {
+          brandId: brand?.id,
+          brandName: brand?.name,
+          bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
+          errorCode: error?.code || "",
+          errorMessage: String(error?.message || "unknown error").slice(0, 300),
+        },
+      });
+    } catch (evaluationError) {
+      console.warn("[trend-analysis] evaluation failure record failed", {
+        message: evaluationError?.message || "unknown error",
+      });
+    }
     if (String(error?.code || "").startsWith("TREND_")) {
       throw error;
     }

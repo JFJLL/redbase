@@ -1,5 +1,10 @@
 const { randomId, assertConfigured, withRetries } = require("../utils");
 const { fetchJson } = require("./text-provider");
+const {
+  TASKS: EVALUATION_TASKS,
+  PROMPT_VERSIONS,
+  recordAiRun,
+} = require("./evaluation");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
@@ -257,6 +262,7 @@ async function createImageJob(
     bodyImageCount: editImageUrls.length,
   });
 
+  const requestStartedAt = Date.now();
   let initial = null;
   try {
     initial = await withRetries(
@@ -280,24 +286,73 @@ async function createImageJob(
       message: error?.message || "unknown error",
       responseBody: truncateLogValue(error?.rawBody || error?.payload || "", 1500),
     });
+    try {
+      recordAiRun({
+        task: EVALUATION_TASKS.IMAGE_GENERATION,
+        model: String(provider.model || ""),
+        prompt_version: PROMPT_VERSIONS.image_generation,
+        latency: Math.max(0, Date.now() - requestStartedAt),
+        success: false,
+        quality_score: null,
+        metadata: {
+          stage: "create",
+          providerMode: useEditModel ? "edit" : "text-to-image",
+          brandId: brand?.id ?? null,
+          trendId: trend?.id ?? null,
+          errorMessage: String(error?.message || "unknown error").slice(0, 300),
+        },
+      });
+    } catch (evaluationError) {
+      console.warn("[image-job] evaluation failure record failed", {
+        message: evaluationError?.message || "unknown error",
+      });
+    }
     throw error;
   }
 
-  const submission = parseImageProviderSubmission(provider, initial);
+  let submission;
+  try {
+    submission = parseImageProviderSubmission(provider, initial);
+    console.log("[image-job] upstream task accepted", {
+      upstreamId: submission.taskId,
+      status: submission.status,
+      error: submission.error,
+      resultUrl: summarizeUrl(submission.resultUrl),
+      hasDirectImageUrl: Boolean(submission.imageUrl),
+    });
+    validateImageProviderSubmission(provider, submission);
+  } catch (error) {
+    try {
+      recordAiRun({
+        task: EVALUATION_TASKS.IMAGE_GENERATION,
+        model: String(provider.model || ""),
+        prompt_version: PROMPT_VERSIONS.image_generation,
+        latency: Math.max(0, Date.now() - requestStartedAt),
+        success: false,
+        quality_score: null,
+        metadata: {
+          stage: "validate",
+          providerMode: useEditModel ? "edit" : "text-to-image",
+          brandId: brand?.id ?? null,
+          trendId: trend?.id ?? null,
+          errorMessage: String(error?.message || "unknown error").slice(0, 300),
+        },
+      });
+    } catch (evaluationError) {
+      console.warn("[image-job] evaluation validation failure record failed", {
+        message: evaluationError?.message || "unknown error",
+      });
+    }
+    throw error;
+  }
+
   const imageUrl = submission.imageUrl;
-  console.log("[image-job] upstream task accepted", {
-    upstreamId: submission.taskId,
-    status: submission.status,
-    error: submission.error,
-    resultUrl: summarizeUrl(submission.resultUrl),
-    hasDirectImageUrl: Boolean(imageUrl),
-  });
-  validateImageProviderSubmission(provider, submission);
+  const createdAt = Date.now();
   const job = {
     id: randomId(),
     ownerUserId: Number(ownerUserId || 0),
     status: imageUrl ? "completed" : "pending",
-    createdAt: Date.now(),
+    createdAt,
     provider: getImageProviderName(provider),
     providerMode: useEditModel ? "edit" : "text-to-image",
     providerResultUrl: submission.resultUrl,
@@ -321,9 +376,43 @@ async function createImageJob(
     },
     imageUrl: imageUrl || "",
     error: "",
+    evaluationRunId: "",
   };
 
+  if (job.status === "completed") {
+    recordImageJobEvaluation(job, { success: true });
+  }
+
   imageJobs.set(job.id, job);
+  return job;
+}
+
+function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
+  if (!job || job.evaluationRunId) return job;
+  try {
+    const evaluationRun = recordAiRun({
+      task: EVALUATION_TASKS.IMAGE_GENERATION,
+      model: String(job.model || ""),
+      prompt_version: PROMPT_VERSIONS.image_generation,
+      latency: Math.max(0, Date.now() - Number(job.createdAt || Date.now())),
+      success: Boolean(success),
+      quality_score: null,
+      metadata: {
+        jobId: job.id,
+        provider: job.provider || "",
+        providerMode: job.providerMode || "",
+        brandId: job.metadata?.brandId ?? job.generationContext?.brandId ?? null,
+        trendId: job.metadata?.trendId ?? job.generationContext?.trendId ?? null,
+        errorMessage: String(errorMessage || job.error || "").slice(0, 300),
+      },
+    });
+    job.evaluationRunId = evaluationRun.id;
+  } catch (evaluationError) {
+    console.warn("[image-job] evaluation record failed", {
+      jobId: job?.id,
+      message: evaluationError?.message || "unknown error",
+    });
+  }
   return job;
 }
 
@@ -462,6 +551,7 @@ async function resolveImageJob(appConfig, imageJobs, job) {
         ...buildImageJobLogContext(job),
         imageUrl: summarizeUrl(job.imageUrl),
       });
+      recordImageJobEvaluation(job, { success: true });
     } else if (polled.status === "failed") {
       job.status = "failed";
       job.error = polled.error || "图片生成失败";
@@ -471,6 +561,7 @@ async function resolveImageJob(appConfig, imageJobs, job) {
         upstreamSummary: polled.summary,
         upstreamPayload: truncateLogValue(polled.payload, 2000),
       });
+      recordImageJobEvaluation(job, { success: false, errorMessage: job.error });
     } else if (Date.now() - job.createdAt > IMAGE_JOB_TIMEOUT_MS) {
       job.status = "failed";
       job.error = "图片生成超时，请稍后重试。";
@@ -478,6 +569,7 @@ async function resolveImageJob(appConfig, imageJobs, job) {
         ...buildImageJobLogContext(job),
         upstreamSummary: polled.summary,
       });
+      recordImageJobEvaluation(job, { success: false, errorMessage: job.error });
     } else {
       job.status = "pending";
     }
@@ -491,6 +583,7 @@ async function resolveImageJob(appConfig, imageJobs, job) {
     if (Date.now() - job.createdAt > IMAGE_JOB_TIMEOUT_MS) {
       job.status = "failed";
       job.error = error.message || "图片生成失败";
+      recordImageJobEvaluation(job, { success: false, errorMessage: job.error });
     } else {
       job.status = "pending";
     }
@@ -557,4 +650,5 @@ module.exports = {
   parseImageProviderSubmission,
   parseImageProviderResult,
   validateImageProviderSubmission,
+  recordImageJobEvaluation,
 };
