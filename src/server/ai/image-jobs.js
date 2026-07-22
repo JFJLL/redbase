@@ -335,6 +335,11 @@ async function createImageJob(
         latency: Math.max(0, Date.now() - requestStartedAt),
         success: false,
         quality_score: null,
+        context: buildImageEvaluationContext({
+          ownerUserId,
+          brand,
+          metadata,
+        }),
         metadata: {
           stage: "create",
           providerMode: useEditModel ? "edit" : "text-to-image",
@@ -372,6 +377,11 @@ async function createImageJob(
         latency: Math.max(0, Date.now() - requestStartedAt),
         success: false,
         quality_score: null,
+        context: buildImageEvaluationContext({
+          ownerUserId,
+          brand,
+          metadata,
+        }),
         metadata: {
           stage: "validate",
           providerMode: useEditModel ? "edit" : "text-to-image",
@@ -404,6 +414,9 @@ async function createImageJob(
     model: provider.model,
     metadata: {
       ...metadata,
+      brandId: brand?.id ?? metadata.brandId ?? null,
+      brandName: brand?.name || metadata.brandName || "",
+      industry: brand?.industry || metadata.industry || "",
       providerTaskId: submission.taskId,
       aspectRatio: outputAspectRatio,
       sourceImageUrls: [...sourceUrls, ...uploadedSourceUrls],
@@ -431,6 +444,25 @@ async function createImageJob(
   return job;
 }
 
+function buildImageEvaluationContext({ ownerUserId, brand, metadata, job } = {}) {
+  const meta = metadata || job?.metadata || {};
+  const generationContext = job?.generationContext || {};
+  const brandId =
+    brand?.id ??
+    meta.brandId ??
+    generationContext.brandId ??
+    "";
+  return {
+    user_id: ownerUserId ?? job?.ownerUserId ?? generationContext.userId ?? "",
+    brand_id: brandId,
+    brand_name: brand?.name || meta.brandName || generationContext.brandName || "",
+    industry: brand?.industry || meta.industry || generationContext.industry || "",
+    generation_id: job?.generationId ?? generationContext.sourceGenerationId ?? meta.generationId ?? "",
+    content_type: meta.contentType || generationContext.contentType || "",
+    platform: meta.platform || generationContext.platform || "",
+  };
+}
+
 function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
   if (!job || job.evaluationRunId) return job;
   try {
@@ -441,6 +473,7 @@ function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
       latency: Math.max(0, Date.now() - Number(job.evaluationStartedAt || job.createdAt || Date.now())),
       success: Boolean(success),
       quality_score: null,
+      context: buildImageEvaluationContext({ job }),
       metadata: {
         jobId: job.id,
         provider: job.provider || "",
@@ -448,6 +481,8 @@ function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
         promptEngine: job.metadata?.promptEngine || "",
         brandId: job.metadata?.brandId ?? job.generationContext?.brandId ?? null,
         trendId: job.metadata?.trendId ?? job.generationContext?.trendId ?? null,
+        contentType: job.metadata?.contentType || "",
+        platform: job.metadata?.platform || "",
         errorMessage: String(errorMessage || job.error || "").slice(0, 300),
       },
     });

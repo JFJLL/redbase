@@ -3248,6 +3248,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         success: true,
         // quality_score is reserved for human rateGeneration(1-5); auto hints stay in metadata.
         quality_score: null,
+        context: {
+          brand_id: brand.id ?? "",
+          brand_name: brand.name || "",
+          industry: brand.industry || "",
+        },
         metadata: {
           brandId: brand.id,
           brandName: brand.name,
@@ -3286,6 +3291,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         latency: Date.now() - startedAt,
         success: false,
         quality_score: null,
+        context: {
+          brand_id: brand?.id ?? "",
+          brand_name: brand?.name || "",
+          industry: brand?.industry || "",
+        },
         metadata: {
           brandId: brand?.id,
           brandName: brand?.name,

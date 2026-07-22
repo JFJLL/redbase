@@ -31,6 +31,27 @@ const TASKS = Object.freeze({
   IMAGE_GENERATION: "image_generation",
 });
 
+/** Business-context dimensions stored on each run for cross-industry/brand analysis. */
+const CONTEXT_FIELDS = Object.freeze([
+  "user_id",
+  "brand_id",
+  "brand_name",
+  "industry",
+  "generation_id",
+  "content_type",
+  "platform",
+]);
+
+const EMPTY_CONTEXT = Object.freeze({
+  user_id: "",
+  brand_id: "",
+  brand_name: "",
+  industry: "",
+  generation_id: "",
+  content_type: "",
+  platform: "",
+});
+
 /**
  * @type {{
  *   storePath: string,
@@ -100,10 +121,34 @@ function normalizeLatency(value) {
 }
 
 /**
+ * Normalize business context for a run.
+ * Accepts either a nested `context` object or top-level context field aliases.
+ * Nested `context` wins over top-level for the same key.
+ */
+function normalizeContext(input = {}) {
+  const nested =
+    input.context && typeof input.context === "object" && !Array.isArray(input.context)
+      ? input.context
+      : {};
+  const source = { ...input, ...nested };
+  const normalized = {};
+  for (const field of CONTEXT_FIELDS) {
+    const raw = source[field];
+    if (raw == null || raw === "") {
+      normalized[field] = "";
+      continue;
+    }
+    normalized[field] = String(raw).trim();
+  }
+  return normalized;
+}
+
+/**
  * Normalize a generation run. quality_score is NEVER accepted from recordAiRun input;
  * only rateGeneration may set human scores (merged from the ratings side store).
  */
 function normalizeRunRecord(input = {}, rating = null) {
+  const context = normalizeContext(input);
   return {
     id: String(input.id || randomId()),
     task: String(input.task || "").trim(),
@@ -114,6 +159,8 @@ function normalizeRunRecord(input = {}, rating = null) {
     quality_score: rating && rating.quality_score != null ? Number(rating.quality_score) : null,
     created_at: String(input.created_at || new Date().toISOString()),
     rated_at: rating && rating.rated_at ? String(rating.rated_at) : "",
+    ...context,
+    context: { ...context },
     metadata: input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
       ? { ...input.metadata }
       : {},
@@ -197,6 +244,7 @@ function loadAllRuns() {
 
 function appendRun(run) {
   // Persist generation rows without human scores (append-only).
+  const context = normalizeContext(run);
   const persisted = {
     id: run.id,
     task: run.task,
@@ -205,11 +253,17 @@ function appendRun(run) {
     latency: run.latency,
     success: run.success,
     created_at: run.created_at,
+    ...context,
+    context: { ...context },
     metadata: run.metadata || {},
   };
 
   if (Array.isArray(storeState.memoryRuns)) {
-    storeState.memoryRuns.push({ ...persisted, metadata: { ...(persisted.metadata || {}) } });
+    storeState.memoryRuns.push({
+      ...persisted,
+      context: { ...(persisted.context || {}) },
+      metadata: { ...(persisted.metadata || {}) },
+    });
     return;
   }
 
@@ -221,7 +275,13 @@ function appendRun(run) {
 /**
  * Persist one AI run for later rating and version comparison.
  * quality_score is always null here; use rateGeneration for human scores.
- * @returns {object} normalized run record (includes id)
+ *
+ * Optional business context (nested or top-level):
+ *   user_id, brand_id, brand_name, industry, generation_id, content_type, platform
+ *
+ * @param {object} input
+ * @param {object} [input.context]
+ * @returns {object} normalized run record (includes id + context)
  */
 function recordAiRun(input = {}) {
   const run = normalizeRunRecord({
@@ -271,6 +331,13 @@ function findEvaluationRun(runId) {
   return loadAllRuns().find((run) => run.id === id) || null;
 }
 
+function matchesContextFilter(run, field, expected) {
+  const want = String(expected || "").trim();
+  if (!want) return true;
+  const have = String(run?.[field] ?? run?.context?.[field] ?? "").trim();
+  return have === want;
+}
+
 function listEvaluationRuns(filters = {}) {
   let runs = loadAllRuns();
   if (filters.task) {
@@ -288,6 +355,12 @@ function listEvaluationRuns(filters = {}) {
   if (filters.success != null) {
     const success = Boolean(filters.success);
     runs = runs.filter((run) => run.success === success);
+  }
+  const contextFilters = normalizeContext(filters);
+  for (const field of CONTEXT_FIELDS) {
+    if (contextFilters[field]) {
+      runs = runs.filter((run) => matchesContextFilter(run, field, contextFilters[field]));
+    }
   }
   if (filters.ratedOnly) {
     // Human-rated only: requires rated_at from rateGeneration.
@@ -323,11 +396,13 @@ function buildVersionStats(runs) {
 /**
  * Compare prompt versions for a task (or all tasks).
  * Averages only human ratings (rateGeneration).
+ * Accepts the same business-context filters as compareByContext / listEvaluationRuns.
  */
 function comparePromptVersions(filters = {}) {
   const runs = listEvaluationRuns({
     task: filters.task,
     model: filters.model,
+    ...normalizeContext(filters),
   });
 
   const byVersion = new Map();
@@ -379,9 +454,110 @@ function comparePromptVersions(filters = {}) {
 
   return {
     task: filters.task || null,
+    filters: pickActiveFilters(filters),
     total_runs: runs.length,
     versions,
     improvement,
+  };
+}
+
+function pickActiveFilters(filters = {}) {
+  const active = {};
+  if (filters.task) active.task = String(filters.task);
+  if (filters.model) active.model = String(filters.model);
+  if (filters.prompt_version) active.prompt_version = String(filters.prompt_version);
+  const context = normalizeContext(filters);
+  for (const field of CONTEXT_FIELDS) {
+    if (context[field]) active[field] = context[field];
+  }
+  return active;
+}
+
+function resolveGroupByKey(run, groupBy) {
+  const key = String(groupBy || "").trim();
+  if (!key) return "(all)";
+  if (key === "prompt_version") return run.prompt_version || "(unknown)";
+  if (key === "task") return run.task || "(unknown)";
+  if (key === "model") return run.model || "(unknown)";
+  if (CONTEXT_FIELDS.includes(key)) {
+    return String(run?.[key] ?? run?.context?.[key] ?? "").trim() || "(unknown)";
+  }
+  return "(all)";
+}
+
+/**
+ * Aggregate evaluation metrics by business context.
+ *
+ * Examples:
+ *   compareByContext({ industry: "母婴", task: "trend_analysis" })
+ *   compareByContext({ industry: "食品", task: "image_generation" })
+ *   compareByContext({ task: "trend_analysis", groupBy: "industry" })
+ *   compareByContext({ industry: "母婴", groupBy: "prompt_version" })
+ *
+ * Returns average quality (human ratings only), average latency, and success rate.
+ */
+function compareByContext(filters = {}) {
+  const contextFilters = normalizeContext(filters);
+  const query = {
+    task: filters.task,
+    model: filters.model,
+    prompt_version: filters.prompt_version,
+    ...contextFilters,
+  };
+  const runs = listEvaluationRuns(query);
+  const groupBy = String(filters.groupBy || "").trim();
+  const stats = buildVersionStats(runs);
+
+  let groups = null;
+  if (groupBy) {
+    const byGroup = new Map();
+    for (const run of runs) {
+      const key = resolveGroupByKey(run, groupBy);
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key).push(run);
+    }
+    groups = [...byGroup.entries()]
+      .map(([value, groupRuns]) => ({
+        group_by: groupBy,
+        value,
+        ...buildVersionStats(groupRuns),
+      }))
+      .sort((a, b) => {
+        const scoreA = a.avg_quality_score == null ? -1 : a.avg_quality_score;
+        const scoreB = b.avg_quality_score == null ? -1 : b.avg_quality_score;
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        return String(a.value).localeCompare(String(b.value), undefined, { numeric: true });
+      });
+  }
+
+  let best = null;
+  if (groups && groups.length) {
+    const ranked = groups.filter((item) => item.avg_quality_score != null);
+    if (ranked.length) {
+      best = {
+        group_by: groupBy,
+        value: ranked[0].value,
+        avg_quality_score: ranked[0].avg_quality_score,
+        avg_latency_ms: ranked[0].avg_latency_ms,
+        success_rate: ranked[0].success_rate,
+        run_count: ranked[0].run_count,
+        rated_count: ranked[0].rated_count,
+      };
+    }
+  }
+
+  return {
+    filters: pickActiveFilters(query),
+    group_by: groupBy || null,
+    total_runs: runs.length,
+    avg_quality_score: stats.avg_quality_score,
+    avg_latency_ms: stats.avg_latency_ms,
+    success_rate: stats.success_rate,
+    run_count: stats.run_count,
+    rated_count: stats.rated_count,
+    success_count: stats.success_count,
+    groups,
+    best,
   };
 }
 
@@ -406,14 +582,18 @@ function estimateTrendAutoQualityScore(metrics = {}, success = true) {
 module.exports = {
   TASKS,
   PROMPT_VERSIONS,
+  CONTEXT_FIELDS,
+  EMPTY_CONTEXT,
   DEFAULT_STORE_PATH,
   configureEvaluationStore,
   resetEvaluationStoreForTests,
+  normalizeContext,
   recordAiRun,
   rateGeneration,
   findEvaluationRun,
   listEvaluationRuns,
   comparePromptVersions,
+  compareByContext,
   estimateTrendAutoQualityScore,
   ratingsPathFor,
 };
