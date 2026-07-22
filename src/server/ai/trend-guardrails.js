@@ -293,8 +293,24 @@ function hasUnsupportedHardClaim(trend) {
   return findUnsupportedHardClaims(trend).length > 0;
 }
 
+const EMPTY_MARKETING_PLATITUDE_PATTERNS = [
+  /消费升级/i,
+  /年轻人关注健康/i,
+  /品质生活/i,
+  /用户越来越重视/i,
+  /关注健康生活/i,
+  /追求更好的生活/i,
+];
+
+function isEmptyMarketingPlatitude(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  return EMPTY_MARKETING_PLATITUDE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 module.exports = {
   HIGH_RISK_BRAND_CLAIM_PATTERNS,
+  EMPTY_MARKETING_PLATITUDE_PATTERNS,
   collectTrendClaimTexts,
   findPositiveClaimMatch,
   findPositiveClaimMatchDetails,
@@ -309,4 +325,5 @@ module.exports = {
   hasUnsupportedHardClaimText,
   findPositiveBrandClaimMatch,
   isUnsupportedBrandClaimText,
+  isEmptyMarketingPlatitude,
 };

@@ -29,6 +29,11 @@ const {
   buildSafeBrandIntelligenceForMedicineTraffic,
   formatBrandIntelligencePromptLines,
 } = require("./brand-profile-builder");
+const {
+  extractMarketSignalsFromSources,
+  formatMarketSignalsPromptBlock,
+  isEmptyPlatitude,
+} = require("./trend-signal-extractor");
 
 const PGY_XHS_TREND_COUNT = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE;
 const TREND_ITEMS_PER_BUCKET = 10;
@@ -263,12 +268,14 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
   const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
   return [
-    "你是资深小红书内容运营策略顾问，擅长品牌定位、热点适配判断与内容选题策划。",
-    "你的任务是根据完整品牌档案、品牌智能层结论和当前 bucket 证据，快速输出热点趋势和选题骨架；完整发布文案与视觉资产会在用户实际生成内容时另行创建。",
+    "你是资深小红书增长与内容营销顾问，擅长把市场信号转成品牌可执行的营销机会与内容方向。",
+    "任务链路：搜索/站内证据 → 市场信号 → 趋势机会 → 内容方向。你的目标不是写泛泛趋势报告，而是输出可决策的营销机会。",
     "最高优先级：输入没有逐字提供的数字、热度/增长/收藏/互动强度、医学结论、适用性和品牌卖点一律不写；不能为了让文案更像营销趋势而补齐这些事实。",
     "任何来源未逐字支持的百分比、人数、排名和‘引发/激发/带动/促使用户互动或分享’都属于虚构结果，所有 title、summary、reason、ideas、hook 和 tags 一律禁止；可以改写成‘提供讨论入口’或‘设计征集动作’这类策略动作。",
+    "每条机会必须同时回答：市场发生了什么变化、用户为什么变化、品牌为什么现在该抓、下一步内容怎么做。",
+    "禁止空话套话：不得使用“消费升级、年轻人关注健康、品质生活、用户越来越重视、关注健康生活、追求更好的生活”等正确但无价值的表述。",
     "禁止停留在“是否适合品牌”的模糊判断。对每条趋势必须判断：是否强化品牌优势、是否创造新消费场景、是否避开竞品红海；场景与结合方式必须跟随品牌智能层，不同品牌应落到各自不同的消费场景。",
-    "所有趋势要基于品牌智能层做内容机会与差异化判断，但只能写成策略判断与待验证方向，不能声称搜索、收藏、互动或扩散已经发生。",
+    "所有趋势要基于市场信号与品牌智能层做内容机会判断，但只能写成策略判断与待验证方向，不能声称搜索、收藏、互动或扩散已经发生。",
     "请只输出 JSON，不要输出 Markdown，不要补充解释。",
     'JSON 顶层结构必须是：{"trendBuckets":[...]}。',
     `trendBuckets 只输出当前请求的 ${selectedBucketMeta.length} 个对象，key 分别是 ${formatBucketKeys(selectedBucketMeta)}；不要额外生成其他 bucket，也不要输出任何品牌摘要字段。`,
@@ -281,8 +288,15 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
     "每条 title 必须先从对应来源标题中逐字保留一个品牌名、事件名、报告名或 IP 名；来源没有专名时，逐字保留一个不少于 4 个连续汉字的独特短语。只写‘育儿IP、育儿文章、直播问题、宝宝瞬间、家长困惑’等泛词判定为不合格。",
     "证据对齐不能只靠品牌名、产品名、行业名、年份或“年轻人/家长/用户”等受众词；每条都必须写出至少一个品牌档案之外、来自所引证据的具体事件、问题、表达形式或讨论对象。",
     "禁止使用“现有搜索信号显示”“相关内容值得继续观察”“可从某场景和某形式角度验证反馈”等批量套用句式；十条趋势的标题结构和推荐理由也不得套用同一句法。",
-    "每条 trend 必须包含：id 或 stableKey、title, category, summary, score, tags, reason, ideas。",
-    "trend.title 控制在 16-42 个中文字符，summary 控制在 45-90 个中文字符，reason 控制在 40-110 个中文字符；说清事实、机制和品牌角色后立即结束，不写重复结论。",
+    "每条 trend 必须包含：id 或 stableKey、title, category, market_change, consumer_shift, why_now, brand_opportunity, content_direction, confidence_score, summary, score, tags, reason, ideas。",
+    "营销机会字段要求：",
+    "- market_change：市场/内容场发生了什么具体变化（必填，20-70字）",
+    "- consumer_shift：用户为什么变化、需求或表达如何迁移（必填，20-70字）",
+    "- why_now：为什么现在值得抓（必填，16-60字）",
+    "- brand_opportunity：当前品牌为什么该抓、抓什么（必填，24-80字）",
+    "- content_direction：下一步内容怎么做（必填，20-70字）",
+    "- confidence_score：0-100 整数，表示机会置信度；可与 score 相同或接近",
+    "trend.title 控制在 16-42 个中文字符；summary 用 45-90 字概括 market_change + consumer_shift；reason 用 40-110 字写 why_now + brand_opportunity；说清后立即结束。",
     "使用 AnySearch 证据时，每条 trend 还必须包含 evidenceIds，且只能引用输入里真实存在的 S 编号；Pgy 路径可返回空数组。",
     "score 必须是 0 到 100 的整数，代表本批证据内的相对内容机会分，不等于已经证实的全网热度。",
     "评分标准：只有‘网页事实片段’明确支持快速增长或高互动，才可给 80 分以上；只有‘网页内容样本/社交讨论样本’时最高 79 分，按来源时效、话题相关性、内容可执行性和品牌关联度拉开差距。",
@@ -290,7 +304,7 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
     "reason 至少 36 个中文字符，首句必须自然写出与 title 相同的来源专名或独特短语，并说明具体话题/形式、可转成的运营机制和品牌参与方式；直接从专有话题、用户矛盾、内容机制或执行动作切入，禁止以‘来源、证据、报告、案例’开头，禁止套用‘内容上可转化为……品牌可……’的批量句式。",
     "十条 reason 至少使用五种明显不同的句法和论证顺序；相邻两条不能复用相同开头或‘话题/形式 + 可转化 + 品牌可’三段模板。证据边界通过克制措辞体现，不得把 S 编号、内部取证等级或校验规则写进用户可见文案。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
-    "ideas 必须是 2 条，每条 idea 只包含：title, summary, angle, brandFit, audience, hook, tags；不要输出 contentAssets。",
+    "ideas 必须是 2 条，且都服务 content_direction；每条 idea 只包含：title, summary, angle, brandFit, audience, hook, tags；不要输出 contentAssets。",
     buildIdeaDiversityPrompt(selectedBucketMeta),
     buildTrendDeduplicationPrompt(trendCount),
     buildTrendFreshnessPrompt(),
@@ -482,6 +496,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     : [];
   const pgyEvidenceBlock = buildPgyEvidencePromptBlock(options.pgyEvidence);
   const anySearchEvidenceBlock = buildAnySearchEvidencePromptBlock(options.anySearchEvidence);
+  const marketSignalsBlock = formatMarketSignalsPromptBlock(options.marketSignals);
   const categoryBlock = buildXhsCategoryPromptBlock(options.xhsCategoryPath || options.pgyEvidence?.categoryPath || "");
   const retryFeedback = String(options.retryFeedback || "").trim();
   const medicineBrand = isMedicineBrand(brand);
@@ -507,7 +522,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
       ]
     : [];
   return [
-    `请基于以下品牌信息与品牌智能层，围绕小红书平台的热点话题与内容机会，只为用户当前点击的维度快速生成热点趋势和选题骨架。`,
+    `请基于以下品牌信息、品牌智能层与市场信号，围绕小红书平台把证据转成营销机会与内容方向；只为用户当前点击的维度生成结果。`,
     "",
     "当前 bucket 独立规则：",
     formatBucketPromptRules(selectedBucketMeta),
@@ -516,6 +531,8 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     ...(categoryBlock && !pgyEvidenceBlock ? ["", categoryBlock] : []),
     ...(pgyEvidenceBlock ? ["", pgyEvidenceBlock] : []),
     ...(anySearchEvidenceBlock ? ["", anySearchEvidenceBlock] : []),
+    "",
+    marketSignalsBlock,
     ...(anySearchGenerationPlan ? ["", anySearchGenerationPlan] : []),
     "",
     "要求：",
@@ -536,7 +553,9 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     options.anySearchEvidence && !hasReliableWebEvidence
       ? "5. 本次只有网页内容样本/社交讨论样本，score 必须在 0-79 内按相对内容机会拉开差距；不得用热门、收藏、互动、增长或普遍性为分数找理由。"
       : "5. score 要按本批证据内的相对内容机会给出，不要所有趋势都给高分；80 分以上必须有网页事实片段明确支持。",
-    "6. 选题要能直接给运营同学使用，标题、角度、钩子要有小红书笔记感，避免空泛文案。",
+    "6. 每条趋势必须填 market_change、consumer_shift、why_now、brand_opportunity、content_direction；缺一即无效。",
+    "6.1 禁止“消费升级、年轻人关注健康、品质生活、用户越来越重视”等正确但无商业判断的空话。",
+    "7. 选题要能直接给运营同学使用：两条 idea 都服务 content_direction，标题、角度、钩子要有小红书笔记感，避免空泛文案。",
     "7. 每条趋势固定生成 2 条 idea，只输出 title、summary、angle、brandFit、audience、hook、tags，不输出 contentAssets；两条只能在本槽唯一机制内采用不同场景、叙事切口和执行步骤，每个字段用一两句说清。",
     "8. 不要输出品牌摘要字段，也不要补充品牌档案没有依据的产品功能、认证、功效或适用人群。",
     anySearchEvidenceBlock
@@ -715,27 +734,75 @@ function buildContentAssetEnrichmentUserPrompt(brand, trend, idea, retryFeedback
   ].join("\n");
 }
 
+function pickFirstNonEmpty(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function normalizeOpportunityText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function deriveTrendCopyFromOpportunity(trend) {
+  const marketChange = normalizeOpportunityText(trend?.market_change);
+  const consumerShift = normalizeOpportunityText(trend?.consumer_shift);
+  const whyNow = normalizeOpportunityText(trend?.why_now);
+  const brandOpportunity = normalizeOpportunityText(trend?.brand_opportunity);
+  const contentDirection = normalizeOpportunityText(trend?.content_direction);
+  const confidenceScore = normalizeModelScore(trend?.confidence_score ?? trend?.confidenceScore);
+  const summary = pickFirstNonEmpty(
+    trend?.summary,
+    [marketChange, consumerShift].filter(Boolean).join("；"),
+  );
+  const reason = pickFirstNonEmpty(
+    trend?.reason,
+    [whyNow, brandOpportunity, contentDirection].filter(Boolean).join("；"),
+  );
+  const score = normalizeModelScore(trend?.score) ?? confidenceScore;
+  return {
+    market_change: marketChange,
+    consumer_shift: consumerShift,
+    why_now: whyNow,
+    brand_opportunity: brandOpportunity,
+    content_direction: contentDirection,
+    confidence_score: confidenceScore ?? score,
+    summary,
+    reason,
+    score,
+  };
+}
+
 function normalizeTrendSet(rawTrends, brand, baseId, options = {}) {
   const source = Array.isArray(rawTrends) ? rawTrends : rawTrends && typeof rawTrends === "object" ? Object.values(rawTrends) : [];
   const maxItems = Math.max(TREND_ITEMS_PER_BUCKET, Number(options.maxItems || TREND_ITEMS_PER_BUCKET));
   return source
     .map(normalizeRawTrend)
-    .filter((trend) => trend.title || trend.summary || trend.reason)
+    .filter((trend) => trend.title || trend.summary || trend.reason || trend.market_change || trend.brand_opportunity)
     .slice(0, maxItems)
     .map((trend, index) => {
       const ideas = Array.isArray(trend?.ideas) && trend.ideas.length
         ? trend.ideas.slice(0, 2).map((idea) => normalizeTrendIdea(idea))
         : [];
+      const opportunity = deriveTrendCopyFromOpportunity(trend);
       return {
         id: baseId + index + 1,
         stableKey: String(trend?.stableKey || trend?.stable_key || trend?.id || `${baseId + index + 1}`),
         rank: index + 1,
         title: String(trend?.title || "").trim(),
         category: String(trend?.category || "").trim(),
-        summary: String(trend?.summary || "").trim(),
-        score: normalizeModelScore(trend?.score),
+        market_change: opportunity.market_change,
+        consumer_shift: opportunity.consumer_shift,
+        why_now: opportunity.why_now,
+        brand_opportunity: opportunity.brand_opportunity,
+        content_direction: opportunity.content_direction,
+        confidence_score: opportunity.confidence_score,
+        summary: opportunity.summary,
+        score: opportunity.score,
         tags: normalizeModelTags(trend?.tags),
-        reason: String(trend?.reason || "").trim(),
+        reason: opportunity.reason,
         evidenceIds: normalizeEvidenceIds(trend?.evidenceIds),
         ideas,
         customPrompt: "",
@@ -783,6 +850,12 @@ function normalizeRawTrend(trend) {
     ...trend,
     title: trend.title || trend.name || trend.topic || trend.keyword || "",
     category: trend.category || trend.type || trend.bucket || trend.dimension || trend.scene || trend.tag || "",
+    market_change: trend.market_change || trend.marketChange || trend.market_shift || trend.marketShift || "",
+    consumer_shift: trend.consumer_shift || trend.consumerShift || trend.user_shift || trend.userShift || "",
+    why_now: trend.why_now || trend.whyNow || trend.timing || "",
+    brand_opportunity: trend.brand_opportunity || trend.brandOpportunity || trend.opportunity || "",
+    content_direction: trend.content_direction || trend.contentDirection || trend.next_content || trend.nextContent || "",
+    confidence_score: trend.confidence_score ?? trend.confidenceScore ?? trend.confidence,
     summary: trend.summary || trend.description || trend.desc || trend.insight || trend.content || trend.overview || trend.explanation || "",
     score: trend.score ?? trend.heat ?? trend.heatScore ?? trend.index ?? trend.popularity ?? trend.hotScore ?? trend.hotIndex,
     tags: trend.tags || trend.tagList || trend.hashtags || [],
@@ -1007,6 +1080,11 @@ function getTrendBodyText(trend) {
   return [
     trend?.summary,
     trend?.reason,
+    trend?.market_change,
+    trend?.consumer_shift,
+    trend?.why_now,
+    trend?.brand_opportunity,
+    trend?.content_direction,
     ...(trend?.tags || []),
     ...(trend?.ideas || []).flatMap((idea) => [
       idea?.title,
@@ -1018,6 +1096,75 @@ function getTrendBodyText(trend) {
       ...(idea?.tags || []),
     ]),
   ].join(" ");
+}
+
+
+function validateTrendQuality(trend) {
+  if (!trend || typeof trend !== "object") return false;
+  const marketChange = normalizeOpportunityText(trend.market_change);
+  const brandOpportunity = normalizeOpportunityText(trend.brand_opportunity);
+  const contentDirection = normalizeOpportunityText(trend.content_direction);
+  if (!marketChange || !brandOpportunity || !contentDirection) return false;
+  if (isEmptyPlatitude(marketChange) || isEmptyPlatitude(brandOpportunity) || isEmptyPlatitude(contentDirection)) {
+    return false;
+  }
+  const consumerShift = normalizeOpportunityText(trend.consumer_shift);
+  const whyNow = normalizeOpportunityText(trend.why_now);
+  if (consumerShift && isEmptyPlatitude(consumerShift)) return false;
+  if (whyNow && isEmptyPlatitude(whyNow)) return false;
+  return true;
+}
+
+function filterTrendsByQuality(trendBuckets) {
+  return (Array.isArray(trendBuckets) ? trendBuckets : []).map((bucket) => ({
+    ...bucket,
+    items: (bucket.items || []).filter((trend) => validateTrendQuality(trend)),
+  }));
+}
+
+function getTrendQualityIssues(trendBuckets) {
+  const issues = [];
+  for (const bucket of trendBuckets || []) {
+    for (const [trendIndex, trend] of (bucket.items || []).entries()) {
+      for (const field of ["market_change", "brand_opportunity", "content_direction"]) {
+        const value = normalizeOpportunityText(trend?.[field]);
+        if (!value) {
+          issues.push({
+            bucketKey: bucket.key,
+            trendIndex,
+            title: String(trend?.title || "").slice(0, 80),
+            reason: "missing-opportunity-field",
+            field,
+          });
+          continue;
+        }
+        if (isEmptyPlatitude(value)) {
+          issues.push({
+            bucketKey: bucket.key,
+            trendIndex,
+            title: String(trend?.title || "").slice(0, 80),
+            reason: "empty-opportunity-platitude",
+            field,
+            claim: value.slice(0, 120),
+          });
+        }
+      }
+      for (const field of ["consumer_shift", "why_now"]) {
+        const value = normalizeOpportunityText(trend?.[field]);
+        if (value && isEmptyPlatitude(value)) {
+          issues.push({
+            bucketKey: bucket.key,
+            trendIndex,
+            title: String(trend?.title || "").slice(0, 80),
+            reason: "empty-opportunity-platitude",
+            field,
+            claim: value.slice(0, 120),
+          });
+        }
+      }
+    }
+  }
+  return issues;
 }
 
 function hasGroundingOverlap(candidateTokens, evidenceTokens, ignoredTokens) {
@@ -1286,6 +1433,7 @@ function getTrendCopyQualityIssues(trendBuckets, validationNow = new Date()) {
 function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, brand, pgyEvidence, validationNow = new Date()) {
   return [
     ...getTrendStructureIssues(trendBuckets, bucketMeta),
+    ...getTrendQualityIssues(trendBuckets),
     ...getDuplicateTrendIssues(trendBuckets),
     ...(anySearchEvidence ? getAnySearchEvidenceCoverageIssues(trendBuckets, anySearchEvidence) : []),
     ...(anySearchEvidence ? getEvidenceGroundingIssues(trendBuckets, anySearchEvidence, brand) : []),
@@ -1306,8 +1454,11 @@ function formatTrendRetryFeedback(issues) {
   if (["bucket-count", "bucket-key", "trend-count", "repair-count"].some((reason) => reasons.has(reason))) {
     feedback.push(`只输出当前 bucket，并完整返回 ${TREND_ITEMS_PER_BUCKET} 条趋势，不能少于或多于 ${TREND_ITEMS_PER_BUCKET} 条。`);
   }
-  if (["missing-trend-field", "insufficient-reason-detail", "invalid-score", "missing-trend-tags", "idea-count", "missing-idea-field", "missing-idea-tags"].some((reason) => reasons.has(reason))) {
-    feedback.push("补齐每条趋势和两条 idea 的全部 schema 字段；reason 至少用 36 个中文字符说明具体来源话题、内容机会和判断边界，趋势与 idea 的 tags 都要有 3-5 个。 ");
+  if (["missing-trend-field", "missing-opportunity-field", "insufficient-reason-detail", "invalid-score", "missing-trend-tags", "idea-count", "missing-idea-field", "missing-idea-tags"].some((reason) => reasons.has(reason))) {
+    feedback.push("补齐每条趋势的 market_change、consumer_shift、why_now、brand_opportunity、content_direction，以及两条 idea 的全部 schema 字段；reason 至少用 36 个中文字符说明具体来源话题、内容机会和判断边界，趋势与 idea 的 tags 都要有 3-5 个。 ");
+  }
+  if (reasons.has("empty-opportunity-platitude")) {
+    feedback.push("删除消费升级、年轻人关注健康、品质生活、用户越来越重视等空话；market_change/brand_opportunity/content_direction 必须写具体变化、品牌抓手和下一步内容动作。 ");
   }
   if (reasons.has("generic-reason")) {
     feedback.push("重写空泛的推荐理由：必须点出来源里的具体事件/提问/内容形式、可转化的运营机制和证据边界，不得只写‘活动有效、当前可复制、内容贴近需求、增加互动’。 ");
@@ -1425,7 +1576,7 @@ function buildTargetedTrendRepairSystemPrompt(bucketMeta, repairCount) {
     "只输出 JSON，不要输出 Markdown 或解释。",
     'JSON 顶层结构必须是：{"items":[...]}。',
     `items 必须严格输出 ${repairCount} 条，顺序与用户消息中的“待重写条目”一致。`,
-    "每条 item 必须包含：stableKey、title、category、summary、score、tags、reason、evidenceIds、ideas。",
+    "每条 item 必须包含：stableKey、title、category、market_change、consumer_shift、why_now、brand_opportunity、content_direction、confidence_score、summary、score、tags、reason、evidenceIds、ideas。",
     "tags 必须是 3-5 个以 # 开头的字符串；score 必须是 0-100 的整数。",
     "score 是本批证据内的相对内容机会分；没有网页事实片段直接支持时最高 79 分，不得用虚构的热门、收藏、互动或搜索强度解释分数。",
     "reason 至少 36 个中文字符，必须保留具体来源话题、说明内容转化逻辑和证据边界，不能用‘活动有效、当前可复制、增加互动、该方向源于、缺乏热度数据、适合作为内容实验’等内部校验式句子敷衍。",
@@ -1451,6 +1602,12 @@ function toLeanTrendRepairInput(trend) {
     stableKey: trend?.stableKey || "",
     title: trend?.title || "",
     category: trend?.category || "",
+    market_change: trend?.market_change || "",
+    consumer_shift: trend?.consumer_shift || "",
+    why_now: trend?.why_now || "",
+    brand_opportunity: trend?.brand_opportunity || "",
+    content_direction: trend?.content_direction || "",
+    confidence_score: trend?.confidence_score,
     summary: trend?.summary || "",
     score: trend?.score,
     tags: trend?.tags || [],
@@ -1483,6 +1640,8 @@ const FIELD_SCOPED_TREND_REPAIR_REASONS = new Set([
   "internal-evidence-jargon",
   "formulaic-reason-opening",
   "inline-evidence-reference",
+  "missing-opportunity-field",
+  "empty-opportunity-platitude",
 ]);
 
 function cloneTrendRepairValue(value) {
@@ -2338,7 +2497,17 @@ function finalizeModelTrendBuckets(trendBuckets, bucketMeta, baseId) {
 }
 
 function getBrandClaimTextEntries(trend) {
-  const entries = ["title", "category", "summary", "reason"].map((field) => ({
+  const entries = [
+    "title",
+    "category",
+    "summary",
+    "reason",
+    "market_change",
+    "consumer_shift",
+    "why_now",
+    "brand_opportunity",
+    "content_direction",
+  ].map((field) => ({
     field,
     text: String(trend?.[field] || ""),
   }));
@@ -2720,6 +2889,15 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         cacheHit: Boolean(anySearchEvidence.cacheHit),
       });
     }
+    // Evidence Normalize -> Signal Extraction -> Trend Opportunity Generation
+    const marketSignals = options.marketSignals
+      || extractMarketSignalsFromSources({ brand, anySearchEvidence, pgyEvidence });
+    console.log("[trend-analysis] market signals extracted", {
+      brandId: brand.id,
+      brandName: brand.name,
+      signalCount: marketSignals?.signals?.length || 0,
+      sampleKeywords: (marketSignals?.signals || []).slice(0, 3).map((item) => item.keyword),
+    });
     const modelTiming = {
       requestedAt: new Date().toISOString(),
       requestMs: 0,
@@ -2774,11 +2952,13 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             pgyEvidence,
             anySearchEvidence,
             brandIntelligence,
+            marketSignals,
           }, repairPlan, candidateBuckets, lastValidationIssues)
         : buildTrendAnalysisUserPrompt(brand, {
             pgyEvidence,
             anySearchEvidence,
             brandIntelligence,
+            marketSignals,
             xhsCategoryPath: options.xhsCategoryPath,
             trendCount: TREND_ITEMS_PER_BUCKET,
             retryFeedback,
@@ -2906,18 +3086,33 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
               validationNow,
             );
         if (!postAliasIssues.length) {
-          trendBuckets = finalizeModelTrendBuckets(
-            attachEvidenceSnapshots(userVisibleBuckets, anySearchEvidence, pgyEvidence),
-            selectedBucketMeta,
-            baseId,
-          );
-          break;
+          const qualityFiltered = filterTrendsByQuality(userVisibleBuckets);
+          const qualityCountIssues = getTrendStructureIssues(qualityFiltered, selectedBucketMeta);
+          if (qualityCountIssues.length) {
+            validationIssues = [
+              ...getTrendQualityIssues(userVisibleBuckets),
+              ...qualityCountIssues,
+            ];
+          } else {
+            trendBuckets = finalizeModelTrendBuckets(
+              attachEvidenceSnapshots(qualityFiltered, anySearchEvidence, pgyEvidence),
+              selectedBucketMeta,
+              baseId,
+            );
+            Object.defineProperty(trendBuckets, "marketSignals", {
+              value: marketSignals,
+              enumerable: false,
+              configurable: true,
+            });
+            break;
+          }
+        } else {
+          // Alias restoration can create a brand-specific risk phrase that was
+          // intentionally invisible to the model. Feed only its field/reason back
+          // into the same model-repair path; claims and the real brand stay out of
+          // the repair prompt.
+          validationIssues = postAliasIssues;
         }
-        // Alias restoration can create a brand-specific risk phrase that was
-        // intentionally invisible to the model. Feed only its field/reason back
-        // into the same model-repair path; claims and the real brand stay out of
-        // the repair prompt.
-        validationIssues = postAliasIssues;
       }
 
       lastValidationIssues = validationIssues;
@@ -3136,6 +3331,9 @@ module.exports = {
   normalizeTrendBuckets,
   normalizeEvidenceIds,
   isGenericTrendReason,
+  validateTrendQuality,
+  filterTrendsByQuality,
+  getTrendQualityIssues,
   getTrendGenerationIssues,
   getMedicineSafetyIssues,
   getStaleMarketingWindowIssues,
