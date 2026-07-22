@@ -3340,9 +3340,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         // quality_score is reserved for human rateGeneration(1-5); auto hints stay in metadata.
         quality_score: null,
         context: {
+          user_id: options.userId ?? options.ownerUserId ?? "",
           brand_id: brand.id ?? "",
           brand_name: brand.name || "",
           industry: brand.industry || "",
+          generation_id: options.generationId ?? options.analysisId ?? baseId ?? "",
         },
         metadata: {
           brandId: brand.id,
@@ -3401,9 +3403,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         success: false,
         quality_score: null,
         context: {
+          user_id: options.userId ?? options.ownerUserId ?? "",
           brand_id: brand?.id ?? "",
           brand_name: brand?.name || "",
           industry: brand?.industry || "",
+          generation_id: options.generationId ?? options.analysisId ?? baseId ?? "",
         },
         metadata: {
           brandId: brand?.id,

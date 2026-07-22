@@ -212,6 +212,8 @@ async function handleTrendRoutes(context, req, res, pathname) {
       generatedTrends = await generateAiTrendSet(brand, trendBase, {
         bucketKey: selectedBucket.key,
         xhsCategoryPath,
+        userId: user.id,
+        analysisId,
       });
       const completion = completeTrendAnalysisRequest({
         requestId,
