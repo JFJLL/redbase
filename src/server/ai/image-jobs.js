@@ -10,9 +10,19 @@ const {
   PROMPT_VERSIONS,
   recordAiRun,
 } = require("./evaluation");
+const {
+  createJob,
+  getJob,
+  updateJob,
+  listPendingJobs,
+  markFailed,
+} = require("../db/repositories/image-job-runtime-repository");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
+const IMAGE_JOB_TIMEOUT_ERROR = "timeout";
+
+let recoveryAttempted = false;
 
 /**
  * Replace free-form AI prompts with the fixed commercial image-prompt engine.
@@ -226,9 +236,91 @@ async function fetchImageProviderResultOnce(provider, job, headers) {
   };
 }
 
+function recoverPendingImageJobs({ force = false } = {}) {
+  if (recoveryAttempted && !force) {
+    return { scanned: 0, timedOut: 0, active: 0 };
+  }
+  recoveryAttempted = true;
+  let pending = [];
+  try {
+    pending = listPendingJobs({ limit: 500 });
+  } catch (error) {
+    recoveryAttempted = false;
+    console.warn("[image-job] recovery deferred", {
+      message: error?.message || "unknown error",
+    });
+    return { scanned: 0, timedOut: 0, active: 0, deferred: true };
+  }
+
+  const now = Date.now();
+  let timedOut = 0;
+  for (const job of pending) {
+    const ageMs = now - Number(job.createdAt || 0);
+    if (ageMs > IMAGE_JOB_TIMEOUT_MS) {
+      markFailed(job.id, IMAGE_JOB_TIMEOUT_ERROR);
+      timedOut += 1;
+      console.error("[image-job] recovered timed-out job", {
+        jobId: job.id,
+        ageMs,
+        previousStatus: job.status,
+        error: IMAGE_JOB_TIMEOUT_ERROR,
+      });
+    }
+  }
+  const active = pending.length - timedOut;
+  console.log("[image-job] recovery complete", {
+    scanned: pending.length,
+    timedOut,
+    active,
+  });
+  return { scanned: pending.length, timedOut, active };
+}
+
+function ensureImageJobRecovery() {
+  if (!recoveryAttempted) {
+    recoverPendingImageJobs();
+  }
+}
+
+function createImageJobStore() {
+  return {
+    get(jobId) {
+      ensureImageJobRecovery();
+      return getJob(jobId);
+    },
+    set(jobId, job) {
+      ensureImageJobRecovery();
+      if (!job || typeof job !== "object") return this;
+      const payload = { ...job, id: job.id || jobId };
+      if (!payload.id) return this;
+      if (getJob(payload.id)) {
+        updateJob(payload);
+      } else {
+        createJob(payload);
+      }
+      return this;
+    },
+    has(jobId) {
+      ensureImageJobRecovery();
+      return Boolean(getJob(jobId));
+    },
+    delete() {
+      return true;
+    },
+  };
+}
+
+function isJobTimedOut(job, now = Date.now()) {
+  return now - Number(job?.createdAt || 0) > IMAGE_JOB_TIMEOUT_MS;
+}
+
+function persistImageJob(job) {
+  if (!job?.id) return job;
+  return updateJob(job) || job;
+}
+
 async function createImageJob(
   appConfig,
-  imageJobs,
   {
     ownerUserId,
     brand,
@@ -244,6 +336,7 @@ async function createImageJob(
     aspectRatio,
   },
 ) {
+  ensureImageJobRecovery();
   const provider = appConfig.imageProvider;
   assertConfigured(provider.apiKey, "图片模型 API Key");
   const referenceImages = normalizeImageInputs(productImages || productImage);
@@ -335,6 +428,11 @@ async function createImageJob(
         latency: Math.max(0, Date.now() - requestStartedAt),
         success: false,
         quality_score: null,
+        context: buildImageEvaluationContext({
+          ownerUserId,
+          brand,
+          metadata,
+        }),
         metadata: {
           stage: "create",
           providerMode: useEditModel ? "edit" : "text-to-image",
@@ -372,6 +470,11 @@ async function createImageJob(
         latency: Math.max(0, Date.now() - requestStartedAt),
         success: false,
         quality_score: null,
+        context: buildImageEvaluationContext({
+          ownerUserId,
+          brand,
+          metadata,
+        }),
         metadata: {
           stage: "validate",
           providerMode: useEditModel ? "edit" : "text-to-image",
@@ -404,6 +507,9 @@ async function createImageJob(
     model: provider.model,
     metadata: {
       ...metadata,
+      brandId: brand?.id ?? metadata.brandId ?? null,
+      brandName: brand?.name || metadata.brandName || "",
+      industry: brand?.industry || metadata.industry || "",
       providerTaskId: submission.taskId,
       aspectRatio: outputAspectRatio,
       sourceImageUrls: [...sourceUrls, ...uploadedSourceUrls],
@@ -427,8 +533,30 @@ async function createImageJob(
     recordImageJobEvaluation(job, { success: true });
   }
 
-  imageJobs.set(job.id, job);
-  return job;
+  return createJob(job);
+}
+
+/**
+ * Observation-only business context for evaluation runs.
+ * Does not affect image generation control flow.
+ */
+function buildImageEvaluationContext({ ownerUserId, brand, metadata, job } = {}) {
+  const meta = metadata || job?.metadata || {};
+  const generationContext = job?.generationContext || {};
+  const brandId =
+    brand?.id ??
+    meta.brandId ??
+    generationContext.brandId ??
+    "";
+  return {
+    user_id: ownerUserId ?? job?.ownerUserId ?? generationContext.userId ?? "",
+    brand_id: brandId,
+    brand_name: brand?.name || meta.brandName || generationContext.brandName || "",
+    industry: brand?.industry || meta.industry || generationContext.industry || "",
+    generation_id: job?.generationId ?? generationContext.sourceGenerationId ?? meta.generationId ?? "",
+    content_type: meta.contentType || generationContext.contentType || "",
+    platform: meta.platform || generationContext.platform || "",
+  };
 }
 
 function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
@@ -441,6 +569,7 @@ function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
       latency: Math.max(0, Date.now() - Number(job.evaluationStartedAt || job.createdAt || Date.now())),
       success: Boolean(success),
       quality_score: null,
+      context: buildImageEvaluationContext({ job }),
       metadata: {
         jobId: job.id,
         provider: job.provider || "",
@@ -448,6 +577,8 @@ function recordImageJobEvaluation(job, { success, errorMessage = "" } = {}) {
         promptEngine: job.metadata?.promptEngine || "",
         brandId: job.metadata?.brandId ?? job.generationContext?.brandId ?? null,
         trendId: job.metadata?.trendId ?? job.generationContext?.trendId ?? null,
+        contentType: job.metadata?.contentType || "",
+        platform: job.metadata?.platform || "",
         errorMessage: String(errorMessage || job.error || "").slice(0, 300),
       },
     });
@@ -574,9 +705,38 @@ function withImageReferencePrompt(metadata, { productImages, logoImages, styleIm
   };
 }
 
-async function resolveImageJob(appConfig, imageJobs, job) {
+async function resolveImageJob(appConfig, jobOrId) {
+  ensureImageJobRecovery();
+
+  const jobId = typeof jobOrId === "string" ? jobOrId : jobOrId?.id;
+  let job = jobId ? getJob(jobId) : null;
+  if (!job && jobOrId && typeof jobOrId === "object" && jobOrId.id) {
+    job = jobOrId;
+  }
+  if (!job) {
+    const error = new Error("图片任务不存在或已过期。");
+    error.code = "IMAGE_JOB_NOT_FOUND";
+    throw error;
+  }
+
   if (job.status === "completed" || job.status === "failed") {
     return job;
+  }
+
+  if (isJobTimedOut(job)) {
+    let failed = markFailed(job.id, IMAGE_JOB_TIMEOUT_ERROR) || { ...job, status: "failed", error: IMAGE_JOB_TIMEOUT_ERROR };
+    failed = recordImageJobEvaluation(failed, { success: false, errorMessage: IMAGE_JOB_TIMEOUT_ERROR });
+    failed = persistImageJob(failed) || failed;
+    console.error("[image-job] timed out", {
+      ...buildImageJobLogContext(failed),
+      error: IMAGE_JOB_TIMEOUT_ERROR,
+    });
+    return failed;
+  }
+
+  if (job.status !== "running") {
+    job.status = "running";
+    job = persistImageJob(job) || job;
   }
 
   try {
@@ -592,6 +752,7 @@ async function resolveImageJob(appConfig, imageJobs, job) {
     if (polled.status === "completed" && polled.imageUrl) {
       job.status = "completed";
       job.imageUrl = polled.imageUrl;
+      job.error = "";
       console.log("[image-job] completed", {
         ...buildImageJobLogContext(job),
         imageUrl: summarizeUrl(job.imageUrl),
@@ -607,9 +768,9 @@ async function resolveImageJob(appConfig, imageJobs, job) {
         upstreamPayload: truncateLogValue(polled.payload, 2000),
       });
       recordImageJobEvaluation(job, { success: false, errorMessage: job.error });
-    } else if (Date.now() - job.createdAt > IMAGE_JOB_TIMEOUT_MS) {
+    } else if (isJobTimedOut(job)) {
       job.status = "failed";
-      job.error = "图片生成超时，请稍后重试。";
+      job.error = IMAGE_JOB_TIMEOUT_ERROR;
       console.error("[image-job] timed out", {
         ...buildImageJobLogContext(job),
         upstreamSummary: polled.summary,
@@ -625,17 +786,16 @@ async function resolveImageJob(appConfig, imageJobs, job) {
       statusCode: error?.statusCode || null,
       responseBody: truncateLogValue(error?.rawBody || error?.payload || "", 1500),
     });
-    if (Date.now() - job.createdAt > IMAGE_JOB_TIMEOUT_MS) {
+    if (isJobTimedOut(job)) {
       job.status = "failed";
-      job.error = error.message || "图片生成失败";
+      job.error = IMAGE_JOB_TIMEOUT_ERROR;
       recordImageJobEvaluation(job, { success: false, errorMessage: job.error });
     } else {
       job.status = "pending";
     }
   }
 
-  imageJobs.set(job.id, job);
-  return job;
+  return persistImageJob(job) || job;
 }
 
 function buildImageJobResponse(job) {
@@ -686,8 +846,10 @@ function getImageJobProviderHeaders(appConfig, job) {
 module.exports = {
   IMAGE_JOB_TIMEOUT_MS,
   IMAGE_JOB_HTTP_TIMEOUT_MS,
+  IMAGE_JOB_TIMEOUT_ERROR,
   buildImageConceptMetadata,
   applyStructuredImagePrompt,
+  buildImageEvaluationContext,
   createImageJob,
   resolveImageJob,
   buildImageJobResponse,
@@ -697,4 +859,7 @@ module.exports = {
   parseImageProviderResult,
   validateImageProviderSubmission,
   recordImageJobEvaluation,
+  recoverPendingImageJobs,
+  createImageJobStore,
+  ensureImageJobRecovery,
 };

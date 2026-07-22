@@ -3331,6 +3331,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     Object.defineProperty(trendBuckets, "analysisMetrics", { value: metrics, enumerable: false, configurable: true });
     Object.defineProperty(trendBuckets, "aiCallBudget", { value: budgetSnap, enumerable: false, configurable: true });
     try {
+      // Observation only: evaluation must not control trend generation flow.
       const evaluationRun = recordAiRun({
         task: EVALUATION_TASKS.TREND_ANALYSIS,
         model: String(appConfig?.textProvider?.model || ""),
@@ -3339,6 +3340,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         success: true,
         // quality_score is reserved for human rateGeneration(1-5); auto hints stay in metadata.
         quality_score: null,
+        context: {
+          brand_id: brand.id ?? "",
+          brand_name: brand.name || "",
+          industry: brand.industry || "",
+        },
         metadata: {
           brandId: brand.id,
           brandName: brand.name,
@@ -3388,6 +3394,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       reason: error?.message || "empty model result",
     });
     try {
+      // Observation only: failure recording must never change control flow.
       recordAiRun({
         task: EVALUATION_TASKS.TREND_ANALYSIS,
         model: String(appConfig?.textProvider?.model || ""),
@@ -3395,6 +3402,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         latency: Date.now() - startedAt,
         success: false,
         quality_score: null,
+        context: {
+          brand_id: brand?.id ?? "",
+          brand_name: brand?.name || "",
+          industry: brand?.industry || "",
+        },
         metadata: {
           brandId: brand?.id,
           brandName: brand?.name,

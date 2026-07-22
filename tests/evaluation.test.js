@@ -13,6 +13,7 @@ const {
   findEvaluationRun,
   listEvaluationRuns,
   comparePromptVersions,
+  compareByContext,
   estimateTrendAutoQualityScore,
 } = require("../src/server/ai/evaluation");
 
@@ -188,4 +189,144 @@ test("rateGeneration does not drop concurrent appends", () => {
   assert.equal(findEvaluationRun(second.id).quality_score, null);
   assert.ok(fs.existsSync(tempFile));
   assert.ok(fs.existsSync(tempFile.replace(/\.jsonl$/, ".ratings.json")));
+});
+
+test("recordAiRun persists nested business context fields", () => {
+  const run = recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: PROMPT_VERSIONS.trend_analysis,
+    latency: 800,
+    success: true,
+    context: {
+      user_id: "42",
+      brand_id: "7",
+      brand_name: "BabyCare",
+      industry: "母婴",
+      generation_id: "",
+      content_type: "",
+      platform: "",
+    },
+  });
+
+  assert.equal(run.brand_id, "7");
+  assert.equal(run.brand_name, "BabyCare");
+  assert.equal(run.industry, "母婴");
+  assert.equal(run.context.industry, "母婴");
+
+  const loaded = findEvaluationRun(run.id);
+  assert.equal(loaded.brand_id, "7");
+  assert.equal(loaded.industry, "母婴");
+  assert.equal(loaded.context.brand_name, "BabyCare");
+});
+
+test("compareByContext answers industry and task quality questions", () => {
+  const momTrendA = recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: "trend-v1",
+    latency: 1000,
+    success: true,
+    context: { industry: "母婴", brand_id: "1", brand_name: "A" },
+  });
+  const momTrendB = recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: "trend-v1",
+    latency: 1400,
+    success: true,
+    context: { industry: "母婴", brand_id: "2", brand_name: "B" },
+  });
+  const foodImageA = recordAiRun({
+    task: TASKS.IMAGE_GENERATION,
+    model: "img-1",
+    prompt_version: "image-v1",
+    latency: 2000,
+    success: true,
+    context: { industry: "食品", brand_id: "3", content_type: "cover", platform: "xiaohongshu" },
+  });
+  const foodImageB = recordAiRun({
+    task: TASKS.IMAGE_GENERATION,
+    model: "img-1",
+    prompt_version: "image-v1",
+    latency: 3000,
+    success: false,
+    context: { industry: "食品", brand_id: "3", content_type: "cover", platform: "xiaohongshu" },
+  });
+  recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: "trend-v1",
+    latency: 500,
+    success: true,
+    context: { industry: "美妆", brand_id: "9" },
+  });
+
+  rateGeneration(momTrendA.id, 4);
+  rateGeneration(momTrendB.id, 5);
+  rateGeneration(foodImageA.id, 3);
+
+  const momTrends = compareByContext({ industry: "母婴", task: TASKS.TREND_ANALYSIS });
+  assert.equal(momTrends.total_runs, 2);
+  assert.equal(momTrends.avg_quality_score, 4.5);
+  assert.equal(momTrends.avg_latency_ms, 1200);
+  assert.equal(momTrends.success_rate, 1);
+
+  const foodImages = compareByContext({ industry: "食品", task: TASKS.IMAGE_GENERATION });
+  assert.equal(foodImages.total_runs, 2);
+  assert.equal(foodImages.avg_quality_score, 3);
+  assert.equal(foodImages.avg_latency_ms, 2500);
+  assert.equal(foodImages.success_rate, 0.5);
+
+  const byIndustry = compareByContext({ task: TASKS.TREND_ANALYSIS, groupBy: "industry" });
+  assert.ok(Array.isArray(byIndustry.groups));
+  const momGroup = byIndustry.groups.find((item) => item.value === "母婴");
+  assert.equal(momGroup.avg_quality_score, 4.5);
+  assert.equal(byIndustry.best.value, "母婴");
+});
+
+test("comparePromptVersions still finds best prompt version and accepts context filters", () => {
+  const v1 = recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: "trend-v1",
+    latency: 1000,
+    success: true,
+    context: { industry: "母婴" },
+  });
+  const v2 = recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: "trend-v2",
+    latency: 900,
+    success: true,
+    context: { industry: "母婴" },
+  });
+  recordAiRun({
+    task: TASKS.TREND_ANALYSIS,
+    model: "m1",
+    prompt_version: "trend-v2",
+    latency: 800,
+    success: true,
+    context: { industry: "食品" },
+  });
+
+  rateGeneration(v1.id, 3);
+  rateGeneration(v2.id, 4.5);
+
+  const comparison = comparePromptVersions({ task: TASKS.TREND_ANALYSIS, industry: "母婴" });
+  assert.equal(comparison.total_runs, 2);
+  const best = comparison.versions.reduce((acc, item) =>
+    (item.avg_quality_score || 0) > (acc.avg_quality_score || 0) ? item : acc,
+  );
+  assert.equal(best.prompt_version, "trend-v2");
+  assert.equal(best.avg_quality_score, 4.5);
+
+  const byVersion = compareByContext({
+    task: TASKS.TREND_ANALYSIS,
+    industry: "母婴",
+    groupBy: "prompt_version",
+  });
+  assert.equal(byVersion.best.value, "trend-v2");
+  assert.equal(byVersion.best.avg_quality_score, 4.5);
 });

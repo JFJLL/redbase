@@ -1,9 +1,29 @@
 const { generateAiTrendSet, regenerateTrendIdeas, ensureTrendIdeaContentAssets } = require("./ai/trend-service");
-const { createImageJob, resolveImageJob, buildImageJobResponse } = require("./ai/image-jobs");
+const {
+  createImageJob,
+  resolveImageJob,
+  buildImageJobResponse,
+  createImageJobStore,
+  recoverPendingImageJobs,
+  ensureImageJobRecovery,
+} = require("./ai/image-jobs");
 const { buildTextProviderEndpoint } = require("./ai/text-provider");
 
 function createAiServices(appConfig) {
-  const imageJobs = new Map();
+  // No in-memory Map: image_jobs SQLite table is the sole job state source.
+  // Facade keeps .get/.set compatible with existing image-generation routes.
+  const imageJobs = createImageJobStore();
+
+  // Recovery is deferred until DB is open (ensureStore runs after createAiServices).
+  setImmediate(() => {
+    try {
+      ensureImageJobRecovery();
+    } catch (error) {
+      console.warn("[image-job] deferred recovery failed", {
+        message: error?.message || "unknown error",
+      });
+    }
+  });
 
   return {
     imageJobs,
@@ -11,7 +31,7 @@ function createAiServices(appConfig) {
     regenerateTrendIdeas: (brand, trend, customPrompt) => regenerateTrendIdeas(appConfig, brand, trend, customPrompt),
     ensureTrendIdeaContentAssets: (brand, trend, ideaIndex) => ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex),
     createImageJob: ({ ownerUserId, brand, trend, idea, metadata, productImage, productImages, logoImage, styleReferenceImages, sourceImageUrls, sourceImages, aspectRatio }) =>
-      createImageJob(appConfig, imageJobs, {
+      createImageJob(appConfig, {
         ownerUserId,
         brand,
         trend,
@@ -25,8 +45,9 @@ function createAiServices(appConfig) {
         sourceImages,
         aspectRatio,
       }),
-    resolveImageJob: (job) => resolveImageJob(appConfig, imageJobs, job),
+    resolveImageJob: (job) => resolveImageJob(appConfig, job),
     buildImageJobResponse,
+    recoverPendingImageJobs,
     buildTextProviderEndpoint: () => buildTextProviderEndpoint(appConfig),
   };
 }
