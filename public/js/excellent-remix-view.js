@@ -5,7 +5,6 @@
 
 import {
   REMIX_CONTENT_MODES,
-  REMIX_ASSET_MODES,
   MAX_REMIX_PRODUCT_IMAGES,
   MAX_CUSTOM_DIRECTION_CHARS,
   MIN_CUSTOM_DIRECTION_CHARS,
@@ -116,7 +115,7 @@ export function renderExistingIdeasHtml(state, helpers) {
     <input class="excellent-remix-search" data-remix-idea-query type="search" placeholder="搜索选题标题/摘要/人群/历史分析" value="${escapeHtml(
       state.existingIdeaQuery || "",
     )}" />
-    <div class="excellent-idea-list">
+    <div class="excellent-idea-list" role="listbox" aria-label="已有选题列表">
       ${ideas
         .map((idea) => {
           const key = buildExistingIdeaKey(idea);
@@ -155,7 +154,7 @@ export function renderContentDirectionHtml(state, helpers) {
   return `
     <section class="excellent-remix-section">
       <h3>4. 这次要讲什么</h3>
-      <div class="excellent-mode-tabs">
+      <div class="excellent-mode-tabs" role="tablist" aria-label="内容方向模式">
         ${[
           [REMIX_CONTENT_MODES.SMART, "智能生成内容方向"],
           [REMIX_CONTENT_MODES.EXISTING_IDEA, "使用已有选题"],
@@ -163,7 +162,7 @@ export function renderContentDirectionHtml(state, helpers) {
         ]
           .map(
             ([value, label]) => `
-          <label class="${mode === value ? "is-active" : ""}">
+          <label class="excellent-mode-tab ${mode === value ? "is-active" : ""}">
             <input type="radio" name="remix-content-mode" data-remix-content-mode="${value}" ${
               mode === value ? "checked" : ""
             } />
@@ -173,6 +172,7 @@ export function renderContentDirectionHtml(state, helpers) {
           )
           .join("")}
       </div>
+      <div class="excellent-mode-panel">
       ${
         mode === REMIX_CONTENT_MODES.SMART
           ? renderSmartDirectionsHtml(state, helpers)
@@ -185,51 +185,7 @@ export function renderContentDirectionHtml(state, helpers) {
           <p class="excellent-remix-hint">${MIN_CUSTOM_DIRECTION_CHARS}-${MAX_CUSTOM_DIRECTION_CHARS} 字，先生成融合方案后再进入生图。</p>
         `
       }
-    </section>
-  `;
-}
-
-export function renderTrendSectionHtml(state, helpers) {
-  const { escapeHtml } = helpers;
-  return `
-    <section class="excellent-remix-section">
-      <h3>5. 趋势语境增强（可选）</h3>
-      <label class="excellent-toggle-row">
-        <input type="checkbox" data-remix-trend-toggle ${state.useTrendContext ? "checked" : ""} />
-        <span>增加趋势语境（默认关闭；趋势不得改写内容主体）</span>
-      </label>
-      ${
-        state.useTrendContext
-          ? `
-        <div class="excellent-trend-recs">
-          ${
-            state.trendRecommendations?.length
-              ? state.trendRecommendations
-                  .map(
-                    (item) => `
-              <label class="excellent-trend-card ${Number(state.selectedTrendId) === Number(item.trendId) ? "is-selected" : ""}">
-                <input type="radio" name="remix-trend" data-remix-trend-id="${Number(item.trendId)}" ${
-                  Number(state.selectedTrendId) === Number(item.trendId) ? "checked" : ""
-                } />
-                <div>
-                  <strong>${escapeHtml(item.title || "")}</strong>
-                  <p>${escapeHtml(item.summary || "")}</p>
-                  <span class="excellent-direction-meta">相关度 ${Number(item.relevanceScore || 0).toFixed(2)} · ${escapeHtml(
-                    item.matchReason || "",
-                  )}</span>
-                </div>
-              </label>
-            `,
-                  )
-                  .join("")
-              : `<div class="excellent-remix-status">${escapeHtml(
-                  state.trendRecommendMessage || "当前没有适合自然结合的趋势，建议不关联趋势。",
-                )}</div>`
-          }
-        </div>
-      `
-          : `<p class="excellent-remix-hint">关闭时不会向融合方案传入任何趋势；已有选题的父级趋势也不会自动使用。</p>`
-      }
+      </div>
     </section>
   `;
 }
@@ -242,7 +198,7 @@ export function renderFusionPlanHtml(state, brandReady, helpers) {
   return `
     <section class="excellent-remix-section excellent-remix-fusion">
       <div class="excellent-remix-section-head">
-        <h3>6. 本次融合方案</h3>
+        <h3>5. 本次融合方案</h3>
         <button type="button" class="secondary-btn small-btn" data-remix-build-fusion ${canBuild ? "" : "disabled"}>
           ${state.fusionStatus === "ready" ? "重新生成融合方案" : "生成融合方案"}
         </button>
@@ -282,11 +238,6 @@ export function renderFusionPlanHtml(state, brandReady, helpers) {
               : ""
           }
           <div><span>品牌如何进入</span><p>${escapeHtml(plan.brandIntegration || "")}</p></div>
-          <div><span>趋势语境</span><p>${
-            plan.trendUsed
-              ? escapeHtml(`已使用：${plan.trendTitle || ""}。${plan.trendRole || ""}`)
-              : escapeHtml(plan.trendRole || "未使用趋势")
-          }</p></div>
           <div class="excellent-fusion-slides">
             <span>四页规划</span>
             <ol>
@@ -317,47 +268,39 @@ export function renderAssetsHtml(brand, state, helpers) {
   const assets = resolveAssetFlags(state);
   const hasLogo = Boolean(brand?.logo);
   const selectedCount = assets.productImageIds.length;
-  const mode = state.assetMode || REMIX_ASSET_MODES.NONE;
+  const logoActive = assets.useBrandLogo;
+  const productActive = selectedCount > 0;
   return `
-    <section class="excellent-remix-section ${state.sections?.assetsCollapsed ? "is-collapsed" : ""}">
-      <div class="excellent-remix-section-head">
-        <h3>7. 素材使用方式（可选）</h3>
-        <button type="button" class="ghost-btn small-btn" data-remix-toggle-assets>${
-          state.sections?.assetsCollapsed ? "展开" : "收起"
-        }</button>
-      </div>
-      <div class="excellent-asset-modes" ${state.sections?.assetsCollapsed ? "hidden" : ""}>
-        <label class="excellent-asset-mode ${mode === REMIX_ASSET_MODES.NONE ? "is-selected" : ""}">
-          <input type="radio" name="remix-asset-mode" data-remix-asset-mode="${REMIX_ASSET_MODES.NONE}" ${
-            mode === REMIX_ASSET_MODES.NONE ? "checked" : ""
-          } />
-          <div>
-            <strong>不使用上传素材</strong>
-            <p>根据品牌档案与产品描述原创生成（默认）</p>
-          </div>
-        </label>
-        <div class="excellent-asset-mode ${mode === REMIX_ASSET_MODES.LOGO || mode === REMIX_ASSET_MODES.LOGO_AND_PRODUCT ? "is-selected" : ""}">
-          <div class="excellent-logo-block">
+    <section class="excellent-remix-section">
+      <h3>6. 素材使用方式（可选）</h3>
+      <p class="excellent-remix-hint excellent-asset-intro">默认按品牌档案与产品描述原创生成。需要时可叠加品牌 Logo 与产品实拍图。</p>
+      <div class="excellent-asset-unified">
+        <div class="excellent-asset-block ${logoActive ? "is-selected" : ""}">
+          <div class="excellent-asset-block-head">
             <strong>品牌 Logo</strong>
-            ${
-              hasLogo
-                ? `
+          </div>
+          ${
+            hasLogo
+              ? `
+            <div class="excellent-logo-row">
+              <img class="excellent-logo-thumb" src="${authenticatedImageSrc(brand.logo.url)}" alt="品牌 Logo" />
               <label class="excellent-logo-check">
-                <input type="checkbox" data-remix-logo ${assets.useBrandLogo ? "checked" : ""} />
+                <input type="checkbox" data-remix-logo ${logoActive ? "checked" : ""} />
                 <span>使用品牌 Logo</span>
               </label>
-              <img class="excellent-logo-thumb" src="${authenticatedImageSrc(brand.logo.url)}" alt="品牌 Logo" />
-            `
-                : `
-              <p class="excellent-remix-hint">当前品牌未配置 Logo</p>
-              <button type="button" class="secondary-btn small-btn" data-remix-go-brand>前往品牌档案上传</button>
-            `
-            }
-          </div>
+            </div>
+          `
+              : `
+            <p class="excellent-remix-hint">当前品牌未配置 Logo</p>
+            <button type="button" class="secondary-btn small-btn" data-remix-go-brand>前往品牌档案上传</button>
+          `
+          }
         </div>
-        <div class="excellent-asset-mode ${mode === REMIX_ASSET_MODES.PRODUCT || mode === REMIX_ASSET_MODES.LOGO_AND_PRODUCT ? "is-selected" : ""}">
-          <strong>产品实拍图</strong>
-          <p>已选择 ${selectedCount} / ${MAX_REMIX_PRODUCT_IMAGES}</p>
+        <div class="excellent-asset-block ${productActive ? "is-selected" : ""}">
+          <div class="excellent-asset-block-head">
+            <strong>产品实拍图</strong>
+            <span class="excellent-asset-count">已选 ${selectedCount} / ${MAX_REMIX_PRODUCT_IMAGES}</span>
+          </div>
           <button type="button" class="secondary-btn small-btn" data-remix-open-product-picker ${
             state.brandId ? "" : "disabled"
           }>从当前品牌素材库选择</button>
@@ -386,9 +329,9 @@ export function renderExcellentRemixBodyHtml({
     ${renderReferenceCardHtml(item, state, helpers)}
     <section class="excellent-remix-section">
       <h3>2. 选择品牌</h3>
-      <label class="excellent-remix-wide">
+      <label class="excellent-remix-brand-field">
         <span>品牌</span>
-        <select data-remix-field="brand">
+        <select class="excellent-remix-brand-select" data-remix-field="brand">
           ${(helpers.brands || [])
             .map(
               (entry) =>
@@ -437,7 +380,6 @@ export function renderExcellentRemixBodyHtml({
       }</p>
     </section>
     ${renderContentDirectionHtml(state, helpers)}
-    ${renderTrendSectionHtml(state, helpers)}
     ${renderFusionPlanHtml(state, brandReady, helpers)}
     ${renderAssetsHtml(brand, state, helpers)}
     <div class="excellent-originality-note">只学习参考笔记的信息节奏、页面角色和内容方法；不会复制原文、原图人物、原品牌、原 Logo、水印或具体版式。参考笔记图片不会自动进入最终生图。</div>
@@ -483,5 +425,3 @@ export function renderBrandProductPickerHtml(state, helpers) {
     <p class="excellent-remix-hint">最多选择 ${MAX_REMIX_PRODUCT_IMAGES} 张。已选 ${selected.size} 张。仅显示当前品牌 product 素材。</p>
   `;
 }
-
-export { canSubmitExcellentRemix, canGenerateFusionPlan, getSelectedSmartDirection };

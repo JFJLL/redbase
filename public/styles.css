@@ -4922,24 +4922,57 @@ textarea {
   line-height: 1.55;
 }
 .excellent-mode-tabs {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 12px;
-}
-.excellent-mode-tabs label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: 999px;
+  margin-bottom: 14px;
+  padding: 4px;
+  border-radius: 14px;
   border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.excellent-mode-tabs .excellent-mode-tab,
+.excellent-mode-tabs label.excellent-mode-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  gap: 0;
+  margin: 0;
+  padding: 10px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
   cursor: pointer;
   font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.35;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.excellent-mode-tabs label.is-active {
-  border-color: rgba(234, 74, 127, 0.5);
+.excellent-mode-tabs .excellent-mode-tab input,
+.excellent-mode-tabs label.excellent-mode-tab input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.excellent-mode-tabs .excellent-mode-tab span {
+  font-weight: 700;
+}
+.excellent-mode-tabs .excellent-mode-tab.is-active,
+.excellent-mode-tabs label.excellent-mode-tab.is-active {
+  border-color: rgba(234, 74, 127, 0.45);
   background: var(--pink-soft);
+  color: var(--text);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.excellent-mode-panel {
+  display: grid;
+  gap: 10px;
 }
 .excellent-direction-grid,
 .excellent-idea-list,
@@ -4947,14 +4980,21 @@ textarea {
   display: grid;
   gap: 10px;
 }
+.excellent-idea-list {
+  max-height: min(280px, 36vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
 .excellent-direction-card,
 .excellent-idea-card,
-.excellent-trend-card,
-.excellent-asset-mode {
+.excellent-trend-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
   align-items: start;
+  width: auto;
   padding: 12px;
   border-radius: 12px;
   border: 1px solid var(--line);
@@ -4963,8 +5003,7 @@ textarea {
 }
 .excellent-direction-card.is-selected,
 .excellent-idea-card.is-selected,
-.excellent-trend-card.is-selected,
-.excellent-asset-mode.is-selected {
+.excellent-trend-card.is-selected {
   border-color: rgba(234, 74, 127, 0.55);
   background: rgba(234, 74, 127, 0.08);
 }
@@ -4984,15 +5023,58 @@ textarea {
   color: var(--muted);
   font-size: 0.72rem;
 }
+.excellent-remix-brand-field {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+.excellent-remix-brand-field > span {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 700;
+}
 .excellent-remix-search,
 .excellent-remix-section textarea,
-.excellent-remix-section select {
+.excellent-remix-section select,
+.excellent-remix-brand-select {
   width: 100%;
-  border: 1px solid var(--line);
+  min-height: 44px;
+  border: 1px solid rgba(20, 16, 16, 0.12);
   border-radius: 10px;
-  background: #161428;
+  background: #fff;
   color: var(--text);
   padding: 10px 12px;
+  outline: none;
+}
+.excellent-remix-brand-select,
+.excellent-remix-section select.excellent-remix-brand-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #fff;
+  background-image: linear-gradient(45deg, transparent 50%, #8a7f84 50%),
+    linear-gradient(135deg, #8a7f84 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 3px), calc(100% - 12px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  color: #161214;
+  border: 1px solid rgba(20, 16, 16, 0.14);
+  padding-right: 36px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.excellent-remix-brand-select:hover {
+  border-color: rgba(216, 68, 68, 0.35);
+}
+.excellent-remix-brand-select:focus,
+.excellent-remix-section select:focus,
+.excellent-remix-section textarea:focus,
+.excellent-remix-search:focus {
+  border-color: rgba(216, 68, 68, 0.55);
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.1);
+}
+.excellent-remix-brand-select option {
+  background: #fff;
+  color: #161214;
 }
 .excellent-remix-section textarea { min-height: 110px; resize: vertical; }
 .excellent-toggle-row {
@@ -5015,14 +5097,52 @@ textarea {
 .excellent-fusion-slides em { font-style: normal; color: var(--text); }
 .excellent-fusion-slides .muted,
 .idea-copy.muted { color: var(--muted); }
-.excellent-asset-modes { display: grid; gap: 10px; }
-.excellent-logo-block { display: grid; gap: 8px; }
+.excellent-asset-intro { margin-bottom: 12px; }
+.excellent-asset-unified {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.excellent-asset-block {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.excellent-asset-block.is-selected {
+  border-color: rgba(234, 74, 127, 0.45);
+  background: rgba(234, 74, 127, 0.08);
+}
+.excellent-asset-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.excellent-asset-block-head strong {
+  font-size: 0.88rem;
+}
+.excellent-asset-count {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+.excellent-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .excellent-logo-thumb {
   width: 56px;
   height: 56px;
   object-fit: contain;
   border-radius: 8px;
   background: #fff;
+  border: 1px solid var(--line);
 }
 .excellent-product-picker-grid {
   display: grid;
@@ -5228,6 +5348,15 @@ body.excellent-modal-open { overflow: hidden; }
   .excellent-product-picker-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .xhs-slide-grid { grid-template-columns: 1fr; }
   .excellent-remix-form { max-height: min(62vh, 640px); }
+  .excellent-mode-tabs {
+    grid-template-columns: 1fr;
+  }
+  .excellent-asset-unified {
+    grid-template-columns: 1fr;
+  }
+  .excellent-idea-list {
+    max-height: min(240px, 34vh);
+  }
 }
 @media (max-width: 420px) {
   .excellent-content-grid,

@@ -39,6 +39,7 @@ export function createExcellentRemixState(seed = {}) {
     existingIdeaQuery: "",
     selectedExistingIdea: null,
     customDirection: "",
+    // Trend context UI removed; always keep closed for fusion requests.
     useTrendContext: false,
     trendRecommendations: [],
     selectedTrendId: null,
@@ -60,10 +61,7 @@ export function createExcellentRemixState(seed = {}) {
     brandProductImagesStatus: "idle",
     productPickerOpen: false,
     loadingBrand: false,
-    sections: {
-      assetsCollapsed: true,
-      trendCollapsed: false,
-    },
+    sections: {},
     // sessionEpoch alias kept for older call sites; real isolation uses instanceId + request ids.
     requestEpoch: Number(seed.sessionEpoch || seed.requestEpoch) || 0,
     analysisRequestId: 0,
@@ -244,8 +242,8 @@ export function buildFusionRequestBody(state) {
     existingIdeaRef: buildExistingIdeaRef(state),
     customDirection:
       state.contentDirectionMode === REMIX_CONTENT_MODES.CUSTOM ? String(state.customDirection || "").trim() : "",
-    useTrendContext: Boolean(state.useTrendContext),
-    trendId: state.useTrendContext ? state.selectedTrendId : null,
+    useTrendContext: false,
+    trendId: null,
     sourceAnalysisId: state.analysisId || state.analysis?.analysisId || "",
   };
 }

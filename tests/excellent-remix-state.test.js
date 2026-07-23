@@ -202,3 +202,16 @@ test("metadata_only defaults and platform visual detection", () => {
     false,
   );
 });
+
+test("excellent remix view module links without undefined exports", async () => {
+  const stateModuleUrl = `data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`;
+  const viewSource = fs
+    .readFileSync(path.join(__dirname, "../public/js/excellent-remix-view.js"), "utf8")
+    .replace('from "./excellent-remix-state.js"', `from "${stateModuleUrl}"`);
+  const viewModuleUrl = `data:text/javascript;base64,${Buffer.from(viewSource, "utf8").toString("base64")}`;
+
+  const viewModule = await import(viewModuleUrl);
+
+  assert.equal(typeof viewModule.renderExcellentRemixBodyHtml, "function");
+  assert.equal(typeof viewModule.renderBrandProductPickerHtml, "function");
+});

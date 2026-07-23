@@ -410,8 +410,8 @@ test("detail uses returned image count and empty-body copy without full-gallery 
   assert.equal(detail.availableImageCount, 1);
   assert.equal(detail.imageCount, 1);
   assert.equal(detail.item.imageUrls.length, 1);
-  assert.match(detail.message, /原笔记正文暂未由接口提供/);
-  assert.doesNotMatch(detail.message || "", /完整图集|完整内容/);
+  assert.equal(detail.message || "", "");
+  assert.doesNotMatch(detail.message || "", /完整图集|完整内容|原笔记正文暂未由接口提供/);
 });
 
 test("warmAllExcellentContentBoards fails if any board fails", async () => {

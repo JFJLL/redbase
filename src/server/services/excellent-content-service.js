@@ -738,8 +738,8 @@ function noteHasCompleteImages(item) {
 }
 
 function buildDetailMessage(item) {
-  const hasContent = Boolean(String(item?.content || "").trim());
-  if (!hasContent) return "原笔记正文暂未由接口提供。";
+  // List-sourced notes often lack body text; do not surface placeholder copy to clients.
+  void item;
   return "";
 }
 
@@ -821,7 +821,7 @@ async function getExcellentContentDetail(
     imageCount: 0,
     updatedAt: "",
     detailUnavailable: true,
-    message: "原笔记正文暂未由接口提供。",
+    message: "",
   };
 }
 

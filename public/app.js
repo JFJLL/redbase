@@ -47,7 +47,6 @@ import {
   MAX_REMIX_PRODUCT_IMAGES,
   toggleLearningFocus,
   invalidateAfterInputChange,
-  getSelectedSmartDirection,
   canGenerateFusionPlan,
   canSubmitExcellentRemix,
   buildFusionRequestBody,
@@ -66,7 +65,6 @@ import {
 import {
   fetchRemixAnalysis,
   fetchContentDirections,
-  fetchRecommendTrends,
   fetchFusionPlan,
   fetchBrandRemixIdeas,
   fetchBrandProductImages,
@@ -4828,7 +4826,11 @@ function renderExcellentDetailCarousel() {
           <div><strong>${formatCompactMetric(item.metrics?.favoriteCount)}</strong><span>收藏</span></div>
           <div><strong>${formatCompactMetric(item.metrics?.commentCount)}</strong><span>评论</span></div>
         </div>
-        <div class="excellent-detail-body">${escapeHtml(String(item.content || "").trim() ? item.content : "原笔记正文暂未由接口提供。")}</div>
+        ${
+          String(item.content || "").trim()
+            ? `<div class="excellent-detail-body">${escapeHtml(item.content)}</div>`
+            : ""
+        }
         <div class="excellent-detail-actions">
           <a href="${escapeHtml(item.noteUrl || "#")}" target="_blank" rel="noopener noreferrer">查看原笔记</a>
           <button class="primary-btn excellent-detail-remix" data-excellent-remix="${escapeHtml(String(item.noteId || item.id))}" type="button">一键仿图文</button>
@@ -4908,14 +4910,8 @@ async function openExcellentContentDetail(noteId) {
       };
       state.excellentDetail.item = merged;
       state.excellentDetail.complete = Boolean(result.complete);
-      // Never claim "完整图集"; only surface empty-body / unavailable messages.
-      if (!String(merged.content || "").trim() && result.message) {
-        state.excellentDetail.error = result.message;
-      } else {
-        state.excellentDetail.error = "";
-      }
-    } else if (result?.message) {
-      state.excellentDetail.error = result.message;
+      // Empty body is normal for list-sourced notes; do not show placeholder copy.
+      state.excellentDetail.error = "";
     }
   } catch (error) {
     if (isStaleSessionRequest(error) || requestId !== state.excellentDetail.requestId) return;
@@ -5148,57 +5144,6 @@ async function loadExcellentRemixDirections({ auto = false } = {}) {
   }
 }
 
-async function loadExcellentRemixTrendRecommendations() {
-  if (!excellentRemixState || !excellentRemixState.useTrendContext) return;
-  const requestId = nextRemixRequestId(excellentRemixState, "trendRequestId");
-  const token = captureRemixRequestToken(excellentRemixState, "trendRequestId", requestId);
-  const noteId = excellentRemixState.noteId;
-  const board = excellentRemixState.board;
-  const brandId = Number(excellentRemixState.brandId);
-  try {
-    const body = {
-      brandId,
-      board,
-      contentMode: excellentRemixState.contentDirectionMode,
-      direction: getSelectedSmartDirection(excellentRemixState),
-      existingIdeaRef: excellentRemixState.selectedExistingIdea
-        ? {
-            scope: excellentRemixState.selectedExistingIdea.scope === "snapshot" ? "snapshot" : "current",
-            analysisId: excellentRemixState.selectedExistingIdea.analysisId ?? null,
-            trendId: excellentRemixState.selectedExistingIdea.trendId,
-            ideaIndex: excellentRemixState.selectedExistingIdea.ideaIndex,
-          }
-        : null,
-      customDirection: excellentRemixState.customDirection,
-      sourceAnalysisId: excellentRemixState.analysisId || "",
-    };
-    const result = await fetchRecommendTrends(request, noteId, body);
-    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
-    excellentRemixState.trendRecommendations = result.recommendations || [];
-    excellentRemixState.trendRecommendMessage = result.message || "";
-    if (!excellentRemixState.trendRecommendations.length) {
-      excellentRemixState.selectedTrendId = null;
-    } else if (
-      !excellentRemixState.trendRecommendations.some(
-        (item) => Number(item.trendId) === Number(excellentRemixState.selectedTrendId),
-      )
-    ) {
-      excellentRemixState.selectedTrendId = excellentRemixState.trendRecommendations[0].trendId;
-    }
-    renderExcellentRemix();
-  } catch (error) {
-    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
-      return;
-    }
-    excellentRemixState.useTrendContext = false;
-    excellentRemixState.trendRecommendations = [];
-    excellentRemixState.selectedTrendId = null;
-    excellentRemixState.trendRecommendMessage = "趋势推荐失败，已退回不使用趋势。";
-    showToast(excellentRemixState.trendRecommendMessage);
-    renderExcellentRemix();
-  }
-}
-
 function renderExcellentRemix() {
   const root = document.getElementById("excellentRemixBody");
   const submitButton = document.getElementById("submitExcellentRemix");
@@ -5242,11 +5187,6 @@ function renderExcellentRemix() {
   });
   root.querySelector("[data-remix-build-fusion]")?.addEventListener("click", () => {
     buildExcellentRemixFusionPlan().catch(() => {});
-  });
-  root.querySelector("[data-remix-toggle-assets]")?.addEventListener("click", () => {
-    if (!excellentRemixState) return;
-    excellentRemixState.sections.assetsCollapsed = !excellentRemixState.sections.assetsCollapsed;
-    renderExcellentRemix();
   });
   root.querySelector("[data-remix-open-product-picker]")?.addEventListener("click", () => {
     openExcellentRemixProductPicker().catch(() => {});
@@ -5438,9 +5378,6 @@ async function handleExcellentRemixChange(event) {
   if (target.dataset.remixSmartDirection) {
     excellentRemixState.selectedSmartDirectionId = target.dataset.remixSmartDirection;
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
-    if (excellentRemixState.useTrendContext) {
-      await loadExcellentRemixTrendRecommendations();
-    }
     renderExcellentRemix();
     return;
   }
@@ -5450,9 +5387,6 @@ async function handleExcellentRemixChange(event) {
     const hit = (excellentRemixState.existingIdeas || []).find((idea) => buildExistingIdeaKey(idea) === key);
     excellentRemixState.selectedExistingIdea = hit || parsed;
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
-    if (excellentRemixState.useTrendContext) {
-      await loadExcellentRemixTrendRecommendations();
-    }
     renderExcellentRemix();
     return;
   }
@@ -5484,31 +5418,6 @@ async function handleExcellentRemixChange(event) {
       search.focus();
       search.selectionStart = search.selectionEnd = search.value.length;
     }
-    return;
-  }
-  if (target.hasAttribute("data-remix-trend-toggle")) {
-    excellentRemixState.useTrendContext = Boolean(target.checked);
-    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
-    if (excellentRemixState.useTrendContext) {
-      await loadExcellentRemixTrendRecommendations();
-    } else {
-      excellentRemixState.selectedTrendId = null;
-      excellentRemixState.trendRecommendations = [];
-    }
-    renderExcellentRemix();
-    return;
-  }
-  if (target.dataset.remixTrendId) {
-    excellentRemixState.selectedTrendId = Number(target.dataset.remixTrendId);
-    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
-    renderExcellentRemix();
-    return;
-  }
-  if (target.dataset.remixAssetMode === REMIX_ASSET_MODES.NONE) {
-    excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
-    excellentRemixState.useBrandLogo = false;
-    excellentRemixState.productImageIds = [];
-    renderExcellentRemix();
     return;
   }
   if (target.hasAttribute("data-remix-logo")) {
