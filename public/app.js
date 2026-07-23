@@ -40,6 +40,36 @@ import {
   excellentRefreshResponseMatches,
   rollbackExcellentDraftFilters,
 } from "./js/excellent-list-state.js";
+import {
+  createExcellentRemixState,
+  REMIX_CONTENT_MODES,
+  REMIX_ASSET_MODES,
+  MAX_REMIX_PRODUCT_IMAGES,
+  toggleLearningFocus,
+  invalidateAfterInputChange,
+  filterExistingIdeas,
+  getSelectedSmartDirection,
+  canGenerateFusionPlan,
+  canSubmitExcellentRemix,
+  resolveAssetFlags,
+  buildFusionRequestBody,
+  buildGenerationPayload,
+} from "./js/excellent-remix-state.js";
+import {
+  fetchRemixAnalysis,
+  fetchContentDirections,
+  fetchRecommendTrends,
+  fetchFusionPlan,
+  fetchBrandRemixIdeas,
+  fetchBrandProductImages,
+  previewExcellentRemix,
+  generateExcellentRemixSlide,
+  completeExcellentRemix,
+} from "./js/excellent-remix-api.js";
+import {
+  renderExcellentRemixBodyHtml,
+  renderBrandProductPickerHtml,
+} from "./js/excellent-remix-view.js";
 
 let sessionEpoch = 0;
 
@@ -4850,40 +4880,175 @@ async function openExcellentRemix(noteId) {
   const item = findExcellentContentById(noteId);
   if (!item) return;
   closeExcellentContentDetail();
-  excellentRemixState = {
+  const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
+  const slice = getExcellentBoardState(board);
+  const openEpoch = sessionEpoch;
+  excellentRemixState = createExcellentRemixState({
     noteId: String(item.noteId || item.id),
+    board,
+    contentSource: slice.contentSource || "all",
+    categoryPath: slice.categoryPath || "",
+    industryPath: slice.industryPath || "",
     brandId: state.selectedBrandId || state.brands[0]?.id || null,
-    trendId: null,
-    ideaIndex: 0,
-    productImageIds: [],
-    useBrandLogo: true,
-    focus: ["structure", "visual"],
-    loadingBrand: false,
-  };
+  });
+  excellentRemixState.requestEpoch = openEpoch;
   document.getElementById("excellentRemixModal")?.classList.add("is-open");
   setExcellentModalOpen(true);
   renderExcellentRemix();
+  // On-demand analysis only — never batch-analyze list items.
+  loadExcellentRemixAnalysis(openEpoch).catch(() => {});
   if (excellentRemixState.brandId) {
-    excellentRemixState.loadingBrand = true;
-    renderExcellentRemix();
-    try {
-      await ensureBrandDetailLoaded(excellentRemixState.brandId);
-    } catch (error) {
-      if (!isStaleSessionRequest(error)) showToast(`品牌详情加载失败：${error.message}`);
-    } finally {
-      if (excellentRemixState) {
-        excellentRemixState.loadingBrand = false;
-        renderExcellentRemix();
-      }
-    }
+    await loadExcellentRemixBrandContext(excellentRemixState.brandId, openEpoch);
   }
 }
 
 function closeExcellentRemix() {
   document.getElementById("excellentRemixModal")?.classList.remove("is-open");
+  document.getElementById("excellentRemixProductPickerModal")?.classList.remove("is-open");
+  if (excellentRemixState) excellentRemixState.productPickerOpen = false;
   excellentRemixState = null;
   if (!document.getElementById("excellentContentModal")?.classList.contains("is-open")) {
     setExcellentModalOpen(false);
+  }
+}
+
+function isExcellentRemixEpochCurrent(epoch) {
+  return excellentRemixState && epoch === excellentRemixState.requestEpoch && epoch === sessionEpoch;
+}
+
+async function loadExcellentRemixAnalysis(epoch) {
+  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch)) return;
+  excellentRemixState.analysisStatus = "loading";
+  excellentRemixState.analysisError = "";
+  renderExcellentRemix();
+  try {
+    const result = await fetchRemixAnalysis(request, excellentRemixState.noteId, {
+      board: excellentRemixState.board,
+      contentSource: excellentRemixState.contentSource,
+      categoryPath: excellentRemixState.categoryPath,
+      industryPath: excellentRemixState.industryPath,
+    });
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    const analysis = result.analysis || result;
+    excellentRemixState.analysis = analysis;
+    excellentRemixState.analysisId = analysis.analysisId || "";
+    excellentRemixState.analysisStatus =
+      analysis.analysisMode === "metadata_only" || analysis.degraded ? "degraded" : "ready";
+    if (analysis.degraded) excellentRemixState.analysisStatus = "degraded";
+    if (excellentRemixState.analysisStatus === "ready" && analysis.analysisMode === "metadata_only") {
+      excellentRemixState.analysisStatus = "degraded";
+    }
+    if (!analysis.analysisMode) excellentRemixState.analysisStatus = "degraded";
+    renderExcellentRemix();
+  } catch (error) {
+    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.analysisStatus = "error";
+    excellentRemixState.analysisError = error.message || "分析失败";
+    // Keep modal open; fusion can still use server-side degraded analysis.
+    excellentRemixState.analysisStatus = "degraded";
+    renderExcellentRemix();
+  }
+}
+
+async function loadExcellentRemixBrandContext(brandId, epoch) {
+  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch)) return;
+  excellentRemixState.loadingBrand = true;
+  excellentRemixState.productImageIds = [];
+  excellentRemixState.useBrandLogo = false;
+  excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
+  excellentRemixState.selectedExistingIdea = null;
+  excellentRemixState.smartDirections = [];
+  excellentRemixState.selectedSmartDirectionId = "";
+  excellentRemixState.trendRecommendations = [];
+  excellentRemixState.selectedTrendId = null;
+  excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+  renderExcellentRemix();
+  try {
+    await ensureBrandDetailLoaded(brandId);
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    const ideasResult = await fetchBrandRemixIdeas(request, brandId);
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.existingIdeas = ideasResult.ideas || [];
+    if (excellentRemixState.contentDirectionMode === REMIX_CONTENT_MODES.SMART) {
+      await loadExcellentRemixDirections(epoch);
+    }
+  } catch (error) {
+    if (!isStaleSessionRequest(error) && isExcellentRemixEpochCurrent(epoch)) {
+      showToast(`品牌详情加载失败：${error.message}`);
+    }
+  } finally {
+    if (excellentRemixState && isExcellentRemixEpochCurrent(epoch)) {
+      excellentRemixState.loadingBrand = false;
+      renderExcellentRemix();
+    }
+  }
+}
+
+async function loadExcellentRemixDirections(epoch) {
+  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch) || !excellentRemixState.brandId) return;
+  excellentRemixState.directionsStatus = "loading";
+  excellentRemixState.directionsError = "";
+  renderExcellentRemix();
+  try {
+    const result = await fetchContentDirections(request, excellentRemixState.noteId, {
+      board: excellentRemixState.board,
+      brandId: Number(excellentRemixState.brandId),
+      sourceAnalysisId: excellentRemixState.analysisId || "",
+      learningFocus: excellentRemixState.learningFocus,
+    });
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.smartDirections = result.directions || [];
+    excellentRemixState.selectedSmartDirectionId = excellentRemixState.smartDirections[0]?.id || "";
+    excellentRemixState.directionsStatus = "ready";
+    if (result.analysisId) excellentRemixState.analysisId = result.analysisId;
+    renderExcellentRemix();
+  } catch (error) {
+    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.directionsStatus = "error";
+    excellentRemixState.directionsError = error.message || "内容方向生成失败";
+    renderExcellentRemix();
+  }
+}
+
+async function loadExcellentRemixTrendRecommendations(epoch) {
+  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch) || !excellentRemixState.useTrendContext) return;
+  try {
+    const body = {
+      brandId: Number(excellentRemixState.brandId),
+      board: excellentRemixState.board,
+      contentMode: excellentRemixState.contentDirectionMode,
+      direction: getSelectedSmartDirection(excellentRemixState),
+      existingIdeaRef: excellentRemixState.selectedExistingIdea
+        ? {
+            trendId: excellentRemixState.selectedExistingIdea.trendId,
+            ideaIndex: excellentRemixState.selectedExistingIdea.ideaIndex,
+          }
+        : null,
+      customDirection: excellentRemixState.customDirection,
+      sourceAnalysisId: excellentRemixState.analysisId || "",
+    };
+    const result = await fetchRecommendTrends(request, excellentRemixState.noteId, body);
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.trendRecommendations = result.recommendations || [];
+    excellentRemixState.trendRecommendMessage = result.message || "";
+    if (!excellentRemixState.trendRecommendations.length) {
+      excellentRemixState.selectedTrendId = null;
+    } else if (
+      !excellentRemixState.trendRecommendations.some(
+        (item) => Number(item.trendId) === Number(excellentRemixState.selectedTrendId),
+      )
+    ) {
+      excellentRemixState.selectedTrendId = excellentRemixState.trendRecommendations[0].trendId;
+    }
+    renderExcellentRemix();
+  } catch (error) {
+    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.useTrendContext = false;
+    excellentRemixState.trendRecommendations = [];
+    excellentRemixState.selectedTrendId = null;
+    excellentRemixState.trendRecommendMessage = "趋势推荐失败，已退回不使用趋势。";
+    showToast(excellentRemixState.trendRecommendMessage);
+    renderExcellentRemix();
   }
 }
 
@@ -4896,265 +5061,541 @@ function renderExcellentRemix() {
     if (submitButton) submitButton.disabled = true;
     return;
   }
-  const item = findExcellentContentById(excellentRemixState.noteId);
+  const item = findExcellentContentById(excellentRemixState.noteId, excellentRemixState.board);
   const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
-  const brandReady = brand && isBrandDetailLoaded(brand);
-  const trends = brandReady ? flattenRemixTrends(brand) : [];
-  if (!trends.some((entry) => Number(entry.trend.id) === Number(excellentRemixState.trendId))) {
-    excellentRemixState.trendId = trends[0]?.trend.id || null;
-    excellentRemixState.ideaIndex = 0;
-  }
-  const selectedTrendEntry = trends.find((entry) => Number(entry.trend.id) === Number(excellentRemixState.trendId));
-  const ideas = selectedTrendEntry?.trend?.ideas || [];
-  if (!ideas[excellentRemixState.ideaIndex]) excellentRemixState.ideaIndex = 0;
-  const cover = safeImageSrc(item?.primaryCoverUrl || item?.imageUrls?.[0] || "");
-  const canSubmit = Boolean(brand && brandReady && selectedTrendEntry && ideas.length && !excellentRemixState.loadingBrand);
-  if (submitButton) submitButton.disabled = !canSubmit;
-
+  const brandReady = Boolean(brand && isBrandDetailLoaded(brand) && !excellentRemixState.loadingBrand);
   const emptyState = !state.brands.length
     ? `<div class="excellent-remix-empty"><strong>还没有品牌档案</strong><p>请先创建品牌，再回来完成一键仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-brand type="button">去品牌档案</button></div></div>`
-    : !brandReady && excellentRemixState.loadingBrand
+    : excellentRemixState.loadingBrand
       ? `<div class="excellent-remix-empty"><strong>正在加载品牌详情…</strong><p>请稍候。</p></div>`
-      : !trends.length
-        ? `<div class="excellent-remix-empty"><strong>当前品牌还没有趋势</strong><p>请先在趋势分析中生成热点，再回到这里仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-trends type="button">去趋势分析</button></div></div>`
-        : !ideas.length
-          ? `<div class="excellent-remix-empty"><strong>当前趋势还没有选题</strong><p>请先在内容选题页生成选题，再回来仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-ideas type="button">去内容选题</button></div></div>`
-          : "";
+      : "";
 
-  root.innerHTML = `
-    <div class="excellent-remix-template">
-      ${cover ? `<img src="${cover}" alt="" referrerpolicy="no-referrer" />` : `<div class="excellent-cover-fallback">暂无封面</div>`}
-      <div>
-        <span>参考笔记</span>
-        <strong>${escapeHtml(item?.title || "优秀内容")}</strong>
-        <p>${escapeHtml(item?.author?.nickname || "未知作者")} · 阅读 ${formatCompactMetric(item?.metrics?.readCount)}</p>
-      </div>
-    </div>
-    ${
-      emptyState ||
-      `<div class="excellent-remix-grid">
-        <label><span>1. 选择品牌</span><select data-remix-field="brand">${state.brands.map((entry) => `<option value="${entry.id}" ${Number(entry.id) === Number(excellentRemixState.brandId) ? "selected" : ""}>${escapeHtml(entry.name)}</option>`).join("")}</select></label>
-        <label><span>2. 选择趋势</span><select data-remix-field="trend">${trends.map((entry) => `<option value="${entry.trend.id}" ${Number(entry.trend.id) === Number(excellentRemixState.trendId) ? "selected" : ""}>${escapeHtml(entry.bucketTitle)} · ${escapeHtml(entry.trend.title)}</option>`).join("")}</select></label>
-        <label class="excellent-remix-wide"><span>3. 选择选题</span><select data-remix-field="idea">${ideas.map((idea, index) => `<option value="${index}" ${index === excellentRemixState.ideaIndex ? "selected" : ""}>${escapeHtml(idea.title)}</option>`).join("")}</select></label>
-      </div>`
-    }
-    <section class="excellent-remix-options">
-      <h3>想重点学习什么</h3>
-      <div class="excellent-check-row">
-        ${[["structure", "信息结构"], ["visual", "视觉语言"], ["hook", "封面钩子"], ["conversion", "收藏转化"]].map(([value, label]) => `<label><input data-remix-focus="${value}" type="checkbox" ${excellentRemixState.focus.includes(value) ? "checked" : ""} /><span>${label}</span></label>`).join("")}
-      </div>
-    </section>
-    <section class="excellent-remix-options">
-      <h3>产品与品牌素材</h3>
-      <label class="excellent-logo-check"><input data-remix-logo type="checkbox" ${brand?.logo && excellentRemixState.useBrandLogo ? "checked" : ""} ${brand?.logo ? "" : "disabled"} /><span>${brand?.logo ? "在合适页面使用品牌 Logo" : "当前品牌还没有 Logo"}</span></label>
-      <div class="excellent-product-picker">
-        ${
-          state.productImageLibrary.length
-            ? state.productImageLibrary
-                .map(
-                  (image) =>
-                    `<label><input data-remix-product="${image.id}" type="checkbox" ${excellentRemixState.productImageIds.includes(image.id) ? "checked" : ""} /><img src="${authenticatedImageSrc(image.url)}" alt="${escapeHtml(image.originalName || "产品图")}" /><span>${escapeHtml(image.originalName || "产品图")}</span></label>`,
-                )
-                .join("")
-            : `<p>还没有上传过产品图，仍可先生成图文方案。</p>`
-        }
-      </div>
-    </section>
-    <div class="excellent-originality-note">只学习参考笔记的信息节奏、页面角色和内容方法；不会复制原文、原图人物、原品牌、原 Logo、水印或具体版式。</div>
-  `;
+  root.innerHTML = renderExcellentRemixBodyHtml({
+    state: excellentRemixState,
+    item,
+    brand,
+    brandReady,
+    emptyStateHtml: emptyState,
+    helpers: {
+      escapeHtml,
+      safeImageSrc,
+      authenticatedImageSrc,
+      formatCompactMetric,
+      brands: state.brands,
+    },
+  });
+
+  if (submitButton) {
+    submitButton.disabled = !canSubmitExcellentRemix(excellentRemixState, brandReady);
+  }
 
   root.querySelector("[data-remix-go-brand]")?.addEventListener("click", () => {
     closeExcellentRemix();
     switchTab("brands");
   });
-  root.querySelector("[data-remix-go-trends]")?.addEventListener("click", () => {
-    closeExcellentRemix();
-    switchTab("trends");
+  root.querySelector("[data-remix-build-fusion]")?.addEventListener("click", () => {
+    buildExcellentRemixFusionPlan().catch(() => {});
   });
-  root.querySelector("[data-remix-go-ideas]")?.addEventListener("click", () => {
-    closeExcellentRemix();
-    switchTab("ideas");
+  root.querySelector("[data-remix-toggle-assets]")?.addEventListener("click", () => {
+    if (!excellentRemixState) return;
+    excellentRemixState.sections.assetsCollapsed = !excellentRemixState.sections.assetsCollapsed;
+    renderExcellentRemix();
   });
+  root.querySelector("[data-remix-open-product-picker]")?.addEventListener("click", () => {
+    openExcellentRemixProductPicker().catch(() => {});
+  });
+
+  if (excellentRemixState.productPickerOpen) {
+    renderExcellentRemixProductPicker();
+  }
+}
+
+async function buildExcellentRemixFusionPlan() {
+  if (!excellentRemixState) return;
+  const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
+  const brandReady = brand && isBrandDetailLoaded(brand);
+  if (!canGenerateFusionPlan(excellentRemixState, brandReady)) {
+    showToast("请先完成品牌、参考分析与内容方向选择。");
+    return;
+  }
+  const epoch = excellentRemixState.requestEpoch;
+  excellentRemixState.fusionStatus = "loading";
+  excellentRemixState.fusionError = "";
+  renderExcellentRemix();
+  try {
+    const result = await fetchFusionPlan(request, excellentRemixState.noteId, buildFusionRequestBody(excellentRemixState));
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.fusionPlan = result.fusionPlan || result;
+    excellentRemixState.fusionStatus = "ready";
+    if (excellentRemixState.fusionPlan?.analysisId) {
+      excellentRemixState.analysisId = excellentRemixState.fusionPlan.analysisId;
+    }
+    renderExcellentRemix();
+  } catch (error) {
+    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.fusionStatus = "error";
+    excellentRemixState.fusionError = error.message || "融合方案生成失败";
+    excellentRemixState.fusionPlan = null;
+    renderExcellentRemix();
+  }
+}
+
+async function openExcellentRemixProductPicker() {
+  if (!excellentRemixState?.brandId) return;
+  const epoch = excellentRemixState.requestEpoch;
+  excellentRemixState.productPickerOpen = true;
+  excellentRemixState.brandProductImagesStatus = "loading";
+  document.getElementById("excellentRemixProductPickerModal")?.classList.add("is-open");
+  renderExcellentRemixProductPicker();
+  try {
+    const result = await fetchBrandProductImages(request, excellentRemixState.brandId);
+    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.brandProductImages = result.images || [];
+    excellentRemixState.brandProductImagesStatus = "ready";
+    renderExcellentRemixProductPicker();
+  } catch (error) {
+    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    excellentRemixState.brandProductImages = [];
+    excellentRemixState.brandProductImagesStatus = "error";
+    excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
+    excellentRemixState.productImageIds = [];
+    showToast(`产品素材加载失败：${error.message}`);
+    renderExcellentRemixProductPicker();
+  }
+}
+
+function renderExcellentRemixProductPicker() {
+  const root = document.getElementById("excellentRemixProductPickerBody");
+  if (!root || !excellentRemixState) return;
+  root.innerHTML = renderBrandProductPickerHtml(excellentRemixState, {
+    escapeHtml,
+    authenticatedImageSrc,
+  });
+}
+
+function closeExcellentRemixProductPicker() {
+  document.getElementById("excellentRemixProductPickerModal")?.classList.remove("is-open");
+  if (excellentRemixState) {
+    excellentRemixState.productPickerOpen = false;
+    if (excellentRemixState.productImageIds?.length) {
+      excellentRemixState.assetMode =
+        excellentRemixState.useBrandLogo ? REMIX_ASSET_MODES.LOGO_AND_PRODUCT : REMIX_ASSET_MODES.PRODUCT;
+    }
+    renderExcellentRemix();
+  }
 }
 
 async function handleExcellentRemixChange(event) {
   if (!excellentRemixState) return;
-  const field = event.target.dataset.remixField;
-  if (field === "brand") {
-    excellentRemixState.brandId = Number(event.target.value);
-    excellentRemixState.trendId = null;
-    excellentRemixState.ideaIndex = 0;
-    excellentRemixState.loadingBrand = true;
+  const target = event.target;
+  const epoch = excellentRemixState.requestEpoch;
+
+  if (target.dataset.remixField === "brand") {
+    excellentRemixState.brandId = Number(target.value);
+    await loadExcellentRemixBrandContext(excellentRemixState.brandId, epoch);
+    return;
+  }
+  if (target.dataset.remixFocus) {
+    excellentRemixState.learningFocus = toggleLearningFocus(
+      excellentRemixState.learningFocus,
+      target.dataset.remixFocus,
+      target.checked,
+    );
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
     renderExcellentRemix();
-    try {
-      await ensureBrandDetailLoaded(excellentRemixState.brandId);
-    } catch (error) {
-      if (!isStaleSessionRequest(error)) showToast(`品牌详情加载失败：${error.message}`);
-    } finally {
-      if (excellentRemixState) {
-        excellentRemixState.loadingBrand = false;
-        renderExcellentRemix();
-      }
+    return;
+  }
+  if (target.dataset.remixContentMode) {
+    excellentRemixState.contentDirectionMode = target.dataset.remixContentMode;
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+    if (
+      excellentRemixState.contentDirectionMode === REMIX_CONTENT_MODES.SMART &&
+      !excellentRemixState.smartDirections.length &&
+      excellentRemixState.brandId
+    ) {
+      await loadExcellentRemixDirections(epoch);
+    }
+    renderExcellentRemix();
+    return;
+  }
+  if (target.dataset.remixSmartDirection) {
+    excellentRemixState.selectedSmartDirectionId = target.dataset.remixSmartDirection;
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+    if (excellentRemixState.useTrendContext) {
+      await loadExcellentRemixTrendRecommendations(epoch);
+    }
+    renderExcellentRemix();
+    return;
+  }
+  if (target.dataset.remixExistingIdea) {
+    const [trendId, ideaIndex] = String(target.dataset.remixExistingIdea).split(":");
+    const hit = (excellentRemixState.existingIdeas || []).find(
+      (idea) => Number(idea.trendId) === Number(trendId) && Number(idea.ideaIndex) === Number(ideaIndex),
+    );
+    excellentRemixState.selectedExistingIdea = hit || {
+      trendId: Number(trendId),
+      ideaIndex: Number(ideaIndex),
+    };
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+    if (excellentRemixState.useTrendContext) {
+      await loadExcellentRemixTrendRecommendations(epoch);
+    }
+    renderExcellentRemix();
+    return;
+  }
+  if (target.hasAttribute("data-remix-custom-direction")) {
+    excellentRemixState.customDirection = target.value || "";
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+    // Debounced re-render not needed for typing; submit button updates on fusion rebuild.
+    const submitButton = document.getElementById("submitExcellentRemix");
+    if (submitButton) {
+      const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
+      submitButton.disabled = !canSubmitExcellentRemix(
+        excellentRemixState,
+        Boolean(brand && isBrandDetailLoaded(brand)),
+      );
     }
     return;
   }
-  if (field === "trend") {
-    excellentRemixState.trendId = Number(event.target.value);
-    excellentRemixState.ideaIndex = 0;
+  if (target.hasAttribute("data-remix-idea-query")) {
+    excellentRemixState.existingIdeaQuery = target.value || "";
+    renderExcellentRemix();
+    const search = document.querySelector("[data-remix-idea-query]");
+    if (search) {
+      search.focus();
+      search.selectionStart = search.selectionEnd = search.value.length;
+    }
+    return;
+  }
+  if (target.hasAttribute("data-remix-trend-toggle")) {
+    excellentRemixState.useTrendContext = Boolean(target.checked);
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+    if (excellentRemixState.useTrendContext) {
+      await loadExcellentRemixTrendRecommendations(epoch);
+    } else {
+      excellentRemixState.selectedTrendId = null;
+      excellentRemixState.trendRecommendations = [];
+    }
     renderExcellentRemix();
     return;
   }
-  if (field === "idea") {
-    excellentRemixState.ideaIndex = Number(event.target.value);
+  if (target.dataset.remixTrendId) {
+    excellentRemixState.selectedTrendId = Number(target.dataset.remixTrendId);
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+    renderExcellentRemix();
     return;
   }
-  if (event.target.dataset.remixFocus) {
-    const value = event.target.dataset.remixFocus;
-    excellentRemixState.focus = event.target.checked
-      ? [...new Set([...excellentRemixState.focus, value])]
-      : excellentRemixState.focus.filter((item) => item !== value);
+  if (target.dataset.remixAssetMode === REMIX_ASSET_MODES.NONE) {
+    excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
+    excellentRemixState.useBrandLogo = false;
+    excellentRemixState.productImageIds = [];
+    renderExcellentRemix();
     return;
   }
-  if (event.target.hasAttribute("data-remix-logo")) {
-    excellentRemixState.useBrandLogo = event.target.checked;
+  if (target.hasAttribute("data-remix-logo")) {
+    excellentRemixState.useBrandLogo = Boolean(target.checked);
+    if (excellentRemixState.useBrandLogo) {
+      excellentRemixState.assetMode = excellentRemixState.productImageIds.length
+        ? REMIX_ASSET_MODES.LOGO_AND_PRODUCT
+        : REMIX_ASSET_MODES.LOGO;
+    } else if (excellentRemixState.productImageIds.length) {
+      excellentRemixState.assetMode = REMIX_ASSET_MODES.PRODUCT;
+    } else {
+      excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
+    }
+    renderExcellentRemix();
     return;
   }
-  if (event.target.dataset.remixProduct) {
-    const imageId = Number(event.target.dataset.remixProduct);
-    excellentRemixState.productImageIds = event.target.checked
-      ? [...new Set([...excellentRemixState.productImageIds, imageId])].slice(0, MAX_SELECTED_PRODUCT_IMAGES)
-      : excellentRemixState.productImageIds.filter((id) => id !== imageId);
+  if (target.dataset.remixPickProduct) {
+    const imageId = Number(target.dataset.remixPickProduct);
+    if (target.checked) {
+      excellentRemixState.productImageIds = [...new Set([...(excellentRemixState.productImageIds || []), imageId])].slice(
+        0,
+        MAX_REMIX_PRODUCT_IMAGES,
+      );
+    } else {
+      excellentRemixState.productImageIds = (excellentRemixState.productImageIds || []).filter((id) => id !== imageId);
+    }
+    if (excellentRemixState.productImageIds.length) {
+      excellentRemixState.assetMode = excellentRemixState.useBrandLogo
+        ? REMIX_ASSET_MODES.LOGO_AND_PRODUCT
+        : REMIX_ASSET_MODES.PRODUCT;
+    } else if (excellentRemixState.useBrandLogo) {
+      excellentRemixState.assetMode = REMIX_ASSET_MODES.LOGO;
+    } else {
+      excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
+    }
+    renderExcellentRemixProductPicker();
+    return;
   }
-}
-
-function buildExcellentRemixPack(item, brand, trend, idea, focus) {
-  const focusLabels = {
-    structure: "信息结构",
-    visual: "视觉语言",
-    hook: "封面钩子",
-    conversion: "收藏转化",
-  };
-  const focusText = (focus || []).map((key) => focusLabels[key] || key).filter(Boolean).join("、") || "信息结构";
-  const originalityGuard =
-    "只学习参考笔记的信息节奏、页面角色和内容方法；不得复制原文、原图人物、原品牌、原Logo、水印、具体版式和可识别视觉资产；生成全新的原创内容与画面。";
-  const productPoint = String(brand.product || brand.description || "产品核心价值").split(/[。；\n]/)[0].slice(0, 42);
-  const existingSlides = idea.contentAssets?.xhsCarousel?.slides || [];
-  const pageDefs = [
-    {
-      pageTask: "封面钩子，强调第一眼点击理由",
-      title: idea.hook || idea.title || `先看这篇：${String(trend.title || "").slice(0, 12)}`,
-      copy: `如果你最近在关注${String(trend.title || "这个话题").slice(0, 16)}，这篇值得先收藏。`,
-    },
-    {
-      pageTask: "用户场景或真实问题",
-      title: `真实场景里的问题`,
-      copy: idea.summary || trend.summary || `很多人在这个场景里容易踩坑。`,
-    },
-    {
-      pageTask: "品牌或产品解决方式",
-      title: `${brand.name} 的解法`,
-      copy: idea.brandFit || productPoint,
-    },
-    {
-      pageTask: "总结、行动清单或收藏理由",
-      title: "收藏这份行动清单",
-      copy: `适合 ${idea.audience || brand.audience || "目标用户"}：先记下重点，再按自己的场景调整。`,
-    },
-  ];
-  const slides = pageDefs.map((page, index) => {
-    const source = existingSlides[index] || {};
-    const title = String(source.title || page.title).slice(0, 30);
-    const copy = String(source.copy || page.copy).slice(0, 150);
-    const remixBrief = {
-      sourceType: "excellent_content",
-      sourceNoteId: String(item.noteId || item.id || ""),
-      sourceTitle: String(item.title || "").slice(0, 120),
-      sourceBoard: String(item.board || item.sourceKey || "xhs_hot"),
-      sourceCategoryPath: String(item.categoryPath || ""),
-      sourceIndustryPath: String(item.industryPath || ""),
-      sourceImageCount: Number(item.imageCount || item.imageUrls?.length || 0),
-      sourceReadCount: Number(item.metrics?.readCount || 0),
-      sourceEngagementCount: Number(item.metrics?.engagementCount || 0),
-      learningFocus: [...(focus || [])],
-      pageTask: page.pageTask,
-      pageTitle: title,
-      pageCopy: copy,
-      originalityGuard,
-    };
-    return {
-      pageLabel: `第 ${index + 1} 张`,
-      title,
-      copy,
-      visualDirection: `围绕${brand.name}与选题「${idea.title}」做原创表达，学习重点：${focusText}。`,
-      style: "小红书图文编辑感，少量短文字、强层级、真实生活气质。",
-      composition: `${page.pageTask}；3:4 竖图，一页只讲一个重点，标题克制，产品自然出现。`,
-      prompt: "",
-      remixBrief,
-      aspectRatio: "3:4",
-    };
-  });
-  const publishTitle = idea.contentAssets?.xhsCarousel?.publishTitle || idea.title;
-  const baseCaption = idea.contentAssets?.xhsCarousel?.publishCaption || idea.summary || "";
-  const tags = [...new Set([...(idea.tags || []), trend.title].filter(Boolean))].slice(0, 5);
-  return {
-    title: publishTitle,
-    publishTitle,
-    caption: baseCaption,
-    publishCaption: `${baseCaption}\n\n这次把重点拆成 4 张图：先讲场景，再给方法，最后留一份可以直接收藏的行动清单。\n\n${tags.map((tag) => `#${String(tag).replace(/^#/, "")}`).join(" ")}`.trim(),
-    aspectRatio: "3:4",
-    sourceTemplate: {
-      noteId: String(item.noteId || item.id || ""),
-      title: item.title || "",
-      sourceUrl: item.noteUrl || "",
-      source: item.board || item.sourceKey || "xhs_hot",
-      board: item.board || item.sourceKey || "xhs_hot",
-      contentSource: item.contentSource || "all",
-    },
-    remixBrief: {
-      sourceType: "excellent_content",
-      sourceNoteId: String(item.noteId || item.id || ""),
-      sourceTitle: String(item.title || "").slice(0, 120),
-      sourceBoard: String(item.board || item.sourceKey || "xhs_hot"),
-      sourceCategoryPath: String(item.categoryPath || ""),
-      sourceIndustryPath: String(item.industryPath || ""),
-      sourceImageCount: Number(item.imageCount || item.imageUrls?.length || 0),
-      sourceReadCount: Number(item.metrics?.readCount || 0),
-      sourceEngagementCount: Number(item.metrics?.engagementCount || 0),
-      learningFocus: [...(focus || [])],
-      originalityGuard,
-    },
-    slides,
-  };
 }
 
 async function submitExcellentRemix(event) {
   event.preventDefault();
   if (!excellentRemixState) return;
-  const snapshot = { ...excellentRemixState, focus: [...excellentRemixState.focus], productImageIds: [...excellentRemixState.productImageIds] };
-  const item = findExcellentContentById(snapshot.noteId);
-  const brand = state.brands.find((entry) => Number(entry.id) === Number(snapshot.brandId));
-  if (!item || !brand) return;
+  const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
+  if (!brand) return;
   await ensureBrandDetailLoaded(brand.id);
-  const selectedTrendEntry = flattenRemixTrends(brand).find((entry) => Number(entry.trend.id) === Number(snapshot.trendId));
-  const trend = selectedTrendEntry?.trend;
-  const idea = trend?.ideas?.[snapshot.ideaIndex];
-  if (!trend || !idea) {
-    showToast("请先选择有效的趋势和选题。");
+  if (!canSubmitExcellentRemix(excellentRemixState, true)) {
+    showToast("请先生成有效的融合方案（4 页）。");
     return;
   }
-  const carouselPack = buildExcellentRemixPack(item, brand, trend, idea, snapshot.focus);
-  const productImages = state.productImageLibrary.filter((image) => snapshot.productImageIds.includes(image.id));
+  const item = findExcellentContentById(excellentRemixState.noteId, excellentRemixState.board);
+  const fusionPlan = excellentRemixState.fusionPlan;
+  const genPayload = buildGenerationPayload(excellentRemixState, fusionPlan);
+  const productImages = (excellentRemixState.brandProductImages || []).filter((image) =>
+    genPayload.productImageIds.includes(image.id),
+  );
+  // Fallback: map ids to minimal objects for API if picker list was emptied after selection.
+  const productImagePayload =
+    productImages.length > 0
+      ? productImages
+      : genPayload.productImageIds.map((id) => ({ id }));
   closeExcellentRemix();
-  await generateXhsCarouselForContext({
+  await generateExcellentRemixCarousel({
     brand,
-    trend,
-    idea,
-    ideaIndex: snapshot.ideaIndex,
-    productImages,
-    useBrandLogo: Boolean(snapshot.useBrandLogo && brand.logo),
-    carouselPack,
+    fusionPlan,
     sourceCase: item,
-    aspectRatio: "3:4",
+    productImages: productImagePayload,
+    useBrandLogo: Boolean(genPayload.useBrandLogo && brand.logo),
+    contentMode: genPayload.contentMode,
+    existingIdeaRef: genPayload.existingIdeaRef,
+    ideaTitle: genPayload.ideaTitle,
+    trendTitle: genPayload.trendTitle,
+  });
+}
+
+async function generateExcellentRemixCarousel({
+  brand,
+  fusionPlan,
+  sourceCase = null,
+  productImages = [],
+  useBrandLogo = false,
+  contentMode = "smart",
+  existingIdeaRef = null,
+  ideaTitle = "",
+  trendTitle = "",
+  aspectRatio = "3:4",
+} = {}) {
+  if (!brand || !fusionPlan?.carouselPack) return;
+  const imageResult = openAssetModal({
+    kicker: "一键仿图文",
+    title: "优秀内容仿图文方案",
+    description: "基于参考方法 × 内容方向 × 品牌信息生成 4 页原创组图，可继续单张或一键生图。",
+    loadingTitle: "正在准备仿图文方案...",
+    loadingCopy: "正在校验融合方案并进入现有小红书组图预览链路。",
+  });
+
+  try {
+    const previewResult = await previewExcellentRemix(request, brand.id, {
+      aspectRatio,
+      carouselPack: fusionPlan.carouselPack,
+      contentMode,
+      existingIdeaRef,
+    });
+    updateCurrentUser(previewResult.user);
+    const previewPack = previewResult.carouselPack;
+    if (!previewPack || !Array.isArray(previewPack.slides)) {
+      throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
+    }
+    const pack = {
+      ...previewPack,
+      aspectRatio,
+      carouselGroupId: previewPack.carouselGroupId || `excellent-remix-${brand.id}-${Date.now()}`,
+      slides: enrichXhsCarouselSlides(previewPack),
+    };
+    const flags = {
+      isGeneratingAll: false,
+      completed: false,
+      creditEventId: null,
+    };
+    const taskQueue = [];
+    let activeTaskCount = 0;
+    let activeGenerateTaskCount = 0;
+    let imageJobSubmissionChain = Promise.resolve();
+    let renderAndBind = () => {};
+
+    const completeIfReady = async () => {
+      if (flags.completed || !pack.slides.every(hasXhsCarouselSlideImage)) return;
+      const completeResult = await completeExcellentRemix(request, brand.id, {
+        carouselPack: pack,
+        creditEventId: flags.creditEventId,
+        contentMode,
+        existingIdeaRef,
+        ideaTitle,
+        trendTitle,
+      });
+      updateCurrentUser(completeResult.user);
+      if (completeResult.generation && !state.generationHistory.some((item) => item.id === completeResult.generation.id)) {
+        state.generationHistoryFilters = createEmptyGenerationHistoryFilters();
+        state.generationHistoryNeedsLatest = false;
+        state.generationHistory.unshift(completeResult.generation);
+        renderGenerationHistory();
+      }
+      flags.completed = true;
+      showToast("仿图文组图已全部生成并写入历史生成。");
+    };
+
+    const getNextRunnableTaskIndex = () => {
+      if (activeTaskCount >= IMAGE_TASK_MAX_CONCURRENCY || !taskQueue.length) return -1;
+      const nextGenerateIndex = taskQueue.findIndex((task) => task.type === "generate");
+      if (nextGenerateIndex >= 0) return nextGenerateIndex;
+      if (activeGenerateTaskCount > 0) return -1;
+      return 0;
+    };
+
+    const runImageJobSubmission = (submit) => {
+      const pending = imageJobSubmissionChain.catch(() => {});
+      imageJobSubmissionChain = pending.then(submit);
+      return imageJobSubmissionChain;
+    };
+
+    const pumpImageTaskQueue = () => {
+      let taskIndex = getNextRunnableTaskIndex();
+      while (taskIndex >= 0) {
+        const [task] = taskQueue.splice(taskIndex, 1);
+        activeTaskCount += 1;
+        if (task.type === "generate") activeGenerateTaskCount += 1;
+        task
+          .run()
+          .catch((error) => {
+            console.warn(error.message);
+          })
+          .finally(async () => {
+            activeTaskCount -= 1;
+            if (task.type === "generate") activeGenerateTaskCount -= 1;
+            if (!taskQueue.length && activeTaskCount === 0) {
+              flags.isGeneratingAll = false;
+              await completeIfReady().catch((error) => showToast(`仿图文组图写入历史失败：${error.message}`));
+            }
+            renderAndBind();
+            pumpImageTaskQueue();
+          });
+        taskIndex = getNextRunnableTaskIndex();
+      }
+    };
+
+    const enqueueImageTask = (type, run) => {
+      taskQueue.push({ type, run });
+      pumpImageTaskQueue();
+      renderAndBind();
+    };
+
+    const runGenerateSlide = async (slideIndex) => {
+      const slide = pack.slides[slideIndex];
+      if (!slide || hasXhsCarouselSlideImage(slide)) return;
+      slide.isQueued = false;
+      slide.isGenerating = true;
+      renderAndBind();
+      try {
+        const result = await runImageJobSubmission(() =>
+          generateExcellentRemixSlide(request, brand.id, slideIndex, {
+            carouselPack: pack,
+            slide,
+            productImages,
+            useBrandLogo,
+            aspectRatio,
+            contentMode,
+            existingIdeaRef,
+            ideaTitle,
+            trendTitle,
+          }),
+        );
+        updateCurrentUser(result.user);
+        flags.creditEventId = result.creditEventId || flags.creditEventId;
+        if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
+        const imageConcept = await pollImageJob(result.slideJob.jobId);
+        pack.slides[slideIndex] = {
+          ...pack.slides[slideIndex],
+          previewUrl: imageConcept.imageUrl || imageConcept.previewUrl,
+          imageUrl: imageConcept.imageUrl || imageConcept.previewUrl,
+          isGenerating: false,
+          isQueued: false,
+          error: "",
+        };
+      } catch (error) {
+        if (isStaleSessionRequest(error)) return;
+        slide.isGenerating = false;
+        slide.isQueued = false;
+        slide.error = `生成失败：${error.message}`;
+      }
+    };
+
+    const enqueueGenerateSlide = (slideIndex) => {
+      const slide = pack.slides[slideIndex];
+      if (!slide || hasXhsCarouselSlideImage(slide) || slide.isGenerating || slide.isQueued) return;
+      syncXhsCarouselPromptInputs(imageResult, pack);
+      slide.isQueued = true;
+      slide.error = "";
+      enqueueImageTask("generate", () => runGenerateSlide(slideIndex));
+    };
+
+    // Reuse the existing carousel UI renderer by temporarily adapting to known helpers.
+    renderAndBind = () => {
+      renderXhsCarouselPreviewUI({
+        imageResult,
+        pack,
+        flags,
+        sourceCase,
+        enqueueGenerateSlide,
+        onGenerateAll: () => {
+          flags.isGeneratingAll = true;
+          pack.slides.forEach((_, index) => enqueueGenerateSlide(index));
+        },
+      });
+    };
+    renderAndBind();
+  } catch (error) {
+    if (isStaleSessionRequest(error)) return;
+    imageResult.innerHTML = `<div class="image-meta-card"><h3>准备失败</h3><div class="idea-copy">${escapeHtml(
+      error.message,
+    )}</div></div>`;
+  }
+}
+
+function renderXhsCarouselPreviewUI({ imageResult, pack, flags, sourceCase, enqueueGenerateSlide, onGenerateAll }) {
+  // Lightweight dedicated renderer so excellent remix does not depend on trend/idea route helpers.
+  const slidesHtml = (pack.slides || [])
+    .map((slide, index) => {
+      const img = slide.imageUrl || slide.previewUrl;
+      return `
+        <div class="xhs-slide-card">
+          <div class="xhs-slide-head">
+            <strong>${escapeHtml(slide.pageLabel || `第 ${index + 1} 张`)}</strong>
+            <span>${escapeHtml(slide.pageRole || "")}</span>
+          </div>
+          <div class="idea-copy"><strong>${escapeHtml(slide.title || "")}</strong><p>${escapeHtml(slide.copy || "")}</p></div>
+          <div class="idea-copy muted">${escapeHtml(slide.visualDirection || "")}</div>
+          ${
+            img
+              ? `<img src="${authenticatedImageSrc(img)}" alt="${escapeHtml(slide.title || "")}" />`
+              : `<div class="excellent-cover-fallback">待生成</div>`
+          }
+          ${slide.error ? `<div class="idea-copy" style="color:#ff8fa8">${escapeHtml(slide.error)}</div>` : ""}
+          <button type="button" class="secondary-btn small-btn" data-remix-gen-slide="${index}" ${
+            slide.isGenerating || slide.isQueued || img ? "disabled" : ""
+          }>
+            ${slide.isGenerating || slide.isQueued ? "生成中…" : "生成此页"}
+          </button>
+        </div>
+      `;
+    })
+    .join("");
+
+  imageResult.innerHTML = `
+    <div class="asset-header-card">
+      <h3>${escapeHtml(pack.publishTitle || pack.title || "仿图文组图")}</h3>
+      <p>${escapeHtml(pack.publishCaption || "")}</p>
+      ${sourceCase ? `<p class="muted">参考：${escapeHtml(sourceCase.title || "")}（仅学习方法，不复制原文原图）</p>` : ""}
+      <div class="form-actions">
+        <button type="button" class="primary-btn" data-remix-gen-all ${flags.isGeneratingAll ? "disabled" : ""}>一键生成四页</button>
+      </div>
+    </div>
+    <div class="asset-grid xhs-slide-grid">${slidesHtml}</div>
+  `;
+  imageResult.querySelector("[data-remix-gen-all]")?.addEventListener("click", onGenerateAll);
+  imageResult.querySelectorAll("[data-remix-gen-slide]").forEach((button) => {
+    button.addEventListener("click", () => enqueueGenerateSlide(Number(button.dataset.remixGenSlide)));
   });
 }
 
@@ -5221,7 +5662,21 @@ function bindExcellentContentLibrary() {
     if (event.target.id === "excellentRemixModal") closeExcellentRemix();
   });
   document.getElementById("excellentRemixBody")?.addEventListener("change", handleExcellentRemixChange);
+  document.getElementById("excellentRemixBody")?.addEventListener("input", (event) => {
+    if (
+      event.target?.hasAttribute?.("data-remix-custom-direction") ||
+      event.target?.hasAttribute?.("data-remix-idea-query")
+    ) {
+      handleExcellentRemixChange(event);
+    }
+  });
   document.getElementById("excellentRemixForm")?.addEventListener("submit", submitExcellentRemix);
+  document.getElementById("closeExcellentRemixProductPickerModal")?.addEventListener("click", closeExcellentRemixProductPicker);
+  document.getElementById("finishExcellentRemixProductPickerModal")?.addEventListener("click", closeExcellentRemixProductPicker);
+  document.getElementById("excellentRemixProductPickerBody")?.addEventListener("change", handleExcellentRemixChange);
+  document.getElementById("excellentRemixProductPickerModal")?.addEventListener("click", (event) => {
+    if (event.target.id === "excellentRemixProductPickerModal") closeExcellentRemixProductPicker();
+  });
 
   document.addEventListener("keydown", (event) => {
     if (document.getElementById("excellentContentModal")?.classList.contains("is-open") && state.excellentDetail?.item) {

@@ -131,6 +131,8 @@ function initializeDatabaseSchema() {
     CREATE TABLE IF NOT EXISTS product_images (
       id INTEGER PRIMARY KEY,
       owner_user_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL DEFAULT 0,
+      asset_type TEXT NOT NULL DEFAULT 'unassigned',
       original_name TEXT NOT NULL,
       stored_path TEXT NOT NULL,
       mime_type TEXT NOT NULL,
@@ -140,6 +142,20 @@ function initializeDatabaseSchema() {
       last_used_at TEXT NOT NULL DEFAULT '',
       deleted_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS excellent_content_remix_analysis_cache (
+      note_id TEXT NOT NULL,
+      board_key TEXT NOT NULL,
+      source_signature TEXT NOT NULL,
+      analysis_version TEXT NOT NULL,
+      analysis_mode TEXT NOT NULL,
+      analysis_json TEXT NOT NULL,
+      model_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_error TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (note_id, board_key, source_signature, analysis_version)
     );
 
     CREATE TABLE IF NOT EXISTS image_jobs (
@@ -240,6 +256,10 @@ function ensureDatabaseIndexes() {
     CREATE INDEX IF NOT EXISTS idx_credit_events_generation_id ON credit_events(generation_id);
     CREATE INDEX IF NOT EXISTS idx_product_images_owner_user_id ON product_images(owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_product_images_owner_sha ON product_images(owner_user_id, sha256, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_product_images_owner_brand_type
+      ON product_images(owner_user_id, brand_id, asset_type, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_excellent_remix_analysis_expires
+      ON excellent_content_remix_analysis_cache(expires_at);
     CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_user_id ON image_jobs(owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_created ON image_jobs(owner_user_id, created_at_ms);
     CREATE INDEX IF NOT EXISTS idx_trend_analysis_requests_user_status ON trend_analysis_requests(user_id, status, created_at);
@@ -302,6 +322,32 @@ function ensureSchemaUpgrades() {
     db.exec("ALTER TABLE brands ADD COLUMN logo_json TEXT NOT NULL DEFAULT '{}'");
   }
 
+  if (tableExists("product_images")) {
+    if (!hasColumn("product_images", "brand_id")) {
+      db.exec("ALTER TABLE product_images ADD COLUMN brand_id INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!hasColumn("product_images", "asset_type")) {
+      // Legacy rows stay unassigned so they never appear across all brands in remix pickers.
+      db.exec("ALTER TABLE product_images ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'unassigned'");
+    }
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS excellent_content_remix_analysis_cache (
+      note_id TEXT NOT NULL,
+      board_key TEXT NOT NULL,
+      source_signature TEXT NOT NULL,
+      analysis_version TEXT NOT NULL,
+      analysis_mode TEXT NOT NULL,
+      analysis_json TEXT NOT NULL,
+      model_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_error TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (note_id, board_key, source_signature, analysis_version)
+    );
+  `);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS generations (
       id INTEGER PRIMARY KEY,
@@ -346,6 +392,8 @@ function ensureSchemaUpgrades() {
     CREATE TABLE IF NOT EXISTS product_images (
       id INTEGER PRIMARY KEY,
       owner_user_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL DEFAULT 0,
+      asset_type TEXT NOT NULL DEFAULT 'unassigned',
       original_name TEXT NOT NULL,
       stored_path TEXT NOT NULL,
       mime_type TEXT NOT NULL,
@@ -355,6 +403,20 @@ function ensureSchemaUpgrades() {
       last_used_at TEXT NOT NULL DEFAULT '',
       deleted_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS excellent_content_remix_analysis_cache (
+      note_id TEXT NOT NULL,
+      board_key TEXT NOT NULL,
+      source_signature TEXT NOT NULL,
+      analysis_version TEXT NOT NULL,
+      analysis_mode TEXT NOT NULL,
+      analysis_json TEXT NOT NULL,
+      model_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_error TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (note_id, board_key, source_signature, analysis_version)
     );
 
     CREATE TABLE IF NOT EXISTS image_jobs (
@@ -441,10 +503,13 @@ function hasCurrentStoreSchema() {
     hasColumn("ideas", "content_assets_json") &&
     tableExists("generations") &&
     tableExists("product_images") &&
+    hasColumn("product_images", "brand_id") &&
+    hasColumn("product_images", "asset_type") &&
     tableExists("image_jobs") &&
     tableExists("credit_events") &&
     tableExists("trend_analysis_requests") &&
-    tableExists("excellent_content_cache")
+    tableExists("excellent_content_cache") &&
+    tableExists("excellent_content_remix_analysis_cache")
   );
 }
 

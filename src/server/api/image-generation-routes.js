@@ -10,14 +10,21 @@ const {
   attachGenerationToLatestCreditEvent,
   refundCreditEventIfNeeded,
 } = require("../db/repositories/admin-repository");
-const { findBrandByOwner, updateCurrentTrendIdeaContentAssets } = require("../db/repositories/brand-repository");
+const brandRepository = require("../db/repositories/brand-repository");
+const { updateCurrentTrendIdeaContentAssets } = brandRepository;
+const findBrandByOwner = (...args) => brandRepository.findBrandByOwner(...args);
 const {
   findGenerationByOwner,
   findXhsCarouselGenerationByGroup,
   insertGeneration,
   upsertGeneration,
 } = require("../db/repositories/generation-repository");
-const { findProductImageByOwner, touchProductImageUsed } = require("../db/repositories/product-image-repository");
+const {
+  findProductImageByOwner,
+  findProductImageByOwnerBrandAndType,
+  touchProductImageUsed,
+  ASSET_TYPE_PRODUCT,
+} = require("../db/repositories/product-image-repository");
 const { findImageJobByOwner, upsertImageJob } = require("../db/repositories/image-job-repository");
 const {
   buildImageConceptMetadataFromIdea,
@@ -113,14 +120,47 @@ function createSqlGenerationRecord(userId, brand, trend, idea, type, channelLabe
     channelLabel,
     brandId: brand.id,
     brandName: brand.name,
-    trendId: trend.id,
-    trendTitle: trend.title,
-    ideaTitle: idea.title,
+    trendId: trend?.id ?? 0,
+    trendTitle: trend?.title || "",
+    ideaTitle: idea?.title || "",
     cardTitle: payload.title,
     createdAt: new Date().toISOString(),
     previewUrl: payload.previewUrl || payload.imageUrl || payload.slides?.[0]?.previewUrl || "",
     summary: summaryByType[type] || "",
     payload,
+  };
+}
+
+/**
+ * History labels for excellent remix when smart/custom have no persistent trend/idea.
+ * Not used as content generation inputs.
+ */
+function buildExcellentRemixHistoryRefs(payload = {}, brand) {
+  const contentMode = String(payload.contentMode || "smart");
+  const existing = payload.existingIdeaRef && typeof payload.existingIdeaRef === "object" ? payload.existingIdeaRef : null;
+  if (contentMode === "existing_idea" && existing && Number(existing.trendId) > 0) {
+    return {
+      trend: { id: Number(existing.trendId), title: String(payload.trendTitle || "已有选题来源趋势") },
+      idea: { title: String(payload.ideaTitle || payload.carouselPack?.publishTitle || "优秀内容仿图文") },
+      contentMode,
+      existingIdeaRef: {
+        trendId: Number(existing.trendId),
+        ideaIndex: Number(existing.ideaIndex || 0),
+      },
+    };
+  }
+  return {
+    trend: { id: 0, title: "" },
+    idea: {
+      title: String(
+        payload.ideaTitle ||
+          payload.carouselPack?.publishTitle ||
+          payload.carouselPack?.title ||
+          `${brand?.name || "品牌"}优秀内容仿图文`,
+      ),
+    },
+    contentMode,
+    existingIdeaRef: null,
   };
 }
 
@@ -300,10 +340,14 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     unauthorized,
   } = bindRouteScope(context);
 
-  async function resolveProductImageInputSql(user, input) {
+  async function resolveProductImageInputSql(user, input, options = {}) {
     const imageId = Number(input?.id || input?.productImageId || 0);
     if (Number.isFinite(imageId) && imageId > 0) {
-      const image = findProductImageByOwner(imageId, user.id);
+      const brandId = Number(options.brandId || 0);
+      const requireBrandScope = Boolean(options.requireBrandScope && brandId > 0);
+      const image = requireBrandScope
+        ? findProductImageByOwnerBrandAndType(imageId, user.id, brandId, ASSET_TYPE_PRODUCT)
+        : findProductImageByOwner(imageId, user.id);
       if (!image) return null;
       const buffer = await fsp.readFile(resolveStoredProductImagePath(image));
       touchProductImageUsed(image.id, new Date().toISOString());
@@ -313,6 +357,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         dataUrl: `data:${image.mimeType};base64,${buffer.toString("base64")}`,
         sizeBytes: Number(image.sizeBytes || buffer.length),
       };
+    }
+    if (options.requireBrandScope) {
+      // Excellent remix never accepts free-form dataUrl product images from client.
+      return null;
     }
     return normalizeProductImage(input);
   }
@@ -330,8 +378,15 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const resolved = [];
     let totalBytes = 0;
     for (const rawImage of rawImages) {
-      const image = await resolveProductImageInputSql(user, rawImage);
-      if (!image) continue;
+      const image = await resolveProductImageInputSql(user, rawImage, options);
+      if (!image) {
+        if (options.requireBrandScope && (rawImage?.id || rawImage?.productImageId)) {
+          throw Object.assign(new Error("所选产品图不属于当前品牌或不是产品素材。"), {
+            code: "PRODUCT_IMAGE_BRAND_MISMATCH",
+          });
+        }
+        continue;
+      }
       totalBytes += Number(image.sizeBytes || estimateDataUrlBytes(image.dataUrl) || 0);
       if (totalBytes > maxTotalBytes) {
         throw Object.assign(
@@ -819,6 +874,263 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       wechatPack: sanitizePayloadForClient(wechatPack),
       jobId: job.id,
       user: sanitizeUser(charged.user),
+    });
+    return true;
+  }
+
+  // Excellent remix preview: does not require persistent trend/idea.
+  const excellentRemixPreviewMatch = pathname.match(/^\/api\/brands\/(\d+)\/excellent-remix-preview$/);
+  if (req.method === "POST" && excellentRemixPreviewMatch) {
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    const brand = findBrandByOwner(Number(excellentRemixPreviewMatch[1]), user.id);
+    if (!brand) {
+      badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
+      return true;
+    }
+    const payload = await collectBody(req);
+    const aspectRatio = requireAspectRatio(payload, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
+    if (!payload?.carouselPack || typeof payload.carouselPack !== "object") {
+      badRequest(res, "缺少融合方案 carouselPack。");
+      return true;
+    }
+    let carouselPack;
+    try {
+      const { normalizeGeneratedXhsCarouselPack } = require("../ai/content-service");
+      carouselPack = normalizeGeneratedXhsCarouselPack(payload.carouselPack);
+    } catch (error) {
+      badRequest(res, error.message || "自定义组图方案校验失败。");
+      return true;
+    }
+    carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
+    // Never accept source note images as generation references on this path.
+    if (Array.isArray(payload.sourceImageUrls) && payload.sourceImageUrls.length) {
+      badRequest(res, "参考笔记图片不得作为生图素材。");
+      return true;
+    }
+    json(res, 200, {
+      carouselPack: sanitizePayloadForClient(carouselPack),
+      user: sanitizeUser(user),
+    });
+    return true;
+  }
+
+  const excellentRemixSlideMatch = pathname.match(/^\/api\/brands\/(\d+)\/excellent-remix\/slides\/(\d+)$/);
+  if (req.method === "POST" && excellentRemixSlideMatch) {
+    const requestStartedAt = Date.now();
+    const slideIndex = Number(excellentRemixSlideMatch[2]);
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > 3) {
+      badRequest(res, "小红书组图页码无效。");
+      return true;
+    }
+    const brand = findBrandByOwner(Number(excellentRemixSlideMatch[1]), user.id);
+    if (!brand) {
+      badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
+      return true;
+    }
+    const payload = await collectBody(req);
+    const incomingPack = payload.carouselPack && typeof payload.carouselPack === "object" ? payload.carouselPack : {};
+    const aspectRatio = requireAspectRatio({ aspectRatio: payload.aspectRatio || incomingPack.aspectRatio }, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
+    let normalizedPack;
+    try {
+      const { normalizeGeneratedXhsCarouselPack } = require("../ai/content-service");
+      normalizedPack = applyAspectRatioToCarouselPack(normalizeGeneratedXhsCarouselPack(incomingPack), aspectRatio);
+    } catch (error) {
+      badRequest(res, error.message || "组图方案校验失败。");
+      return true;
+    }
+    const slide = normalizeXhsCarouselSlideForJob(
+      payload.slide || normalizedPack.slides[slideIndex],
+      normalizedPack.slides[slideIndex],
+      slideIndex,
+    );
+    if (!slide.prompt) {
+      badRequest(res, "当前页缺少服务端生图提示词，请重新生成融合方案后再试。");
+      return true;
+    }
+    let productImages = [];
+    try {
+      productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage, {
+        requireBrandScope: true,
+        brandId: brand.id,
+        maxCount: 2,
+        label: "产品实拍图",
+      });
+    } catch (error) {
+      if (error?.code === "PRODUCT_IMAGE_BRAND_MISMATCH" || error?.code === "IMAGE_LIMIT_EXCEEDED") {
+        badRequest(res, error.message);
+        return true;
+      }
+      throw error;
+    }
+    const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
+    const historyRefs = buildExcellentRemixHistoryRefs(payload, brand);
+    const charged = await runChargedAiWork({
+      user,
+      cost: CREDIT_COSTS.xhsCarouselSlide,
+      event: buildSqlCreditEventInput({
+        actionType: "xhsCarousel",
+        actionLabel: "优秀内容仿图文单张生成",
+        brand,
+        trend: historyRefs.trend,
+        idea: historyRefs.idea,
+        channelLabel: "一键仿图文",
+        summary: `${slide.pageLabel} · ${slide.title}`,
+        payload: {
+          slideIndex,
+          pageLabel: slide.pageLabel,
+          referenceImageUsed: productImages.length > 0,
+          referenceImageCount: productImages.length,
+          logoUsed: Boolean(logoImage),
+          aspectRatio,
+          contentMode: historyRefs.contentMode,
+          excellentRemix: true,
+        },
+      }),
+      run: () =>
+        createImageJob({
+          ownerUserId: user.id,
+          brand,
+          trend: historyRefs.trend.id ? historyRefs.trend : null,
+          idea: historyRefs.idea,
+          productImages,
+          logoImage,
+          aspectRatio,
+          metadata: {
+            title: `${normalizedPack.title} ${slide.pageLabel}`,
+            visualDirection: slide.visualDirection,
+            style: slide.style,
+            composition: slide.composition,
+            prompt: slide.prompt,
+            slideIndex,
+            pageLabel: slide.pageLabel,
+            copy: slide.copy,
+            aspectRatio,
+            ...(slide.remixBrief && typeof slide.remixBrief === "object" ? { remixBrief: slide.remixBrief } : {}),
+          },
+        }),
+    });
+    if (!charged) return true;
+    const job = charged.value;
+    job.generationContext = {
+      type: "xhsCarouselSlide",
+      singleSlideOnly: true,
+      excellentRemix: true,
+      userId: user.id,
+      brandId: brand.id,
+      trendId: historyRefs.trend.id || 0,
+      ideaIndex: historyRefs.existingIdeaRef?.ideaIndex ?? null,
+      contentMode: historyRefs.contentMode,
+      existingIdeaRef: historyRefs.existingIdeaRef,
+      slideIndex,
+      carouselTitle: normalizedPack.title || "",
+      publishTitle: normalizedPack.publishTitle || "",
+      publishCaption: normalizedPack.publishCaption || "",
+      caption: normalizedPack.caption || "",
+      carouselGroupId: normalizeCarouselGroupId(incomingPack.carouselGroupId || normalizedPack.carouselGroupId),
+      creditEventId: charged.creditEvent.id,
+      aspectRatio,
+    };
+    upsertImageJob(user.id, job);
+    console.log("[image-job] excellent remix slide job created", {
+      elapsedMs: Date.now() - requestStartedAt,
+      jobId: job.id,
+      brandId: brand.id,
+      slideIndex,
+      productImageCount: productImages.length,
+      logoUsed: Boolean(logoImage),
+    });
+    json(res, 202, {
+      slideJob: { slideIndex, jobId: job.id },
+      creditEventId: charged.creditEvent.id,
+      user: sanitizeUser(charged.user),
+    });
+    return true;
+  }
+
+  const excellentRemixCompleteMatch = pathname.match(/^\/api\/brands\/(\d+)\/excellent-remix\/complete$/);
+  if (req.method === "POST" && excellentRemixCompleteMatch) {
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    const brand = findBrandByOwner(Number(excellentRemixCompleteMatch[1]), user.id);
+    if (!brand) {
+      badRequest(res, "当前品牌不存在或你没有访问权限，请刷新页面后重试。");
+      return true;
+    }
+    const payload = await collectBody(req);
+    let carouselPack = payload.carouselPack || {};
+    const aspectRatio = requireAspectRatio(carouselPack, "xhsCarousel", res, badRequest);
+    if (!aspectRatio) return true;
+    if (!isValidCompletedCarouselPack(carouselPack)) {
+      badRequest(res, "小红书组图必须等待 4 张真实图片全部生成完成后才能写入历史。");
+      return true;
+    }
+    carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
+    const historyRefs = buildExcellentRemixHistoryRefs(payload, brand);
+    const existingGenerationId = findGenerationIdForCreditEvent(Number(payload.creditEventId), user.id);
+    const existingGeneration =
+      (existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null) ||
+      findXhsCarouselGenerationByGroup(user.id, carouselPack.carouselGroupId);
+    if (existingGeneration) {
+      const nextPayload = mergeXhsCarouselSlidePayload(existingGeneration.payload || {}, {
+        ...carouselPack,
+        generatedMode: "group",
+        carouselGroupId: normalizeCarouselGroupId(carouselPack.carouselGroupId || existingGeneration.payload?.carouselGroupId),
+        contentMode: historyRefs.contentMode,
+        excellentRemix: true,
+      });
+      const nextGeneration = {
+        ...existingGeneration,
+        cardTitle: nextPayload.title || existingGeneration.cardTitle,
+        previewUrl: nextPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
+        summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
+        payload: nextPayload,
+      };
+      await persistGenerationImages(nextGeneration);
+      const savedGeneration = upsertGeneration(nextGeneration);
+      updateCreditEventGeneration(Number(payload.creditEventId), savedGeneration, savedGeneration.payload);
+      json(res, 200, {
+        generation: sanitizeGeneration(savedGeneration, appConfig),
+        creditEventId: Number(payload.creditEventId) || null,
+        user: sanitizeUser(user),
+      });
+      return true;
+    }
+    const generation = createSqlGenerationRecord(
+      user.id,
+      brand,
+      historyRefs.trend,
+      historyRefs.idea,
+      "xhsCarousel",
+      "一键仿图文",
+      {
+        ...carouselPack,
+        contentMode: historyRefs.contentMode,
+        excellentRemix: true,
+        existingIdeaRef: historyRefs.existingIdeaRef,
+      },
+    );
+    await persistGenerationImages(generation);
+    insertGeneration(generation);
+    const creditEvent =
+      updateCreditEventGeneration(Number(payload.creditEventId), generation, carouselPack) ||
+      attachGenerationToLatestCreditEvent({
+        user,
+        actionType: "xhsCarousel",
+        brand,
+        trend: historyRefs.trend,
+        idea: historyRefs.idea,
+        generation,
+        generationPayload: carouselPack,
+      });
+    json(res, 200, {
+      generation: sanitizeGeneration(generation, appConfig),
+      creditEventId: creditEvent?.id || null,
+      user: sanitizeUser(user),
     });
     return true;
   }

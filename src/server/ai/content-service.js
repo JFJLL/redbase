@@ -73,15 +73,24 @@ function normalizeGeneratedXhsCarouselPack(raw) {
     aspectRatio: getText(source, "aspectRatio", 16) || "3:4",
     slides: rawSlides.map((slide, index) => {
       const remixBrief = normalizeRemixBrief(slide?.remixBrief || source.remixBrief);
+      const sourceLearningApplied = Array.isArray(slide?.sourceLearningApplied)
+        ? slide.sourceLearningApplied
+            .map((item) => String(item || "").replace(/\s+/g, " ").trim().slice(0, 80))
+            .filter(Boolean)
+            .slice(0, 6)
+        : [];
       const normalizedSlide = {
         pageLabel: getText(slide, "pageLabel", 24) || `第 ${index + 1} 张`,
+        pageRole: getText(slide, "pageRole", 80),
         title: getRequiredText(slide, "title", `第 ${index + 1} 页标题`, 120),
         copy: getRequiredText(slide, "copy", `第 ${index + 1} 页文案`, 500),
+        contentGoal: getText(slide, "contentGoal", 200),
         visualDirection: getRequiredText(slide, "visualDirection", `第 ${index + 1} 页视觉方向`, 300),
         style: getText(slide, "style", 160) || "小红书组图封面页，清晰、真实、适合收藏",
         composition: getText(slide, "composition", 500) || "竖版信息图，标题清楚，留白充足，画面有连续组图统一性。",
         prompt: getText(slide, "prompt", 1800),
         aspectRatio: getText(slide, "aspectRatio", 16) || getText(source, "aspectRatio", 16) || "3:4",
+        sourceLearningApplied,
         previewUrl: "",
       };
       if (remixBrief) {
@@ -124,10 +133,19 @@ function normalizeExcellentBoardValue(value) {
   return "";
 }
 
+function normalizeContentModeValue(value) {
+  const mode = compactRemixText(value, 40);
+  if (mode === "smart" || mode === "existing_idea" || mode === "custom") return mode;
+  return "";
+}
+
 function normalizeRemixBrief(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const learningFocus = Array.isArray(raw.learningFocus)
     ? raw.learningFocus.map((item) => compactRemixText(item, 40)).filter(Boolean).slice(0, 8)
+    : [];
+  const sourceLearningApplied = Array.isArray(raw.sourceLearningApplied)
+    ? raw.sourceLearningApplied.map((item) => compactRemixText(item, 80)).filter(Boolean).slice(0, 6)
     : [];
   const brief = {
     sourceType: compactRemixText(raw.sourceType, 40) || "excellent_content",
@@ -139,17 +157,28 @@ function normalizeRemixBrief(raw) {
     sourceImageCount: normalizeNonNegNumber(raw.sourceImageCount, 99),
     sourceReadCount: normalizeNonNegNumber(raw.sourceReadCount, 1e12),
     sourceEngagementCount: normalizeNonNegNumber(raw.sourceEngagementCount, 1e12),
+    contentMode: normalizeContentModeValue(raw.contentMode),
+    contentDirection: compactRemixText(raw.contentDirection, 200),
+    targetAudience: compactRemixText(raw.targetAudience, 80),
+    userScene: compactRemixText(raw.userScene, 120),
+    trendUsed: Boolean(raw.trendUsed),
+    trendTitle: compactRemixText(raw.trendTitle, 120),
     learningFocus,
+    pageRole: compactRemixText(raw.pageRole, 80),
     pageTask: compactRemixText(raw.pageTask, 200),
     pageTitle: compactRemixText(raw.pageTitle, 120),
     pageCopy: compactRemixText(raw.pageCopy, 300),
+    contentGoal: compactRemixText(raw.contentGoal, 200),
+    sourceLearningApplied,
     originalityGuard: compactRemixText(raw.originalityGuard, 400),
   };
-  // Never allow sourceUrl, cookies, tokens, or arbitrary secrets into prompt metadata.
+  // Never allow sourceUrl, cookies, tokens, image URLs, or arbitrary secrets into prompt metadata.
   delete brief.sourceUrl;
   delete brief.cookie;
   delete brief.token;
   delete brief.authorization;
+  delete brief.imageUrls;
+  delete brief.sourceImageUrls;
   return brief;
 }
 

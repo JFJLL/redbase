@@ -334,6 +334,17 @@ function buildRemixBriefLayer(rawBrief) {
   const learningFocus = Array.isArray(rawBrief.learningFocus)
     ? rawBrief.learningFocus.map((item) => compactText(item, 40)).filter(Boolean).slice(0, 6)
     : [];
+  const sourceLearningApplied = Array.isArray(rawBrief.sourceLearningApplied)
+    ? rawBrief.sourceLearningApplied.map((item) => compactText(item, 60)).filter(Boolean).slice(0, 4)
+    : [];
+  const contentMode = compactText(rawBrief.contentMode, 40);
+  const contentDirection = compactText(rawBrief.contentDirection, 160);
+  const targetAudience = compactText(rawBrief.targetAudience, 60);
+  const userScene = compactText(rawBrief.userScene, 100);
+  const pageRole = compactText(rawBrief.pageRole, 60);
+  const contentGoal = compactText(rawBrief.contentGoal, 140);
+  const trendUsed = Boolean(rawBrief.trendUsed);
+  const trendTitle = trendUsed ? compactText(rawBrief.trendTitle, 80) : "";
   const originalityGuard =
     compactText(rawBrief.originalityGuard, 320) ||
     "只学习参考笔记的信息节奏、页面角色和内容方法；不得复制原文、原图人物、原品牌、原Logo、水印、具体版式和可识别视觉资产；生成全新的原创内容与画面。";
@@ -344,9 +355,17 @@ function buildRemixBriefLayer(rawBrief) {
     boardLabel ? `来源板块：${boardLabel}` : "",
     taxonomyPath ? `类目或行业：${taxonomyPath}` : "",
     readLabel ? readLabel : "",
+    contentMode ? `内容方向模式：${contentMode}` : "",
+    contentDirection ? `本次内容方向：${contentDirection}` : "",
+    targetAudience ? `目标人群：${targetAudience}` : "",
+    userScene ? `用户场景：${userScene}` : "",
+    trendTitle ? `可选趋势语境：${trendTitle}（仅增强时效，不改内容主体）` : "",
+    pageRole ? `本页角色：${pageRole}` : "",
+    contentGoal ? `本页内容目标：${contentGoal}` : "",
     pageTask ? `本页页面任务：${pageTask}` : "",
     pageTitle ? `本页标题重点：${pageTitle}` : "",
     pageCopy ? `本页文案重点：${pageCopy}` : "",
+    sourceLearningApplied.length ? `本页应用的参考方法：${sourceLearningApplied.join("；")}` : "",
     learningFocus.length ? `学习重点：${learningFocus.join("、")}` : "",
     `原创保护：${originalityGuard}`,
   ].filter(Boolean);

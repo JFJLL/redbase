@@ -634,7 +634,7 @@
           <div>
             <div class="modal-kicker">一键仿图文</div>
             <h2 id="excellentRemixTitle">基于优秀内容生成原创组图方案</h2>
-            <p>选择品牌、趋势和选题，学习参考笔记的结构节奏，生成 4 页原创小红书图文。</p>
+            <p>学习参考笔记怎么讲，配合本次内容方向与品牌信息，可选叠加趋势语境，生成 4 页原创小红书图文。</p>
           </div>
           <button class="modal-close" id="closeExcellentRemixModal" type="button">×</button>
         </div>
@@ -648,6 +648,23 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260723-excellent-manual-refresh"></script>
+    <div class="modal-mask" id="excellentRemixProductPickerModal">
+      <div class="modal-panel product-library-modal-panel" role="dialog" aria-modal="true" aria-labelledby="excellentRemixProductPickerTitle">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">品牌产品素材</div>
+            <h2 id="excellentRemixProductPickerTitle">从当前品牌素材库选择</h2>
+            <p>只展示当前品牌的产品实拍图，最多 2 张。不含历史生成图、其他品牌图与无归属图。</p>
+          </div>
+          <button class="modal-close" id="closeExcellentRemixProductPickerModal" type="button">×</button>
+        </div>
+        <div id="excellentRemixProductPickerBody" class="excellent-remix-product-picker-body"></div>
+        <div class="product-library-footer">
+          <button class="primary-btn small-btn" id="finishExcellentRemixProductPickerModal" type="button">完成选择</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js?v=20260723-excellent-remix-v3"></script>
   </body>
 </html>
