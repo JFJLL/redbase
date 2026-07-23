@@ -550,40 +550,110 @@ async function warmAllExcellentContentBoards(appConfig, options = {}) {
   return { ok: true, boards: results };
 }
 
-function findNoteInCaches(noteId, board) {
+function findNoteInCacheItems(cache, noteId) {
+  if (!hasCacheItems(cache)) return null;
   const target = String(noteId || "").trim();
   if (!target) return null;
-  const boardKey = String(board || "").trim();
-  // Scan matching board caches via repeated known source keys (all + content sources).
-  const sourceKeys = [
-    boardKey,
-    ...EXCELLENT_CONTENT_SOURCES.filter((s) => s.value !== "all").map((s) => `${boardKey}:${s.value}`),
-  ];
-  for (const sourceKey of sourceKeys) {
-    // Empty taxonomy path first (default list).
-    const cache = findExcellentContentCache(sourceKey, "");
-    if (hasCacheItems(cache)) {
-      const hit = cache.items.find((item) => String(item.noteId || item.id) === target);
-      if (hit) {
-        return { item: hit, updatedAt: cache.fetchedAt, sourceKey, taxonomyPath: "" };
-      }
+  const hit = cache.items.find((item) => String(item.noteId || item.id) === target);
+  if (!hit) return null;
+  return {
+    item: hit,
+    updatedAt: cache.fetchedAt || "",
+    sourceKey: cache.sourceKey || "",
+    taxonomyPath: cache.categoryPath != null ? String(cache.categoryPath) : "",
+  };
+}
+
+/**
+ * Prefer exact (sourceKey, taxonomyPath) cache for the list context that opened detail.
+ * Safe fallbacks stay on the same board only: same sourceKey default taxonomy, then board:all default.
+ * Never returns a note from another board even if noteId collides.
+ */
+function findNoteInCaches(
+  noteId,
+  board,
+  { contentSource = "all", taxonomyPath = "" } = {},
+) {
+  const target = String(noteId || "").trim();
+  if (!target) return null;
+  const boardDef = getExcellentContentBoard(board);
+  if (!boardDef) return null;
+  const boardKey = boardDef.value;
+  const sourceDef = getExcellentContentSource(contentSource);
+  const resolvedSource = sourceDef ? sourceDef.value : "all";
+  const exactSourceKey = buildCacheSourceKey(boardKey, resolvedSource);
+  const exactTaxonomy = String(taxonomyPath || "");
+
+  const exact = findNoteInCacheItems(findExcellentContentCache(exactSourceKey, exactTaxonomy), target);
+  if (exact) {
+    return { ...exact, sourceKey: exactSourceKey, taxonomyPath: exactTaxonomy, contentSource: resolvedSource };
+  }
+
+  // Fallback: same content source, default (empty) taxonomy — only if exact path was non-empty.
+  if (exactTaxonomy) {
+    const defaultTaxonomy = findNoteInCacheItems(findExcellentContentCache(exactSourceKey, ""), target);
+    if (defaultTaxonomy) {
+      return {
+        ...defaultTaxonomy,
+        sourceKey: exactSourceKey,
+        taxonomyPath: "",
+        contentSource: resolvedSource,
+      };
     }
   }
+
+  // Fallback: board "all" content source, default taxonomy (never another board).
+  if (exactSourceKey !== boardKey) {
+    const boardDefault = findNoteInCacheItems(findExcellentContentCache(boardKey, ""), target);
+    if (boardDefault) {
+      return { ...boardDefault, sourceKey: boardKey, taxonomyPath: "", contentSource: "all" };
+    }
+  }
+
   return null;
 }
 
 function noteHasCompleteImages(item) {
   if (!item) return false;
   const urls = Array.isArray(item.imageUrls) ? item.imageUrls.filter(Boolean) : [];
-  const count = Number(item.imageCount || urls.length || 0);
-  return urls.length > 0 && urls.length >= Math.min(count || urls.length, 1);
+  if (!urls.length) return false;
+  const count = Number(item.imageCount || 0);
+  if (!Number.isFinite(count) || count <= 0) {
+    // Unknown total: treat returned urls as usable, without claiming a verified total.
+    return true;
+  }
+  return urls.length >= count;
+}
+
+function buildDetailMessage(item, complete) {
+  const hasContent = Boolean(String(item?.content || "").trim());
+  if (hasContent && complete) return "";
+  if (!complete && urlsCount(item) > 0) {
+    return "当前仅展示接口已返回的图片";
+  }
+  if (!hasContent && complete) return "";
+  if (!hasContent) return "完整内容暂时无法加载";
+  return "";
+}
+
+function urlsCount(item) {
+  return Array.isArray(item?.imageUrls) ? item.imageUrls.filter(Boolean).length : 0;
 }
 
 /**
  * Detail strategy: list already carries full noteImages; return cache item.
  * No upstream detail API confirmed; never fabricate body/images.
  */
-async function getExcellentContentDetail(appConfig, { noteId, board = EXCELLENT_BOARD_DEFAULT } = {}) {
+async function getExcellentContentDetail(
+  appConfig,
+  {
+    noteId,
+    board = EXCELLENT_BOARD_DEFAULT,
+    contentSource = "all",
+    categoryPath = "",
+    industryPath = "",
+  } = {},
+) {
   const boardDef = getExcellentContentBoard(board);
   if (!boardDef) {
     const error = new Error("暂不支持该内容板块。");
@@ -591,30 +661,51 @@ async function getExcellentContentDetail(appConfig, { noteId, board = EXCELLENT_
     error.statusCode = 400;
     throw error;
   }
-  const hit = findNoteInCaches(noteId, boardDef.value);
+  const sourceDef = getExcellentContentSource(contentSource);
+  if (!sourceDef) {
+    const error = new Error("暂不支持该内容来源。");
+    error.code = "INVALID_SOURCE";
+    error.statusCode = 400;
+    throw error;
+  }
+  const taxonomy = resolveTaxonomyPath(boardDef, { categoryPath, industryPath });
+  const hit = findNoteInCaches(noteId, boardDef.value, {
+    contentSource: sourceDef.value,
+    taxonomyPath: taxonomy.taxonomyPath,
+  });
   if (hit?.item) {
+    const urls = Array.isArray(hit.item.imageUrls) ? hit.item.imageUrls.filter(Boolean) : [];
+    const rawCount = Number(hit.item.imageCount || 0);
+    const imageCount = Number.isFinite(rawCount) && rawCount > 0 ? rawCount : urls.length;
+    const complete = noteHasCompleteImages({ ...hit.item, imageUrls: urls, imageCount: rawCount });
     return {
       item: {
         ...hit.item,
         content: hit.item.content != null ? String(hit.item.content) : "",
-        imageUrls: Array.isArray(hit.item.imageUrls) ? hit.item.imageUrls : [],
-        imageCount: Number(hit.item.imageCount || hit.item.imageUrls?.length || 0),
+        imageUrls: urls,
+        imageCount,
       },
+      board: boardDef.value,
+      contentSource: hit.contentSource || sourceDef.value,
+      taxonomyPath: hit.taxonomyPath != null ? hit.taxonomyPath : taxonomy.taxonomyPath,
       fromCache: true,
-      complete: noteHasCompleteImages(hit.item),
+      complete,
+      availableImageCount: urls.length,
+      imageCount,
       updatedAt: hit.updatedAt || "",
-      detailUnavailable: !String(hit.item.content || "").trim(),
-      message: String(hit.item.content || "").trim()
-        ? ""
-        : noteHasCompleteImages(hit.item)
-          ? ""
-          : "完整内容暂时无法加载",
+      detailUnavailable: !String(hit.item.content || "").trim() && !complete,
+      message: buildDetailMessage({ ...hit.item, imageUrls: urls }, complete),
     };
   }
   return {
     item: null,
+    board: boardDef.value,
+    contentSource: sourceDef.value,
+    taxonomyPath: taxonomy.taxonomyPath,
     fromCache: false,
     complete: false,
+    availableImageCount: 0,
+    imageCount: 0,
     updatedAt: "",
     detailUnavailable: true,
     message: "完整内容暂时无法加载",
@@ -681,5 +772,7 @@ module.exports = {
   getExcellentContentSourcesList,
   getExcellentContentCacheTtlMs,
   mapExcellentContentError,
+  noteHasCompleteImages,
+  findNoteInCaches,
   __resetExcellentContentInFlightForTests,
 };

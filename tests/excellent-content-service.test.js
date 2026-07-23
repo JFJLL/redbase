@@ -17,6 +17,7 @@ const {
   getExcellentContentDetail,
   buildCacheSourceKey,
   mapExcellentContentError,
+  noteHasCompleteImages,
   __resetExcellentContentInFlightForTests,
 } = require("../src/server/services/excellent-content-service");
 const {
@@ -213,6 +214,155 @@ test("detail returns list cache images without requiring upstream detail", async
   assert.equal(detail.item.noteId, "detail-1");
   assert.equal(detail.item.imageUrls.length, 3);
   assert.equal(typeof detail.item.noteId, "string");
+  assert.equal(detail.complete, true);
+  assert.equal(detail.availableImageCount, 3);
+  assert.equal(detail.board, "xhs_hot");
+});
+
+test("detail hits non-empty categoryPath and industryPath caches", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  const now = new Date();
+  const xhsPath = "内容类目#美妆#护肤";
+  const ecomPath = "所属行业#美妆个护#彩妆";
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot",
+    categoryPath: xhsPath,
+    items: [
+      {
+        ...makeNote("cat-note", { read: 10 }),
+        imageUrls: ["https://img.example/cat.jpg"],
+        imageCount: 1,
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+  upsertExcellentContentCache({
+    sourceKey: "ecommerce_hot",
+    categoryPath: ecomPath,
+    items: [
+      {
+        ...makeNote("ind-note", { read: 20 }),
+        board: "ecommerce_hot",
+        sourceKey: "ecommerce_hot",
+        imageUrls: ["https://img.example/ind.jpg", "https://img.example/ind2.jpg"],
+        imageCount: 2,
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+
+  const xhs = await getExcellentContentDetail(
+    {},
+    { noteId: "cat-note", board: "xhs_hot", categoryPath: xhsPath },
+  );
+  assert.equal(xhs.fromCache, true);
+  assert.equal(xhs.item.noteId, "cat-note");
+  assert.equal(xhs.taxonomyPath, xhsPath);
+
+  const ecom = await getExcellentContentDetail(
+    {},
+    { noteId: "ind-note", board: "ecommerce_hot", industryPath: ecomPath },
+  );
+  assert.equal(ecom.fromCache, true);
+  assert.equal(ecom.item.noteId, "ind-note");
+  assert.equal(ecom.taxonomyPath, ecomPath);
+  assert.equal(ecom.board, "ecommerce_hot");
+});
+
+test("detail isolates contentSource and does not cross boards for same noteId", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  const now = new Date();
+  const noteId = "shared-id";
+  upsertExcellentContentCache({
+    sourceKey: buildCacheSourceKey("xhs_hot", "professional"),
+    categoryPath: "",
+    items: [{ ...makeNote(noteId, { read: 1 }), title: "pro-xhs", contentSource: "professional" }],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+  upsertExcellentContentCache({
+    sourceKey: buildCacheSourceKey("ecommerce_hot", "user"),
+    categoryPath: "",
+    items: [
+      {
+        ...makeNote(noteId, { read: 2 }),
+        title: "user-ecom",
+        board: "ecommerce_hot",
+        contentSource: "user",
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+
+  const pro = await getExcellentContentDetail(
+    {},
+    { noteId, board: "xhs_hot", contentSource: "professional" },
+  );
+  assert.equal(pro.item.title, "pro-xhs");
+  assert.equal(pro.contentSource, "professional");
+
+  const user = await getExcellentContentDetail(
+    {},
+    { noteId, board: "ecommerce_hot", contentSource: "user" },
+  );
+  assert.equal(user.item.title, "user-ecom");
+  assert.equal(user.board, "ecommerce_hot");
+
+  // Looking on wrong board should not return the other board's note without fallbacks.
+  const miss = await getExcellentContentDetail(
+    {},
+    { noteId: "only-on-xhs", board: "ecommerce_hot", contentSource: "all" },
+  );
+  assert.equal(miss.item, null);
+  assert.equal(miss.fromCache, false);
+});
+
+test("noteHasCompleteImages requires urls length >= imageCount", () => {
+  assert.equal(
+    noteHasCompleteImages({ imageUrls: ["a"], imageCount: 8 }),
+    false,
+  );
+  assert.equal(
+    noteHasCompleteImages({
+      imageUrls: Array.from({ length: 8 }, (_, i) => `u${i}`),
+      imageCount: 8,
+    }),
+    true,
+  );
+  assert.equal(noteHasCompleteImages({ imageUrls: ["a", "b"], imageCount: 0 }), true);
+  assert.equal(noteHasCompleteImages({ imageUrls: [], imageCount: 3 }), false);
+  assert.equal(noteHasCompleteImages(null), false);
+});
+
+test("detail incomplete images report available count without claiming full set", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  const now = new Date();
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot",
+    categoryPath: "",
+    items: [
+      {
+        ...makeNote("partial-img", { read: 5 }),
+        imageUrls: ["https://img.example/only-cover.jpg"],
+        imageCount: 8,
+        content: "",
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+  const detail = await getExcellentContentDetail({}, { noteId: "partial-img", board: "xhs_hot" });
+  assert.equal(detail.complete, false);
+  assert.equal(detail.availableImageCount, 1);
+  assert.equal(detail.imageCount, 8);
+  assert.equal(detail.item.imageUrls.length, 1);
+  assert.match(detail.message, /仅展示接口已返回的图片|完整内容暂时无法加载/);
 });
 
 test("warmAllExcellentContentBoards fails if any board fails", async () => {
@@ -520,15 +670,19 @@ test("remix carousel pack normalize keeps 4 pages sourceTemplate and remixBrief"
       title: "参考",
       sourceUrl: "https://www.xiaohongshu.com/explore/n1",
       source: "xhs_hot",
-      board: "xhs_hot",
-      contentSource: "all",
+      board: "ecommerce_hot",
+      contentSource: "professional",
     },
     remixBrief: {
       sourceType: "excellent_content",
       sourceNoteId: "n1",
       sourceTitle: "参考",
-      sourceBoard: "xhs_hot",
+      sourceBoard: "ecommerce_hot",
+      sourceCategoryPath: "内容类目#美妆",
+      sourceIndustryPath: "所属行业#美妆个护",
+      sourceImageCount: 4,
       sourceReadCount: 1200,
+      sourceEngagementCount: 88,
       originalityGuard: "原创保护",
       learningFocus: ["structure"],
       pageTask: "封面",
@@ -543,6 +697,8 @@ test("remix carousel pack normalize keeps 4 pages sourceTemplate and remixBrief"
       remixBrief: {
         sourceType: "excellent_content",
         sourceNoteId: "n1",
+        sourceBoard: "ecommerce_hot",
+        sourceReadCount: 1200,
         pageTask: `任务${n}`,
         originalityGuard: "原创保护",
       },
@@ -550,10 +706,16 @@ test("remix carousel pack normalize keeps 4 pages sourceTemplate and remixBrief"
   });
   assert.equal(pack.slides.length, 4);
   assert.equal(pack.sourceTemplate.noteId, "n1");
-  assert.equal(pack.sourceTemplate.source, "xhs_hot");
-  assert.doesNotMatch(JSON.stringify(pack), /professional/);
+  assert.equal(pack.sourceTemplate.source, "ecommerce_hot");
+  assert.equal(pack.sourceTemplate.board, "ecommerce_hot");
+  assert.equal(pack.sourceTemplate.contentSource, "professional");
   assert.equal(pack.remixBrief.sourceType, "excellent_content");
+  assert.equal(pack.remixBrief.sourceBoard, "ecommerce_hot");
+  assert.equal(pack.remixBrief.sourceIndustryPath, "所属行业#美妆个护");
+  assert.equal(pack.remixBrief.sourceReadCount, 1200);
+  assert.equal(pack.remixBrief.sourceImageCount, 4);
   assert.equal(pack.slides[0].remixBrief.pageTask, "任务1");
+  assert.equal(pack.slides[0].remixBrief.sourceBoard, "ecommerce_hot");
   assert.ok(!JSON.stringify(pack).includes("http://cdn.example/original.jpg"));
 });
 
@@ -573,6 +735,9 @@ test("remix prompt engine appends context without sourceUrl", () => {
     objective: "种草",
     remixBrief: {
       sourceTitle: "参考标题",
+      sourceBoard: "ecommerce_hot",
+      sourceIndustryPath: "所属行业#美妆个护",
+      sourceReadCount: 5600,
       pageTask: "封面钩子",
       pageTitle: "本页标题",
       pageCopy: "本页文案",
@@ -587,6 +752,9 @@ test("remix prompt engine appends context without sourceUrl", () => {
   assert.match(withRemix, /封面钩子/);
   assert.match(withRemix, /structure/);
   assert.match(withRemix, /不得复制原文/);
+  assert.match(withRemix, /电商热门/);
+  assert.match(withRemix, /所属行业#美妆个护/);
+  assert.match(withRemix, /阅读量约 5600/);
   assert.doesNotMatch(withRemix, /secret\.example/);
   const long = buildImagePrompt({
     brand: { name: "测试品牌", product: "产品" },
@@ -601,5 +769,35 @@ test("remix prompt engine appends context without sourceUrl", () => {
   });
   assert.ok(long.includes("优秀内容仿写上下文"));
   assert.ok(!long.includes("y".repeat(200)));
+});
+
+test("invalid board in sourceTemplate is cleared; normal prompt unchanged", () => {
+  const pack = normalizeGeneratedXhsCarouselPack({
+    title: "方案",
+    publishTitle: "发布标题",
+    publishCaption: "发布文案内容足够长",
+    slides: [1, 2, 3, 4].map((n) => ({
+      pageLabel: `第 ${n} 张`,
+      title: `标题${n}`,
+      copy: `文案${n}`,
+      visualDirection: `视觉${n}`,
+    })),
+    sourceTemplate: {
+      noteId: "n2",
+      title: "t",
+      board: "invalid_board",
+      contentSource: "user",
+      sourceUrl: "https://www.xiaohongshu.com/explore/n2",
+    },
+  });
+  assert.equal(pack.sourceTemplate.board, "");
+  assert.equal(pack.sourceTemplate.contentSource, "user");
+  const base = buildImagePrompt({
+    brand: { name: "测试品牌", product: "产品" },
+    contentType: "cover",
+    platform: "xiaohongshu",
+  });
+  assert.match(base, /【视觉目标】/);
+  assert.doesNotMatch(base, /优秀内容仿写上下文/);
 });
 

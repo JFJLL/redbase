@@ -176,6 +176,71 @@ test("excellent contents detail returns cached note images", async () => {
   assert.equal(res.body.item.noteId, "e1");
   assert.equal(res.body.item.imageUrls.length, 2);
   assert.equal(res.body.fromCache, true);
+  assert.equal(res.body.board, "ecommerce_hot");
+  assert.equal(typeof res.body.item.noteId, "string");
+});
+
+test("excellent detail hits taxonomy-scoped cache via query params", async () => {
+  const now = new Date();
+  const categoryPath = "内容类目#美妆#护肤";
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot:professional",
+    categoryPath,
+    items: [
+      {
+        id: "tax-1",
+        noteId: "tax-1",
+        title: "类目笔记",
+        noteType: "image",
+        board: "xhs_hot",
+        imageUrls: ["https://img.example/t1.jpg"],
+        imageCount: 1,
+        metrics: { readCount: 3, likeCount: 1, favoriteCount: 0, commentCount: 0, engagementCount: 1 },
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+  const res = createRes();
+  const qs = new URLSearchParams({
+    board: "xhs_hot",
+    contentSource: "professional",
+    categoryPath,
+  });
+  const handled = await handleExcellentContentRoutes(
+    { appConfig: { pgy: { enabled: false } } },
+    createGetReq(`/api/excellent-contents/tax-1/detail?${qs}`, "redbase_session=excellent-token"),
+    res,
+    "/api/excellent-contents/tax-1/detail",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.item.noteId, "tax-1");
+  assert.equal(res.body.taxonomyPath, categoryPath);
+  assert.equal(res.body.contentSource, "professional");
+});
+
+test("excellent detail rejects invalid board and contentSource", async () => {
+  const badBoard = createRes();
+  await handleExcellentContentRoutes(
+    { appConfig: { pgy: { enabled: false } } },
+    createGetReq("/api/excellent-contents/n1/detail?board=other", "redbase_session=excellent-token"),
+    badBoard,
+    "/api/excellent-contents/n1/detail",
+  );
+  assert.equal(badBoard.statusCode, 400);
+
+  const badSource = createRes();
+  await handleExcellentContentRoutes(
+    { appConfig: { pgy: { enabled: false } } },
+    createGetReq(
+      "/api/excellent-contents/n1/detail?board=xhs_hot&contentSource=nope",
+      "redbase_session=excellent-token",
+    ),
+    badSource,
+    "/api/excellent-contents/n1/detail",
+  );
+  assert.equal(badSource.statusCode, 400);
 });
 
 test("excellent contents accepts waitForFresh query flag", async () => {

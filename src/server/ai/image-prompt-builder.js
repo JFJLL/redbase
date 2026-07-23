@@ -323,15 +323,27 @@ function buildRemixBriefLayer(rawBrief) {
   const pageTask = compactText(rawBrief.pageTask, 160);
   const pageTitle = compactText(rawBrief.pageTitle, 80);
   const pageCopy = compactText(rawBrief.pageCopy, 200);
+  const sourceBoard = compactText(rawBrief.sourceBoard, 40);
+  const boardLabel =
+    sourceBoard === "ecommerce_hot" ? "电商热门" : sourceBoard === "xhs_hot" ? "小红书热门" : "";
+  const taxonomyPath =
+    compactText(rawBrief.sourceCategoryPath, 120) || compactText(rawBrief.sourceIndustryPath, 120);
+  const readCount = Number(rawBrief.sourceReadCount);
+  const readLabel =
+    Number.isFinite(readCount) && readCount > 0 ? `阅读量约 ${Math.floor(readCount)}` : "";
   const learningFocus = Array.isArray(rawBrief.learningFocus)
     ? rawBrief.learningFocus.map((item) => compactText(item, 40)).filter(Boolean).slice(0, 6)
     : [];
   const originalityGuard =
     compactText(rawBrief.originalityGuard, 320) ||
     "只学习参考笔记的信息节奏、页面角色和内容方法；不得复制原文、原图人物、原品牌、原Logo、水印、具体版式和可识别视觉资产；生成全新的原创内容与画面。";
+  // Controlled remix layer only — never sourceUrl, image URLs, cookies, or free-form secrets.
   const lines = [
     "【优秀内容仿写上下文】",
     sourceTitle ? `参考案例标题：${sourceTitle}` : "",
+    boardLabel ? `来源板块：${boardLabel}` : "",
+    taxonomyPath ? `类目或行业：${taxonomyPath}` : "",
+    readLabel ? readLabel : "",
     pageTask ? `本页页面任务：${pageTask}` : "",
     pageTitle ? `本页标题重点：${pageTitle}` : "",
     pageCopy ? `本页文案重点：${pageCopy}` : "",

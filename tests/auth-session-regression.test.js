@@ -92,9 +92,8 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     retriedHistoryImagePaths: new Set(["/private/image.png"]),
     historyImageSignatureRefreshInFlight: Promise.resolve(),
     historyFilterTimer: pendingFilterTimer,
-    excellentFreshCheckTimer: pendingFreshTimer,
-    excellentFreshCheckKey: "xhs_hot::美妆",
-    excellentFreshCheckAttempted: new Set(["xhs_hot::美妆"]),
+    excellentFreshCheckTimers: new Map([["xhs_hot::all::", pendingFreshTimer]]),
+    excellentFreshCheckAttempted: new Set(["xhs_hot::all::"]),
     clearTimeout: (timer) => calls.push(`clearTimeout:${timer.id}`),
     document: {
       querySelectorAll: () => [],
@@ -135,8 +134,7 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
   assert.equal(context.retriedHistoryImagePaths.size, 0);
   assert.equal(context.historyImageSignatureRefreshInFlight, null);
   assert.equal(context.historyFilterTimer, null);
-  assert.equal(context.excellentFreshCheckTimer, null);
-  assert.equal(context.excellentFreshCheckKey, "");
+  assert.equal(context.excellentFreshCheckTimers.size, 0);
   assert.equal(context.excellentFreshCheckAttempted.size, 0);
   assert.equal(context.sessionEpoch, 4);
   assert.deepEqual(calls, [

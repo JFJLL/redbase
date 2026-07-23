@@ -73,10 +73,28 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       badRequest(res, "暂不支持该内容板块。");
       return true;
     }
+    const contentSourceRaw = String(url.searchParams.get("contentSource") || "all").trim() || "all";
+    if (!getExcellentContentSource(contentSourceRaw)) {
+      badRequest(res, "暂不支持该内容来源。");
+      return true;
+    }
+    // Only accept the taxonomy field that matches the board; ignore the other.
+    const boardDef = getExcellentContentBoard(boardRaw);
+    const categoryPath =
+      boardDef?.taxonomyType === "category"
+        ? normalizePgyCategoryPath(url.searchParams.get("categoryPath") || "")
+        : "";
+    const industryPath =
+      boardDef?.taxonomyType === "industry"
+        ? normalizePgyIndustryPath(url.searchParams.get("industryPath") || "")
+        : "";
     try {
       const result = await getExcellentContentDetail(context.appConfig, {
         noteId,
         board: boardRaw,
+        contentSource: contentSourceRaw,
+        categoryPath,
+        industryPath,
       });
       json(res, 200, result);
     } catch (error) {

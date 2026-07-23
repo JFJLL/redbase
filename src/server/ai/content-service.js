@@ -112,6 +112,18 @@ function compactRemixText(value, maxLength = 240) {
     .slice(0, maxLength);
 }
 
+function normalizeNonNegNumber(value, max = Number.MAX_SAFE_INTEGER) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) return 0;
+  return Math.min(max, Math.floor(num));
+}
+
+function normalizeExcellentBoardValue(value) {
+  const board = compactRemixText(value, 40);
+  if (board === "xhs_hot" || board === "ecommerce_hot") return board;
+  return "";
+}
+
 function normalizeRemixBrief(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const learningFocus = Array.isArray(raw.learningFocus)
@@ -121,28 +133,38 @@ function normalizeRemixBrief(raw) {
     sourceType: compactRemixText(raw.sourceType, 40) || "excellent_content",
     sourceNoteId: compactRemixText(raw.sourceNoteId, 80),
     sourceTitle: compactRemixText(raw.sourceTitle, 120),
+    sourceBoard: normalizeExcellentBoardValue(raw.sourceBoard),
     sourceCategoryPath: compactRemixText(raw.sourceCategoryPath, 180),
-    sourceImageCount: Math.max(0, Math.min(99, Number(raw.sourceImageCount) || 0)),
-    sourceEngagementCount: Math.max(0, Number(raw.sourceEngagementCount) || 0),
+    sourceIndustryPath: compactRemixText(raw.sourceIndustryPath, 180),
+    sourceImageCount: normalizeNonNegNumber(raw.sourceImageCount, 99),
+    sourceReadCount: normalizeNonNegNumber(raw.sourceReadCount, 1e12),
+    sourceEngagementCount: normalizeNonNegNumber(raw.sourceEngagementCount, 1e12),
     learningFocus,
     pageTask: compactRemixText(raw.pageTask, 200),
     pageTitle: compactRemixText(raw.pageTitle, 120),
     pageCopy: compactRemixText(raw.pageCopy, 300),
     originalityGuard: compactRemixText(raw.originalityGuard, 400),
   };
-  // Never allow sourceUrl or secrets into prompt metadata.
+  // Never allow sourceUrl, cookies, tokens, or arbitrary secrets into prompt metadata.
   delete brief.sourceUrl;
+  delete brief.cookie;
+  delete brief.token;
+  delete brief.authorization;
   return brief;
 }
 
 function normalizeSourceTemplate(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const noteId = compactRemixText(raw.noteId || raw.sourceNoteId, 80);
+  const board = normalizeExcellentBoardValue(raw.board || raw.source);
   return {
     noteId,
     title: compactRemixText(raw.title, 120),
+    // sourceUrl stays in business payload only; Image Prompt Engine must not use it.
     sourceUrl: compactRemixText(raw.sourceUrl || raw.noteUrl, 300),
-    source: compactRemixText(raw.source, 40) || "xhs_hot",
+    source: board || compactRemixText(raw.source, 40) || "xhs_hot",
+    board,
+    contentSource: compactRemixText(raw.contentSource, 40),
   };
 }
 
