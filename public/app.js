@@ -5377,13 +5377,18 @@ async function handleExcellentRemixChange(event) {
   if (target.hasAttribute("data-remix-custom-direction")) {
     excellentRemixState.customDirection = target.value || "";
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
-    // Debounced re-render not needed for typing; submit button updates on fusion rebuild.
+    // Keep action availability in sync without re-rendering and disrupting the cursor.
+    const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
+    const brandReady = Boolean(brand && isBrandDetailLoaded(brand));
+    const fusionButton = document.querySelector("[data-remix-build-fusion]");
+    if (fusionButton) {
+      fusionButton.disabled = !canGenerateFusionPlan(excellentRemixState, brandReady);
+    }
     const submitButton = document.getElementById("submitExcellentRemix");
     if (submitButton) {
-      const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
       submitButton.disabled = !canSubmitExcellentRemix(
         excellentRemixState,
-        Boolean(brand && isBrandDetailLoaded(brand)),
+        brandReady,
       );
     }
     return;
