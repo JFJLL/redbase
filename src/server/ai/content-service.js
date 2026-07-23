@@ -147,6 +147,7 @@ function normalizeRemixBrief(raw) {
   const sourceLearningApplied = Array.isArray(raw.sourceLearningApplied)
     ? raw.sourceLearningApplied.map((item) => compactRemixText(item, 80)).filter(Boolean).slice(0, 6)
     : [];
+  const platformVisualGuidance = compactRemixText(raw.platformVisualGuidance, 220);
   const brief = {
     sourceType: compactRemixText(raw.sourceType, 40) || "excellent_content",
     sourceNoteId: compactRemixText(raw.sourceNoteId, 80),
@@ -170,6 +171,8 @@ function normalizeRemixBrief(raw) {
     pageCopy: compactRemixText(raw.pageCopy, 300),
     contentGoal: compactRemixText(raw.contentGoal, 200),
     sourceLearningApplied,
+    // Separate from sourceLearningApplied — platform defaults must not look like reference-image learning.
+    platformVisualGuidance,
     originalityGuard: compactRemixText(raw.originalityGuard, 400),
   };
   // Never allow sourceUrl, cookies, tokens, image URLs, or arbitrary secrets into prompt metadata.

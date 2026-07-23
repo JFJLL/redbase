@@ -47,14 +47,22 @@ import {
   MAX_REMIX_PRODUCT_IMAGES,
   toggleLearningFocus,
   invalidateAfterInputChange,
-  filterExistingIdeas,
   getSelectedSmartDirection,
   canGenerateFusionPlan,
   canSubmitExcellentRemix,
-  resolveAssetFlags,
   buildFusionRequestBody,
   buildGenerationPayload,
+  buildExistingIdeaKey,
+  parseExistingIdeaKey,
+  defaultLearningFocusForAnalysis,
+  isPlatformDefaultVisual,
 } from "./js/excellent-remix-state.js";
+import {
+  captureRemixRequestToken,
+  nextRemixRequestId,
+  isRemixResponseCurrent,
+  shouldAutoGenerateSmartDirections,
+} from "./js/excellent-remix-request.js";
 import {
   fetchRemixAnalysis,
   fetchContentDirections,
@@ -72,6 +80,7 @@ import {
 } from "./js/excellent-remix-view.js";
 
 let sessionEpoch = 0;
+let excellentRemixInstanceSequence = 0;
 
 function assertSessionEpoch(expectedEpoch) {
   if (expectedEpoch === sessionEpoch) return;
@@ -4882,7 +4891,7 @@ async function openExcellentRemix(noteId) {
   closeExcellentContentDetail();
   const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
   const slice = getExcellentBoardState(board);
-  const openEpoch = sessionEpoch;
+  const instanceId = ++excellentRemixInstanceSequence;
   excellentRemixState = createExcellentRemixState({
     noteId: String(item.noteId || item.id),
     board,
@@ -4890,45 +4899,56 @@ async function openExcellentRemix(noteId) {
     categoryPath: slice.categoryPath || "",
     industryPath: slice.industryPath || "",
     brandId: state.selectedBrandId || state.brands[0]?.id || null,
+    instanceId,
+    sessionEpoch,
+    requestEpoch: sessionEpoch,
   });
-  excellentRemixState.requestEpoch = openEpoch;
   document.getElementById("excellentRemixModal")?.classList.add("is-open");
   setExcellentModalOpen(true);
   renderExcellentRemix();
-  // On-demand analysis only — never batch-analyze list items.
-  loadExcellentRemixAnalysis(openEpoch).catch(() => {});
-  if (excellentRemixState.brandId) {
-    await loadExcellentRemixBrandContext(excellentRemixState.brandId, openEpoch);
-  }
+  // Analysis and brand load in parallel; smart directions wait for analysis settlement.
+  const analysisPromise = loadExcellentRemixAnalysis().catch(() => {});
+  const brandPromise = excellentRemixState.brandId
+    ? loadExcellentRemixBrandContext(excellentRemixState.brandId).catch(() => {})
+    : Promise.resolve();
+  await Promise.all([analysisPromise, brandPromise]);
+  await maybeAutoGenerateSmartDirectionsOnce();
 }
 
 function closeExcellentRemix() {
   document.getElementById("excellentRemixModal")?.classList.remove("is-open");
   document.getElementById("excellentRemixProductPickerModal")?.classList.remove("is-open");
-  if (excellentRemixState) excellentRemixState.productPickerOpen = false;
+  // Invalidate any in-flight responses for the previous instance.
+  excellentRemixInstanceSequence += 1;
   excellentRemixState = null;
   if (!document.getElementById("excellentContentModal")?.classList.contains("is-open")) {
     setExcellentModalOpen(false);
   }
 }
 
-function isExcellentRemixEpochCurrent(epoch) {
-  return excellentRemixState && epoch === excellentRemixState.requestEpoch && epoch === sessionEpoch;
+function isExcellentRemixResponseCurrent(token, options = {}) {
+  if (!excellentRemixState || !token) return false;
+  if (Number(token.sessionEpoch) !== Number(sessionEpoch)) return false;
+  return isRemixResponseCurrent(excellentRemixState, token, options);
 }
 
-async function loadExcellentRemixAnalysis(epoch) {
-  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch)) return;
+async function loadExcellentRemixAnalysis() {
+  if (!excellentRemixState) return;
+  const requestId = nextRemixRequestId(excellentRemixState, "analysisRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "analysisRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
   excellentRemixState.analysisStatus = "loading";
   excellentRemixState.analysisError = "";
   renderExcellentRemix();
   try {
-    const result = await fetchRemixAnalysis(request, excellentRemixState.noteId, {
-      board: excellentRemixState.board,
+    const result = await fetchRemixAnalysis(request, noteId, {
+      board,
       contentSource: excellentRemixState.contentSource,
       categoryPath: excellentRemixState.categoryPath,
       industryPath: excellentRemixState.industryPath,
     });
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board })) return;
     const analysis = result.analysis || result;
     excellentRemixState.analysis = analysis;
     excellentRemixState.analysisId = analysis.analysisId || "";
@@ -4939,19 +4959,31 @@ async function loadExcellentRemixAnalysis(epoch) {
       excellentRemixState.analysisStatus = "degraded";
     }
     if (!analysis.analysisMode) excellentRemixState.analysisStatus = "degraded";
+    // metadata_only: keep structure/hook defaults; strip reference-visual focus claim.
+    if (isPlatformDefaultVisual(analysis)) {
+      excellentRemixState.learningFocus = (excellentRemixState.learningFocus || []).filter((item) => item !== "visual");
+      if (!excellentRemixState.learningFocus.length) {
+        excellentRemixState.learningFocus = defaultLearningFocusForAnalysis(analysis);
+      }
+    }
     renderExcellentRemix();
+    await maybeAutoGenerateSmartDirectionsOnce();
   } catch (error) {
-    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
-    excellentRemixState.analysisStatus = "error";
+    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board })) return;
     excellentRemixState.analysisError = error.message || "分析失败";
     // Keep modal open; fusion can still use server-side degraded analysis.
     excellentRemixState.analysisStatus = "degraded";
     renderExcellentRemix();
+    await maybeAutoGenerateSmartDirectionsOnce();
   }
 }
 
-async function loadExcellentRemixBrandContext(brandId, epoch) {
-  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch)) return;
+async function loadExcellentRemixBrandContext(brandId) {
+  if (!excellentRemixState) return;
+  const requestId = nextRemixRequestId(excellentRemixState, "brandRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "brandRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
   excellentRemixState.loadingBrand = true;
   excellentRemixState.productImageIds = [];
   excellentRemixState.useBrandLogo = false;
@@ -4959,67 +4991,111 @@ async function loadExcellentRemixBrandContext(brandId, epoch) {
   excellentRemixState.selectedExistingIdea = null;
   excellentRemixState.smartDirections = [];
   excellentRemixState.selectedSmartDirectionId = "";
+  excellentRemixState.directionsStatus = "idle";
+  excellentRemixState.directionsError = "";
+  excellentRemixState.directionsAutoTriggered = false;
   excellentRemixState.trendRecommendations = [];
   excellentRemixState.selectedTrendId = null;
   excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
+  // Invalidate in-flight direction responses for previous brand.
+  nextRemixRequestId(excellentRemixState, "directionsRequestId");
   renderExcellentRemix();
   try {
     await ensureBrandDetailLoaded(brandId);
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     const ideasResult = await fetchBrandRemixIdeas(request, brandId);
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     excellentRemixState.existingIdeas = ideasResult.ideas || [];
-    if (excellentRemixState.contentDirectionMode === REMIX_CONTENT_MODES.SMART) {
-      await loadExcellentRemixDirections(epoch);
-    }
   } catch (error) {
-    if (!isStaleSessionRequest(error) && isExcellentRemixEpochCurrent(epoch)) {
+    if (!isStaleSessionRequest(error) && isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
       showToast(`品牌详情加载失败：${error.message}`);
     }
   } finally {
-    if (excellentRemixState && isExcellentRemixEpochCurrent(epoch)) {
+    if (excellentRemixState && isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
       excellentRemixState.loadingBrand = false;
       renderExcellentRemix();
+      await maybeAutoGenerateSmartDirectionsOnce();
     }
   }
 }
 
-async function loadExcellentRemixDirections(epoch) {
-  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch) || !excellentRemixState.brandId) return;
+/**
+ * Barrier: smart directions only after analysis is settled and brand is ready.
+ * Auto-fires at most once per brand/instance settlement.
+ */
+async function maybeAutoGenerateSmartDirectionsOnce() {
+  if (!excellentRemixState) return;
+  if (!shouldAutoGenerateSmartDirections(excellentRemixState)) return;
+  excellentRemixState.directionsAutoTriggered = true;
+  await loadExcellentRemixDirections({ auto: true });
+}
+
+async function loadExcellentRemixDirections({ auto = false } = {}) {
+  if (!excellentRemixState || !excellentRemixState.brandId) return;
+  // Hard barrier: never race ahead of analysisId / analysis settlement.
+  const settled =
+    excellentRemixState.analysisStatus === "ready" ||
+    excellentRemixState.analysisStatus === "degraded" ||
+    excellentRemixState.analysisStatus === "error";
+  if (!settled) {
+    if (!auto) {
+      excellentRemixState.directionsError = "请等待参考分析完成后再生成内容方向。";
+      renderExcellentRemix();
+    }
+    return;
+  }
+  const requestId = nextRemixRequestId(excellentRemixState, "directionsRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "directionsRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
+  const brandId = Number(excellentRemixState.brandId);
   excellentRemixState.directionsStatus = "loading";
   excellentRemixState.directionsError = "";
   renderExcellentRemix();
   try {
-    const result = await fetchContentDirections(request, excellentRemixState.noteId, {
-      board: excellentRemixState.board,
-      brandId: Number(excellentRemixState.brandId),
+    const result = await fetchContentDirections(request, noteId, {
+      board,
+      brandId,
       sourceAnalysisId: excellentRemixState.analysisId || "",
       learningFocus: excellentRemixState.learningFocus,
+      contentSource: excellentRemixState.contentSource,
+      categoryPath: excellentRemixState.categoryPath,
+      industryPath: excellentRemixState.industryPath,
     });
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     excellentRemixState.smartDirections = result.directions || [];
     excellentRemixState.selectedSmartDirectionId = excellentRemixState.smartDirections[0]?.id || "";
     excellentRemixState.directionsStatus = "ready";
     if (result.analysisId) excellentRemixState.analysisId = result.analysisId;
     renderExcellentRemix();
   } catch (error) {
-    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
+      return;
+    }
     excellentRemixState.directionsStatus = "error";
     excellentRemixState.directionsError = error.message || "内容方向生成失败";
+    // Allow a single manual retry after auto failure; keep auto flag so we don't loop.
     renderExcellentRemix();
   }
 }
 
-async function loadExcellentRemixTrendRecommendations(epoch) {
-  if (!excellentRemixState || !isExcellentRemixEpochCurrent(epoch) || !excellentRemixState.useTrendContext) return;
+async function loadExcellentRemixTrendRecommendations() {
+  if (!excellentRemixState || !excellentRemixState.useTrendContext) return;
+  const requestId = nextRemixRequestId(excellentRemixState, "trendRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "trendRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
+  const brandId = Number(excellentRemixState.brandId);
   try {
     const body = {
-      brandId: Number(excellentRemixState.brandId),
-      board: excellentRemixState.board,
+      brandId,
+      board,
       contentMode: excellentRemixState.contentDirectionMode,
       direction: getSelectedSmartDirection(excellentRemixState),
       existingIdeaRef: excellentRemixState.selectedExistingIdea
         ? {
+            scope: excellentRemixState.selectedExistingIdea.scope === "snapshot" ? "snapshot" : "current",
+            analysisId: excellentRemixState.selectedExistingIdea.analysisId ?? null,
             trendId: excellentRemixState.selectedExistingIdea.trendId,
             ideaIndex: excellentRemixState.selectedExistingIdea.ideaIndex,
           }
@@ -5027,8 +5103,8 @@ async function loadExcellentRemixTrendRecommendations(epoch) {
       customDirection: excellentRemixState.customDirection,
       sourceAnalysisId: excellentRemixState.analysisId || "",
     };
-    const result = await fetchRecommendTrends(request, excellentRemixState.noteId, body);
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    const result = await fetchRecommendTrends(request, noteId, body);
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     excellentRemixState.trendRecommendations = result.recommendations || [];
     excellentRemixState.trendRecommendMessage = result.message || "";
     if (!excellentRemixState.trendRecommendations.length) {
@@ -5042,7 +5118,9 @@ async function loadExcellentRemixTrendRecommendations(epoch) {
     }
     renderExcellentRemix();
   } catch (error) {
-    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
+      return;
+    }
     excellentRemixState.useTrendContext = false;
     excellentRemixState.trendRecommendations = [];
     excellentRemixState.selectedTrendId = null;
@@ -5118,13 +5196,17 @@ async function buildExcellentRemixFusionPlan() {
     showToast("请先完成品牌、参考分析与内容方向选择。");
     return;
   }
-  const epoch = excellentRemixState.requestEpoch;
+  const requestId = nextRemixRequestId(excellentRemixState, "fusionRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "fusionRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
+  const brandId = Number(excellentRemixState.brandId);
   excellentRemixState.fusionStatus = "loading";
   excellentRemixState.fusionError = "";
   renderExcellentRemix();
   try {
-    const result = await fetchFusionPlan(request, excellentRemixState.noteId, buildFusionRequestBody(excellentRemixState));
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    const result = await fetchFusionPlan(request, noteId, buildFusionRequestBody(excellentRemixState));
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     excellentRemixState.fusionPlan = result.fusionPlan || result;
     excellentRemixState.fusionStatus = "ready";
     if (excellentRemixState.fusionPlan?.analysisId) {
@@ -5132,7 +5214,9 @@ async function buildExcellentRemixFusionPlan() {
     }
     renderExcellentRemix();
   } catch (error) {
-    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
+      return;
+    }
     excellentRemixState.fusionStatus = "error";
     excellentRemixState.fusionError = error.message || "融合方案生成失败";
     excellentRemixState.fusionPlan = null;
@@ -5142,25 +5226,77 @@ async function buildExcellentRemixFusionPlan() {
 
 async function openExcellentRemixProductPicker() {
   if (!excellentRemixState?.brandId) return;
-  const epoch = excellentRemixState.requestEpoch;
+  const requestId = nextRemixRequestId(excellentRemixState, "productImagesRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "productImagesRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
+  const brandId = Number(excellentRemixState.brandId);
   excellentRemixState.productPickerOpen = true;
   excellentRemixState.brandProductImagesStatus = "loading";
   document.getElementById("excellentRemixProductPickerModal")?.classList.add("is-open");
   renderExcellentRemixProductPicker();
   try {
-    const result = await fetchBrandProductImages(request, excellentRemixState.brandId);
-    if (!isExcellentRemixEpochCurrent(epoch)) return;
+    const result = await fetchBrandProductImages(request, brandId);
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     excellentRemixState.brandProductImages = result.images || [];
     excellentRemixState.brandProductImagesStatus = "ready";
     renderExcellentRemixProductPicker();
   } catch (error) {
-    if (isStaleSessionRequest(error) || !isExcellentRemixEpochCurrent(epoch)) return;
+    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
+      return;
+    }
     excellentRemixState.brandProductImages = [];
     excellentRemixState.brandProductImagesStatus = "error";
     excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
     excellentRemixState.productImageIds = [];
     showToast(`产品素材加载失败：${error.message}`);
     renderExcellentRemixProductPicker();
+  }
+}
+
+async function uploadExcellentRemixBrandProductImage(file) {
+  if (!excellentRemixState?.brandId || !file) return;
+  const brandId = Number(excellentRemixState.brandId);
+  const requestId = nextRemixRequestId(excellentRemixState, "productImagesRequestId");
+  const token = captureRemixRequestToken(excellentRemixState, "productImagesRequestId", requestId);
+  const noteId = excellentRemixState.noteId;
+  const board = excellentRemixState.board;
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const result = await request("/api/product-images", {
+      method: "POST",
+      body: JSON.stringify({
+        brandId,
+        name: file.name,
+        dataUrl,
+      }),
+    });
+    if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
+    const image = result.image;
+    if (image) {
+      excellentRemixState.brandProductImages = [
+        image,
+        ...(excellentRemixState.brandProductImages || []).filter((item) => Number(item.id) !== Number(image.id)),
+      ];
+      excellentRemixState.brandProductImagesStatus = "ready";
+      // Auto-select newly uploaded brand asset if under cap.
+      if ((excellentRemixState.productImageIds || []).length < MAX_REMIX_PRODUCT_IMAGES) {
+        excellentRemixState.productImageIds = [
+          ...new Set([...(excellentRemixState.productImageIds || []), image.id]),
+        ].slice(0, MAX_REMIX_PRODUCT_IMAGES);
+        excellentRemixState.assetMode = excellentRemixState.useBrandLogo
+          ? REMIX_ASSET_MODES.LOGO_AND_PRODUCT
+          : REMIX_ASSET_MODES.PRODUCT;
+      }
+      upsertProductImageLibrary(image);
+      showToast(result.duplicate ? "该图片已在当前品牌素材库中" : "已上传到当前品牌素材库");
+    }
+    renderExcellentRemixProductPicker();
+  } catch (error) {
+    if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
+      return;
+    }
+    showToast(`上传失败：${error.message}`);
   }
 }
 
@@ -5188,14 +5324,19 @@ function closeExcellentRemixProductPicker() {
 async function handleExcellentRemixChange(event) {
   if (!excellentRemixState) return;
   const target = event.target;
-  const epoch = excellentRemixState.requestEpoch;
 
   if (target.dataset.remixField === "brand") {
     excellentRemixState.brandId = Number(target.value);
-    await loadExcellentRemixBrandContext(excellentRemixState.brandId, epoch);
+    await loadExcellentRemixBrandContext(excellentRemixState.brandId);
     return;
   }
   if (target.dataset.remixFocus) {
+    if (target.dataset.remixFocus === "visual" && isPlatformDefaultVisual(excellentRemixState.analysis)) {
+      // Opt-in only as platform-default guidance, never as reference-image learning.
+      if (target.checked) {
+        showToast("当前未进行图片理解，已作为平台通用视觉建议使用，不代表参考笔记真实视觉特征。");
+      }
+    }
     excellentRemixState.learningFocus = toggleLearningFocus(
       excellentRemixState.learningFocus,
       target.dataset.remixFocus,
@@ -5213,7 +5354,14 @@ async function handleExcellentRemixChange(event) {
       !excellentRemixState.smartDirections.length &&
       excellentRemixState.brandId
     ) {
-      await loadExcellentRemixDirections(epoch);
+      // Reset auto flag only for explicit user switch when directions empty and analysis settled.
+      if (
+        excellentRemixState.analysisStatus === "ready" ||
+        excellentRemixState.analysisStatus === "degraded"
+      ) {
+        excellentRemixState.directionsAutoTriggered = true;
+        await loadExcellentRemixDirections({ auto: false });
+      }
     }
     renderExcellentRemix();
     return;
@@ -5222,25 +5370,27 @@ async function handleExcellentRemixChange(event) {
     excellentRemixState.selectedSmartDirectionId = target.dataset.remixSmartDirection;
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
     if (excellentRemixState.useTrendContext) {
-      await loadExcellentRemixTrendRecommendations(epoch);
+      await loadExcellentRemixTrendRecommendations();
     }
     renderExcellentRemix();
     return;
   }
   if (target.dataset.remixExistingIdea) {
-    const [trendId, ideaIndex] = String(target.dataset.remixExistingIdea).split(":");
-    const hit = (excellentRemixState.existingIdeas || []).find(
-      (idea) => Number(idea.trendId) === Number(trendId) && Number(idea.ideaIndex) === Number(ideaIndex),
-    );
-    excellentRemixState.selectedExistingIdea = hit || {
-      trendId: Number(trendId),
-      ideaIndex: Number(ideaIndex),
-    };
+    const key = String(target.dataset.remixExistingIdea || "");
+    const parsed = parseExistingIdeaKey(key);
+    const hit = (excellentRemixState.existingIdeas || []).find((idea) => buildExistingIdeaKey(idea) === key);
+    excellentRemixState.selectedExistingIdea = hit || parsed;
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
     if (excellentRemixState.useTrendContext) {
-      await loadExcellentRemixTrendRecommendations(epoch);
+      await loadExcellentRemixTrendRecommendations();
     }
     renderExcellentRemix();
+    return;
+  }
+  if (target.hasAttribute("data-remix-upload-brand-product") && target.files?.[0]) {
+    const file = target.files[0];
+    target.value = "";
+    await uploadExcellentRemixBrandProductImage(file);
     return;
   }
   if (target.hasAttribute("data-remix-custom-direction")) {
@@ -5271,7 +5421,7 @@ async function handleExcellentRemixChange(event) {
     excellentRemixState.useTrendContext = Boolean(target.checked);
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
     if (excellentRemixState.useTrendContext) {
-      await loadExcellentRemixTrendRecommendations(epoch);
+      await loadExcellentRemixTrendRecommendations();
     } else {
       excellentRemixState.selectedTrendId = null;
       excellentRemixState.trendRecommendations = [];

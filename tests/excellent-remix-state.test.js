@@ -21,6 +21,11 @@ const transformed = source
   resolveAssetFlags,
   buildFusionRequestBody,
   filterExistingIdeas,
+  buildExistingIdeaKey,
+  parseExistingIdeaKey,
+  buildExistingIdeaRef,
+  defaultLearningFocusForAnalysis,
+  isPlatformDefaultVisual,
   MAX_REMIX_PRODUCT_IMAGES,
   DEFAULT_LEARNING_FOCUS,
   MIN_CUSTOM_DIRECTION_CHARS,
@@ -39,17 +44,26 @@ const {
   resolveAssetFlags,
   buildFusionRequestBody,
   filterExistingIdeas,
+  buildExistingIdeaKey,
+  parseExistingIdeaKey,
+  buildExistingIdeaRef,
+  defaultLearningFocusForAnalysis,
+  isPlatformDefaultVisual,
   MAX_REMIX_PRODUCT_IMAGES,
+  DEFAULT_LEARNING_FOCUS,
 } = sandbox.module.exports;
 
-test("default remix state: smart mode, no trend, no assets", () => {
-  const state = createExcellentRemixState({ noteId: "n1", brandId: 1 });
+test("default remix state: smart mode, no trend, no assets, structure+hook focus", () => {
+  const state = createExcellentRemixState({ noteId: "n1", brandId: 1, instanceId: 9 });
   assert.equal(state.contentDirectionMode, REMIX_CONTENT_MODES.SMART);
   assert.equal(state.useTrendContext, false);
   assert.equal(state.assetMode, REMIX_ASSET_MODES.NONE);
   assert.equal(state.useBrandLogo, false);
   assert.equal(state.productImageIds.length, 0);
-  assert.equal(state.learningFocus.join(","), "structure,visual");
+  assert.equal(state.learningFocus.join(","), DEFAULT_LEARNING_FOCUS.join(","));
+  assert.equal(state.instanceId, 9);
+  assert.equal(state.analysisRequestId, 0);
+  assert.equal(state.directionsAutoTriggered, false);
 });
 
 test("input changes mark fusion stale", () => {
@@ -69,7 +83,7 @@ test("content direction validation for three modes", () => {
 
   state.contentDirectionMode = REMIX_CONTENT_MODES.EXISTING_IDEA;
   assert.equal(hasValidContentDirection(state), false);
-  state.selectedExistingIdea = { trendId: 1, ideaIndex: 0 };
+  state.selectedExistingIdea = { scope: "current", trendId: 1, ideaIndex: 0 };
   assert.equal(hasValidContentDirection(state), true);
 
   state.contentDirectionMode = REMIX_CONTENT_MODES.CUSTOM;
@@ -107,10 +121,17 @@ test("asset flags default none and cap product images", () => {
   assert.equal(flags.productImageIds.length, 0);
 });
 
-test("learning focus toggle and fusion request body", () => {
+test("learning focus toggle and fusion request body includes taxonomy", () => {
   const focus = toggleLearningFocus(["structure"], "hook", true);
   assert.equal(focus.join(","), "structure,hook");
-  const state = createExcellentRemixState({ noteId: "n1", brandId: 8, board: "ecommerce_hot" });
+  const state = createExcellentRemixState({
+    noteId: "n1",
+    brandId: 8,
+    board: "ecommerce_hot",
+    contentSource: "professional",
+    categoryPath: "内容类目#母婴",
+    industryPath: "",
+  });
   state.learningFocus = focus;
   state.contentDirectionMode = REMIX_CONTENT_MODES.CUSTOM;
   state.customDirection = "自定义方向内容足够长";
@@ -121,14 +142,63 @@ test("learning focus toggle and fusion request body", () => {
   assert.equal(body.useTrendContext, false);
   assert.equal(body.trendId, null);
   assert.equal(body.customDirection, "自定义方向内容足够长");
+  assert.equal(body.contentSource, "professional");
+  assert.equal(body.categoryPath, "内容类目#母婴");
 });
 
-test("existing idea search is flat and filters by text", () => {
+test("existing idea search is flat and filters by text including snapshot names", () => {
   const ideas = [
-    { ideaTitle: "转奶节奏", ideaSummary: "便便观察", trendTitle: "母婴热", audience: "妈妈", scene: "夜间", brandFit: "温和" },
-    { ideaTitle: "办公效率", ideaSummary: "表格", trendTitle: "职场", audience: "白领", scene: "工位", brandFit: "无" },
+    {
+      ideaTitle: "转奶节奏",
+      ideaSummary: "便便观察",
+      trendTitle: "母婴热",
+      audience: "妈妈",
+      scene: "夜间",
+      brandFit: "温和",
+      scope: "current",
+      analysisName: "",
+    },
+    {
+      ideaTitle: "办公效率",
+      ideaSummary: "表格",
+      trendTitle: "职场",
+      audience: "白领",
+      scene: "工位",
+      brandFit: "无",
+      scope: "snapshot",
+      analysisName: "三月复盘",
+    },
   ];
-  const filtered = filterExistingIdeas(ideas, "转奶");
-  assert.equal(filtered.length, 1);
-  assert.equal(filtered[0].ideaTitle, "转奶节奏");
+  assert.equal(filterExistingIdeas(ideas, "转奶").length, 1);
+  assert.equal(filterExistingIdeas(ideas, "三月复盘").length, 1);
+});
+
+test("existing idea key encodes scope and analysisId", () => {
+  const key = buildExistingIdeaKey({ scope: "snapshot", analysisId: 9, trendId: 301, ideaIndex: 1 });
+  assert.equal(key, "snapshot:9:301:1");
+  const parsed = parseExistingIdeaKey(key);
+  assert.equal(parsed.scope, "snapshot");
+  assert.equal(parsed.analysisId, 9);
+  assert.equal(parsed.trendId, 301);
+  assert.equal(parsed.ideaIndex, 1);
+  const state = createExcellentRemixState({ noteId: "n1" });
+  state.contentDirectionMode = REMIX_CONTENT_MODES.EXISTING_IDEA;
+  state.selectedExistingIdea = parsed;
+  const ref = buildExistingIdeaRef(state);
+  assert.equal(ref.scope, "snapshot");
+  assert.equal(ref.analysisId, 9);
+});
+
+test("metadata_only defaults and platform visual detection", () => {
+  const focus = defaultLearningFocusForAnalysis({ analysisMode: "metadata_only" });
+  assert.equal(focus.join(","), "structure,hook");
+  assert.equal(isPlatformDefaultVisual({ analysisMode: "metadata_only" }), true);
+  assert.equal(
+    isPlatformDefaultVisual({
+      analysisMode: "multimodal",
+      meta: { multimodalUsed: true },
+      visualLanguage: { source: "reference_image" },
+    }),
+    false,
+  );
 });

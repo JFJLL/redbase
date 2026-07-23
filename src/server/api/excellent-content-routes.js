@@ -218,6 +218,9 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         brandId,
         sourceAnalysisId: payload.sourceAnalysisId || payload.analysisId || "",
         learningFocus: payload.learningFocus,
+        contentSource: payload.contentSource || "all",
+        categoryPath: normalizePgyCategoryPath(payload.categoryPath || ""),
+        industryPath: normalizePgyIndustryPath(payload.industryPath || ""),
       });
       json(res, 200, result);
     } catch (error) {

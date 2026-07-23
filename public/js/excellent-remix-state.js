@@ -13,7 +13,8 @@ export const REMIX_ASSET_MODES = Object.freeze({
   LOGO_AND_PRODUCT: "logo_and_product",
 });
 
-export const DEFAULT_LEARNING_FOCUS = Object.freeze(["structure", "visual"]);
+/** Default learning focus avoids claiming reference visual understanding without multimodal. */
+export const DEFAULT_LEARNING_FOCUS = Object.freeze(["structure", "hook"]);
 export const MAX_REMIX_PRODUCT_IMAGES = 2;
 export const MIN_CUSTOM_DIRECTION_CHARS = 5;
 export const MAX_CUSTOM_DIRECTION_CHARS = 500;
@@ -26,6 +27,8 @@ export function createExcellentRemixState(seed = {}) {
     categoryPath: String(seed.categoryPath || ""),
     industryPath: String(seed.industryPath || ""),
     brandId: seed.brandId ?? null,
+    instanceId: Number(seed.instanceId) || 0,
+    sessionEpoch: Number(seed.sessionEpoch) || 0,
     learningFocus: Array.isArray(seed.learningFocus)
       ? [...seed.learningFocus]
       : [...DEFAULT_LEARNING_FOCUS],
@@ -46,6 +49,7 @@ export function createExcellentRemixState(seed = {}) {
     analysisId: "",
     directionsStatus: "idle",
     directionsError: "",
+    directionsAutoTriggered: false,
     fusionPlan: null,
     fusionStatus: "idle", // idle | loading | ready | error | stale
     fusionError: "",
@@ -60,7 +64,14 @@ export function createExcellentRemixState(seed = {}) {
       assetsCollapsed: true,
       trendCollapsed: false,
     },
-    requestEpoch: 0,
+    // sessionEpoch alias kept for older call sites; real isolation uses instanceId + request ids.
+    requestEpoch: Number(seed.sessionEpoch || seed.requestEpoch) || 0,
+    analysisRequestId: 0,
+    brandRequestId: 0,
+    directionsRequestId: 0,
+    trendRequestId: 0,
+    fusionRequestId: 0,
+    productImagesRequestId: 0,
   };
 }
 
@@ -108,7 +119,16 @@ export function filterExistingIdeas(ideas, query) {
     .toLowerCase();
   if (!q) return list;
   return list.filter((idea) => {
-    const hay = [idea.ideaTitle, idea.ideaSummary, idea.trendTitle, idea.audience, idea.scene, idea.brandFit]
+    const hay = [
+      idea.ideaTitle,
+      idea.ideaSummary,
+      idea.trendTitle,
+      idea.audience,
+      idea.scene,
+      idea.brandFit,
+      idea.analysisName,
+      idea.scope,
+    ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
@@ -121,13 +141,38 @@ export function getSelectedSmartDirection(state) {
   return (state.smartDirections || []).find((item) => item.id === state.selectedSmartDirectionId) || null;
 }
 
+export function buildExistingIdeaKey(idea) {
+  if (!idea) return "";
+  const scope = idea.scope === "snapshot" ? "snapshot" : "current";
+  const analysisId = idea.analysisId == null || idea.analysisId === "" ? 0 : Number(idea.analysisId);
+  return `${scope}:${analysisId}:${Number(idea.trendId)}:${Number(idea.ideaIndex)}`;
+}
+
+export function parseExistingIdeaKey(raw) {
+  const parts = String(raw || "").split(":");
+  if (parts.length < 4) return null;
+  const [scopeRaw, analysisRaw, trendRaw, ideaRaw] = parts;
+  const scope = scopeRaw === "snapshot" ? "snapshot" : "current";
+  const analysisId = Number(analysisRaw);
+  const trendId = Number(trendRaw);
+  const ideaIndex = Number(ideaRaw);
+  if (!Number.isFinite(trendId) || !Number.isInteger(ideaIndex) || ideaIndex < 0) return null;
+  return {
+    scope,
+    analysisId: scope === "snapshot" && Number.isFinite(analysisId) && analysisId > 0 ? analysisId : null,
+    trendId,
+    ideaIndex,
+  };
+}
+
 export function hasValidContentDirection(state) {
   if (!state) return false;
   if (state.contentDirectionMode === REMIX_CONTENT_MODES.SMART) {
     return Boolean(getSelectedSmartDirection(state));
   }
   if (state.contentDirectionMode === REMIX_CONTENT_MODES.EXISTING_IDEA) {
-    return Boolean(state.selectedExistingIdea?.trendId != null && state.selectedExistingIdea?.ideaIndex != null);
+    const idea = state.selectedExistingIdea;
+    return Boolean(idea && idea.trendId != null && idea.ideaIndex != null);
   }
   const custom = String(state.customDirection || "").trim();
   return custom.length >= MIN_CUSTOM_DIRECTION_CHARS && custom.length <= MAX_CUSTOM_DIRECTION_CHARS;
@@ -172,6 +217,19 @@ export function resolveAssetFlags(state) {
   };
 }
 
+export function buildExistingIdeaRef(state) {
+  if (state?.contentDirectionMode !== REMIX_CONTENT_MODES.EXISTING_IDEA || !state.selectedExistingIdea) {
+    return null;
+  }
+  const idea = state.selectedExistingIdea;
+  return {
+    scope: idea.scope === "snapshot" ? "snapshot" : "current",
+    analysisId: idea.analysisId == null || idea.analysisId === "" ? null : Number(idea.analysisId),
+    trendId: Number(idea.trendId),
+    ideaIndex: Number(idea.ideaIndex),
+  };
+}
+
 export function buildFusionRequestBody(state) {
   const direction = getSelectedSmartDirection(state);
   return {
@@ -183,13 +241,7 @@ export function buildFusionRequestBody(state) {
     learningFocus: [...(state.learningFocus || [])],
     contentMode: state.contentDirectionMode,
     smartDirection: state.contentDirectionMode === REMIX_CONTENT_MODES.SMART ? direction : null,
-    existingIdeaRef:
-      state.contentDirectionMode === REMIX_CONTENT_MODES.EXISTING_IDEA && state.selectedExistingIdea
-        ? {
-            trendId: Number(state.selectedExistingIdea.trendId),
-            ideaIndex: Number(state.selectedExistingIdea.ideaIndex),
-          }
-        : null,
+    existingIdeaRef: buildExistingIdeaRef(state),
     customDirection:
       state.contentDirectionMode === REMIX_CONTENT_MODES.CUSTOM ? String(state.customDirection || "").trim() : "",
     useTrendContext: Boolean(state.useTrendContext),
@@ -203,16 +255,25 @@ export function buildGenerationPayload(state, fusionPlan) {
   return {
     carouselPack: fusionPlan.carouselPack,
     contentMode: state.contentDirectionMode,
-    existingIdeaRef:
-      state.contentDirectionMode === REMIX_CONTENT_MODES.EXISTING_IDEA && state.selectedExistingIdea
-        ? {
-            trendId: Number(state.selectedExistingIdea.trendId),
-            ideaIndex: Number(state.selectedExistingIdea.ideaIndex),
-          }
-        : null,
+    existingIdeaRef: buildExistingIdeaRef(state),
+    // Client may send labels for UX only; server re-resolves authoritative titles.
     ideaTitle: fusionPlan.carouselPack?.publishTitle || fusionPlan.contentThesis || "",
     trendTitle: fusionPlan.trendUsed ? fusionPlan.trendTitle || "" : "",
     useBrandLogo: assets.useBrandLogo,
     productImageIds: assets.productImageIds,
   };
+}
+
+export function defaultLearningFocusForAnalysis(analysis) {
+  if (analysis?.analysisMode === "multimodal" && analysis?.meta?.multimodalUsed) {
+    return ["structure", "visual", "hook"];
+  }
+  return [...DEFAULT_LEARNING_FOCUS];
+}
+
+export function isPlatformDefaultVisual(analysis) {
+  if (!analysis) return true;
+  if (analysis.analysisMode === "metadata_only") return true;
+  if (analysis.visualLanguage?.source === "platform_default") return true;
+  return !analysis.meta?.multimodalUsed;
 }

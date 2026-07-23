@@ -366,6 +366,12 @@ function buildRemixBriefLayer(rawBrief) {
     pageTitle ? `本页标题重点：${pageTitle}` : "",
     pageCopy ? `本页文案重点：${pageCopy}` : "",
     sourceLearningApplied.length ? `本页应用的参考方法：${sourceLearningApplied.join("；")}` : "",
+    (() => {
+      const platformVisualGuidance = compactText(rawBrief.platformVisualGuidance, 200);
+      return platformVisualGuidance
+        ? `平台通用视觉建议（非参考笔记图片识别）：${platformVisualGuidance}`
+        : "";
+    })(),
     learningFocus.length ? `学习重点：${learningFocus.join("、")}` : "",
     `原创保护：${originalityGuard}`,
   ].filter(Boolean);

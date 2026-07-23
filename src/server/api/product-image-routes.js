@@ -13,6 +13,7 @@ const {
   insertProductImage,
   markProductImageDeleted,
   ASSET_TYPE_PRODUCT,
+  ASSET_TYPE_UNASSIGNED,
 } = require("../db/repositories/product-image-repository");
 const brandRepository = require("../db/repositories/brand-repository");
 
@@ -90,18 +91,27 @@ async function handleProductImageRoutes(context, req, res, pathname) {
           return true;
         }
       }
+      // brandId present → product asset of that brand; otherwise unassigned global upload.
+      const assetType = brandId > 0 ? ASSET_TYPE_PRODUCT : ASSET_TYPE_UNASSIGNED;
       const sha256 = crypto.createHash("sha256").update(parsed.buffer).digest("hex");
-      const existing = findDuplicateProductImage(user.id, sha256);
+      const existing = findDuplicateProductImage({
+        ownerUserId: user.id,
+        brandId,
+        assetType,
+        sha256,
+      });
       if (existing) {
         image = existing;
         duplicate = true;
       } else {
+        // Scheme A: independent record + file copy per brand ownership scope.
         const imageId = allocateCounter("nextProductImageId", 1);
         const now = new Date();
         const year = String(now.getFullYear());
         const month = String(now.getMonth() + 1).padStart(2, "0");
         const ext = PRODUCT_IMAGE_MIME_EXTENSIONS[parsed.mimeType];
-        const fileName = `pi_${imageId}_${crypto.randomBytes(6).toString("hex")}.${ext}`;
+        const brandScope = brandId > 0 ? `brand-${brandId}` : "unassigned";
+        const fileName = `pi_${imageId}_${brandScope}_${crypto.randomBytes(6).toString("hex")}.${ext}`;
         const storedPath = path.join("uploads", "product-images", "users", String(user.id), year, month, fileName);
         const absolutePath = path.join(DATA_DIR, storedPath);
         await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -110,7 +120,7 @@ async function handleProductImageRoutes(context, req, res, pathname) {
           id: imageId,
           ownerUserId: user.id,
           brandId,
-          assetType: brandId > 0 ? ASSET_TYPE_PRODUCT : ASSET_TYPE_PRODUCT,
+          assetType,
           originalName: sanitizeFileName(payload?.name || "product-image"),
           storedPath,
           mimeType: parsed.mimeType,

@@ -10,10 +10,10 @@ import {
   MAX_CUSTOM_DIRECTION_CHARS,
   MIN_CUSTOM_DIRECTION_CHARS,
   filterExistingIdeas,
-  getSelectedSmartDirection,
   canGenerateFusionPlan,
-  canSubmitExcellentRemix,
   resolveAssetFlags,
+  buildExistingIdeaKey,
+  isPlatformDefaultVisual,
 } from "./excellent-remix-state.js";
 
 function boardLabel(board) {
@@ -111,25 +111,31 @@ export function renderExistingIdeasHtml(state, helpers) {
   if (!state.existingIdeas?.length) {
     return `<div class="excellent-remix-status">当前品牌还没有已生成选题。可改用智能方向或自己描述。</div>`;
   }
+  const selectedKey = state.selectedExistingIdea ? buildExistingIdeaKey(state.selectedExistingIdea) : "";
   return `
-    <input class="excellent-remix-search" data-remix-idea-query type="search" placeholder="搜索选题标题/摘要/人群" value="${escapeHtml(
+    <input class="excellent-remix-search" data-remix-idea-query type="search" placeholder="搜索选题标题/摘要/人群/历史分析" value="${escapeHtml(
       state.existingIdeaQuery || "",
     )}" />
     <div class="excellent-idea-list">
       ${ideas
         .map((idea) => {
-          const selected =
-            state.selectedExistingIdea &&
-            Number(state.selectedExistingIdea.trendId) === Number(idea.trendId) &&
-            Number(state.selectedExistingIdea.ideaIndex) === Number(idea.ideaIndex);
+          const key = buildExistingIdeaKey(idea);
+          const selected = selectedKey && selectedKey === key;
+          const scopeLabel =
+            idea.scope === "snapshot"
+              ? `历史分析：${idea.analysisName || "未命名分析"}${
+                  idea.analysisTimestamp ? ` · ${String(idea.analysisTimestamp).slice(0, 16)}` : ""
+                }`
+              : "当前选题";
           return `
             <label class="excellent-idea-card ${selected ? "is-selected" : ""}">
-              <input type="radio" name="remix-existing-idea" data-remix-existing-idea="${Number(idea.trendId)}:${Number(
-                idea.ideaIndex,
-              )}" ${selected ? "checked" : ""} />
+              <input type="radio" name="remix-existing-idea" data-remix-existing-idea="${escapeHtml(key)}" ${
+                selected ? "checked" : ""
+              } />
               <div>
                 <strong>${escapeHtml(idea.ideaTitle || "未命名选题")}</strong>
                 <p>${escapeHtml(idea.ideaSummary || "")}</p>
+                <span class="excellent-direction-meta">${escapeHtml(scopeLabel)}</span>
                 <span class="excellent-direction-meta">来源趋势：${escapeHtml(idea.trendTitle || "—")}（仅说明）</span>
                 <span class="excellent-direction-meta">人群：${escapeHtml(idea.audience || "—")} · 场景：${escapeHtml(
                   idea.scene || "—",
@@ -268,6 +274,13 @@ export function renderFusionPlanHtml(state, brandReady, helpers) {
               plan.sourceRole ||
               "",
           )}</p></div>
+          ${
+            plan.platformVisualGuidance
+              ? `<div><span>平台通用视觉建议</span><p>${escapeHtml(
+                  plan.platformVisualGuidance.description || "",
+                )}（未进行图片理解，不代表参考笔记真实视觉特征）</p></div>`
+              : ""
+          }
           <div><span>品牌如何进入</span><p>${escapeHtml(plan.brandIntegration || "")}</p></div>
           <div><span>趋势语境</span><p>${
             plan.trendUsed
@@ -391,23 +404,37 @@ export function renderExcellentRemixBodyHtml({
     <section class="excellent-remix-section">
       <h3>3. 想重点学习什么</h3>
       <div class="excellent-check-row">
-        ${[
-          ["structure", "信息结构"],
-          ["visual", "视觉语言"],
-          ["hook", "封面钩子"],
-          ["conversion", "收藏转化"],
-        ]
-          .map(
-            ([value, label]) => `
-          <label>
-            <input data-remix-focus="${value}" type="checkbox" ${state.learningFocus?.includes(value) ? "checked" : ""} />
+        ${(() => {
+          const platformVisual = isPlatformDefaultVisual(state.analysis);
+          const items = [
+            ["structure", "信息结构", false],
+            [
+              "visual",
+              platformVisual ? "平台通用视觉建议" : "视觉语言",
+              platformVisual,
+            ],
+            ["hook", "封面钩子", false],
+            ["conversion", "收藏转化", false],
+          ];
+          return items
+            .map(
+              ([value, label, isPlatformVisual]) => `
+          <label class="${isPlatformVisual ? "is-platform-visual" : ""}">
+            <input data-remix-focus="${value}" ${
+              isPlatformVisual ? 'data-remix-allow-platform-visual="1"' : ""
+            } type="checkbox" ${state.learningFocus?.includes(value) ? "checked" : ""} />
             <span>${label}</span>
           </label>
         `,
-          )
-          .join("")}
+            )
+            .join("");
+        })()}
       </div>
-      <p class="excellent-remix-hint">学习重点控制融合阶段真正使用哪些参考方法字段，而不是只显示文字。</p>
+      <p class="excellent-remix-hint">学习重点控制融合阶段真正使用哪些参考方法字段。${
+        isPlatformDefaultVisual(state.analysis)
+          ? "当前为 metadata_only：未进行图片理解，“平台通用视觉建议”不代表参考笔记真实配色/构图/字体。"
+          : "学习重点控制融合阶段真正使用哪些参考方法字段，而不是只显示文字。"
+      }</p>
     </section>
     ${renderContentDirectionHtml(state, helpers)}
     ${renderTrendSectionHtml(state, helpers)}
@@ -420,18 +447,28 @@ export function renderExcellentRemixBodyHtml({
 export function renderBrandProductPickerHtml(state, helpers) {
   const { escapeHtml, authenticatedImageSrc } = helpers;
   const images = state.brandProductImages || [];
-  const selected = new Set(state.productImageIds || []);
+  const selected = new Set((state.productImageIds || []).map(Number));
+  const uploadBlock = `
+    <div class="excellent-product-upload">
+      <label class="secondary-btn small-btn excellent-product-upload-btn">
+        上传到当前品牌
+        <input type="file" accept="image/*" data-remix-upload-brand-product hidden />
+      </label>
+      <p class="excellent-remix-hint">图片将归属当前品牌素材库，可立即勾选使用；不会写入其他品牌。未归属全局素材请在此重新上传到当前品牌。</p>
+    </div>
+  `;
   if (state.brandProductImagesStatus === "loading") {
-    return `<div class="excellent-remix-status is-loading">正在加载当前品牌产品素材…</div>`;
+    return `${uploadBlock}<div class="excellent-remix-status is-loading">正在加载当前品牌产品素材…</div>`;
   }
   if (!images.length) {
-    return `<div class="excellent-remix-status">当前品牌还没有产品实拍图。可在品牌相关上传入口补充后，再回到这里选择。</div>`;
+    return `${uploadBlock}<div class="excellent-remix-status">当前品牌还没有产品实拍图。请直接「上传到当前品牌」，或从本机重新选择图片。</div>`;
   }
   return `
+    ${uploadBlock}
     <div class="excellent-product-picker-grid">
       ${images
         .map((image) => {
-          const isSelected = selected.has(image.id);
+          const isSelected = selected.has(Number(image.id));
           return `
             <label class="excellent-product-pick ${isSelected ? "is-selected" : ""}">
               <input type="checkbox" data-remix-pick-product="${image.id}" ${isSelected ? "checked" : ""} />
@@ -443,7 +480,7 @@ export function renderBrandProductPickerHtml(state, helpers) {
         })
         .join("")}
     </div>
-    <p class="excellent-remix-hint">最多选择 ${MAX_REMIX_PRODUCT_IMAGES} 张。已选 ${selected.size} 张。</p>
+    <p class="excellent-remix-hint">最多选择 ${MAX_REMIX_PRODUCT_IMAGES} 张。已选 ${selected.size} 张。仅显示当前品牌 product 素材。</p>
   `;
 }
 

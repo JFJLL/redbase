@@ -65,6 +65,52 @@ brandRepo.findBrandByOwner = (brandId, ownerUserId) => {
           ],
         },
       ],
+      analyses: [
+        {
+          id: 55,
+          name: "历史分析一",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          trendSnapshot: [
+            {
+              key: "xhs",
+              items: [
+                {
+                  id: 11,
+                  title: "历史趋势同 id",
+                  summary: "snapshot",
+                  tags: ["转奶"],
+                  ideas: [
+                    {
+                      title: "历史选题A",
+                      summary: "历史摘要",
+                      angle: "历史场景",
+                      audience: "妈妈",
+                      brandFit: "历史植入",
+                      hook: "历史钩子",
+                      tags: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+  }
+  if (Number(brandId) === 8 && Number(ownerUserId) === 91) {
+    return {
+      id: 8,
+      name: "第二品牌",
+      industry: "美妆",
+      audience: "油皮",
+      description: "控油",
+      product: "妆前乳",
+      goal: "持久",
+      knowledgeBase: "",
+      logo: null,
+      trends: [],
+      analyses: [],
     };
   }
   return null;
@@ -259,7 +305,7 @@ test("content-directions returns 3 modes without trend", async () => {
   assert.ok(res.body.directions.every((item) => item.transferMode));
 });
 
-test("idea library flattens existing ideas", async () => {
+test("idea library flattens current and snapshot ideas", async () => {
   const res = createRes();
   await handleExcellentContentRoutes(
     routeContext(),
@@ -268,9 +314,9 @@ test("idea library flattens existing ideas", async () => {
     "/api/brands/7/excellent-remix-ideas",
   );
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.ideas.length, 1);
-  assert.equal(res.body.ideas[0].ideaTitle, "选题A");
-  assert.equal(res.body.ideas[0].trendId, 11);
+  assert.ok(res.body.ideas.some((item) => item.scope === "current" && item.ideaTitle === "选题A"));
+  assert.ok(res.body.ideas.some((item) => item.scope === "snapshot" && item.ideaTitle === "历史选题A"));
+  assert.ok(res.body.ideas.some((item) => item.analysisName === "历史分析一"));
 });
 
 test("fusion-plan smart mode does not require trendId", async () => {
@@ -386,4 +432,143 @@ test("product images brand filter excludes other brand and unassigned", async ()
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.images.length, 1);
   assert.equal(res.body.images[0].originalName, "mine.png");
+});
+
+test("same file can upload to brand A and brand B independently", async () => {
+  const tinyPng = "data:image/png;base64,iVBORw0KGgo=";
+  const ctx = {
+    ...routeContext(),
+    parseProductImageDataUrl: () => ({ mimeType: "image/png", buffer: Buffer.from("same-bytes-for-both-brands") }),
+    DATA_DIR: tempDir,
+  };
+  // inject DATA_DIR usage via absolute write path mock already in resolveStoredProductImagePath
+  const { DATA_DIR: _ignored, ...rest } = ctx;
+  const context = {
+    ...rest,
+    // product routes use DATA_DIR from config; fsp writes under DATA_DIR — use temp via resolve path
+  };
+  // Patch config DATA_DIR indirectly by writing into tempDir through absolute path join in route (uses DATA_DIR).
+  // Ensure uploads dir exists.
+  await fs.promises.mkdir(path.join(tempDir, "uploads", "product-images", "users", "91"), { recursive: true });
+
+  // Monkey-patch path used by product routes by setting env if needed — repository only stores storedPath.
+  const uploadA = createRes();
+  await handleProductImageRoutes(
+    routeContext(),
+    createPostReq("/api/product-images", { brandId: 7, name: "shared-a.png", dataUrl: tinyPng }),
+    uploadA,
+    "/api/product-images",
+  );
+  assert.equal(uploadA.statusCode, 201);
+  assert.equal(uploadA.body.image.brandId, 7);
+
+  const uploadB = createRes();
+  await handleProductImageRoutes(
+    routeContext(),
+    createPostReq("/api/product-images", { brandId: 8, name: "shared-b.png", dataUrl: tinyPng }),
+    uploadB,
+    "/api/product-images",
+  );
+  assert.equal(uploadB.statusCode, 201);
+  assert.equal(uploadB.body.image.brandId, 8);
+  assert.notEqual(uploadA.body.image.id, uploadB.body.image.id);
+
+  const listA = createRes();
+  await handleProductImageRoutes(routeContext(), createGetReq("/api/product-images?brandId=7"), listA, "/api/product-images");
+  const listB = createRes();
+  await handleProductImageRoutes(routeContext(), createGetReq("/api/product-images?brandId=8"), listB, "/api/product-images");
+  assert.ok(listA.body.images.some((item) => Number(item.id) === Number(uploadA.body.image.id)));
+  assert.ok(listB.body.images.some((item) => Number(item.id) === Number(uploadB.body.image.id)));
+  assert.ok(!listA.body.images.some((item) => Number(item.id) === Number(uploadB.body.image.id)));
+
+  const unassigned = createRes();
+  await handleProductImageRoutes(
+    routeContext(),
+    createPostReq("/api/product-images", { name: "no-brand.png", dataUrl: tinyPng }),
+    unassigned,
+    "/api/product-images",
+  );
+  assert.equal(unassigned.statusCode, 201);
+  assert.equal(unassigned.body.image.brandId, 0);
+  assert.equal(unassigned.body.image.assetType, ASSET_TYPE_UNASSIGNED);
+});
+
+test("fusion-plan reads correct snapshot idea and rejects invalid analysisId", async () => {
+  const ok = createRes();
+  await handleExcellentContentRoutes(
+    routeContext(),
+    createPostReq("/api/excellent-contents/api-note-1/fusion-plan", {
+      board: "xhs_hot",
+      brandId: 7,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "snapshot", analysisId: 55, trendId: 11, ideaIndex: 0 },
+      useTrendContext: false,
+    }),
+    ok,
+    "/api/excellent-contents/api-note-1/fusion-plan",
+  );
+  assert.equal(ok.statusCode, 200);
+  assert.match(ok.body.fusionPlan.contentThesis, /历史/);
+
+  const bad = createRes();
+  await handleExcellentContentRoutes(
+    routeContext(),
+    createPostReq("/api/excellent-contents/api-note-1/fusion-plan", {
+      board: "xhs_hot",
+      brandId: 7,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "snapshot", analysisId: 9999, trendId: 11, ideaIndex: 0 },
+      useTrendContext: false,
+    }),
+    bad,
+    "/api/excellent-contents/api-note-1/fusion-plan",
+  );
+  assert.ok(bad.statusCode === 400 || bad.statusCode === 404 || bad.statusCode >= 400);
+});
+
+test("complete history attribution ignores forged client titles", async () => {
+  const fusionRes = createRes();
+  await handleExcellentContentRoutes(
+    routeContext(),
+    createPostReq("/api/excellent-contents/api-note-1/fusion-plan", {
+      board: "xhs_hot",
+      brandId: 7,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+      useTrendContext: false,
+    }),
+    fusionRes,
+    "/api/excellent-contents/api-note-1/fusion-plan",
+  );
+  const carouselPack = {
+    ...fusionRes.body.fusionPlan.carouselPack,
+    carouselGroupId: "grp-history-1",
+    slides: fusionRes.body.fusionPlan.carouselPack.slides.map((slide, index) => ({
+      ...slide,
+      imageUrl: `/generated/${index}.png`,
+      previewUrl: `/generated/${index}.png`,
+    })),
+  };
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    {
+      ...routeContext(),
+      appConfig: { assetSigningSecret: "test-secret", imageProvider: { enabled: false } },
+    },
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      aspectRatio: "3:4",
+      carouselPack,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+      trendTitle: "客户端伪造趋势",
+      ideaTitle: "客户端伪造选题",
+      creditEventId: 1,
+    }),
+    res,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.generation.ideaTitle, "选题A");
+  assert.notEqual(res.body.generation.ideaTitle, "客户端伪造选题");
+  assert.equal(res.body.generation.trendTitle, "转奶讨论");
 });

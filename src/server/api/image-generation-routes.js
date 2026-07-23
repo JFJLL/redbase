@@ -132,36 +132,12 @@ function createSqlGenerationRecord(userId, brand, trend, idea, type, channelLabe
 }
 
 /**
- * History labels for excellent remix when smart/custom have no persistent trend/idea.
- * Not used as content generation inputs.
+ * History labels for excellent remix.
+ * Server re-resolves titles from DB / normalized pack — never trusts client trendTitle/ideaTitle.
  */
 function buildExcellentRemixHistoryRefs(payload = {}, brand) {
-  const contentMode = String(payload.contentMode || "smart");
-  const existing = payload.existingIdeaRef && typeof payload.existingIdeaRef === "object" ? payload.existingIdeaRef : null;
-  if (contentMode === "existing_idea" && existing && Number(existing.trendId) > 0) {
-    return {
-      trend: { id: Number(existing.trendId), title: String(payload.trendTitle || "已有选题来源趋势") },
-      idea: { title: String(payload.ideaTitle || payload.carouselPack?.publishTitle || "优秀内容仿图文") },
-      contentMode,
-      existingIdeaRef: {
-        trendId: Number(existing.trendId),
-        ideaIndex: Number(existing.ideaIndex || 0),
-      },
-    };
-  }
-  return {
-    trend: { id: 0, title: "" },
-    idea: {
-      title: String(
-        payload.ideaTitle ||
-          payload.carouselPack?.publishTitle ||
-          payload.carouselPack?.title ||
-          `${brand?.name || "品牌"}优秀内容仿图文`,
-      ),
-    },
-    contentMode,
-    existingIdeaRef: null,
-  };
+  const { resolveExcellentRemixHistoryAttribution } = require("../services/excellent-remix-fusion-service");
+  return resolveExcellentRemixHistoryAttribution(brand, payload);
 }
 
 function normalizeCarouselGroupId(value) {
@@ -968,7 +944,13 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       throw error;
     }
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
-    const historyRefs = buildExcellentRemixHistoryRefs(payload, brand);
+    let historyRefs;
+    try {
+      historyRefs = buildExcellentRemixHistoryRefs(payload, brand);
+    } catch (error) {
+      badRequest(res, error.message || "历史归因无效");
+      return true;
+    }
     const charged = await runChargedAiWork({
       user,
       cost: CREDIT_COSTS.xhsCarouselSlide,
@@ -1070,7 +1052,13 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
     carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
-    const historyRefs = buildExcellentRemixHistoryRefs(payload, brand);
+    let historyRefs;
+    try {
+      historyRefs = buildExcellentRemixHistoryRefs(payload, brand);
+    } catch (error) {
+      badRequest(res, error.message || "历史归因无效");
+      return true;
+    }
     const existingGenerationId = findGenerationIdForCreditEvent(Number(payload.creditEventId), user.id);
     const existingGeneration =
       (existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null) ||

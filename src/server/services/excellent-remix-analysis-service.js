@@ -113,6 +113,9 @@ function buildMetadataOnlyAnalysis(note, board) {
       colorMood: "未能进行完整图片理解，配色仅按平台常见真实生活感处理",
       typography: "标题优先、层级清晰（元数据推断）",
       composition: "3:4 竖版信息图节奏（由平台形态与图片数量推断）",
+      // Honest labeling: no multimodal image understanding was performed.
+      source: "platform_default",
+      confidence: "low",
     },
     conversionPattern: {
       type: /清单|对照|步骤|方法/.test(title) ? "checklist" : "save_worthy_summary",
@@ -189,6 +192,14 @@ function normalizeAnalysis(raw, note, board) {
       colorMood: compactText(raw.visualLanguage?.colorMood, 80) || fallback.visualLanguage.colorMood,
       typography: compactText(raw.visualLanguage?.typography, 80) || fallback.visualLanguage.typography,
       composition: compactText(raw.visualLanguage?.composition, 120) || fallback.visualLanguage.composition,
+      source:
+        analysisMode === "multimodal" && raw.meta?.multimodalUsed === true
+          ? compactText(raw.visualLanguage?.source, 40) || "reference_image"
+          : "platform_default",
+      confidence:
+        analysisMode === "multimodal" && raw.meta?.multimodalUsed === true
+          ? compactText(raw.visualLanguage?.confidence, 20) || "medium"
+          : "low",
     },
     conversionPattern: {
       type: compactText(raw.conversionPattern?.type, 40) || fallback.conversionPattern.type,
@@ -427,6 +438,14 @@ function getRemixAnalysisById(analysisId, noteId, board) {
   };
 }
 
+function isPlatformDefaultVisualLanguage(analysis) {
+  if (!analysis) return true;
+  if (analysis.analysisMode === "metadata_only") return true;
+  if (analysis.visualLanguage?.source === "platform_default") return true;
+  if (analysis.visualLanguage?.confidence === "low" && !analysis.meta?.multimodalUsed) return true;
+  return !analysis.meta?.multimodalUsed;
+}
+
 function filterAnalysisByLearningFocus(analysis, learningFocus = []) {
   const focus = new Set(
     (Array.isArray(learningFocus) ? learningFocus : [])
@@ -435,9 +454,10 @@ function filterAnalysisByLearningFocus(analysis, learningFocus = []) {
   );
   if (!focus.size) {
     focus.add("structure");
-    focus.add("visual");
+    focus.add("hook");
   }
   const applied = [];
+  let platformVisualGuidance = null;
   if (focus.has("structure") && analysis?.narrativeStructure) {
     applied.push({
       type: "structure",
@@ -446,21 +466,32 @@ function filterAnalysisByLearningFocus(analysis, learningFocus = []) {
     });
   }
   if (focus.has("visual") && analysis?.visualLanguage) {
-    applied.push({
-      type: "visual",
-      description: compactText(
-        [
-          analysis.visualLanguage.layout,
-          analysis.visualLanguage.textDensity,
-          analysis.visualLanguage.colorMood,
-          analysis.visualLanguage.typography,
-        ]
-          .filter(Boolean)
-          .join("；"),
-        200,
-      ),
-      visualLanguage: analysis.visualLanguage,
-    });
+    const visualDescription = compactText(
+      [
+        analysis.visualLanguage.layout,
+        analysis.visualLanguage.textDensity,
+        analysis.visualLanguage.colorMood,
+        analysis.visualLanguage.typography,
+      ]
+        .filter(Boolean)
+        .join("；"),
+      200,
+    );
+    if (isPlatformDefaultVisualLanguage(analysis)) {
+      // Do not claim reference-image learning for platform defaults.
+      platformVisualGuidance = {
+        source: "platform_default",
+        confidence: analysis.visualLanguage.confidence || "low",
+        description: compactText(`平台通用视觉建议（未进行图片理解）：${visualDescription}`, 220),
+        visualLanguage: analysis.visualLanguage,
+      };
+    } else {
+      applied.push({
+        type: "visual",
+        description: visualDescription,
+        visualLanguage: analysis.visualLanguage,
+      });
+    }
   }
   if (focus.has("hook") && analysis?.hookPattern) {
     applied.push({
@@ -476,7 +507,7 @@ function filterAnalysisByLearningFocus(analysis, learningFocus = []) {
       conversionPattern: analysis.conversionPattern,
     });
   }
-  return { focus: [...focus], applied };
+  return { focus: [...focus], applied, platformVisualGuidance };
 }
 
 function __resetRemixAnalysisInFlightForTests() {
@@ -494,6 +525,7 @@ module.exports = {
   analyzeExcellentNoteForRemix,
   getRemixAnalysisById,
   filterAnalysisByLearningFocus,
+  isPlatformDefaultVisualLanguage,
   compactText,
   stripHtml,
   __resetRemixAnalysisInFlightForTests,

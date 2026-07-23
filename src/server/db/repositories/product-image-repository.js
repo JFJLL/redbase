@@ -126,17 +126,47 @@ function findProductImageById(imageId) {
   );
 }
 
-function findDuplicateProductImage(ownerUserId, sha256) {
+/**
+ * Brand-scoped dedupe. Same file may belong to brand A and brand B independently.
+ * Call with object: { ownerUserId, brandId, assetType, sha256 }
+ * Legacy call (ownerUserId, sha256) is treated as unassigned scope.
+ */
+function findDuplicateProductImage(ownerUserIdOrOpts, sha256Maybe) {
+  let ownerUserId;
+  let brandId = 0;
+  let assetType = ASSET_TYPE_UNASSIGNED;
+  let sha256 = "";
+  if (ownerUserIdOrOpts && typeof ownerUserIdOrOpts === "object" && !Array.isArray(ownerUserIdOrOpts)) {
+    ownerUserId = Number(ownerUserIdOrOpts.ownerUserId);
+    brandId = normalizeBrandId(ownerUserIdOrOpts.brandId);
+    assetType = normalizeAssetType(
+      ownerUserIdOrOpts.assetType != null
+        ? ownerUserIdOrOpts.assetType
+        : brandId > 0
+          ? ASSET_TYPE_PRODUCT
+          : ASSET_TYPE_UNASSIGNED,
+    );
+    sha256 = String(ownerUserIdOrOpts.sha256 || "");
+  } else {
+    ownerUserId = Number(ownerUserIdOrOpts);
+    brandId = 0;
+    assetType = ASSET_TYPE_UNASSIGNED;
+    sha256 = String(sha256Maybe || "");
+  }
   return mapProductImageRow(
     db
       .prepare(
         `
     SELECT ${IMAGE_COLUMNS}
     FROM product_images
-    WHERE owner_user_id = ? AND sha256 = ? AND deleted_at = ''
+    WHERE owner_user_id = ?
+      AND brand_id = ?
+      AND asset_type = ?
+      AND sha256 = ?
+      AND deleted_at = ''
   `,
       )
-      .get(Number(ownerUserId), String(sha256 || "")),
+      .get(ownerUserId, brandId, assetType, sha256),
   );
 }
 
