@@ -5563,10 +5563,10 @@ async function generateExcellentRemixCarousel({
       completed: false,
       completing: false,
       completeError: "",
-      creditEventId: null,
     };
     /** @type {Map<number, { jobId: string, creditEventId: number|null, generationId: number|null, status: string }>} */
     const slideJobs = new Map();
+
     const taskQueue = [];
     let activeTaskCount = 0;
     let activeGenerateTaskCount = 0;
@@ -5691,7 +5691,6 @@ async function generateExcellentRemixCarousel({
           }),
         );
         updateCurrentUser(result.user);
-        flags.creditEventId = result.creditEventId || flags.creditEventId;
         if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
         slideJobs.set(slideIndex, {
           jobId: result.slideJob.jobId,

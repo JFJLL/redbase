@@ -34,6 +34,7 @@ const {
 } = require("../ai/content-service");
 const { sanitizePayloadForClient } = require("../utils");
 const { resolveAspectRatio } = require("./aspect-ratios");
+const { withExcellentRemixGroupLock } = require("../services/excellent-remix-generation-lock");
 
 const EXCELLENT_REMIX_CREDIT_ACTION_TYPES = ["xhsCarousel"];
 const CAROUSEL_GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
@@ -321,6 +322,8 @@ async function upsertSingleSlideCarouselGeneration({
   persistGenerationImages,
   channelLabel = "小红书组图",
 }) {
+  // Caller must hold withExcellentRemixGroupLock for excellent-remix groups.
+  // Always re-query inside this function so concurrent writers merge into one row.
   const groupId = normalizeCarouselGroupId(payload.carouselGroupId);
   const existingGeneration = groupId ? findXhsCarouselGenerationByGroup(userId, groupId) : null;
   if (existingGeneration && channelLabel === "一键仿图文" && !assertExcellentRemixGroupOwnership(existingGeneration, brand)) {
@@ -357,63 +360,138 @@ function loadOwnedImageJob(imageJobs, jobId, userId) {
   return findImageJobByOwner(jobId, userId);
 }
 
+function resolveExistingExcellentRemixGenerationForJob(userId, job, carouselGroupId) {
+  const generationId = Number(job?.generationId || 0);
+  if (!generationId) return null;
+  const existing = findGenerationByOwner(generationId, userId);
+  if (!existing) return null;
+  if (normalizeCarouselGroupId(existing.payload?.carouselGroupId) !== carouselGroupId) return null;
+  if (!isExcellentRemixGeneration(existing)) return null;
+  return existing;
+}
+
+function mergeCompletedJobSnapshot(memoryJob, dbJob) {
+  if (!dbJob) return memoryJob;
+  if (!memoryJob) return dbJob;
+  const memoryCompleted = memoryJob.status === "completed" && String(memoryJob.imageUrl || "").trim();
+  const dbCompleted = dbJob.status === "completed" && String(dbJob.imageUrl || "").trim();
+  return {
+    ...dbJob,
+    ...memoryJob,
+    status: memoryCompleted ? memoryJob.status : dbJob.status || memoryJob.status,
+    imageUrl: memoryCompleted
+      ? memoryJob.imageUrl
+      : dbCompleted
+        ? dbJob.imageUrl
+        : memoryJob.imageUrl || dbJob.imageUrl || "",
+    generationId: memoryJob.generationId || dbJob.generationId || null,
+    generationContext: memoryJob.generationContext || dbJob.generationContext || {},
+    metadata: memoryJob.metadata || dbJob.metadata || {},
+  };
+}
+
 async function persistExcellentRemixSlideFromCompletedJob({
   userId,
   job,
   persistGenerationImages,
+  imageJobs = null,
 }) {
   const context = job?.generationContext || {};
   if (!context.excellentRemix) return null;
-  if (job.status !== "completed" || !String(job.imageUrl || "").trim()) return null;
 
-  const brand = findBrandByOwner(context.brandId, userId);
-  if (!brand) return null;
-
+  const brandId = context.brandId;
   const carouselGroupId = normalizeCarouselGroupId(context.carouselGroupId);
   if (!isValidCarouselGroupId(carouselGroupId)) return null;
 
   const slideIndex = Number(context.slideIndex);
   if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > 3) return null;
 
-  let historyRefs;
-  try {
-    historyRefs = buildExcellentRemixHistoryRefs(
-      {
-        contentMode: context.contentMode,
-        existingIdeaRef: context.existingIdeaRef,
-        carouselPack: {
-          title: context.carouselTitle,
-          publishTitle: context.publishTitle,
+  return withExcellentRemixGroupLock(userId, carouselGroupId, async () => {
+    const dbJob = findImageJobByOwner(job.id, userId);
+    const effectiveJob = mergeCompletedJobSnapshot(job, dbJob);
+    if (!effectiveJob) return null;
+
+    // Idempotent path: job already linked to a generation for this group.
+    const alreadyLinked = resolveExistingExcellentRemixGenerationForJob(userId, effectiveJob, carouselGroupId);
+    if (alreadyLinked) {
+      if (imageJobs && effectiveJob.id) {
+        const memory = imageJobs.get(effectiveJob.id);
+        if (memory) {
+          memory.generationId = alreadyLinked.id;
+          imageJobs.set(effectiveJob.id, memory);
+        }
+      }
+      return alreadyLinked;
+    }
+
+    if (effectiveJob.status !== "completed" || !String(effectiveJob.imageUrl || "").trim()) {
+      return null;
+    }
+
+    const effectiveContext = effectiveJob.generationContext || context;
+    const brand = findBrandByOwner(effectiveContext.brandId || brandId, userId);
+    if (!brand) return null;
+
+    let historyRefs;
+    try {
+      historyRefs = buildExcellentRemixHistoryRefs(
+        {
+          contentMode: effectiveContext.contentMode,
+          existingIdeaRef: effectiveContext.existingIdeaRef,
+          carouselPack: {
+            title: effectiveContext.carouselTitle,
+            publishTitle: effectiveContext.publishTitle,
+          },
         },
-      },
+        brand,
+      );
+    } catch (error) {
+      return null;
+    }
+
+    // Re-query group generation inside the lock before create/merge.
+    const payload = buildSingleSlideCarouselPayload(effectiveJob);
+    payload.carouselGroupId = carouselGroupId;
+    payload.excellentRemix = true;
+    payload.contentMode = historyRefs.contentMode;
+    payload.existingIdeaRef = historyRefs.existingIdeaRef;
+    payload.generatedMode = "partialSlides";
+
+    const generation = await upsertSingleSlideCarouselGeneration({
+      userId,
       brand,
-    );
-  } catch (error) {
-    return null;
-  }
+      trend: historyRefs.trend,
+      idea: historyRefs.idea,
+      job: effectiveJob,
+      payload,
+      persistGenerationImages,
+      channelLabel: "一键仿图文",
+    });
 
-  const payload = buildSingleSlideCarouselPayload(job);
-  payload.carouselGroupId = carouselGroupId;
-  payload.excellentRemix = true;
-  payload.contentMode = historyRefs.contentMode;
-  payload.existingIdeaRef = historyRefs.existingIdeaRef;
-  payload.generatedMode = "partialSlides";
+    if (effectiveContext.creditEventId) {
+      linkCreditEventToGeneration(
+        effectiveContext.creditEventId,
+        generation,
+        generation.payload || payload,
+        userId,
+      );
+    }
 
-  const generation = await upsertSingleSlideCarouselGeneration({
-    userId,
-    brand,
-    trend: historyRefs.trend,
-    idea: historyRefs.idea,
-    job,
-    payload,
-    persistGenerationImages,
-    channelLabel: "一键仿图文",
+    // Persist generationId under the same lock so concurrent pollers short-circuit.
+    effectiveJob.generationId = generation.id;
+    upsertImageJob(userId, effectiveJob);
+    if (imageJobs && effectiveJob.id) {
+      const memory = imageJobs.get(effectiveJob.id) || effectiveJob;
+      memory.generationId = generation.id;
+      if (memory.status !== "completed" && effectiveJob.status === "completed") {
+        memory.status = effectiveJob.status;
+        memory.imageUrl = effectiveJob.imageUrl;
+      }
+      imageJobs.set(effectiveJob.id, memory);
+    }
+
+    return generation;
   });
-
-  if (context.creditEventId) {
-    linkCreditEventToGeneration(context.creditEventId, generation, generation.payload || payload, userId);
-  }
-  return generation;
 }
 
 function rebuildCarouselPackFromExcellentRemixJobs(jobs, historyRefs) {
@@ -799,6 +877,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             userId: user.id,
             job: resolved,
             persistGenerationImages,
+            imageJobs,
           });
           if (generation?.id) {
             resolved.generationId = generation.id;
@@ -809,6 +888,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               resolved.imageUrl = currentImageUrl;
             }
             upsertImageJob(user.id, resolved);
+            imageJobs.set(resolved.id, resolved);
           }
         } catch (error) {
           if (error?.code === "CAROUSEL_GROUP_CONFLICT") {
@@ -1311,147 +1391,201 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const jobs = [];
+    // Preflight: ensure the four job ids exist for this user before taking the group lock.
     for (const jobId of slideJobIds) {
       const job = loadOwnedImageJob(imageJobs, jobId, user.id);
       if (!job) {
         notFound(res);
         return true;
       }
-      jobs.push(job);
     }
 
-    for (const job of jobs) {
-      if (job.status !== "completed") {
-        json(res, 409, { error: "存在尚未完成的图片任务，请全部生成完成后再写入历史。" });
-        return true;
-      }
-      if (!String(job.imageUrl || "").trim()) {
-        badRequest(res, "图片任务缺少有效生成结果，无法写入历史。");
-        return true;
-      }
-      const context = job.generationContext || {};
-      if (context.excellentRemix !== true || context.type !== "xhsCarouselSlide") {
-        badRequest(res, "只能使用优秀内容仿图文任务完成组图历史。");
-        return true;
-      }
-      if (Number(context.brandId) !== Number(brand.id)) {
-        badRequest(res, "图片任务与当前品牌不匹配。");
-        return true;
-      }
-      if (normalizeCarouselGroupId(context.carouselGroupId) !== carouselGroupId) {
-        json(res, 409, { error: "图片任务组图分组不一致。" });
-        return true;
-      }
-      const slideIndex = Number(context.slideIndex);
-      if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > 3) {
-        badRequest(res, "图片任务页码无效。");
-        return true;
-      }
-    }
-
-    const slideIndices = jobs.map((job) => Number(job.generationContext.slideIndex));
-    if (new Set(slideIndices).size !== 4 || ![0, 1, 2, 3].every((index) => slideIndices.includes(index))) {
-      badRequest(res, "4 个图片任务的页码必须分别为 0–3 且不重复。");
-      return true;
-    }
-
-    const firstContext = jobs[0].generationContext || {};
-    let historyRefs;
+    let completeResult;
     try {
-      historyRefs = buildExcellentRemixHistoryRefs(
-        {
-          contentMode: firstContext.contentMode,
-          existingIdeaRef: firstContext.existingIdeaRef,
-          carouselPack: {
-            title: firstContext.carouselTitle,
-            publishTitle: firstContext.publishTitle,
-          },
-        },
-        brand,
-      );
-    } catch (error) {
-      badRequest(res, error.message || "历史归因无效");
-      return true;
-    }
+      completeResult = await withExcellentRemixGroupLock(user.id, carouselGroupId, async () => {
+        // Re-load jobs inside the lock so concurrent partial persists are visible.
+        const jobs = [];
+        for (const jobId of slideJobIds) {
+          const job = loadOwnedImageJob(imageJobs, jobId, user.id);
+          if (!job) {
+            const error = new Error("图片任务不存在或无权访问。");
+            error.code = "JOB_NOT_FOUND";
+            error.statusCode = 404;
+            throw error;
+          }
+          jobs.push(job);
+        }
 
-    const carouselPack = rebuildCarouselPackFromExcellentRemixJobs(jobs, historyRefs);
-    if (!isValidCompletedCarouselPack(carouselPack)) {
-      badRequest(res, "服务端重建组图失败：图片任务结果不完整。");
-      return true;
-    }
+        for (const job of jobs) {
+          if (job.status !== "completed") {
+            const error = new Error("存在尚未完成的图片任务，请全部生成完成后再写入历史。");
+            error.code = "JOBS_INCOMPLETE";
+            error.statusCode = 409;
+            throw error;
+          }
+          if (!String(job.imageUrl || "").trim()) {
+            const error = new Error("图片任务缺少有效生成结果，无法写入历史。");
+            error.code = "JOB_MISSING_IMAGE";
+            error.statusCode = 400;
+            throw error;
+          }
+          const context = job.generationContext || {};
+          if (context.excellentRemix !== true || context.type !== "xhsCarouselSlide") {
+            const error = new Error("只能使用优秀内容仿图文任务完成组图历史。");
+            error.code = "JOB_TYPE_INVALID";
+            error.statusCode = 400;
+            throw error;
+          }
+          if (Number(context.brandId) !== Number(brand.id)) {
+            const error = new Error("图片任务与当前品牌不匹配。");
+            error.code = "JOB_BRAND_MISMATCH";
+            error.statusCode = 400;
+            throw error;
+          }
+          if (normalizeCarouselGroupId(context.carouselGroupId) !== carouselGroupId) {
+            const error = new Error("图片任务组图分组不一致。");
+            error.code = "JOB_GROUP_MISMATCH";
+            error.statusCode = 409;
+            throw error;
+          }
+          const slideIndex = Number(context.slideIndex);
+          if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex > 3) {
+            const error = new Error("图片任务页码无效。");
+            error.code = "JOB_SLIDE_INDEX_INVALID";
+            error.statusCode = 400;
+            throw error;
+          }
+        }
 
-    const existingGeneration = findXhsCarouselGenerationByGroup(user.id, carouselGroupId);
-    if (existingGeneration && !assertExcellentRemixGroupOwnership(existingGeneration, brand)) {
-      json(res, 409, { error: "组图分组标识冲突，无法写入历史。" });
-      return true;
-    }
+        const slideIndices = jobs.map((job) => Number(job.generationContext.slideIndex));
+        if (new Set(slideIndices).size !== 4 || ![0, 1, 2, 3].every((index) => slideIndices.includes(index))) {
+          const error = new Error("4 个图片任务的页码必须分别为 0–3 且不重复。");
+          error.code = "JOB_SLIDE_INDEX_DUP";
+          error.statusCode = 400;
+          throw error;
+        }
 
-    let savedGeneration;
-    if (existingGeneration) {
-      const nextPayload = mergeXhsCarouselSlidePayload(existingGeneration.payload || {}, {
-        ...carouselPack,
-        generatedMode: "group",
-        carouselGroupId,
-        contentMode: historyRefs.contentMode,
-        excellentRemix: true,
-        existingIdeaRef: historyRefs.existingIdeaRef,
+        const firstContext = jobs[0].generationContext || {};
+        let historyRefs;
+        try {
+          historyRefs = buildExcellentRemixHistoryRefs(
+            {
+              contentMode: firstContext.contentMode,
+              existingIdeaRef: firstContext.existingIdeaRef,
+              carouselPack: {
+                title: firstContext.carouselTitle,
+                publishTitle: firstContext.publishTitle,
+              },
+            },
+            brand,
+          );
+        } catch (error) {
+          const wrapped = new Error(error.message || "历史归因无效");
+          wrapped.code = "HISTORY_REF_INVALID";
+          wrapped.statusCode = 400;
+          throw wrapped;
+        }
+
+        const carouselPack = rebuildCarouselPackFromExcellentRemixJobs(jobs, historyRefs);
+        if (!isValidCompletedCarouselPack(carouselPack)) {
+          const error = new Error("服务端重建组图失败：图片任务结果不完整。");
+          error.code = "CAROUSEL_REBUILD_FAILED";
+          error.statusCode = 400;
+          throw error;
+        }
+
+        // Always re-query inside the lock so concurrent partial persists merge.
+        const existingGeneration = findXhsCarouselGenerationByGroup(user.id, carouselGroupId);
+        if (existingGeneration && !assertExcellentRemixGroupOwnership(existingGeneration, brand)) {
+          const error = new Error("组图分组标识冲突，无法写入历史。");
+          error.code = "CAROUSEL_GROUP_CONFLICT";
+          error.statusCode = 409;
+          throw error;
+        }
+
+        let savedGeneration;
+        if (existingGeneration) {
+          const nextPayload = mergeXhsCarouselSlidePayload(existingGeneration.payload || {}, {
+            ...carouselPack,
+            generatedMode: "group",
+            carouselGroupId,
+            contentMode: historyRefs.contentMode,
+            excellentRemix: true,
+            existingIdeaRef: historyRefs.existingIdeaRef,
+          });
+          nextPayload.generatedMode = "group";
+          const nextGeneration = {
+            ...existingGeneration,
+            cardTitle: nextPayload.title || existingGeneration.cardTitle,
+            previewUrl: nextPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
+            summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
+            ideaTitle: historyRefs.idea?.title || existingGeneration.ideaTitle,
+            trendId: historyRefs.trend?.id ?? existingGeneration.trendId,
+            trendTitle: historyRefs.trend?.title || existingGeneration.trendTitle,
+            payload: nextPayload,
+          };
+          await persistGenerationImages(nextGeneration);
+          savedGeneration = upsertGeneration(nextGeneration);
+        } else {
+          const generation = createSqlGenerationRecord(
+            user.id,
+            brand,
+            historyRefs.trend,
+            historyRefs.idea,
+            "xhsCarousel",
+            "一键仿图文",
+            {
+              ...carouselPack,
+              generatedMode: "group",
+              contentMode: historyRefs.contentMode,
+              excellentRemix: true,
+              existingIdeaRef: historyRefs.existingIdeaRef,
+            },
+          );
+          await persistGenerationImages(generation);
+          savedGeneration = insertGeneration(generation);
+        }
+
+        const linkedCreditEventIds = [];
+        for (const job of jobs) {
+          const creditEventId = Number(job.generationContext?.creditEventId || 0);
+          if (creditEventId > 0) {
+            const linked = linkCreditEventToGeneration(creditEventId, savedGeneration, savedGeneration.payload, user.id);
+            if (linked?.id) linkedCreditEventIds.push(linked.id);
+          }
+          if (!job.generationId || Number(job.generationId) !== Number(savedGeneration.id)) {
+            job.generationId = savedGeneration.id;
+            upsertImageJob(user.id, job);
+            imageJobs.set(job.id, job);
+          }
+        }
+
+        return {
+          generation: savedGeneration,
+          creditEventIds: linkedCreditEventIds,
+        };
       });
-      nextPayload.generatedMode = "group";
-      const nextGeneration = {
-        ...existingGeneration,
-        cardTitle: nextPayload.title || existingGeneration.cardTitle,
-        previewUrl: nextPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
-        summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
-        ideaTitle: historyRefs.idea?.title || existingGeneration.ideaTitle,
-        trendId: historyRefs.trend?.id ?? existingGeneration.trendId,
-        trendTitle: historyRefs.trend?.title || existingGeneration.trendTitle,
-        payload: nextPayload,
-      };
-      await persistGenerationImages(nextGeneration);
-      savedGeneration = upsertGeneration(nextGeneration);
-    } else {
-      const generation = createSqlGenerationRecord(
-        user.id,
-        brand,
-        historyRefs.trend,
-        historyRefs.idea,
-        "xhsCarousel",
-        "一键仿图文",
-        {
-          ...carouselPack,
-          generatedMode: "group",
-          contentMode: historyRefs.contentMode,
-          excellentRemix: true,
-          existingIdeaRef: historyRefs.existingIdeaRef,
-        },
-      );
-      await persistGenerationImages(generation);
-      savedGeneration = insertGeneration(generation);
-    }
-
-    const linkedCreditEventIds = [];
-    for (const job of jobs) {
-      const creditEventId = Number(job.generationContext?.creditEventId || 0);
-      if (creditEventId > 0) {
-        const linked = linkCreditEventToGeneration(creditEventId, savedGeneration, savedGeneration.payload, user.id);
-        if (linked?.id) linkedCreditEventIds.push(linked.id);
+    } catch (error) {
+      const statusCode = Number(error?.statusCode) || 500;
+      if (statusCode === 404) {
+        notFound(res);
+        return true;
       }
-      if (!job.generationId) {
-        job.generationId = savedGeneration.id;
-        upsertImageJob(user.id, job);
-        imageJobs.set(job.id, job);
-      } else if (Number(job.generationId) !== Number(savedGeneration.id)) {
-        job.generationId = savedGeneration.id;
-        upsertImageJob(user.id, job);
-        imageJobs.set(job.id, job);
+      if (statusCode >= 400 && statusCode < 500) {
+        if (statusCode === 409) {
+          json(res, 409, { error: error.message || "冲突" });
+        } else {
+          badRequest(res, error.message || "请求无效");
+        }
+        return true;
       }
+      throw error;
     }
 
     json(res, 200, {
-      generation: sanitizeGeneration(savedGeneration, appConfig),
-      creditEventIds: linkedCreditEventIds,
-      creditEventId: linkedCreditEventIds[linkedCreditEventIds.length - 1] || null,
+      generation: sanitizeGeneration(completeResult.generation, appConfig),
+      creditEventIds: completeResult.creditEventIds,
+      creditEventId: completeResult.creditEventIds[completeResult.creditEventIds.length - 1] || null,
       carouselGroupId,
       user: sanitizeUser(user),
     });
@@ -1947,5 +2081,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 module.exports = {
   isGeneratedCarouselSlide,
   mergeXhsCarouselSlidePayload,
+  persistExcellentRemixSlideFromCompletedJob,
+  upsertSingleSlideCarouselGeneration,
   handleImageGenerationRoutes,
 };

@@ -1142,6 +1142,433 @@ test("cross-brand carouselGroupId collision is rejected on slide create", async 
   assert.equal(slideRes.statusCode, 409, slideRes.body?.error || "expected group conflict");
 });
 
+function countGenerationsForGroup(userId, carouselGroupId) {
+  return listGenerationsByOwner(userId).filter(
+    (item) => item.payload?.carouselGroupId === carouselGroupId && item.payload?.excellentRemix === true,
+  );
+}
+
+function routeContextWithPersistDelay(imageJobs, delayMs = 30) {
+  return routeContext({
+    imageJobs,
+    persistGenerationImages: async (generation) => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      persistCalls.push({
+        generationId: generation?.id,
+        slides: (generation?.payload?.slides || []).map((slide) => slide?.imageUrl || slide?.previewUrl || ""),
+      });
+      return generation;
+    },
+  });
+}
+
+async function pollJobWithContext(jobId, ctx) {
+  const res = createRes();
+  await handleImageGenerationRoutes(ctx, createGetReq(`/api/image-jobs/${jobId}`), res, `/api/image-jobs/${jobId}`);
+  return res;
+}
+
+test("concurrent two-slide first persist yields single generation", async () => {
+  persistCalls.length = 0;
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const imageJobs = new Map();
+  const job0 = await createCompletedSlideJob({
+    slideIndex: 0,
+    contentMode: "smart",
+    carouselGroupId: preview.carouselGroupId,
+    carouselPack: pack,
+    imageJobs,
+  });
+  const job1 = await createCompletedSlideJob({
+    slideIndex: 1,
+    contentMode: "smart",
+    carouselGroupId: preview.carouselGroupId,
+    carouselPack: pack,
+    imageJobs,
+  });
+
+  const delayedCtx = routeContextWithPersistDelay(imageJobs, 35);
+  const [poll0, poll1] = await Promise.all([
+    pollJobWithContext(job0.jobId, delayedCtx),
+    pollJobWithContext(job1.jobId, delayedCtx),
+  ]);
+
+  assert.equal(poll0.statusCode, 200, poll0.body?.error || "poll0 failed");
+  assert.equal(poll1.statusCode, 200, poll1.body?.error || "poll1 failed");
+  assert.ok(poll0.body.generationId);
+  assert.ok(poll1.body.generationId);
+  assert.equal(Number(poll0.body.generationId), Number(poll1.body.generationId));
+
+  const groupRows = countGenerationsForGroup(91, preview.carouselGroupId);
+  assert.equal(groupRows.length, 1, `expected 1 generation, got ${groupRows.length}`);
+  const generation = groupRows[0];
+  assert.ok(generation.payload.slides[0]?.imageUrl, "slide0 missing");
+  assert.ok(generation.payload.slides[1]?.imageUrl, "slide1 missing");
+
+  const credit0 = findCreditEventById(job0.creditEventId);
+  const credit1 = findCreditEventById(job1.creditEventId);
+  assert.equal(Number(credit0.generationId), Number(generation.id));
+  assert.equal(Number(credit1.generationId), Number(generation.id));
+
+  const stored0 = findImageJobByOwner(job0.jobId, 91);
+  const stored1 = findImageJobByOwner(job1.jobId, 91);
+  assert.equal(Number(stored0.generationId), Number(generation.id));
+  assert.equal(Number(stored1.generationId), Number(generation.id));
+});
+
+test("concurrent four-slide first persist yields single generation with all slides", async () => {
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const imageJobs = new Map();
+  const created = [];
+  for (let slideIndex = 0; slideIndex < 4; slideIndex += 1) {
+    created.push(
+      await createCompletedSlideJob({
+        slideIndex,
+        contentMode: "smart",
+        carouselGroupId: preview.carouselGroupId,
+        carouselPack: pack,
+        imageJobs,
+      }),
+    );
+  }
+
+  const delayedCtx = routeContextWithPersistDelay(imageJobs, 25);
+  const polls = await Promise.all(created.map((item) => pollJobWithContext(item.jobId, delayedCtx)));
+  for (const poll of polls) {
+    assert.equal(poll.statusCode, 200, poll.body?.error || "poll failed");
+    assert.ok(poll.body.generationId);
+  }
+
+  const generationIds = polls.map((poll) => Number(poll.body.generationId));
+  assert.equal(new Set(generationIds).size, 1);
+
+  const groupRows = countGenerationsForGroup(91, preview.carouselGroupId);
+  assert.equal(groupRows.length, 1);
+  const generation = groupRows[0];
+  for (let index = 0; index < 4; index += 1) {
+    assert.ok(generation.payload.slides[index]?.imageUrl, `slide${index} missing`);
+  }
+  assert.equal(generation.payload.generatedMode, "group");
+
+  for (const item of created) {
+    const credit = findCreditEventById(item.creditEventId);
+    assert.equal(Number(credit.generationId), Number(generation.id));
+    const stored = findImageJobByOwner(item.jobId, 91);
+    assert.equal(Number(stored.generationId), Number(generation.id));
+  }
+});
+
+test("concurrent re-poll of same completed job is idempotent", async () => {
+  const created = await createCompletedSlideJob({ slideIndex: 0, contentMode: "smart" });
+  // Clear generationId to simulate two racing first polls before either writes generationId.
+  const job = created.imageJobs.get(created.jobId);
+  assert.ok(job);
+  job.generationId = null;
+  upsertImageJob(91, job);
+
+  const delayedCtx = routeContextWithPersistDelay(created.imageJobs, 30);
+  // Ensure both polls see a completed job without generationId.
+  const storedBefore = findImageJobByOwner(created.jobId, 91);
+  assert.ok(!storedBefore.generationId);
+
+  const [pollA, pollB] = await Promise.all([
+    pollJobWithContext(created.jobId, delayedCtx),
+    pollJobWithContext(created.jobId, delayedCtx),
+  ]);
+
+  assert.equal(pollA.statusCode, 200);
+  assert.equal(pollB.statusCode, 200);
+  assert.equal(Number(pollA.body.generationId), Number(pollB.body.generationId));
+
+  const groupRows = countGenerationsForGroup(91, created.carouselGroupId);
+  assert.equal(groupRows.length, 1);
+  const generation = groupRows[0];
+  const filledSlides = (generation.payload.slides || []).filter(
+    (slide) => String(slide?.imageUrl || slide?.previewUrl || "").trim(),
+  );
+  assert.equal(filledSlides.length, 1);
+
+  const credit = findCreditEventById(created.creditEventId);
+  assert.equal(Number(credit.generationId), Number(generation.id));
+});
+
+test("partial persist concurrent with complete yields single full group generation", async () => {
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const imageJobs = new Map();
+  const created = [];
+  for (let slideIndex = 0; slideIndex < 4; slideIndex += 1) {
+    created.push(
+      await createCompletedSlideJob({
+        slideIndex,
+        contentMode: "smart",
+        carouselGroupId: preview.carouselGroupId,
+        carouselPack: pack,
+        imageJobs,
+      }),
+    );
+  }
+
+  // Persist first three slides sequentially so complete races only with the last poll.
+  for (let index = 0; index < 3; index += 1) {
+    const poll = await pollJob(created[index].jobId, imageJobs);
+    assert.equal(poll.statusCode, 200);
+  }
+
+  const delayedCtx = routeContextWithPersistDelay(imageJobs, 40);
+  const lastJobId = created[3].jobId;
+  const completeBody = {
+    carouselGroupId: preview.carouselGroupId,
+    slideJobIds: created.map((item) => item.jobId),
+    expectedSlideCount: 4,
+  };
+
+  const [pollLast, completeRes] = await Promise.all([
+    pollJobWithContext(lastJobId, delayedCtx),
+    (async () => {
+      const res = createRes();
+      await handleImageGenerationRoutes(
+        delayedCtx,
+        createPostReq("/api/brands/7/excellent-remix/complete", completeBody),
+        res,
+        "/api/brands/7/excellent-remix/complete",
+      );
+      return res;
+    })(),
+  ]);
+
+  assert.equal(pollLast.statusCode, 200, pollLast.body?.error || "last poll failed");
+  assert.equal(completeRes.statusCode, 200, completeRes.body?.error || "complete failed");
+
+  const groupRows = countGenerationsForGroup(91, preview.carouselGroupId);
+  assert.equal(groupRows.length, 1, `expected 1 generation after race, got ${groupRows.length}`);
+  const generation = groupRows[0];
+  assert.equal(generation.payload.generatedMode, "group");
+  for (let index = 0; index < 4; index += 1) {
+    assert.ok(generation.payload.slides[index]?.imageUrl, `slide${index} missing after race`);
+  }
+
+  assert.equal(Number(completeRes.body.generation.id), Number(generation.id));
+  assert.equal(Number(pollLast.body.generationId), Number(generation.id));
+
+  for (const item of created) {
+    const credit = findCreditEventById(item.creditEventId);
+    assert.equal(Number(credit.generationId), Number(generation.id));
+  }
+});
+
+test("different carousel groups persist concurrently without cross-blocking or data mix", async () => {
+  const packA = await getFusionPack("smart");
+  const packB = await getFusionPack("smart");
+  const previewA = await previewRemix(packA);
+  const previewB = await previewRemix(packB);
+  assert.notEqual(previewA.carouselGroupId, previewB.carouselGroupId);
+
+  const imageJobsA = new Map();
+  const imageJobsB = new Map();
+  const jobA = await createCompletedSlideJob({
+    slideIndex: 0,
+    contentMode: "smart",
+    carouselGroupId: previewA.carouselGroupId,
+    carouselPack: packA,
+    imageJobs: imageJobsA,
+  });
+  const jobB = await createCompletedSlideJob({
+    slideIndex: 0,
+    contentMode: "smart",
+    carouselGroupId: previewB.carouselGroupId,
+    carouselPack: packB,
+    imageJobs: imageJobsB,
+  });
+
+  let aStartedAt = 0;
+  let bStartedAt = 0;
+  let aEndedAt = 0;
+  let bEndedAt = 0;
+  const makeOverlappingCtx = (imageJobs, markStart, markEnd) =>
+    routeContext({
+      imageJobs,
+      persistGenerationImages: async (generation) => {
+        markStart();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        markEnd();
+        return generation;
+      },
+    });
+
+  const [pollA, pollB] = await Promise.all([
+    pollJobWithContext(
+      jobA.jobId,
+      makeOverlappingCtx(
+        imageJobsA,
+        () => {
+          aStartedAt = Date.now();
+        },
+        () => {
+          aEndedAt = Date.now();
+        },
+      ),
+    ),
+    pollJobWithContext(
+      jobB.jobId,
+      makeOverlappingCtx(
+        imageJobsB,
+        () => {
+          bStartedAt = Date.now();
+        },
+        () => {
+          bEndedAt = Date.now();
+        },
+      ),
+    ),
+  ]);
+
+  assert.equal(pollA.statusCode, 200);
+  assert.equal(pollB.statusCode, 200);
+  assert.notEqual(Number(pollA.body.generationId), Number(pollB.body.generationId));
+
+  // Overlap check: both persists should start before either finishes.
+  assert.ok(aStartedAt > 0 && bStartedAt > 0);
+  assert.ok(aStartedAt < bEndedAt && bStartedAt < aEndedAt);
+
+  const genA = findXhsCarouselGenerationByGroup(91, previewA.carouselGroupId);
+  const genB = findXhsCarouselGenerationByGroup(91, previewB.carouselGroupId);
+  assert.ok(genA);
+  assert.ok(genB);
+  assert.notEqual(Number(genA.id), Number(genB.id));
+  assert.equal(genA.payload.carouselGroupId, previewA.carouselGroupId);
+  assert.equal(genB.payload.carouselGroupId, previewB.carouselGroupId);
+});
+
+test("different users with same carouselGroupId do not mix generations", async () => {
+  insertUser({
+    id: 93,
+    name: "Remix Concurrent User",
+    phone: "13910000094",
+    password: "hash",
+    accountType: "customer",
+    credits: 50,
+    createdAt: "2026-07-23T00:00:00.000Z",
+  });
+  insertSession({ token: "remix-token-93", userId: 93, createdAt: "2026-07-23T00:00:00.000Z" });
+
+  const sharedGroupId = "shared-group-id-aaaaaaaa";
+  const originalFindBrand = brandRepo.findBrandByOwner;
+  brandRepo.findBrandByOwner = (brandId, ownerUserId) => {
+    if (Number(brandId) === 7 && (Number(ownerUserId) === 91 || Number(ownerUserId) === 93)) {
+      return originalFindBrand(7, 91) || {
+        id: 7,
+        name: "测试品牌",
+        industry: "母婴",
+        audience: "妈妈",
+        description: "温和喂养",
+        product: "奶粉",
+        goal: "安心转奶",
+        knowledgeBase: "",
+        logo: null,
+        trends: [],
+        analyses: [],
+      };
+    }
+    return originalFindBrand(brandId, ownerUserId);
+  };
+
+  try {
+    // User 91 creates a completed job in shared group via normal helpers.
+    const pack = await getFusionPack("smart");
+    const imageJobs91 = new Map();
+    const created91 = await createCompletedSlideJob({
+      slideIndex: 0,
+      contentMode: "smart",
+      carouselGroupId: sharedGroupId,
+      carouselPack: { ...pack, carouselGroupId: sharedGroupId },
+      imageJobs: imageJobs91,
+    });
+
+    // User 93: plant a completed job directly with same group id.
+    const imageJobs93 = new Map();
+    const jobId93 = `93${"b".repeat(30)}`;
+    const credit93 = insertCreditEvent({
+      userId: 93,
+      actionType: "xhsCarousel",
+      actionLabel: "优秀内容仿图文单张生成",
+      creditDelta: -1,
+      creditCost: 1,
+      brandId: 7,
+      summary: "user93 slide",
+      payload: { excellentRemix: true, carouselGroupId: sharedGroupId, slideIndex: 0 },
+    });
+    const job93 = {
+      id: jobId93,
+      ownerUserId: 93,
+      status: "completed",
+      imageUrl: `https://cdn.test-images.example/${jobId93}.png`,
+      createdAt: Date.now(),
+      metadata: {
+        title: "u93",
+        pageLabel: "第 1 张",
+        slideIndex: 0,
+        prompt: "p",
+        copy: "c",
+      },
+      generationContext: {
+        type: "xhsCarouselSlide",
+        singleSlideOnly: true,
+        excellentRemix: true,
+        userId: 93,
+        brandId: 7,
+        contentMode: "smart",
+        slideIndex: 0,
+        carouselGroupId: sharedGroupId,
+        carouselTitle: "u93 title",
+        publishTitle: "u93 publish",
+        publishCaption: "",
+        caption: "",
+        creditEventId: credit93.id,
+        aspectRatio: "3:4",
+        sourceSlide: {
+          pageLabel: "第 1 张",
+          title: "u93",
+          copy: "c",
+        },
+      },
+    };
+    imageJobs93.set(jobId93, job93);
+    upsertImageJob(93, job93);
+
+    const ctx91 = routeContextWithPersistDelay(imageJobs91, 30);
+    const ctx93 = routeContext({
+      imageJobs: imageJobs93,
+      getSessionToken: () => "remix-token-93",
+      persistGenerationImages: async (generation) => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return generation;
+      },
+    });
+
+    const [poll91, poll93] = await Promise.all([
+      pollJobWithContext(created91.jobId, ctx91),
+      pollJobWithContext(jobId93, ctx93),
+    ]);
+
+    assert.equal(poll91.statusCode, 200, poll91.body?.error || "user91 poll failed");
+    assert.equal(poll93.statusCode, 200, poll93.body?.error || "user93 poll failed");
+    assert.notEqual(Number(poll91.body.generationId), Number(poll93.body.generationId));
+
+    const gen91 = findXhsCarouselGenerationByGroup(91, sharedGroupId);
+    const gen93 = findXhsCarouselGenerationByGroup(93, sharedGroupId);
+    assert.ok(gen91);
+    assert.ok(gen93);
+    assert.equal(Number(gen91.ownerUserId), 91);
+    assert.equal(Number(gen93.ownerUserId), 93);
+    assert.notEqual(Number(gen91.id), Number(gen93.id));
+  } finally {
+    brandRepo.findBrandByOwner = originalFindBrand;
+  }
+});
+
 test("credit event ownership and actionType guards prevent tampering", async () => {
   insertUser({
     id: 92,
