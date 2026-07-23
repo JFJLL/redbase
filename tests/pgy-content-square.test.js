@@ -121,7 +121,6 @@ test("builds excellent-content Pgy payload with engagement sort overrides", () =
     orderBy: "premium_engage_num",
     sort: "desc",
     noteType: 1,
-    contentType: "6",
   });
   assert.equal(payload.orderBy, "premium_engage_num");
   assert.equal(payload.nd, "7");
@@ -129,7 +128,7 @@ test("builds excellent-content Pgy payload with engagement sort overrides", () =
   assert.equal(payload.pageSize, 20);
   assert.equal(payload.pageNum, 1);
   assert.equal(payload.noteType, 1);
-  assert.equal(payload.contentType, "6");
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, "contentType"), false);
   assert.equal(payload.noteContentCategory, "内容类目#美妆#护肤");
   // Default trend behavior remains exposure sort and does not force noteType/contentType.
   const defaults = buildPgyHotNotesPayload();

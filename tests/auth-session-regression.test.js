@@ -65,7 +65,7 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     xhsCategoryStatus: "ready",
     xhsCategoryError: "old error",
     excellentContents: [{ noteId: "n1" }],
-    excellentContentFilters: { categoryPath: "美妆", source: "professional" },
+    excellentContentFilters: { categoryPath: "美妆", source: "xhs_hot" },
     excellentContentStatus: "ready",
     excellentContentError: "old",
     excellentContentUpdatedAt: "2026-07-01T00:00:00.000Z",
@@ -93,8 +93,8 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     historyImageSignatureRefreshInFlight: Promise.resolve(),
     historyFilterTimer: pendingFilterTimer,
     excellentFreshCheckTimer: pendingFreshTimer,
-    excellentFreshCheckKey: "professional::美妆",
-    excellentFreshCheckAttempted: new Set(["professional::美妆"]),
+    excellentFreshCheckKey: "xhs_hot::美妆",
+    excellentFreshCheckAttempted: new Set(["xhs_hot::美妆"]),
     clearTimeout: (timer) => calls.push(`clearTimeout:${timer.id}`),
     document: {
       querySelectorAll: () => [],
@@ -123,6 +123,8 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
   assert.equal(state.excellentContents.length, 0);
   assert.equal(state.excellentContentStatus, "idle");
   assert.equal(state.excellentContentRequestId, 0);
+  assert.equal(state.excellentContentFilters.source, "xhs_hot");
+  assert.equal(state.excellentContentFilters.categoryPath, "");
   assert.equal(state.productImageLibrary.length, 0);
   assert.equal(Object.keys(state.productImages).length, 0);
   assert.equal(Object.keys(state.editingIdeas).length, 0);

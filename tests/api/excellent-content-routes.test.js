@@ -88,10 +88,24 @@ test("excellent contents rejects invalid source", async () => {
   assert.equal(res.statusCode, 400);
 });
 
+test("excellent contents rejects multi-origin sources", async () => {
+  for (const source of ["professional", "kol", "celebrity", "buyer", "employee", "owner", "user"]) {
+    const res = createRes();
+    const handled = await handleExcellentContentRoutes(
+      { appConfig: { pgy: { enabled: false } } },
+      createGetReq(`/api/excellent-contents?source=${source}`, "redbase_session=excellent-token"),
+      res,
+      "/api/excellent-contents",
+    );
+    assert.equal(handled, true);
+    assert.equal(res.statusCode, 400, `expected 400 for source=${source}`);
+  }
+});
+
 test("excellent contents returns cached items with metadata", async () => {
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath: "",
     items: [
       {
@@ -113,7 +127,7 @@ test("excellent contents returns cached items with metadata", async () => {
   const res = createRes();
   const handled = await handleExcellentContentRoutes(
     { appConfig: { pgy: { enabled: false } } },
-    createGetReq("/api/excellent-contents?source=professional", "redbase_session=excellent-token"),
+    createGetReq("/api/excellent-contents?source=xhs_hot", "redbase_session=excellent-token"),
     res,
     "/api/excellent-contents",
   );
@@ -126,12 +140,14 @@ test("excellent contents returns cached items with metadata", async () => {
   assert.equal(typeof res.body.stale, "boolean");
   assert.equal(res.body.windowDays, 7);
   assert.equal(res.body.sort, "engagement_desc");
+  assert.equal(res.body.source, "xhs_hot");
+  assert.deepEqual(res.body.filters.sources, [{ value: "xhs_hot", label: "小红书热门" }]);
 });
 
 test("excellent contents accepts waitForFresh query flag", async () => {
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath: "",
     items: [
       {
@@ -153,7 +169,7 @@ test("excellent contents accepts waitForFresh query flag", async () => {
   const res = createRes();
   const handled = await handleExcellentContentRoutes(
     { appConfig: { pgy: { enabled: false } } },
-    createGetReq("/api/excellent-contents?source=professional&waitForFresh=1", "redbase_session=excellent-token"),
+    createGetReq("/api/excellent-contents?source=xhs_hot&waitForFresh=1", "redbase_session=excellent-token"),
     res,
     "/api/excellent-contents",
   );

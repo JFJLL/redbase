@@ -9,19 +9,12 @@ const {
   recordExcellentContentCacheError,
 } = require("../db/repositories/excellent-content-cache-repository");
 
-// Board remains 小红书热门 (bizType=1). "source" is Pgy 内容来源 (contentType codes).
+// V1: 小红书热门全量图文 TOP8 (bizType=1). Single public source; no Pgy contentType filter.
+const EXCELLENT_SOURCE_XHS_HOT = "xhs_hot";
+const EXCELLENT_SOURCE_DEFAULT = EXCELLENT_SOURCE_XHS_HOT;
 const EXCELLENT_CONTENT_SOURCES = Object.freeze([
-  { value: "professional", label: "专业号笔记", contentType: "6" },
-  { value: "kol", label: "博主合作笔记", contentType: "1" },
-  { value: "celebrity", label: "明星合作笔记", contentType: "2" },
-  { value: "buyer", label: "买手笔记", contentType: "5" },
-  { value: "employee", label: "员工笔记", contentType: "3" },
-  { value: "owner", label: "主理人笔记", contentType: "11" },
-  { value: "user", label: "用户笔记", contentType: "12" },
+  { value: EXCELLENT_SOURCE_XHS_HOT, label: "小红书热门" },
 ]);
-const EXCELLENT_SOURCE_DEFAULT = "professional";
-// Backward-compatible alias used by older warm scripts/tests.
-const EXCELLENT_SOURCE_XHS_HOT = EXCELLENT_SOURCE_DEFAULT;
 const EXCELLENT_WINDOW_DAYS = 7;
 const EXCELLENT_ORDER_BY = "premium_engage_num";
 const EXCELLENT_SORT = "desc";
@@ -32,11 +25,10 @@ const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000;
 
 function getExcellentContentSource(sourceValue) {
   const value = String(sourceValue || "").trim();
-  // Legacy value from first V1 implementation.
-  if (value === "xhs_hot" || !value) {
-    return EXCELLENT_CONTENT_SOURCES.find((item) => item.value === EXCELLENT_SOURCE_DEFAULT);
+  if (!value || value === EXCELLENT_SOURCE_XHS_HOT) {
+    return EXCELLENT_CONTENT_SOURCES[0];
   }
-  return EXCELLENT_CONTENT_SOURCES.find((item) => item.value === value) || null;
+  return null;
 }
 
 const EXCELLENT_PUBLIC_MESSAGES = {
@@ -115,7 +107,7 @@ function filterRankAndLimitNotes(notes) {
   }));
 }
 
-async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", contentType = "6", sourceKey = EXCELLENT_SOURCE_DEFAULT, fetchImpl } = {}) {
+async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", sourceKey = EXCELLENT_SOURCE_DEFAULT, fetchImpl } = {}) {
   const collected = [];
   for (let pageNum = 1; pageNum <= EXCELLENT_MAX_PAGES; pageNum += 1) {
     const page = await fetchPgyXhsHotNotes(appConfig, {
@@ -126,15 +118,14 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", conten
       orderBy: EXCELLENT_ORDER_BY,
       sort: EXCELLENT_SORT,
       // Request image/text notes only; engage ranking otherwise floods with videos.
+      // Do not pass contentType — V1 is full 小红书热门, not a Pgy origin subset.
       noteType: 1,
-      // Pgy 内容来源 (专业号/博主合作/明星等).
-      contentType: String(contentType),
       fetchImpl,
     });
     collected.push(
       ...(page.notes || []).map((note) => ({
         ...note,
-        sourceKey,
+        sourceKey: sourceKey || EXCELLENT_SOURCE_XHS_HOT,
       })),
     );
     const imageCount = filterRankAndLimitNotes(collected).length;
@@ -180,24 +171,22 @@ function storeSuccessfulCache(appConfig, sourceKey, categoryPath, items) {
   });
 }
 
-async function refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, contentType, fetchImpl } = {}) {
+async function refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
   const items = await fetchExcellentNotesFromPgy(appConfig, {
     categoryPath,
-    contentType,
     sourceKey,
     fetchImpl,
   });
   return storeSuccessfulCache(appConfig, sourceKey, categoryPath, items);
 }
 
-function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl } = {}) {
+function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
   const key = cacheKey(sourceKey, categoryPath);
   let promise = inFlightRefreshes.get(key);
   if (!promise) {
     promise = refreshExcellentContentCache(appConfig, {
       sourceKey,
       categoryPath,
-      contentType,
       fetchImpl,
     }).finally(() => {
       inFlightRefreshes.delete(key);
@@ -207,8 +196,8 @@ function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, con
   return promise;
 }
 
-function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl } = {}) {
-  const promise = ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl });
+function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
+  const promise = ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
   promise.catch((error) => {
     const message = mapExcellentContentError(error);
     try {
@@ -229,7 +218,6 @@ async function getExcellentContents(appConfig, options = {}) {
     throw error;
   }
   const sourceKey = sourceDef.value;
-  const contentType = sourceDef.contentType;
   const categoryPath = normalizePgyCategoryPath(options.categoryPath || "");
   const forceRefresh = options.forceRefresh === true;
   const waitForFresh = options.waitForFresh === true;
@@ -250,7 +238,7 @@ async function getExcellentContents(appConfig, options = {}) {
 
   // Stale-while-revalidate: return expired cache immediately and refresh in background.
   if (!forceRefresh && !waitForFresh && hasCacheItems(cache)) {
-    scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, contentType, fetchImpl });
+    scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
     return buildResponse({
       items: cache.items,
       updatedAt: cache.fetchedAt,
@@ -265,7 +253,6 @@ async function getExcellentContents(appConfig, options = {}) {
     const refreshed = await ensureExcellentContentRefresh(appConfig, {
       sourceKey,
       categoryPath,
-      contentType,
       fetchImpl,
     });
     if (!refreshed || !hasCacheItems(refreshed)) {

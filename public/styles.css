@@ -4158,7 +4158,7 @@ textarea {
 .excellent-panel-header { margin-bottom: 12px; }
 .excellent-toolbar {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px) auto auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px) auto;
   gap: 12px;
   align-items: end;
   margin-bottom: 18px;
@@ -4175,11 +4175,6 @@ textarea {
   border-radius: 10px;
   background: #fff;
   padding: 0 12px;
-}
-.excellent-toolbar #excellentFilterApply {
-  min-height: 42px;
-  min-width: 88px;
-  white-space: nowrap;
 }
 .excellent-meta {
   display: flex;

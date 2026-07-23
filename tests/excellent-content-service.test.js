@@ -41,7 +41,7 @@ function makeNote(id, { type = "image", like = 10, fav = 5, cmt = 1 } = {}) {
     },
     author: { nickname: "a", fansCount: 1 },
     source: "pgy_content_square",
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
   };
 }
 
@@ -102,7 +102,7 @@ test("excellent content service returns fresh cache without refetch", async () =
   const items = filterRankAndLimitNotes([makeNote("1", { like: 20 }), makeNote("2", { like: 10 })]);
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath: "",
     items,
     fetchedAt: now.toISOString(),
@@ -114,7 +114,7 @@ test("excellent content service returns fresh cache without refetch", async () =
   const result = await getExcellentContents(
     { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
     {
-      source: "professional",
+      source: "xhs_hot",
       categoryPath: "",
       fetchImpl: async () => {
         fetchCount += 1;
@@ -136,7 +136,7 @@ test("expired cache returns stale and refreshes in background", async () => {
   const oldItems = filterRankAndLimitNotes([makeNote("old", { like: 9 })]);
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath: "内容类目#美妆",
     items: oldItems,
     fetchedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
@@ -148,7 +148,7 @@ test("expired cache returns stale and refreshes in background", async () => {
   const result = await getExcellentContents(
     { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000, excellentContentCacheTtlMs: 3600000 } },
     {
-      source: "professional",
+      source: "xhs_hot",
       categoryPath: "美妆",
       fetchImpl: async () => {
         fetchCount += 1;
@@ -161,7 +161,7 @@ test("expired cache returns stale and refreshes in background", async () => {
 
   await new Promise((resolve) => setTimeout(resolve, 80));
   assert.ok(fetchCount >= 1);
-  const refreshed = findExcellentContentCache("professional", "内容类目#美妆");
+  const refreshed = findExcellentContentCache("xhs_hot", "内容类目#美妆");
   assert.ok(refreshed.items.some((item) => item.noteId === "new1"));
 });
 
@@ -172,7 +172,7 @@ test("waitForFresh joins background refresh and returns fresh items", async () =
   const now = new Date();
   const categoryPath = "内容类目#wait-fresh";
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath,
     items: oldItems,
     fetchedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
@@ -189,7 +189,7 @@ test("waitForFresh joins background refresh and returns fresh items", async () =
   const appConfig = { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000, excellentContentCacheTtlMs: 3600000 } };
 
   const stale = await getExcellentContents(appConfig, {
-    source: "professional",
+    source: "xhs_hot",
     categoryPath,
     fetchImpl,
   });
@@ -197,8 +197,8 @@ test("waitForFresh joins background refresh and returns fresh items", async () =
   assert.equal(stale.items[0].noteId, "stale-item");
 
   const [freshA, freshB] = await Promise.all([
-    getExcellentContents(appConfig, { source: "professional", categoryPath, waitForFresh: true, fetchImpl }),
-    getExcellentContents(appConfig, { source: "professional", categoryPath, waitForFresh: true, fetchImpl }),
+    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, waitForFresh: true, fetchImpl }),
+    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, waitForFresh: true, fetchImpl }),
   ]);
   assert.equal(freshA.stale, false);
   assert.equal(freshB.stale, false);
@@ -213,7 +213,7 @@ test("pgy failure with allowStaleOnError true returns stale; false throws and ke
   const items = filterRankAndLimitNotes([makeNote("cached", { like: 12 })]);
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath: "内容类目#数码",
     items,
     fetchedAt: now.toISOString(),
@@ -224,7 +224,7 @@ test("pgy failure with allowStaleOnError true returns stale; false throws and ke
   const stale = await getExcellentContents(
     { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
     {
-      source: "professional",
+      source: "xhs_hot",
       categoryPath: "数码",
       forceRefresh: true,
       allowStaleOnError: true,
@@ -243,7 +243,7 @@ test("pgy failure with allowStaleOnError true returns stale; false throws and ke
       getExcellentContents(
         { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
         {
-          source: "professional",
+          source: "xhs_hot",
           categoryPath: "数码",
           forceRefresh: true,
           allowStaleOnError: false,
@@ -254,7 +254,7 @@ test("pgy failure with allowStaleOnError true returns stale; false throws and ke
       ),
     (error) => Boolean(error?.message),
   );
-  const kept = findExcellentContentCache("professional", "内容类目#数码");
+  const kept = findExcellentContentCache("xhs_hot", "内容类目#数码");
   assert.equal(kept.items[0].noteId, "cached");
   assert.ok(kept.lastError);
 
@@ -264,7 +264,7 @@ test("pgy failure with allowStaleOnError true returns stale; false throws and ke
       getExcellentContents(
         { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
         {
-          source: "professional",
+          source: "xhs_hot",
           categoryPath: "内容类目#不存在类目路径xyz",
           forceRefresh: true,
           fetchImpl: async () => {
@@ -282,7 +282,7 @@ test("warmExcellentContentCache fails on stale fallback and succeeds on fresh pu
   const items = filterRankAndLimitNotes([makeNote("warm-old", { like: 11 })]);
   const now = new Date();
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath: "",
     items,
     fetchedAt: now.toISOString(),
@@ -303,7 +303,7 @@ test("warmExcellentContentCache fails on stale fallback and succeeds on fresh pu
       ),
     (error) => error.code === "PGY_NETWORK_ERROR" || Boolean(error?.message),
   );
-  const kept = findExcellentContentCache("professional", "");
+  const kept = findExcellentContentCache("xhs_hot", "");
   assert.equal(kept.items[0].noteId, "warm-old");
 
   __resetExcellentContentInFlightForTests();
@@ -332,7 +332,7 @@ test("concurrent cold loads share one in-flight refresh", async () => {
   const categoryPath = "内容类目#并发";
   // Ensure no cache for this path
   upsertExcellentContentCache({
-    sourceKey: "professional",
+    sourceKey: "xhs_hot",
     categoryPath,
     items: [],
     fetchedAt: new Date(0).toISOString(),
@@ -348,8 +348,8 @@ test("concurrent cold loads share one in-flight refresh", async () => {
   };
   const appConfig = { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } };
   const [a, b] = await Promise.all([
-    getExcellentContents(appConfig, { source: "professional", categoryPath, forceRefresh: true, fetchImpl }),
-    getExcellentContents(appConfig, { source: "professional", categoryPath, forceRefresh: true, fetchImpl }),
+    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, forceRefresh: true, fetchImpl }),
+    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, forceRefresh: true, fetchImpl }),
   ]);
   assert.equal(a.items.length, 8);
   assert.equal(b.items.length, 8);
@@ -362,6 +362,39 @@ test("invalid source is rejected", async () => {
     () => getExcellentContents({ pgy: { enabled: true, cookie: "x" } }, { source: "other" }),
     (error) => error.code === "INVALID_SOURCE",
   );
+  for (const source of ["professional", "kol", "celebrity", "buyer", "employee", "owner", "user"]) {
+    await assert.rejects(
+      () => getExcellentContents({ pgy: { enabled: true, cookie: "x" } }, { source }),
+      (error) => error.code === "INVALID_SOURCE",
+    );
+  }
+});
+
+test("xhs_hot is the only accepted source and filters label", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  const items = filterRankAndLimitNotes([makeNote("src1", { like: 20 })]);
+  assert.equal(items[0].sourceKey, "xhs_hot");
+  const now = new Date();
+  upsertExcellentContentCache({
+    sourceKey: "xhs_hot",
+    categoryPath: "",
+    items,
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+    lastError: "",
+  });
+  const result = await getExcellentContents(
+    { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+    { source: "xhs_hot" },
+  );
+  assert.equal(result.source, "xhs_hot");
+  assert.deepEqual(result.filters.sources, [{ value: "xhs_hot", label: "小红书热门" }]);
+  const emptySource = await getExcellentContents(
+    { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+    { source: "" },
+  );
+  assert.equal(emptySource.source, "xhs_hot");
 });
 
 test("remix carousel pack normalize keeps 4 pages sourceTemplate and remixBrief", () => {
@@ -375,7 +408,7 @@ test("remix carousel pack normalize keeps 4 pages sourceTemplate and remixBrief"
       noteId: "n1",
       title: "参考",
       sourceUrl: "https://www.xiaohongshu.com/explore/n1",
-      source: "professional",
+      source: "xhs_hot",
     },
     remixBrief: {
       sourceType: "excellent_content",
@@ -402,6 +435,8 @@ test("remix carousel pack normalize keeps 4 pages sourceTemplate and remixBrief"
   });
   assert.equal(pack.slides.length, 4);
   assert.equal(pack.sourceTemplate.noteId, "n1");
+  assert.equal(pack.sourceTemplate.source, "xhs_hot");
+  assert.doesNotMatch(JSON.stringify(pack), /professional/);
   assert.equal(pack.remixBrief.sourceType, "excellent_content");
   assert.equal(pack.slides[0].remixBrief.pageTask, "任务1");
   assert.ok(!JSON.stringify(pack).includes("http://cdn.example/original.jpg"));

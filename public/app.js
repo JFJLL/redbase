@@ -1245,11 +1245,7 @@ function clearSession() {
   state.excellentContents = [];
   state.excellentContentFilters = {
     categoryPath: "",
-    source: "professional",
-  };
-  state.excellentContentDraftFilters = {
-    categoryPath: "",
-    source: "professional",
+    source: "xhs_hot",
   };
   state.excellentContentStatus = "idle";
   state.excellentContentError = "";
@@ -4028,7 +4024,7 @@ function setExcellentModalOpen(isOpen) {
 }
 
 function excellentContentCacheKey(source, categoryPath) {
-  return `${String(source || "professional")}::${String(categoryPath || "")}`;
+  return `${String(source || "xhs_hot")}::${String(categoryPath || "")}`;
 }
 
 function clearExcellentFreshCheckTimer() {
@@ -4055,7 +4051,7 @@ function scheduleExcellentFreshCheck({ source, categoryPath, loadEpoch }) {
     excellentFreshCheckTimer = null;
     if (sessionEpoch !== loadEpoch) return;
     if (!state.sessionToken) return;
-    if ((state.excellentContentFilters.source || "professional") !== source) return;
+    if ((state.excellentContentFilters.source || "xhs_hot") !== source) return;
     if ((state.excellentContentFilters.categoryPath || "") !== categoryPath) return;
     excellentFreshCheckAttempted.add(key);
     loadExcellentContents({ waitForFresh: true, preserveItems: true }).catch(() => {});
@@ -4065,7 +4061,7 @@ function scheduleExcellentFreshCheck({ source, categoryPath, loadEpoch }) {
 function renderExcellentCategoryOptions() {
   const select = document.getElementById("excellentCategoryFilter");
   if (!select) return;
-  const previous = state.excellentContentDraftFilters?.categoryPath ?? state.excellentContentFilters.categoryPath ?? "";
+  const previous = state.excellentContentFilters.categoryPath || "";
   select.innerHTML = `<option value="">全部内容类目</option>${renderXhsCategoryOptions(state.xhsCategories)}`;
   select.value = previous;
 }
@@ -4114,7 +4110,7 @@ function renderExcellentStatus() {
     statusEl.innerHTML = `${escapeHtml(state.excellentContentError || "加载失败")} <button class="inline-link" id="reloadExcellentContents" type="button">重新加载</button>`;
     document.getElementById("reloadExcellentContents")?.addEventListener("click", () => {
       const key = excellentContentCacheKey(
-        state.excellentContentFilters.source || "professional",
+        state.excellentContentFilters.source || "xhs_hot",
         state.excellentContentFilters.categoryPath || "",
       );
       excellentFreshCheckAttempted.delete(key);
@@ -4135,13 +4131,11 @@ function renderExcellentContents() {
 
   const sourceSelect = document.getElementById("excellentSourceFilter");
   if (sourceSelect) {
-    sourceSelect.value =
-      state.excellentContentDraftFilters?.source || state.excellentContentFilters.source || "professional";
+    sourceSelect.value = state.excellentContentFilters.source || "xhs_hot";
   }
   const categorySelect = document.getElementById("excellentCategoryFilter");
   if (categorySelect) {
-    categorySelect.value =
-      state.excellentContentDraftFilters?.categoryPath ?? state.excellentContentFilters.categoryPath ?? "";
+    categorySelect.value = state.excellentContentFilters.categoryPath || "";
   }
 
   if (state.excellentContentStatus === "loading" && !state.excellentContents.length) {
@@ -4151,10 +4145,10 @@ function renderExcellentContents() {
 
   const items = state.excellentContents || [];
   if (!items.length) {
-    root.innerHTML = `<div class="excellent-empty"><strong>${state.excellentContentStatus === "error" ? "暂时无法加载优秀内容" : "暂无图文优秀内容"}</strong><p>${escapeHtml(state.excellentContentError || "调整类目或内容来源后点击「查询」。")}</p><button class="primary-btn" id="reloadExcellentContentsEmpty" type="button">重新加载</button></div>`;
+    root.innerHTML = `<div class="excellent-empty"><strong>${state.excellentContentStatus === "error" ? "暂时无法加载优秀内容" : "暂无图文优秀内容"}</strong><p>${escapeHtml(state.excellentContentError || "当前类目近7日暂无可用图文内容，请切换类目或稍后重试。")}</p><button class="primary-btn" id="reloadExcellentContentsEmpty" type="button">重新加载</button></div>`;
     document.getElementById("reloadExcellentContentsEmpty")?.addEventListener("click", () => {
       const key = excellentContentCacheKey(
-        state.excellentContentFilters.source || "professional",
+        state.excellentContentFilters.source || "xhs_hot",
         state.excellentContentFilters.categoryPath || "",
       );
       excellentFreshCheckAttempted.delete(key);
@@ -4204,7 +4198,7 @@ async function loadExcellentContents({ waitForFresh = false, preserveItems = tru
   if (!state.sessionToken) return null;
   const requestId = ++state.excellentContentRequestId;
   const loadEpoch = sessionEpoch;
-  const source = state.excellentContentFilters.source || "professional";
+  const source = state.excellentContentFilters.source || "xhs_hot";
   const categoryPath = state.excellentContentFilters.categoryPath || "";
   const hadItems = state.excellentContents.length > 0;
   state.excellentContentStatus = "loading";
@@ -4592,7 +4586,7 @@ function buildExcellentRemixPack(item, brand, trend, idea, focus) {
       noteId: String(item.noteId || item.id || ""),
       title: item.title || "",
       sourceUrl: item.noteUrl || "",
-      source: "professional",
+      source: item.sourceKey || "xhs_hot",
     },
     remixBrief: {
       sourceType: "excellent_content",
@@ -4652,36 +4646,32 @@ function bindExcellentContentLibrary() {
     if (detailButton) openExcellentContentDetail(detailButton.dataset.excellentDetail);
   });
 
-  // Draft only — fetch after user clicks 查询.
+  // Category change loads immediately; source V1 is fixed to xhs_hot.
   document.getElementById("excellentCategoryFilter")?.addEventListener("change", (event) => {
-    if (!state.excellentContentDraftFilters) {
-      state.excellentContentDraftFilters = { categoryPath: "", source: "professional" };
-    }
-    state.excellentContentDraftFilters.categoryPath = event.target.value || "";
-  });
-  document.getElementById("excellentSourceFilter")?.addEventListener("change", (event) => {
-    if (!state.excellentContentDraftFilters) {
-      state.excellentContentDraftFilters = { categoryPath: "", source: "professional" };
-    }
-    state.excellentContentDraftFilters.source = event.target.value || "professional";
-  });
-  document.getElementById("excellentFilterApply")?.addEventListener("click", () => {
     clearExcellentFreshCheckTimer();
-    const draft = state.excellentContentDraftFilters || state.excellentContentFilters;
-    state.excellentContentFilters = {
-      categoryPath: draft.categoryPath || "",
-      source: draft.source || "professional",
-    };
-    state.excellentContentDraftFilters = { ...state.excellentContentFilters };
+    const currentKey = excellentContentCacheKey(
+      state.excellentContentFilters.source || "xhs_hot",
+      state.excellentContentFilters.categoryPath || "",
+    );
+    state.excellentContentFilters.categoryPath = event.target.value || "";
     state.excellentContents = [];
     state.excellentContentUpdatedAt = "";
     state.excellentContentStale = false;
-    const key = excellentContentCacheKey(
-      state.excellentContentFilters.source,
-      state.excellentContentFilters.categoryPath,
-    );
-    excellentFreshCheckAttempted.delete(key);
-    loadExcellentContents({ waitForFresh: true, preserveItems: false }).catch(() => {});
+    excellentFreshCheckAttempted.delete(currentKey);
+    loadExcellentContents({
+      waitForFresh: false,
+      preserveItems: false,
+    }).catch(() => {});
+  });
+  document.getElementById("excellentSourceFilter")?.addEventListener("change", (event) => {
+    // V1 only exposes xhs_hot; keep filter in sync if the control ever gains options.
+    const next = event.target.value || "xhs_hot";
+    if (next !== "xhs_hot") {
+      event.target.value = "xhs_hot";
+      state.excellentContentFilters.source = "xhs_hot";
+      return;
+    }
+    state.excellentContentFilters.source = "xhs_hot";
   });
 
   document.getElementById("closeExcellentContentModal")?.addEventListener("click", closeExcellentContentDetail);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Warm shared excellent-content cache (default 专业号笔记, all categories).
+ * Warm shared excellent-content cache (default 小红书热门 / xhs_hot, all categories).
  * Safe to run before traffic switch. Does not print cookies or secrets.
  * Exit 0 only when Pgy refresh succeeds with at least one fresh item.
  */

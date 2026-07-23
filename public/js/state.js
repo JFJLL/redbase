@@ -24,11 +24,7 @@ export const state = {
   excellentContents: [],
   excellentContentFilters: {
     categoryPath: "",
-    source: "professional",
-  },
-  excellentContentDraftFilters: {
-    categoryPath: "",
-    source: "professional",
+    source: "xhs_hot",
   },
   excellentContentStatus: "idle",
   excellentContentError: "",
