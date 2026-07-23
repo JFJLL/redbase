@@ -6,12 +6,15 @@ const { requireSqlAuth } = require("./sql-auth");
 const { allocateCounter } = require("../db/repositories/core-repository");
 const {
   listProductImagesByOwner,
+  listProductImagesByOwnerAndBrand,
   findProductImageByOwner,
   findProductImageById,
   findDuplicateProductImage,
   insertProductImage,
   markProductImageDeleted,
+  ASSET_TYPE_PRODUCT,
 } = require("../db/repositories/product-image-repository");
+const brandRepository = require("../db/repositories/brand-repository");
 
 async function handleProductImageRoutes(context, req, res, pathname) {
   const {
@@ -37,6 +40,28 @@ async function handleProductImageRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/product-images") {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const brandIdRaw = url.searchParams.get("brandId");
+    const brandScoped = brandIdRaw != null && String(brandIdRaw).trim() !== "";
+    if (brandScoped) {
+      const brandId = Number(brandIdRaw);
+      if (!Number.isFinite(brandId) || brandId <= 0) {
+        badRequest(res, "brandId 无效");
+        return true;
+      }
+      const brand = brandRepository.findBrandByOwner(brandId, user.id);
+      if (!brand) {
+        badRequest(res, "当前品牌不存在或你没有访问权限。");
+        return true;
+      }
+      json(res, 200, {
+        brandId,
+        images: listProductImagesByOwnerAndBrand(user.id, brandId)
+          .sort(sortProductImages)
+          .map((image) => buildProductImageView(image, appConfig)),
+      });
+      return true;
+    }
     json(res, 200, {
       images: listProductImagesByOwner(user.id)
         .sort(sortProductImages)
@@ -57,6 +82,14 @@ async function handleProductImageRoutes(context, req, res, pathname) {
         const maxMb = Math.round(MAX_PRODUCT_IMAGE_BYTES / 1024 / 1024);
         throw Object.assign(new Error(`产品图过大，请上传 ${maxMb}MB 以内的图片。`), { code: "PAYLOAD_TOO_LARGE" });
       }
+      let brandId = 0;
+      if (payload?.brandId != null && String(payload.brandId).trim() !== "") {
+        brandId = Number(payload.brandId);
+        if (!Number.isFinite(brandId) || brandId <= 0 || !brandRepository.findBrandByOwner(brandId, user.id)) {
+          badRequest(res, "当前品牌不存在或你没有访问权限。");
+          return true;
+        }
+      }
       const sha256 = crypto.createHash("sha256").update(parsed.buffer).digest("hex");
       const existing = findDuplicateProductImage(user.id, sha256);
       if (existing) {
@@ -76,6 +109,8 @@ async function handleProductImageRoutes(context, req, res, pathname) {
         image = insertProductImage({
           id: imageId,
           ownerUserId: user.id,
+          brandId,
+          assetType: brandId > 0 ? ASSET_TYPE_PRODUCT : ASSET_TYPE_PRODUCT,
           originalName: sanitizeFileName(payload?.name || "product-image"),
           storedPath,
           mimeType: parsed.mimeType,

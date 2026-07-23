@@ -487,6 +487,8 @@ function buildProductImageView(image, appConfig) {
     sizeBytes: Number(image.sizeBytes || 0),
     createdAt: image.createdAt,
     lastUsedAt: image.lastUsedAt || "",
+    brandId: Number(image.brandId || 0) || 0,
+    assetType: String(image.assetType || "unassigned"),
   };
 }
 
