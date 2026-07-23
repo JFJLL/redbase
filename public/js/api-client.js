@@ -59,7 +59,12 @@ export async function pollImageJob(jobId, maxWaitMs = IMAGE_JOB_MAX_WAIT_MS, del
   while (Date.now() - startedAt < maxWaitMs) {
     const result = await requestWithContext(`/api/image-jobs/${jobId}`, {}, requestContext);
     if (result.status === "completed") {
-      return result.imageConcept;
+      return {
+        ...(result.imageConcept || {}),
+        generationId: result.generationId || null,
+        persisted: Boolean(result.persisted || result.generationId),
+        jobId: result.jobId || jobId,
+      };
     }
     if (result.status === "failed") {
       throw new Error(result.error || "图片生成失败");

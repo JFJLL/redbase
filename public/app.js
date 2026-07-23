@@ -5548,42 +5548,80 @@ async function generateExcellentRemixCarousel({
     if (!previewPack || !Array.isArray(previewPack.slides)) {
       throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
     }
+    const serverCarouselGroupId = previewResult.carouselGroupId || previewPack.carouselGroupId;
+    if (!serverCarouselGroupId) {
+      throw new Error("预览未返回组图分组标识，请重试。");
+    }
     const pack = {
       ...previewPack,
       aspectRatio,
-      carouselGroupId: previewPack.carouselGroupId || `excellent-remix-${brand.id}-${Date.now()}`,
+      carouselGroupId: serverCarouselGroupId,
       slides: enrichXhsCarouselSlides(previewPack),
     };
     const flags = {
       isGeneratingAll: false,
       completed: false,
+      completing: false,
+      completeError: "",
       creditEventId: null,
     };
+    /** @type {Map<number, { jobId: string, creditEventId: number|null, generationId: number|null, status: string }>} */
+    const slideJobs = new Map();
     const taskQueue = [];
     let activeTaskCount = 0;
     let activeGenerateTaskCount = 0;
     let imageJobSubmissionChain = Promise.resolve();
     let renderAndBind = () => {};
 
-    const completeIfReady = async () => {
-      if (flags.completed || !pack.slides.every(hasXhsCarouselSlideImage)) return;
-      const completeResult = await completeExcellentRemix(request, brand.id, {
-        carouselPack: pack,
-        creditEventId: flags.creditEventId,
-        contentMode,
-        existingIdeaRef,
-        ideaTitle,
-        trendTitle,
-      });
-      updateCurrentUser(completeResult.user);
-      if (completeResult.generation && !state.generationHistory.some((item) => item.id === completeResult.generation.id)) {
+    const getOrderedSlideJobIds = () =>
+      [0, 1, 2, 3].map((index) => slideJobs.get(index)?.jobId).filter(Boolean);
+
+    const rememberGenerationInHistory = (generation) => {
+      if (!generation?.id) return;
+      const existingIndex = state.generationHistory.findIndex((item) => item.id === generation.id);
+      if (existingIndex >= 0) {
+        state.generationHistory[existingIndex] = generation;
+      } else {
         state.generationHistoryFilters = createEmptyGenerationHistoryFilters();
         state.generationHistoryNeedsLatest = false;
-        state.generationHistory.unshift(completeResult.generation);
-        renderGenerationHistory();
+        state.generationHistory.unshift(generation);
       }
-      flags.completed = true;
-      showToast("仿图文组图已全部生成并写入历史生成。");
+      renderGenerationHistory();
+    };
+
+    const completeIfReady = async ({ force = false } = {}) => {
+      if (flags.completed || flags.completing) return;
+      if (!pack.slides.every(hasXhsCarouselSlideImage)) return;
+      const slideJobIds = getOrderedSlideJobIds();
+      if (slideJobIds.length !== 4) {
+        if (force) {
+          flags.completeError = "缺少完整的 4 个图片任务，无法重新写入历史。";
+          renderAndBind();
+        }
+        return;
+      }
+      flags.completing = true;
+      flags.completeError = "";
+      renderAndBind();
+      try {
+        const completeResult = await completeExcellentRemix(request, brand.id, {
+          carouselGroupId: pack.carouselGroupId,
+          slideJobIds,
+          expectedSlideCount: 4,
+        });
+        updateCurrentUser(completeResult.user);
+        rememberGenerationInHistory(completeResult.generation);
+        flags.completed = true;
+        flags.completeError = "";
+        showToast("仿图文组图已全部生成并写入历史生成。");
+      } catch (error) {
+        flags.completeError = error?.message || "写入历史失败";
+        showToast(`仿图文组图写入历史失败：${flags.completeError}。可点击「重新写入历史」重试，不会重复扣积分。`);
+        throw error;
+      } finally {
+        flags.completing = false;
+        renderAndBind();
+      }
     };
 
     const getNextRunnableTaskIndex = () => {
@@ -5616,7 +5654,7 @@ async function generateExcellentRemixCarousel({
             if (task.type === "generate") activeGenerateTaskCount -= 1;
             if (!taskQueue.length && activeTaskCount === 0) {
               flags.isGeneratingAll = false;
-              await completeIfReady().catch((error) => showToast(`仿图文组图写入历史失败：${error.message}`));
+              await completeIfReady().catch(() => {});
             }
             renderAndBind();
             pumpImageTaskQueue();
@@ -5641,6 +5679,7 @@ async function generateExcellentRemixCarousel({
         const result = await runImageJobSubmission(() =>
           generateExcellentRemixSlide(request, brand.id, slideIndex, {
             carouselPack: pack,
+            carouselGroupId: pack.carouselGroupId,
             slide,
             productImages,
             useBrandLogo,
@@ -5654,6 +5693,12 @@ async function generateExcellentRemixCarousel({
         updateCurrentUser(result.user);
         flags.creditEventId = result.creditEventId || flags.creditEventId;
         if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
+        slideJobs.set(slideIndex, {
+          jobId: result.slideJob.jobId,
+          creditEventId: result.creditEventId || null,
+          generationId: null,
+          status: "pending",
+        });
         const imageConcept = await pollImageJob(result.slideJob.jobId);
         pack.slides[slideIndex] = {
           ...pack.slides[slideIndex],
@@ -5663,6 +5708,15 @@ async function generateExcellentRemixCarousel({
           isQueued: false,
           error: "",
         };
+        slideJobs.set(slideIndex, {
+          jobId: result.slideJob.jobId,
+          creditEventId: result.creditEventId || null,
+          generationId: imageConcept.generationId || null,
+          status: "completed",
+        });
+        if (imageConcept.generationId || imageConcept.persisted) {
+          showToast("已保存至历史生成");
+        }
       } catch (error) {
         if (isStaleSessionRequest(error)) return;
         slide.isGenerating = false;
@@ -5692,6 +5746,9 @@ async function generateExcellentRemixCarousel({
           flags.isGeneratingAll = true;
           pack.slides.forEach((_, index) => enqueueGenerateSlide(index));
         },
+        onRetryComplete: () => {
+          completeIfReady({ force: true }).catch(() => {});
+        },
       });
     };
     renderAndBind();
@@ -5703,7 +5760,15 @@ async function generateExcellentRemixCarousel({
   }
 }
 
-function renderXhsCarouselPreviewUI({ imageResult, pack, flags, sourceCase, enqueueGenerateSlide, onGenerateAll }) {
+function renderXhsCarouselPreviewUI({
+  imageResult,
+  pack,
+  flags,
+  sourceCase,
+  enqueueGenerateSlide,
+  onGenerateAll,
+  onRetryComplete,
+}) {
   // Lightweight dedicated renderer so excellent remix does not depend on trend/idea route helpers.
   const slidesHtml = (pack.slides || [])
     .map((slide, index) => {
@@ -5732,18 +5797,37 @@ function renderXhsCarouselPreviewUI({ imageResult, pack, flags, sourceCase, enqu
     })
     .join("");
 
+  const allReady = (pack.slides || []).every((slide) => Boolean(slide.imageUrl || slide.previewUrl));
+  const showRetry = Boolean(flags.completeError) && allReady && !flags.completed;
+
   imageResult.innerHTML = `
     <div class="asset-header-card">
       <h3>${escapeHtml(pack.publishTitle || pack.title || "仿图文组图")}</h3>
       <p>${escapeHtml(pack.publishCaption || "")}</p>
       ${sourceCase ? `<p class="muted">参考：${escapeHtml(sourceCase.title || "")}（仅学习方法，不复制原文原图）</p>` : ""}
       <div class="form-actions">
-        <button type="button" class="primary-btn" data-remix-gen-all ${flags.isGeneratingAll ? "disabled" : ""}>一键生成四页</button>
+        <button type="button" class="primary-btn" data-remix-gen-all ${flags.isGeneratingAll || flags.completing ? "disabled" : ""}>一键生成四页</button>
+        ${
+          showRetry
+            ? `<button type="button" class="secondary-btn" data-remix-retry-complete ${flags.completing ? "disabled" : ""}>${
+                flags.completing ? "写入中…" : "重新写入历史"
+              }</button>`
+            : ""
+        }
       </div>
+      ${
+        flags.completeError
+          ? `<p class="idea-copy" style="color:#ff8fa8">写入历史失败：${escapeHtml(
+              flags.completeError,
+            )}。当前 4 张图片仍保留，重试不会重复生成或扣积分。</p>`
+          : ""
+      }
+      ${flags.completed ? `<p class="idea-copy muted">组图已写入历史生成。</p>` : ""}
     </div>
     <div class="asset-grid xhs-slide-grid">${slidesHtml}</div>
   `;
   imageResult.querySelector("[data-remix-gen-all]")?.addEventListener("click", onGenerateAll);
+  imageResult.querySelector("[data-remix-retry-complete]")?.addEventListener("click", () => onRetryComplete?.());
   imageResult.querySelectorAll("[data-remix-gen-slide]").forEach((button) => {
     button.addEventListener("click", () => enqueueGenerateSlide(Number(button.dataset.remixGenSlide)));
   });

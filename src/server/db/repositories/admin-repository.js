@@ -386,9 +386,17 @@ function findGenerationForCreditEvent(creditEventId, userId) {
   `).get(Number(creditEventId), Number(userId))?.generationId ?? null;
 }
 
-function updateCreditEventGeneration(creditEventId, generation, generationPayload) {
+function updateCreditEventGeneration(creditEventId, generation, generationPayload, options = {}) {
   const event = findCreditEventById(creditEventId);
   if (!event) return null;
+  if (options.requireUserId != null && Number(event.userId) !== Number(options.requireUserId)) {
+    return null;
+  }
+  if (Array.isArray(options.allowedActionTypes) && options.allowedActionTypes.length) {
+    if (!options.allowedActionTypes.includes(event.actionType)) {
+      return null;
+    }
+  }
   const payload = {
     ...(event.payload || {}),
     generationPayload: generationPayload || generation?.payload || {},

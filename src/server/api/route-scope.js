@@ -17,8 +17,8 @@ function bindRouteScope(context) {
   if (context && typeof context === "object" && routeScopeCache.has(context)) {
     return routeScopeCache.get(context);
   }
+  // Context overrides win over shared helpers so route tests can mock image/asset deps.
   const scope = {
-    ...context,
     fsp,
     randomToken,
     isValidPhone,
@@ -29,6 +29,7 @@ function bindRouteScope(context) {
     createBrandAssetTags,
     formatTimestamp,
     ...helpers,
+    ...context,
   };
   if (context && typeof context === "object") {
     routeScopeCache.set(context, scope);

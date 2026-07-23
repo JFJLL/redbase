@@ -1,5 +1,7 @@
 const crypto = require("crypto");
+const dns = require("dns").promises;
 const fsp = require("fs/promises");
+const net = require("net");
 const path = require("path");
 const { DATA_DIR } = require("../config");
 const { signAssetUrl, verifySignedAssetRequest, signLocalAssetUrls } = require("./signed-urls");
@@ -15,12 +17,103 @@ const MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PRODUCT_IMAGE_SELECTION_COUNT = 10;
 const MAX_PRODUCT_IMAGE_SELECTION_BYTES = 30 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
+const MAX_REMOTE_IMAGE_REDIRECTS = 3;
 const PRODUCT_IMAGE_MIME_EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
   "image/gif": "gif",
 };
+
+function isBlockedImageHostname(hostname) {
+  const host = String(hostname || "")
+    .toLowerCase()
+    .replace(/\.$/, "")
+    .split("%")[0];
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host === "metadata.google.internal" || host === "metadata" || host === "metadata.google") return true;
+  if (host === "0.0.0.0") return true;
+  return false;
+}
+
+function isPrivateOrReservedIp(address) {
+  const normalized = String(address || "")
+    .toLowerCase()
+    .split("%")[0];
+  if (!normalized) return true;
+  const embeddedIpv4 = normalized.match(/(?:^|:)(\d{1,3}(?:\.\d{1,3}){3})$/)?.[1];
+  if (normalized.includes(":") && embeddedIpv4) return isPrivateOrReservedIp(embeddedIpv4);
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    const parts = normalized.split(".").map(Number);
+    return (
+      parts[0] === 0 ||
+      parts[0] === 10 ||
+      (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+      parts[0] === 127 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 0 && (parts[2] === 0 || parts[2] === 2)) ||
+      (parts[0] === 192 && parts[1] === 88 && parts[2] === 99) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19 || (parts[1] === 51 && parts[2] === 100))) ||
+      (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) ||
+      parts[0] >= 224
+    );
+  }
+  if (ipVersion === 6) {
+    if (normalized === "::" || normalized === "::1") return true;
+    if (embeddedIpv4 && isPrivateOrReservedIp(embeddedIpv4)) return true;
+    const hextets = normalized.split(":");
+    const firstHextet = Number.parseInt(hextets[0] || "0", 16);
+    // fc00::/7 unique local, fe80::/10 link-local, ff00::/8 multicast, ::/128, ::1/128
+    if ((firstHextet & 0xfe00) === 0xfc00) return true;
+    if ((firstHextet & 0xffc0) === 0xfe80) return true;
+    if ((firstHextet & 0xff00) === 0xff00) return true;
+    if (firstHextet === 0) return true;
+    return false;
+  }
+  return true;
+}
+
+async function assertSafeRemoteImageUrl(imageUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(imageUrl || "").trim());
+  } catch (error) {
+    throw new Error("图片地址无效");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("仅支持 http/https 图片地址");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("图片地址无效");
+  }
+  const hostname = parsed.hostname;
+  if (isBlockedImageHostname(hostname)) {
+    throw new Error("图片地址不可用");
+  }
+  if (net.isIP(hostname) && isPrivateOrReservedIp(hostname)) {
+    throw new Error("图片地址不可用");
+  }
+  // Cloud metadata common IP as hostname edge case.
+  if (hostname === "169.254.169.254") {
+    throw new Error("图片地址不可用");
+  }
+  if (!net.isIP(hostname)) {
+    let addresses = [];
+    try {
+      addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+    } catch (error) {
+      throw new Error("图片地址解析失败");
+    }
+    if (!addresses.length || addresses.some((item) => isPrivateOrReservedIp(item.address))) {
+      throw new Error("图片地址不可用");
+    }
+  }
+  return parsed;
+}
 
 async function removeGenerationLocalFiles(generation) {
   const storedPaths = collectGenerationStoredPaths(generation);
@@ -344,41 +437,54 @@ async function saveGeneratedImageFromRemote(ownerUserId, generationId, imageUrl,
 }
 
 async function downloadRemoteGeneratedImage(imageUrl) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
-  try {
-    const response = await fetch(imageUrl, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "RedBase/1.0 image-persist",
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`图片下载失败：HTTP ${response.status}`);
+  let currentUrl = String(imageUrl || "").trim();
+  for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMAGE_REDIRECTS; redirectCount += 1) {
+    await assertSafeRemoteImageUrl(currentUrl);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    try {
+      const response = await fetch(currentUrl, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "RedBase/1.0 image-persist",
+        },
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = String(response.headers.get("location") || "").trim();
+        if (!location) {
+          throw new Error("图片下载重定向无效");
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`图片下载失败：HTTP ${response.status}`);
+      }
+      const headerMimeType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      const mimeType = PRODUCT_IMAGE_MIME_EXTENSIONS[headerMimeType] ? headerMimeType : inferImageMimeTypeFromUrl(currentUrl);
+      if (!PRODUCT_IMAGE_MIME_EXTENSIONS[mimeType]) {
+        throw new Error(`图片格式不支持：${headerMimeType || "unknown"}`);
+      }
+      const contentLength = Number(response.headers.get("content-length") || 0);
+      if (contentLength > MAX_GENERATED_IMAGE_BYTES) {
+        throw new Error(`生成图片超过本地保存上限：${formatBytes(contentLength)}`);
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > MAX_GENERATED_IMAGE_BYTES) {
+        throw new Error(`生成图片超过本地保存上限：${formatBytes(buffer.length)}`);
+      }
+      return { buffer, mimeType };
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error("生成图片下载超时");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    const headerMimeType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    const mimeType = PRODUCT_IMAGE_MIME_EXTENSIONS[headerMimeType] ? headerMimeType : inferImageMimeTypeFromUrl(imageUrl);
-    if (!PRODUCT_IMAGE_MIME_EXTENSIONS[mimeType]) {
-      throw new Error(`图片格式不支持：${headerMimeType || "unknown"}`);
-    }
-    const contentLength = Number(response.headers.get("content-length") || 0);
-    if (contentLength > MAX_GENERATED_IMAGE_BYTES) {
-      throw new Error(`生成图片超过本地保存上限：${formatBytes(contentLength)}`);
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > MAX_GENERATED_IMAGE_BYTES) {
-      throw new Error(`生成图片超过本地保存上限：${formatBytes(buffer.length)}`);
-    }
-    return { buffer, mimeType };
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error("生成图片下载超时");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
   }
+  throw new Error("图片下载重定向次数过多");
 }
 
 function inferImageMimeTypeFromUrl(imageUrl) {
@@ -518,6 +624,8 @@ module.exports = {
   resolveStoredAssetPath,
   removeStoredFileIfExists,
   isRemoteImageUrl,
+  assertSafeRemoteImageUrl,
+  isPrivateOrReservedIp,
   buildGeneratedImageUrl,
   buildGeneratedSlideImageUrl,
   buildGeneratedEditImageUrl,

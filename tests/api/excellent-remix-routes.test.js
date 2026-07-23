@@ -21,6 +21,18 @@ const {
   ASSET_TYPE_PRODUCT,
   ASSET_TYPE_UNASSIGNED,
 } = require("../../src/server/db/repositories/product-image-repository");
+const {
+  findCreditEventById,
+  insertCreditEvent,
+  updateCreditEventGeneration,
+} = require("../../src/server/db/repositories/admin-repository");
+const {
+  findXhsCarouselGenerationByGroup,
+  listGenerationsByOwner,
+  insertGeneration,
+} = require("../../src/server/db/repositories/generation-repository");
+const { allocateCounter } = require("../../src/server/db/repositories/core-repository");
+const { upsertImageJob, findImageJobByOwner } = require("../../src/server/db/repositories/image-job-repository");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -33,7 +45,7 @@ insertUser({
   phone: "13910000092",
   password: "hash",
   accountType: "customer",
-  credits: 20,
+  credits: 200,
   createdAt: "2026-07-23T00:00:00.000Z",
 });
 insertSession({ token: "remix-token", userId: 91, createdAt: "2026-07-23T00:00:00.000Z" });
@@ -178,7 +190,12 @@ function createRes() {
   };
 }
 
-function routeContext(appConfig = { pgy: { enabled: false }, assetSigningSecret: "test-secret" }) {
+let imageJobSeq = 0;
+const persistCalls = [];
+
+function routeContext(overrides = {}) {
+  const imageJobs = overrides.imageJobs || new Map();
+  const appConfig = overrides.appConfig || { pgy: { enabled: false }, assetSigningSecret: "test-secret", imageProvider: { enabled: false } };
   return {
     appConfig,
     collectBody,
@@ -224,10 +241,41 @@ function routeContext(appConfig = { pgy: { enabled: false }, assetSigningSecret:
     sanitizePayloadForClient: (payload) => payload,
     sanitizeGeneration: (generation) => generation,
     CREDIT_COSTS: { xhsCarouselSlide: 1 },
-    imageJobs: new Map(),
-    createImageJob: async () => ({ id: "job-1", metadata: {}, generationContext: {} }),
-    resolveImageJob: async () => null,
-    buildImageJobResponse: (job) => job,
+    imageJobs,
+    createImageJob: async ({ metadata, ownerUserId } = {}) => {
+      imageJobSeq += 1;
+      // Route matcher only accepts hex job ids: /api/image-jobs/:hex
+      const id = `${imageJobSeq.toString(16).padStart(8, "0")}${"a".repeat(24)}`;
+      return {
+        id,
+        ownerUserId: ownerUserId || 91,
+        status: "pending",
+        metadata: metadata || {},
+        generationContext: {},
+        imageUrl: "",
+        createdAt: Date.now(),
+      };
+    },
+    resolveImageJob: async (job) => ({
+      ...job,
+      status: "completed",
+      imageUrl: job.imageUrl || `https://cdn.test-images.example/${job.id}.png`,
+      completedAt: new Date().toISOString(),
+    }),
+    buildImageJobResponse: (job) => ({
+      jobId: job.id,
+      status: job.status,
+      imageConcept:
+        job.status === "completed"
+          ? {
+              imageUrl: job.imageUrl,
+              previewUrl: job.imageUrl,
+              pageLabel: job.metadata?.pageLabel || "",
+              slideIndex: job.metadata?.slideIndex ?? null,
+            }
+          : null,
+      error: job.error || "",
+    }),
     ensureTrendIdeaContentAssets: async () => ({}),
     MAX_PRODUCT_IMAGE_SELECTION_COUNT: 10,
     MAX_PRODUCT_IMAGE_SELECTION_BYTES: 30 * 1024 * 1024,
@@ -235,24 +283,29 @@ function routeContext(appConfig = { pgy: { enabled: false }, assetSigningSecret:
     resolveBrandLogoImage: async () => null,
     estimateDataUrlBytes: () => 0,
     formatBytes: () => "0B",
-    persistGenerationImages: async () => {},
+    persistGenerationImages: async (generation) => {
+      persistCalls.push({
+        generationId: generation?.id,
+        slides: (generation?.payload?.slides || []).map((slide) => slide?.imageUrl || slide?.previewUrl || ""),
+      });
+      return generation;
+    },
     persistGeneratedImageReference: async () => {},
     resolveGeneratedImageInputForEdit: async () => null,
-    findTrendItem: brandRepo.findBrandByOwner
-      ? (brand, trendId) => {
-          for (const bucket of brand.trends || []) {
-            const hit = (bucket.items || []).find((item) => Number(item.id) === Number(trendId));
-            if (hit) return hit;
-          }
-          return null;
-        }
-      : () => null,
+    findTrendItem: (brand, trendId) => {
+      for (const bucket of brand.trends || []) {
+        const hit = (bucket.items || []).find((item) => Number(item.id) === Number(trendId));
+        if (hit) return hit;
+      }
+      return null;
+    },
     buildMomentsGenerationPayload: () => ({}),
     buildGeneratedAssetPayload: () => ({}),
     normalizeXhsCarouselSlideForJob: (slide, fallback, index) => ({
       ...(fallback || {}),
       ...(slide || {}),
       pageLabel: slide?.pageLabel || fallback?.pageLabel || `第 ${index + 1} 张`,
+      pageRole: slide?.pageRole || fallback?.pageRole || "",
       prompt: slide?.prompt || fallback?.prompt || "prompt",
       title: slide?.title || fallback?.title || "t",
       copy: slide?.copy || fallback?.copy || "c",
@@ -261,8 +314,127 @@ function routeContext(appConfig = { pgy: { enabled: false }, assetSigningSecret:
       composition: slide?.composition || "c",
     }),
     formatImageServiceError: (error) => error.message,
-    runChargedAiWork: async ({ run, user }) => ({ value: await run(), user, creditEvent: { id: 1 } }),
+    ...overrides,
+    imageJobs,
+    appConfig,
   };
+}
+
+async function getFusionPack(contentMode = "smart", extra = {}) {
+  const body = {
+    board: "xhs_hot",
+    brandId: 7,
+    contentMode,
+    useTrendContext: false,
+    ...extra,
+  };
+  if (contentMode === "smart" && !body.smartDirection) {
+    const directionsRes = createRes();
+    await handleExcellentContentRoutes(
+      routeContext(),
+      createPostReq("/api/excellent-contents/api-note-1/content-directions", { board: "xhs_hot", brandId: 7 }),
+      directionsRes,
+      "/api/excellent-contents/api-note-1/content-directions",
+    );
+    assert.equal(directionsRes.statusCode, 200, directionsRes.body?.error || "directions failed");
+    body.smartDirection = directionsRes.body.directions[0];
+  }
+  if (contentMode === "custom" && !body.customDirection) {
+    body.customDirection = "聚焦转奶焦虑，给出三步安抚清单与品牌温和配方卖点说明。";
+  }
+  const fusionRes = createRes();
+  await handleExcellentContentRoutes(
+    routeContext(),
+    createPostReq("/api/excellent-contents/api-note-1/fusion-plan", body),
+    fusionRes,
+    "/api/excellent-contents/api-note-1/fusion-plan",
+  );
+  assert.equal(fusionRes.statusCode, 200, fusionRes.body?.error || "fusion failed");
+  return fusionRes.body.fusionPlan.carouselPack;
+}
+
+async function previewRemix(carouselPack, extra = {}) {
+  const imageJobs = new Map();
+  const ctx = routeContext({ imageJobs });
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    ctx,
+    createPostReq("/api/brands/7/excellent-remix-preview", {
+      aspectRatio: "3:4",
+      carouselPack,
+      ...extra,
+    }),
+    res,
+    "/api/brands/7/excellent-remix-preview",
+  );
+  assert.equal(res.statusCode, 200);
+  assert.ok(res.body.carouselGroupId);
+  return { ...res.body, imageJobs, ctx };
+}
+
+async function createCompletedSlideJob({
+  slideIndex = 0,
+  contentMode = "smart",
+  existingIdeaRef = null,
+  carouselGroupId,
+  carouselPack,
+  brandId = 7,
+  imageJobs = new Map(),
+  imageUrl,
+  extraBody = {},
+} = {}) {
+  const pack =
+    carouselPack ||
+    (await getFusionPack(contentMode, {
+      ...(existingIdeaRef ? { existingIdeaRef } : {}),
+      ...extraBody,
+    }));
+  let groupId = carouselGroupId;
+  if (!groupId) {
+    const preview = await previewRemix(pack, { contentMode, existingIdeaRef, ...extraBody });
+    groupId = preview.carouselGroupId;
+  }
+  const ctx = routeContext({ imageJobs });
+  const slideRes = createRes();
+  await handleImageGenerationRoutes(
+    ctx,
+    createPostReq(`/api/brands/${brandId}/excellent-remix/slides/${slideIndex}`, {
+      aspectRatio: "3:4",
+      carouselPack: { ...pack, carouselGroupId: groupId },
+      carouselGroupId: groupId,
+      contentMode,
+      existingIdeaRef,
+      slide: pack.slides[slideIndex],
+      ...extraBody,
+    }),
+    slideRes,
+    `/api/brands/${brandId}/excellent-remix/slides/${slideIndex}`,
+  );
+  assert.equal(slideRes.statusCode, 202, slideRes.body?.error || "slide create failed");
+  const jobId = slideRes.body.slideJob.jobId;
+  const creditEventId = slideRes.body.creditEventId;
+  const memoryJob = imageJobs.get(jobId) || findImageJobByOwner(jobId, 91);
+  assert.ok(memoryJob, "job should exist");
+  memoryJob.status = "completed";
+  memoryJob.imageUrl = imageUrl || `https://cdn.test-images.example/${jobId}.png`;
+  imageJobs.set(jobId, memoryJob);
+  upsertImageJob(91, memoryJob);
+  return {
+    jobId,
+    creditEventId,
+    carouselGroupId: groupId,
+    carouselPack: pack,
+    imageJobs,
+    ctx,
+    slideRes,
+  };
+}
+
+async function pollJob(jobId, imageJobs) {
+  const ctx = routeContext({ imageJobs });
+  const res = createRes();
+  await handleImageGenerationRoutes(ctx, createGetReq(`/api/image-jobs/${jobId}`), res, `/api/image-jobs/${jobId}`);
+  return res;
 }
 
 test("remix-analysis requires login and returns metadata_only analysis", async () => {
@@ -526,49 +698,502 @@ test("fusion-plan reads correct snapshot idea and rejects invalid analysisId", a
   assert.ok(bad.statusCode === 400 || bad.statusCode === 404 || bad.statusCode >= 400);
 });
 
-test("complete history attribution ignores forged client titles", async () => {
-  const fusionRes = createRes();
-  await handleExcellentContentRoutes(
-    routeContext(),
-    createPostReq("/api/excellent-contents/api-note-1/fusion-plan", {
-      board: "xhs_hot",
-      brandId: 7,
-      contentMode: "existing_idea",
-      existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
-      useTrendContext: false,
-    }),
-    fusionRes,
-    "/api/excellent-contents/api-note-1/fusion-plan",
-  );
-  const carouselPack = {
-    ...fusionRes.body.fusionPlan.carouselPack,
-    carouselGroupId: "grp-history-1",
-    slides: fusionRes.body.fusionPlan.carouselPack.slides.map((slide, index) => ({
-      ...slide,
-      imageUrl: `/generated/${index}.png`,
-      previewUrl: `/generated/${index}.png`,
-    })),
-  };
+test("complete rejects client-forged image URLs and does not create history", async () => {
+  persistCalls.length = 0;
+  const before = listGenerationsByOwner(91).length;
+  const pack = await getFusionPack("smart");
   const res = createRes();
   await handleImageGenerationRoutes(
-    {
-      ...routeContext(),
-      appConfig: { assetSigningSecret: "test-secret", imageProvider: { enabled: false } },
-    },
+    routeContext(),
     createPostReq("/api/brands/7/excellent-remix/complete", {
       aspectRatio: "3:4",
-      carouselPack,
-      contentMode: "existing_idea",
-      existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
-      trendTitle: "客户端伪造趋势",
-      ideaTitle: "客户端伪造选题",
+      carouselPack: {
+        ...pack,
+        carouselGroupId: "forged-group-1",
+        slides: pack.slides.map((slide, index) => ({
+          ...slide,
+          imageUrl: `/generated/${index}.png`,
+          previewUrl: `/generated/${index}.png`,
+        })),
+      },
+      contentMode: "smart",
       creditEventId: 1,
     }),
     res,
     "/api/brands/7/excellent-remix/complete",
   );
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.generation.ideaTitle, "选题A");
-  assert.notEqual(res.body.generation.ideaTitle, "客户端伪造选题");
-  assert.equal(res.body.generation.trendTitle, "转奶讨论");
+  assert.equal(res.statusCode, 400);
+  assert.equal(persistCalls.length, 0);
+  assert.equal(listGenerationsByOwner(91).length, before);
+});
+
+test("complete rejects external localhost URLs without network download", async () => {
+  persistCalls.length = 0;
+  const pack = await getFusionPack("smart");
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    routeContext(),
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      carouselPack: {
+        ...pack,
+        carouselGroupId: "ssrf-group-1",
+        slides: pack.slides.map((slide) => ({
+          ...slide,
+          imageUrl: "http://127.0.0.1/secret.png",
+          previewUrl: "http://127.0.0.1/secret.png",
+        })),
+      },
+    }),
+    res,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 400);
+  assert.equal(persistCalls.length, 0);
+});
+
+test("smart single slide completion persists history without trend", async () => {
+  persistCalls.length = 0;
+  const created = await createCompletedSlideJob({ slideIndex: 0, contentMode: "smart" });
+  const poll = await pollJob(created.jobId, created.imageJobs);
+  assert.equal(poll.statusCode, 200);
+  assert.ok(poll.body.generationId);
+  assert.equal(poll.body.persisted, true);
+  const generation = findXhsCarouselGenerationByGroup(91, created.carouselGroupId);
+  assert.ok(generation);
+  assert.equal(generation.channelLabel, "一键仿图文");
+  assert.equal(generation.payload.generatedMode, "partialSlides");
+  assert.equal(generation.trendId, 0);
+  assert.equal(generation.trendTitle, "");
+  assert.ok(generation.ideaTitle);
+  assert.ok(generation.payload.slides[0].imageUrl);
+  const credit = findCreditEventById(created.creditEventId);
+  assert.equal(Number(credit.generationId), Number(generation.id));
+});
+
+test("custom single slide completion persists history", async () => {
+  const customDirection = "聚焦转奶焦虑，给出三步安抚清单与品牌温和配方卖点说明。";
+  const pack = await getFusionPack("custom", { customDirection });
+  const preview = await previewRemix(pack, { contentMode: "custom", customDirection });
+  const imageJobs = new Map();
+  const slideRes = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/slides/0", {
+      aspectRatio: "3:4",
+      carouselPack: { ...pack, carouselGroupId: preview.carouselGroupId },
+      carouselGroupId: preview.carouselGroupId,
+      contentMode: "custom",
+      customDirection,
+      slide: pack.slides[0],
+    }),
+    slideRes,
+    "/api/brands/7/excellent-remix/slides/0",
+  );
+  assert.equal(slideRes.statusCode, 202, slideRes.body?.error || "");
+  const jobId = slideRes.body.slideJob.jobId;
+  const job = imageJobs.get(jobId);
+  job.status = "completed";
+  job.imageUrl = `https://cdn.test-images.example/${jobId}.png`;
+  upsertImageJob(91, job);
+  const poll = await pollJob(jobId, imageJobs);
+  assert.equal(poll.statusCode, 200);
+  assert.ok(poll.body.generationId);
+  const generation = findXhsCarouselGenerationByGroup(91, preview.carouselGroupId);
+  assert.ok(generation);
+  assert.equal(generation.trendId, 0);
+  assert.equal(generation.payload.contentMode, "custom");
+});
+
+test("current idea single slide completion persists history", async () => {
+  const pack = await getFusionPack("existing_idea", {
+    existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+  });
+  const preview = await previewRemix(pack, {
+    contentMode: "existing_idea",
+    existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+  });
+  const imageJobs = new Map();
+  const slideRes = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/slides/0", {
+      aspectRatio: "3:4",
+      carouselPack: { ...pack, carouselGroupId: preview.carouselGroupId },
+      carouselGroupId: preview.carouselGroupId,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+      slide: pack.slides[0],
+    }),
+    slideRes,
+    "/api/brands/7/excellent-remix/slides/0",
+  );
+  assert.equal(slideRes.statusCode, 202);
+  const jobId = slideRes.body.slideJob.jobId;
+  const job = imageJobs.get(jobId);
+  job.status = "completed";
+  job.imageUrl = `https://cdn.test-images.example/${jobId}.png`;
+  upsertImageJob(91, job);
+  const poll = await pollJob(jobId, imageJobs);
+  assert.ok(poll.body.generationId);
+  const generation = findXhsCarouselGenerationByGroup(91, preview.carouselGroupId);
+  assert.equal(generation.ideaTitle, "选题A");
+  assert.equal(generation.trendTitle, "转奶讨论");
+});
+
+test("snapshot idea single slide completion persists history without current trends", async () => {
+  const pack = await getFusionPack("existing_idea", {
+    existingIdeaRef: { scope: "snapshot", analysisId: 55, trendId: 11, ideaIndex: 0 },
+  });
+  const preview = await previewRemix(pack, {
+    contentMode: "existing_idea",
+    existingIdeaRef: { scope: "snapshot", analysisId: 55, trendId: 11, ideaIndex: 0 },
+  });
+  const imageJobs = new Map();
+  const slideRes = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/slides/0", {
+      aspectRatio: "3:4",
+      carouselPack: { ...pack, carouselGroupId: preview.carouselGroupId },
+      carouselGroupId: preview.carouselGroupId,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "snapshot", analysisId: 55, trendId: 11, ideaIndex: 0 },
+      slide: pack.slides[0],
+    }),
+    slideRes,
+    "/api/brands/7/excellent-remix/slides/0",
+  );
+  assert.equal(slideRes.statusCode, 202, slideRes.body?.error || "");
+  const jobId = slideRes.body.slideJob.jobId;
+  const job = imageJobs.get(jobId);
+  job.status = "completed";
+  job.imageUrl = `https://cdn.test-images.example/${jobId}.png`;
+  upsertImageJob(91, job);
+  const poll = await pollJob(jobId, imageJobs);
+  assert.ok(poll.body.generationId);
+  const generation = findXhsCarouselGenerationByGroup(91, preview.carouselGroupId);
+  assert.equal(generation.ideaTitle, "历史选题A");
+  assert.equal(generation.trendTitle, "历史趋势同 id");
+});
+
+test("second slide merges into same generation without overwriting first", async () => {
+  const first = await createCompletedSlideJob({ slideIndex: 0, contentMode: "smart" });
+  await pollJob(first.jobId, first.imageJobs);
+  const second = await createCompletedSlideJob({
+    slideIndex: 1,
+    contentMode: "smart",
+    carouselGroupId: first.carouselGroupId,
+    carouselPack: first.carouselPack,
+    imageJobs: first.imageJobs,
+  });
+  await pollJob(second.jobId, first.imageJobs);
+  const generation = findXhsCarouselGenerationByGroup(91, first.carouselGroupId);
+  assert.ok(generation.payload.slides[0].imageUrl);
+  assert.ok(generation.payload.slides[1].imageUrl);
+  assert.notEqual(generation.payload.slides[0].imageUrl, generation.payload.slides[1].imageUrl);
+  assert.equal(generation.payload.generatedMode, "partialSlides");
+});
+
+test("re-polling completed job does not create duplicate history", async () => {
+  const created = await createCompletedSlideJob({ slideIndex: 0, contentMode: "smart" });
+  const firstPoll = await pollJob(created.jobId, created.imageJobs);
+  const countAfterFirst = listGenerationsByOwner(91).filter(
+    (item) => item.payload?.carouselGroupId === created.carouselGroupId,
+  ).length;
+  const secondPoll = await pollJob(created.jobId, created.imageJobs);
+  assert.equal(firstPoll.body.generationId, secondPoll.body.generationId);
+  const countAfterSecond = listGenerationsByOwner(91).filter(
+    (item) => item.payload?.carouselGroupId === created.carouselGroupId,
+  ).length;
+  assert.equal(countAfterFirst, 1);
+  assert.equal(countAfterSecond, 1);
+});
+
+test("complete with four real jobs builds history from job image URLs and links all credit events", async () => {
+  const pack = await getFusionPack("existing_idea", {
+    existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+  });
+  const preview = await previewRemix(pack, {
+    contentMode: "existing_idea",
+    existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+  });
+  const imageJobs = new Map();
+  const jobIds = [];
+  const creditEventIds = [];
+  for (let slideIndex = 0; slideIndex < 4; slideIndex += 1) {
+    const created = await createCompletedSlideJob({
+      slideIndex,
+      contentMode: "existing_idea",
+      existingIdeaRef: { scope: "current", trendId: 11, ideaIndex: 0 },
+      carouselGroupId: preview.carouselGroupId,
+      carouselPack: pack,
+      imageJobs,
+    });
+    await pollJob(created.jobId, imageJobs);
+    jobIds.push(created.jobId);
+    creditEventIds.push(created.creditEventId);
+  }
+  assert.equal(new Set(creditEventIds).size, 4);
+  const completeRes = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      carouselGroupId: preview.carouselGroupId,
+      slideJobIds: jobIds,
+      expectedSlideCount: 4,
+    }),
+    completeRes,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(completeRes.statusCode, 200, completeRes.body?.error || "");
+  assert.equal(completeRes.body.generation.ideaTitle, "选题A");
+  assert.equal(completeRes.body.generation.payload.generatedMode, "group");
+  assert.equal(completeRes.body.generation.payload.slides.length, 4);
+  for (let index = 0; index < 4; index += 1) {
+    assert.match(String(completeRes.body.generation.payload.slides[index].imageUrl || ""), /cdn\.test-images|generated-images|job-/);
+  }
+  const generationId = completeRes.body.generation.id;
+  for (const creditEventId of creditEventIds) {
+    const event = findCreditEventById(creditEventId);
+    assert.equal(Number(event.generationId), Number(generationId));
+  }
+  assert.equal(completeRes.body.creditEventIds.length, 4);
+});
+
+test("complete rejects job owned by another user", async () => {
+  const created = await createCompletedSlideJob({ slideIndex: 0, contentMode: "smart" });
+  // plant a job under user 91 then request as if ids unknown — use foreign job id not in DB
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs: created.imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      carouselGroupId: created.carouselGroupId,
+      slideJobIds: ["missing-job-a", "missing-job-b", "missing-job-c", "missing-job-d"],
+    }),
+    res,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 404);
+});
+
+test("complete rejects jobs from another brand", async () => {
+  const pack = await getFusionPack("smart");
+  const preview7 = await previewRemix(pack);
+  const imageJobs = new Map();
+  // Create four jobs for brand 7
+  const jobIds = [];
+  for (let slideIndex = 0; slideIndex < 4; slideIndex += 1) {
+    const created = await createCompletedSlideJob({
+      slideIndex,
+      contentMode: "smart",
+      carouselGroupId: preview7.carouselGroupId,
+      carouselPack: pack,
+      imageJobs,
+      brandId: 7,
+    });
+    jobIds.push(created.jobId);
+  }
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/8/excellent-remix/complete", {
+      carouselGroupId: preview7.carouselGroupId,
+      slideJobIds: jobIds,
+    }),
+    res,
+    "/api/brands/8/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 400);
+});
+
+test("complete rejects mismatched carouselGroupId", async () => {
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const imageJobs = new Map();
+  const jobIds = [];
+  for (let slideIndex = 0; slideIndex < 4; slideIndex += 1) {
+    const created = await createCompletedSlideJob({
+      slideIndex,
+      contentMode: "smart",
+      carouselGroupId: preview.carouselGroupId,
+      carouselPack: pack,
+      imageJobs,
+    });
+    jobIds.push(created.jobId);
+  }
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      carouselGroupId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      slideJobIds: jobIds,
+    }),
+    res,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 409);
+});
+
+test("complete rejects duplicate slide indexes", async () => {
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const imageJobs = new Map();
+  const created = await createCompletedSlideJob({
+    slideIndex: 0,
+    contentMode: "smart",
+    carouselGroupId: preview.carouselGroupId,
+    carouselPack: pack,
+    imageJobs,
+  });
+  // clone job metadata as if four ids all point to slide 0
+  const jobIds = [];
+  for (let i = 0; i < 4; i += 1) {
+    const cloneId = `dup-job-${i}-${Date.now()}`;
+    const clone = {
+      ...imageJobs.get(created.jobId),
+      id: cloneId,
+      status: "completed",
+      imageUrl: `https://cdn.test-images.example/${cloneId}.png`,
+      generationContext: {
+        ...imageJobs.get(created.jobId).generationContext,
+        slideIndex: 0,
+      },
+    };
+    imageJobs.set(cloneId, clone);
+    upsertImageJob(91, clone);
+    jobIds.push(cloneId);
+  }
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      carouselGroupId: preview.carouselGroupId,
+      slideJobIds: jobIds,
+    }),
+    res,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 400);
+});
+
+test("complete rejects incomplete jobs", async () => {
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const imageJobs = new Map();
+  const jobIds = [];
+  for (let slideIndex = 0; slideIndex < 4; slideIndex += 1) {
+    const created = await createCompletedSlideJob({
+      slideIndex,
+      contentMode: "smart",
+      carouselGroupId: preview.carouselGroupId,
+      carouselPack: pack,
+      imageJobs,
+    });
+    if (slideIndex === 3) {
+      const job = imageJobs.get(created.jobId);
+      job.status = "pending";
+      job.imageUrl = "";
+      upsertImageJob(91, job);
+    }
+    jobIds.push(created.jobId);
+  }
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs }),
+    createPostReq("/api/brands/7/excellent-remix/complete", {
+      carouselGroupId: preview.carouselGroupId,
+      slideJobIds: jobIds,
+    }),
+    res,
+    "/api/brands/7/excellent-remix/complete",
+  );
+  assert.equal(res.statusCode, 409);
+});
+
+test("cross-brand carouselGroupId collision is rejected on slide create", async () => {
+  const pack = await getFusionPack("smart");
+  const preview = await previewRemix(pack);
+  const first = await createCompletedSlideJob({
+    slideIndex: 0,
+    contentMode: "smart",
+    carouselGroupId: preview.carouselGroupId,
+    carouselPack: pack,
+    brandId: 7,
+  });
+  const poll = await pollJob(first.jobId, first.imageJobs);
+  assert.equal(poll.statusCode, 200);
+  assert.ok(poll.body.generationId, "brand 7 generation must exist before collision check");
+  const existing = findXhsCarouselGenerationByGroup(91, preview.carouselGroupId);
+  assert.ok(existing);
+  assert.equal(Number(existing.brandId), 7);
+  const slideRes = createRes();
+  await handleImageGenerationRoutes(
+    routeContext({ imageJobs: first.imageJobs }),
+    createPostReq("/api/brands/8/excellent-remix/slides/0", {
+      aspectRatio: "3:4",
+      carouselPack: { ...pack, carouselGroupId: preview.carouselGroupId },
+      carouselGroupId: preview.carouselGroupId,
+      contentMode: "smart",
+      slide: pack.slides[0],
+    }),
+    slideRes,
+    "/api/brands/8/excellent-remix/slides/0",
+  );
+  assert.equal(slideRes.statusCode, 409, slideRes.body?.error || "expected group conflict");
+});
+
+test("credit event ownership and actionType guards prevent tampering", async () => {
+  insertUser({
+    id: 92,
+    name: "Other User",
+    phone: "13910000093",
+    password: "hash",
+    accountType: "customer",
+    credits: 20,
+    createdAt: "2026-07-23T00:00:00.000Z",
+  });
+  const foreignEvent = insertCreditEvent({
+    userId: 92,
+    actionType: "xhsCarousel",
+    actionLabel: "foreign",
+    creditDelta: -1,
+    creditCost: 1,
+    brandId: 7,
+    summary: "foreign event",
+  });
+  const wrongTypeEvent = insertCreditEvent({
+    userId: 91,
+    actionType: "moments",
+    actionLabel: "unrelated",
+    creditDelta: -1,
+    creditCost: 1,
+    brandId: 7,
+    summary: "moments event",
+  });
+  const generation = insertGeneration({
+    id: allocateCounter("nextGenerationId", 1),
+    ownerUserId: 91,
+    type: "xhsCarousel",
+    channelLabel: "一键仿图文",
+    brandId: 7,
+    brandName: "测试品牌",
+    trendId: 0,
+    trendTitle: "",
+    ideaTitle: "t",
+    cardTitle: "t",
+    createdAt: new Date().toISOString(),
+    previewUrl: "",
+    summary: "",
+    payload: { excellentRemix: true, carouselGroupId: "guard-group-1", slides: [] },
+  });
+  assert.equal(updateCreditEventGeneration(foreignEvent.id, generation, generation.payload, {
+    requireUserId: 91,
+    allowedActionTypes: ["xhsCarousel"],
+  }), null);
+  assert.equal(updateCreditEventGeneration(wrongTypeEvent.id, generation, generation.payload, {
+    requireUserId: 91,
+    allowedActionTypes: ["xhsCarousel"],
+  }), null);
+  assert.equal(findCreditEventById(foreignEvent.id).generationId, null);
+  assert.equal(findCreditEventById(wrongTypeEvent.id).generationId, null);
 });
