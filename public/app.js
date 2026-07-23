@@ -34,7 +34,11 @@ import {
   applyExcellentListResult,
   applyExcellentRefreshError,
   applyExcellentRefreshResult,
+  commitExcellentDraftFilters,
   excellentContentCacheKey,
+  excellentFiltersAreDirty,
+  excellentRefreshResponseMatches,
+  rollbackExcellentDraftFilters,
 } from "./js/excellent-list-state.js";
 
 let sessionEpoch = 0;
@@ -1255,36 +1259,8 @@ function clearSession() {
   state.xhsCategoryError = "";
   state.excellentContentBoard = "xhs_hot";
   state.excellentContentBoards = {
-    xhs_hot: {
-      items: [],
-      categoryPath: "",
-      contentSource: "all",
-      status: "idle",
-      error: "",
-      updatedAt: "",
-      stale: false,
-      hasCache: false,
-      needsUpdate: false,
-      refreshing: false,
-      refreshError: "",
-      requestId: 0,
-      scrollTop: 0,
-    },
-    ecommerce_hot: {
-      items: [],
-      industryPath: "",
-      contentSource: "all",
-      status: "idle",
-      error: "",
-      updatedAt: "",
-      stale: false,
-      hasCache: false,
-      needsUpdate: false,
-      refreshing: false,
-      refreshError: "",
-      requestId: 0,
-      scrollTop: 0,
-    },
+    xhs_hot: createExcellentBoardSlice("xhs_hot"),
+    ecommerce_hot: createExcellentBoardSlice("ecommerce_hot"),
   };
   state.excellentIndustryTaxonomy = [];
   state.excellentIndustryStatus = "idle";
@@ -1558,8 +1534,9 @@ function applyXhsCategoryResult(result) {
     state.xhsCategoryPath = "";
   }
   const xhsBoard = getExcellentBoardState("xhs_hot");
-  if (xhsBoard.categoryPath && !validValues.has(xhsBoard.categoryPath)) {
-    xhsBoard.categoryPath = "";
+  // Invalid taxonomy options only clear draft selection; formal filters stay tied to cached items.
+  if (xhsBoard.draftCategoryPath && !validValues.has(xhsBoard.draftCategoryPath)) {
+    xhsBoard.draftCategoryPath = "";
   }
   renderExcellentTaxonomyOptions();
 }
@@ -4089,6 +4066,8 @@ function createExcellentBoardSlice(board) {
       items: [],
       industryPath: "",
       contentSource: "all",
+      draftIndustryPath: "",
+      draftContentSource: "all",
       status: "idle",
       error: "",
       updatedAt: "",
@@ -4105,6 +4084,8 @@ function createExcellentBoardSlice(board) {
     items: [],
     categoryPath: "",
     contentSource: "all",
+    draftCategoryPath: "",
+    draftContentSource: "all",
     status: "idle",
     error: "",
     updatedAt: "",
@@ -4214,9 +4195,10 @@ function renderExcellentTaxonomyOptions() {
   if (!select) return;
   const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
   const slice = getExcellentBoardState(board);
+  const busy = Boolean(slice.refreshing);
   if (board === "ecommerce_hot") {
     if (title) title.textContent = "所属行业";
-    const selected = slice.industryPath || "";
+    const selected = slice.draftIndustryPath || "";
     const industryOptions = renderIndustryOptions(state.excellentIndustryTaxonomy);
     const emptyHint =
       state.excellentIndustryStatus === "loading"
@@ -4225,15 +4207,16 @@ function renderExcellentTaxonomyOptions() {
           ? "所属行业暂时不可用"
           : "全部所属行业";
     select.innerHTML = `<option value="">${escapeHtml(emptyHint)}</option>${industryOptions}`;
-    select.disabled = state.excellentIndustryStatus === "loading";
+    select.disabled = busy || state.excellentIndustryStatus === "loading";
     select.value = selected;
     if (selected && select.value !== selected) {
-      slice.industryPath = "";
+      // Only clear invalid draft; formal industryPath stays with current cached items.
+      slice.draftIndustryPath = "";
       select.value = "";
     }
   } else {
     if (title) title.textContent = "内容类目";
-    const selected = slice.categoryPath || "";
+    const selected = slice.draftCategoryPath || "";
     const categoryOptions = renderXhsCategoryOptions(state.xhsCategories);
     const emptyHint =
       state.xhsCategoryStatus === "loading"
@@ -4242,10 +4225,11 @@ function renderExcellentTaxonomyOptions() {
           ? "内容类目暂时不可用"
           : "全部内容类目";
     select.innerHTML = `<option value="">${escapeHtml(emptyHint)}</option>${categoryOptions}`;
-    select.disabled = state.xhsCategoryStatus === "loading";
+    select.disabled = busy || state.xhsCategoryStatus === "loading";
     select.value = selected;
     if (selected && select.value !== selected) {
-      slice.categoryPath = "";
+      // Only clear invalid draft; formal categoryPath stays with current cached items.
+      slice.draftCategoryPath = "";
       select.value = "";
     }
   }
@@ -4259,7 +4243,8 @@ function renderExcellentSourceOptions() {
   select.innerHTML = sources
     .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
     .join("");
-  select.value = slice.contentSource || "all";
+  select.value = slice.draftContentSource || "all";
+  select.disabled = Boolean(slice.refreshing);
 }
 
 function renderExcellentBoardTabs() {
@@ -4284,14 +4269,15 @@ function renderExcellentRefreshButton() {
 function renderExcellentContentMeta() {
   const meta = document.getElementById("excellentContentMeta");
   if (!meta) return;
-  const slice = getExcellentBoardState();
+  const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
+  const slice = getExcellentBoardState(board);
   const parts = [`<span>近7日 · 图文 · 按阅读量排序</span>`];
   if (slice.updatedAt) {
     const label = formatExcellentUpdatedLabel(slice.updatedAt);
     if (label) parts.push(`<span>更新 ${escapeHtml(label)}</span>`);
   }
-  if (slice.stale && (slice.items || []).length) {
-    parts.push(`<span class="is-stale">缓存较旧，可点击更新</span>`);
+  if (slice.stale && (slice.items || []).length && !excellentFiltersAreDirty(slice, board)) {
+    parts.push(`<span class="is-stale">当前展示上一次保存的数据，可点击更新内容</span>`);
   }
   meta.innerHTML = parts.join("");
 }
@@ -4299,8 +4285,9 @@ function renderExcellentContentMeta() {
 function renderExcellentStatus() {
   const statusEl = document.getElementById("excellentContentStatus");
   if (!statusEl) return;
-  const slice = getExcellentBoardState();
-  if (slice.refreshing && (slice.items || []).length) {
+  const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
+  const slice = getExcellentBoardState(board);
+  if (slice.refreshing) {
     statusEl.hidden = false;
     statusEl.className = "excellent-status";
     statusEl.textContent = "正在更新内容…";
@@ -4312,6 +4299,18 @@ function renderExcellentStatus() {
     statusEl.textContent = slice.refreshError;
     return;
   }
+  if (excellentFiltersAreDirty(slice, board)) {
+    statusEl.hidden = false;
+    statusEl.className = "excellent-status is-pending";
+    statusEl.textContent = "筛选条件将在点击“更新内容”后生效，当前仍展示上一次保存的数据。";
+    return;
+  }
+  if (slice.stale && (slice.items || []).length) {
+    statusEl.hidden = false;
+    statusEl.className = "excellent-status";
+    statusEl.textContent = "当前展示上一次保存的数据，可点击更新内容。";
+    return;
+  }
   if (slice.status === "error" && !(slice.items || []).length) {
     statusEl.hidden = false;
     statusEl.className = "excellent-status is-error";
@@ -4320,6 +4319,15 @@ function renderExcellentStatus() {
   }
   statusEl.hidden = true;
   statusEl.textContent = "";
+}
+
+/** Update draft-filter chrome only — never loads list content. */
+function renderExcellentFilterChrome() {
+  renderExcellentTaxonomyOptions();
+  renderExcellentSourceOptions();
+  renderExcellentRefreshButton();
+  renderExcellentContentMeta();
+  renderExcellentStatus();
 }
 
 function renderExcellentContents() {
@@ -4489,8 +4497,8 @@ async function loadExcellentContentsForBoard(board, { preserveItems = true, rest
 }
 
 /**
- * Explicit refresh via POST /api/excellent-contents/refresh.
- * Keeps old items until success; does not change scroll position.
+ * Explicit refresh via POST /api/excellent-contents/refresh using draft filters.
+ * Keeps old items + formal filters until success; rolls draft back on failure.
  */
 async function refreshExcellentContentsForBoard(board) {
   if (!state.sessionToken) return null;
@@ -4500,33 +4508,44 @@ async function refreshExcellentContentsForBoard(board) {
 
   const requestId = ++requestSlice.requestId;
   const loadEpoch = sessionEpoch;
-  const contentSource = requestSlice.contentSource || "all";
-  const taxonomyPath =
-    requestBoard === "ecommerce_hot" ? requestSlice.industryPath || "" : requestSlice.categoryPath || "";
+  // Immutable snapshot of draft filters for this request only.
+  const requestFilters = {
+    board: requestBoard,
+    contentSource: requestSlice.draftContentSource || "all",
+    categoryPath: requestBoard === "xhs_hot" ? requestSlice.draftCategoryPath || "" : "",
+    industryPath: requestBoard === "ecommerce_hot" ? requestSlice.draftIndustryPath || "" : "",
+  };
+  const filtersChanged = excellentFiltersAreDirty(requestSlice, requestBoard);
   const previousItems = Array.isArray(requestSlice.items) ? [...requestSlice.items] : [];
+  const previousUpdatedAt = requestSlice.updatedAt || "";
+  const previousFormal = {
+    contentSource: requestSlice.contentSource || "all",
+    categoryPath: requestSlice.categoryPath || "",
+    industryPath: requestSlice.industryPath || "",
+  };
   requestSlice.refreshing = true;
   requestSlice.refreshError = "";
 
   const isActiveAtStart = state.excellentContentBoard === requestBoard;
   if (isActiveAtStart) {
     syncExcellentActiveBoardMirrors();
-    renderExcellentRefreshButton();
-    renderExcellentStatus();
+    renderExcellentFilterChrome();
     if (!previousItems.length) renderExcellentContents();
   }
 
   try {
-    const body = {
-      board: requestBoard,
-      contentSource,
-      categoryPath: requestBoard === "xhs_hot" ? taxonomyPath : "",
-      industryPath: requestBoard === "ecommerce_hot" ? taxonomyPath : "",
-    };
     const result = await request("/api/excellent-contents/refresh", {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestFilters),
     });
     assertSessionEpoch(loadEpoch);
+    if (!excellentRefreshResponseMatches(result, requestFilters)) {
+      // Stale / mismatched payload — do not replace current board content.
+      if (requestSlice.requestId === requestId) {
+        requestSlice.refreshing = false;
+      }
+      return null;
+    }
     const applied = applyExcellentRefreshResult({
       slice: requestSlice,
       requestId,
@@ -4537,22 +4556,43 @@ async function refreshExcellentContentsForBoard(board) {
       requestBoard,
     });
     if (!applied.applied) return null;
+    commitExcellentDraftFilters(requestSlice, requestBoard, requestFilters);
     if (Array.isArray(result?.filters?.contentSources) && result.filters.contentSources.length) {
       state.excellentContentSources = result.filters.contentSources;
     }
     if (applied.isActive) {
       syncExcellentActiveBoardMirrors();
       renderExcellentContents();
-      // Keep user scroll position after successful refresh.
+      if (filtersChanged) {
+        // New formal filters: reset scroll to top of list.
+        requestSlice.scrollTop = 0;
+        dashboardScrollPositions.set(getExcellentBoardScrollKey(requestBoard), {
+          windowY: 0,
+          contentTop: 0,
+        });
+        restoreExcellentBoardScrollPosition(requestBoard);
+      }
+      // Same formal filters: keep current scroll position (do not restore).
       const label = formatExcellentUpdatedLabel(result?.updatedAt || requestSlice.updatedAt);
       if (label) showToast(`已更新至 ${label}`);
     }
     return result;
   } catch (error) {
-    if (isStaleSessionRequest(error)) return null;
-    // Always keep previous items on failure.
+    if (isStaleSessionRequest(error)) {
+      // Avoid permanent "正在更新…" if session changed mid-request.
+      if (requestSlice.requestId === requestId) requestSlice.refreshing = false;
+      return null;
+    }
+    // Always keep previous items + formal filters on failure.
     if (!(requestSlice.items || []).length && previousItems.length) {
       requestSlice.items = previousItems;
+    }
+    requestSlice.updatedAt = previousUpdatedAt;
+    requestSlice.contentSource = previousFormal.contentSource;
+    if (requestBoard === "ecommerce_hot") {
+      requestSlice.industryPath = previousFormal.industryPath;
+    } else {
+      requestSlice.categoryPath = previousFormal.categoryPath;
     }
     const applied = applyExcellentRefreshError({
       slice: requestSlice,
@@ -4563,7 +4603,11 @@ async function refreshExcellentContentsForBoard(board) {
       activeBoard: state.excellentContentBoard,
       requestBoard,
     });
-    if (!applied.applied) return null;
+    if (!applied.applied) {
+      if (requestSlice.requestId === requestId) requestSlice.refreshing = false;
+      return null;
+    }
+    rollbackExcellentDraftFilters(requestSlice, requestBoard);
     if (applied.isActive) {
       syncExcellentActiveBoardMirrors();
       renderExcellentContents();
@@ -4580,29 +4624,6 @@ async function refreshExcellentContentsForBoard(board) {
 async function loadExcellentContents({ preserveItems = true, restoreScroll = true } = {}) {
   const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
   return loadExcellentContentsForBoard(board, { preserveItems, restoreScroll });
-}
-
-/**
- * After taxonomy/contentSource already updated on the active board slice:
- * reset scroll to top, invalidate in-flight requestId, cache-only load.
- */
-function applyExcellentFiltersAndLoad({ preserveItems = false } = {}) {
-  const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
-  const slice = getExcellentBoardState(board);
-  // Invalidate in-flight requests for this board before clearing list.
-  slice.requestId += 1;
-  slice.items = [];
-  slice.updatedAt = "";
-  slice.stale = false;
-  slice.hasCache = false;
-  slice.needsUpdate = true;
-  slice.error = "";
-  slice.refreshError = "";
-  slice.status = "idle";
-  slice.scrollTop = 0;
-  dashboardScrollPositions.set(getExcellentBoardScrollKey(board), { windowY: 0, contentTop: 0 });
-  syncExcellentActiveBoardMirrors();
-  return loadExcellentContents({ preserveItems, restoreScroll: true });
 }
 
 async function prefetchExcellentContents() {
@@ -5156,28 +5177,34 @@ function bindExcellentContentLibrary() {
     });
   });
 
-  // Filter changes: cache-only reload, scroll to top, never auto-call Pgy.
+  // Filter changes only touch draft fields. Never load list / POST refresh / clear items.
   document.getElementById("excellentCategoryFilter")?.addEventListener("change", (event) => {
     const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
     const slice = getExcellentBoardState(board);
-    if (board === "ecommerce_hot") slice.industryPath = event.target.value || "";
-    else slice.categoryPath = event.target.value || "";
-    applyExcellentFiltersAndLoad({ preserveItems: false }).catch((error) => {
-      if (!isStaleSessionRequest(error)) {
-        // Status/error already rendered by loadExcellentContents.
-      }
-    });
+    if (slice.refreshing) {
+      // Revert UI while a refresh is in flight.
+      renderExcellentTaxonomyOptions();
+      return;
+    }
+    if (board === "ecommerce_hot") {
+      slice.draftIndustryPath = event.target.value || "";
+    } else {
+      slice.draftCategoryPath = event.target.value || "";
+    }
+    slice.refreshError = "";
+    renderExcellentFilterChrome();
   });
 
   document.getElementById("excellentSourceFilter")?.addEventListener("change", (event) => {
     const board = state.excellentContentBoard === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
     const slice = getExcellentBoardState(board);
-    slice.contentSource = event.target.value || "all";
-    applyExcellentFiltersAndLoad({ preserveItems: false }).catch((error) => {
-      if (!isStaleSessionRequest(error)) {
-        // Status/error already rendered by loadExcellentContents.
-      }
-    });
+    if (slice.refreshing) {
+      renderExcellentSourceOptions();
+      return;
+    }
+    slice.draftContentSource = event.target.value || "all";
+    slice.refreshError = "";
+    renderExcellentFilterChrome();
   });
 
   document.getElementById("refreshExcellentContentsBtn")?.addEventListener("click", () => {

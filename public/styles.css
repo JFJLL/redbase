@@ -4241,6 +4241,7 @@ textarea {
   font-size: 0.86rem;
 }
 .excellent-status.is-error { background: #fff1f1; color: #b42318; }
+.excellent-status.is-pending { background: #fff8eb; color: #9a6700; }
 .excellent-content-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

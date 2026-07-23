@@ -52,49 +52,8 @@ async function start() {
 
   console.log(`Server running at http://${HOST}:${PORT}`);
 
-  // Best-effort warm of both default excellent-content boards; never block startup.
-  // Only the default board+all-source combos; other filter combinations are not pre-warmed.
-  // Disable with pgy.excellentContentWarmOnStart=false.
-  if (appConfig?.pgy?.excellentContentWarmOnStart !== false) {
-    setImmediate(() => {
-      try {
-        const { warmAllExcellentContentBoards } = require("./services/excellent-content-service");
-        warmAllExcellentContentBoards(appConfig)
-          .then((result) => {
-            for (const board of result.boards || []) {
-              console.log(
-                `[excellent-content] warm complete board=${board.board} items=${board.count} updatedAt=${board.updatedAt || ""}`,
-              );
-            }
-          })
-          .catch((error) => {
-            const boards = Array.isArray(error?.boards) ? error.boards : [];
-            if (boards.length) {
-              for (const board of boards) {
-                if (board.ok) {
-                  console.log(
-                    `[excellent-content] warm complete board=${board.board} items=${board.count}`,
-                  );
-                } else {
-                  console.warn(
-                    `[excellent-content] warm failed board=${board.board}`,
-                    board.lastError ? String(board.lastError).slice(0, 160) : board.code || "failed",
-                  );
-                }
-              }
-              return;
-            }
-            console.warn(
-              "[excellent-content] warm skipped",
-              error?.code || "UNKNOWN",
-              error?.message ? String(error.message).slice(0, 160) : "unknown",
-            );
-          });
-      } catch (error) {
-        console.warn("[excellent-content] warm unavailable", error?.message || error);
-      }
-    });
-  }
+  // Excellent content is cache-only on startup. Do not auto-call Pgy search_note_v2.
+  // Manual ops: npm run warm:excellent-content (explicit maintenance only; not part of normal start).
 
   return server;
 }

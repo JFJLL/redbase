@@ -40,6 +40,7 @@ function createRes() {
 test("clearSession removes user-scoped dashboard data after a 401", () => {
   const source = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
   const clearSessionSource = extractFunction(source, "clearSession");
+  const createExcellentBoardSliceSource = extractFunction(source, "createExcellentBoardSlice");
   const calls = [];
   const state = {
     sessionToken: "cookie",
@@ -107,7 +108,10 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
     closeAccountCenterModal: () => calls.push("closeAccountCenterModal"),
   };
 
-  vm.runInNewContext(`${clearSessionSource}; clearSession();`, context);
+  vm.runInNewContext(
+    `${createExcellentBoardSliceSource}\n${clearSessionSource}; clearSession();`,
+    context,
+  );
 
   assert.equal(state.sessionToken, "");
   assert.equal(state.currentUser, null);
@@ -126,6 +130,10 @@ test("clearSession removes user-scoped dashboard data after a 401", () => {
   assert.equal(state.excellentContentFilters.categoryPath, "");
   assert.equal(state.excellentContentBoards.xhs_hot.refreshing, false);
   assert.equal(state.excellentContentBoards.xhs_hot.refreshError, "");
+  assert.equal(state.excellentContentBoards.xhs_hot.draftCategoryPath, "");
+  assert.equal(state.excellentContentBoards.xhs_hot.draftContentSource, "all");
+  assert.equal(state.excellentContentBoards.ecommerce_hot.draftIndustryPath, "");
+  assert.equal(state.excellentContentBoards.ecommerce_hot.draftContentSource, "all");
   assert.equal(state.productImageLibrary.length, 0);
   assert.equal(Object.keys(state.productImages).length, 0);
   assert.equal(Object.keys(state.editingIdeas).length, 0);

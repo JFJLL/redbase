@@ -4,6 +4,70 @@
  */
 
 /**
+ * Formal filters describe the currently displayed 8 items.
+ * Draft filters are what the user selected in dropdowns but has not applied via "更新内容".
+ */
+export function excellentFiltersAreDirty(boardSlice, board) {
+  if (!boardSlice || typeof boardSlice !== "object") return false;
+  const formalSource = String(boardSlice.contentSource || "all");
+  const draftSource = String(boardSlice.draftContentSource || "all");
+  if (formalSource !== draftSource) return true;
+  if (board === "ecommerce_hot") {
+    return String(boardSlice.industryPath || "") !== String(boardSlice.draftIndustryPath || "");
+  }
+  return String(boardSlice.categoryPath || "") !== String(boardSlice.draftCategoryPath || "");
+}
+
+/**
+ * Commit draft filters to formal filters after a successful explicit refresh.
+ * requestFilters is the immutable snapshot used for the POST body.
+ */
+export function commitExcellentDraftFilters(slice, board, requestFilters = {}) {
+  if (!slice || typeof slice !== "object") return slice;
+  const contentSource = String(requestFilters.contentSource || "all") || "all";
+  slice.contentSource = contentSource;
+  slice.draftContentSource = contentSource;
+  if (board === "ecommerce_hot") {
+    const industryPath = String(requestFilters.industryPath || "");
+    slice.industryPath = industryPath;
+    slice.draftIndustryPath = industryPath;
+  } else {
+    const categoryPath = String(requestFilters.categoryPath || "");
+    slice.categoryPath = categoryPath;
+    slice.draftCategoryPath = categoryPath;
+  }
+  return slice;
+}
+
+/**
+ * On refresh failure, roll draft dropdown values back to the formal filters
+ * so UI never claims the list matches unapplied draft selections.
+ */
+export function rollbackExcellentDraftFilters(slice, board) {
+  if (!slice || typeof slice !== "object") return slice;
+  slice.draftContentSource = slice.contentSource || "all";
+  if (board === "ecommerce_hot") {
+    slice.draftIndustryPath = slice.industryPath || "";
+  } else {
+    slice.draftCategoryPath = slice.categoryPath || "";
+  }
+  return slice;
+}
+
+/**
+ * Validate that a refresh response matches the immutable requestFilters snapshot.
+ */
+export function excellentRefreshResponseMatches(result, requestFilters = {}) {
+  if (!result || typeof result !== "object") return false;
+  if (String(result.board || "") !== String(requestFilters.board || "")) return false;
+  if (String(result.contentSource || "all") !== String(requestFilters.contentSource || "all")) return false;
+  if (String(requestFilters.board || "") === "ecommerce_hot") {
+    return String(result.industryPath || "") === String(requestFilters.industryPath || "");
+  }
+  return String(result.categoryPath || "") === String(requestFilters.categoryPath || "");
+}
+
+/**
  * Whether a list/refresh response may write into its request slice.
  * Independent of which board is currently active in the UI.
  */

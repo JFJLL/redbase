@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 /**
+ * Explicit manual maintenance command only.
  * Warm shared excellent-content cache for both default boards:
  * - 小红书热门 (xhs_hot)
  * - 电商热门 (ecommerce_hot)
+ *
+ * This is NOT part of npm start / server boot / login / page enter.
+ * Operators run: npm run warm:excellent-content
+ *
  * Safe to run before traffic switch. Does not print cookies or secrets.
  * Exit non-zero if any default board fails strict warm (no stale masquerade).
  */
