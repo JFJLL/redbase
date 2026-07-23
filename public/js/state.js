@@ -25,8 +25,12 @@ export const state = {
   excellentContentBoards: {
     xhs_hot: {
       items: [],
+      // Applied filters (used by API after confirm).
       categoryPath: "",
       contentSource: "all",
+      // Draft filters (UI only until user clicks 查询).
+      draftCategoryPath: "",
+      draftContentSource: "all",
       status: "idle",
       error: "",
       updatedAt: "",
@@ -38,6 +42,8 @@ export const state = {
       items: [],
       industryPath: "",
       contentSource: "all",
+      draftIndustryPath: "",
+      draftContentSource: "all",
       status: "idle",
       error: "",
       updatedAt: "",
