@@ -351,26 +351,30 @@
                 <span class="panel-icon excellent-panel-icon">优</span>
                 <h1 class="panel-title">优秀内容</h1>
               </div>
-              <p class="panel-subtitle">发现近期高互动的小红书图文，从优秀案例开始一键仿图文。</p>
+              <p class="panel-subtitle">近7日高阅读图文榜单，支持小红书热门与电商热门，可一键仿图文。</p>
             </div>
           </header>
 
+          <div class="excellent-board-tabs" role="tablist" aria-label="优秀内容板块">
+            <button type="button" class="excellent-board-tab is-active" data-excellent-board="xhs_hot" role="tab" aria-selected="true">小红书热门</button>
+            <button type="button" class="excellent-board-tab" data-excellent-board="ecommerce_hot" role="tab" aria-selected="false">电商热门</button>
+          </div>
+
           <div class="excellent-toolbar" aria-label="优秀内容筛选">
-            <label>
-              <span>类目</span>
+            <label id="excellentTaxonomyFilterLabel">
+              <span id="excellentTaxonomyFilterTitle">内容类目</span>
               <select id="excellentCategoryFilter">
-                <option value="">全部内容类目</option>
+                <option value="">全部</option>
               </select>
             </label>
             <label>
               <span>内容来源</span>
               <select id="excellentSourceFilter">
-                <option value="xhs_hot">小红书热门</option>
+                <option value="all">全部</option>
               </select>
             </label>
             <div class="excellent-meta" id="excellentContentMeta" aria-live="polite">
-              <span>近7日</span>
-              <span>按互动量排序</span>
+              <span>近7日 · 图文 · 按阅读量排序</span>
             </div>
           </div>
 
@@ -641,6 +645,6 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260722-excellent-content"></script>
+    <script type="module" src="./app.js?v=20260723-excellent-dual-hot-v2"></script>
   </body>
 </html>

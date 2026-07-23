@@ -76,11 +76,11 @@ test("excellent contents requires login", async () => {
   assert.equal(res.statusCode, 401);
 });
 
-test("excellent contents rejects invalid source", async () => {
+test("excellent contents rejects invalid board", async () => {
   const res = createRes();
   const handled = await handleExcellentContentRoutes(
     { appConfig: { pgy: { enabled: false } } },
-    createGetReq("/api/excellent-contents?source=other", "redbase_session=excellent-token"),
+    createGetReq("/api/excellent-contents?board=other", "redbase_session=excellent-token"),
     res,
     "/api/excellent-contents",
   );
@@ -88,18 +88,16 @@ test("excellent contents rejects invalid source", async () => {
   assert.equal(res.statusCode, 400);
 });
 
-test("excellent contents rejects multi-origin sources", async () => {
-  for (const source of ["professional", "kol", "celebrity", "buyer", "employee", "owner", "user"]) {
-    const res = createRes();
-    const handled = await handleExcellentContentRoutes(
-      { appConfig: { pgy: { enabled: false } } },
-      createGetReq(`/api/excellent-contents?source=${source}`, "redbase_session=excellent-token"),
-      res,
-      "/api/excellent-contents",
-    );
-    assert.equal(handled, true);
-    assert.equal(res.statusCode, 400, `expected 400 for source=${source}`);
-  }
+test("excellent contents rejects unknown contentSource", async () => {
+  const res = createRes();
+  const handled = await handleExcellentContentRoutes(
+    { appConfig: { pgy: { enabled: false } } },
+    createGetReq("/api/excellent-contents?board=xhs_hot&contentSource=nope", "redbase_session=excellent-token"),
+    res,
+    "/api/excellent-contents",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 400);
 });
 
 test("excellent contents returns cached items with metadata", async () => {
@@ -127,7 +125,7 @@ test("excellent contents returns cached items with metadata", async () => {
   const res = createRes();
   const handled = await handleExcellentContentRoutes(
     { appConfig: { pgy: { enabled: false } } },
-    createGetReq("/api/excellent-contents?source=xhs_hot", "redbase_session=excellent-token"),
+    createGetReq("/api/excellent-contents?board=xhs_hot", "redbase_session=excellent-token"),
     res,
     "/api/excellent-contents",
   );
@@ -139,9 +137,45 @@ test("excellent contents returns cached items with metadata", async () => {
   assert.ok(res.body.updatedAt);
   assert.equal(typeof res.body.stale, "boolean");
   assert.equal(res.body.windowDays, 7);
-  assert.equal(res.body.sort, "engagement_desc");
+  assert.equal(res.body.sort, "read_desc");
+  assert.equal(res.body.board, "xhs_hot");
   assert.equal(res.body.source, "xhs_hot");
-  assert.deepEqual(res.body.filters.sources, [{ value: "xhs_hot", label: "小红书热门" }]);
+  assert.ok(res.body.filters.boards.some((item) => item.value === "ecommerce_hot"));
+  assert.ok(res.body.filters.contentSources.some((item) => item.value === "all"));
+});
+
+test("excellent contents detail returns cached note images", async () => {
+  const now = new Date();
+  upsertExcellentContentCache({
+    sourceKey: "ecommerce_hot",
+    categoryPath: "",
+    items: [
+      {
+        id: "e1",
+        noteId: "e1",
+        title: "电商笔记",
+        noteType: "image",
+        board: "ecommerce_hot",
+        imageUrls: ["https://img.example/a.jpg", "https://img.example/b.jpg"],
+        imageCount: 2,
+        metrics: { readCount: 9, likeCount: 1, favoriteCount: 1, commentCount: 1, engagementCount: 3 },
+      },
+    ],
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+  });
+  const res = createRes();
+  const handled = await handleExcellentContentRoutes(
+    { appConfig: { pgy: { enabled: false } } },
+    createGetReq("/api/excellent-contents/e1/detail?board=ecommerce_hot", "redbase_session=excellent-token"),
+    res,
+    "/api/excellent-contents/e1/detail",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.item.noteId, "e1");
+  assert.equal(res.body.item.imageUrls.length, 2);
+  assert.equal(res.body.fromCache, true);
 });
 
 test("excellent contents accepts waitForFresh query flag", async () => {

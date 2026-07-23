@@ -52,29 +52,36 @@ async function start() {
 
   console.log(`Server running at http://${HOST}:${PORT}`);
 
-  // Best-effort warm of default excellent-content cache; never block startup.
-  // warmExcellentContentCache uses allowStaleOnError=false so stale fallback is not "complete".
+  // Best-effort warm of both default excellent-content boards; never block startup.
+  // Strict warm: stale/empty is not treated as success for logging.
   setImmediate(() => {
     try {
-      const { warmExcellentContentCache } = require("./services/excellent-content-service");
-      warmExcellentContentCache(appConfig)
+      const { warmAllExcellentContentBoards } = require("./services/excellent-content-service");
+      warmAllExcellentContentBoards(appConfig)
         .then((result) => {
-          const count = Array.isArray(result?.items) ? result.items.length : 0;
-          const stale = Boolean(result?.stale);
-          const lastError = String(result?.lastError || "");
-          if (!stale && !lastError && count > 0) {
+          for (const board of result.boards || []) {
             console.log(
-              `[excellent-content] warm complete items=${count} updatedAt=${result?.updatedAt || ""}`,
+              `[excellent-content] warm complete board=${board.board} items=${board.count} updatedAt=${board.updatedAt || ""}`,
             );
-            return;
           }
-          console.warn(
-            "[excellent-content] warm failed",
-            stale ? "stale" : "empty",
-            lastError ? String(lastError).slice(0, 160) : `items=${count}`,
-          );
         })
         .catch((error) => {
+          const boards = Array.isArray(error?.boards) ? error.boards : [];
+          if (boards.length) {
+            for (const board of boards) {
+              if (board.ok) {
+                console.log(
+                  `[excellent-content] warm complete board=${board.board} items=${board.count}`,
+                );
+              } else {
+                console.warn(
+                  `[excellent-content] warm failed board=${board.board}`,
+                  board.lastError ? String(board.lastError).slice(0, 160) : board.code || "failed",
+                );
+              }
+            }
+            return;
+          }
           console.warn(
             "[excellent-content] warm skipped",
             error?.code || "UNKNOWN",

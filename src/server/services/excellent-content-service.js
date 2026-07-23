@@ -1,7 +1,10 @@
 const {
   fetchPgyXhsHotNotes,
+  fetchPgyCategoryTree,
+  fetchPgyIndustryTree,
   getPgyPublicErrorMessage,
   normalizePgyCategoryPath,
+  normalizePgyIndustryPath,
 } = require("../integrations/pgy-content-square");
 const {
   findExcellentContentCache,
@@ -9,36 +12,100 @@ const {
   recordExcellentContentCacheError,
 } = require("../db/repositories/excellent-content-cache-repository");
 
-// V1: 小红书热门全量图文 TOP8 (bizType=1). Single public source; no Pgy contentType filter.
-const EXCELLENT_SOURCE_XHS_HOT = "xhs_hot";
-const EXCELLENT_SOURCE_DEFAULT = EXCELLENT_SOURCE_XHS_HOT;
+// Boards are Pgy content-square tabs. Do not confuse with contentSource (内容来源).
+const EXCELLENT_BOARD_XHS_HOT = "xhs_hot";
+const EXCELLENT_BOARD_ECOMMERCE_HOT = "ecommerce_hot";
+const EXCELLENT_BOARD_DEFAULT = EXCELLENT_BOARD_XHS_HOT;
+
+// Shared 内容来源 options (Pgy contentType). Both boards use the same mapping.
 const EXCELLENT_CONTENT_SOURCES = Object.freeze([
-  { value: EXCELLENT_SOURCE_XHS_HOT, label: "小红书热门" },
+  { value: "all", label: "全部", contentType: null },
+  { value: "kol", label: "博主合作笔记", contentType: "1" },
+  { value: "celebrity", label: "明星合作笔记", contentType: "2" },
+  { value: "employee", label: "员工笔记", contentType: "3" },
+  { value: "buyer", label: "买手笔记", contentType: "5" },
+  { value: "professional", label: "专业号笔记", contentType: "6" },
+  { value: "owner", label: "主理人笔记", contentType: "11" },
+  { value: "user", label: "用户笔记", contentType: "12" },
 ]);
+
+const EXCELLENT_CONTENT_BOARDS = Object.freeze({
+  [EXCELLENT_BOARD_XHS_HOT]: Object.freeze({
+    value: EXCELLENT_BOARD_XHS_HOT,
+    label: "小红书热门",
+    bizType: "1",
+    taxonomyType: "category",
+    taxonomyParam: "noteContentCategory",
+  }),
+  [EXCELLENT_BOARD_ECOMMERCE_HOT]: Object.freeze({
+    value: EXCELLENT_BOARD_ECOMMERCE_HOT,
+    label: "电商热门",
+    bizType: "6",
+    taxonomyType: "industry",
+    taxonomyParam: "noteContentCategory",
+  }),
+});
+
+// Backward-compatible aliases from V1 (board-only, single source).
+const EXCELLENT_SOURCE_XHS_HOT = EXCELLENT_BOARD_XHS_HOT;
+const EXCELLENT_SOURCE_DEFAULT = EXCELLENT_BOARD_DEFAULT;
+
 const EXCELLENT_WINDOW_DAYS = 7;
-const EXCELLENT_ORDER_BY = "premium_engage_num";
+const EXCELLENT_ORDER_BY = "premium_read_num";
 const EXCELLENT_SORT = "desc";
 const EXCELLENT_PAGE_SIZE = 20;
 const EXCELLENT_MAX_PAGES = 3;
 const EXCELLENT_LIMIT = 8;
 const DEFAULT_CACHE_TTL_MS = 60 * 60 * 1000;
-
-function getExcellentContentSource(sourceValue) {
-  const value = String(sourceValue || "").trim();
-  if (!value || value === EXCELLENT_SOURCE_XHS_HOT) {
-    return EXCELLENT_CONTENT_SOURCES[0];
-  }
-  return null;
-}
+const DETAIL_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
 const EXCELLENT_PUBLIC_MESSAGES = {
-  PGY_EMPTY_RESULT: "当前类目近7日暂无可用图文内容，请切换类目或稍后重试。",
+  PGY_EMPTY_RESULT: "当前筛选条件下近7日暂无可用图文内容，请切换筛选或稍后重试。",
   PGY_NETWORK_ERROR: "优秀内容暂时无法更新，请稍后重试。",
   PGY_API_ERROR: "优秀内容暂时无法更新，请稍后重试。",
   EXCELLENT_CONTENT_UNAVAILABLE: "优秀内容暂时不可用，请稍后重试。",
 };
 
 const inFlightRefreshes = new Map();
+const industryTreeCache = { expiresAt: 0, tree: null };
+
+function getExcellentContentBoard(boardValue) {
+  const value = String(boardValue || "").trim();
+  // Legacy V1 used source=xhs_hot for the only board.
+  if (!value || value === EXCELLENT_BOARD_XHS_HOT || value === "xhs") {
+    return EXCELLENT_CONTENT_BOARDS[EXCELLENT_BOARD_XHS_HOT];
+  }
+  return EXCELLENT_CONTENT_BOARDS[value] || null;
+}
+
+function getExcellentContentSource(sourceValue) {
+  const value = String(sourceValue || "").trim();
+  if (!value || value === "all" || value === EXCELLENT_BOARD_XHS_HOT) {
+    // V1 called board "source=xhs_hot" meaning all content sources on xhs hot.
+    if (value === EXCELLENT_BOARD_XHS_HOT) {
+      return EXCELLENT_CONTENT_SOURCES[0];
+    }
+    return EXCELLENT_CONTENT_SOURCES[0];
+  }
+  return EXCELLENT_CONTENT_SOURCES.find((item) => item.value === value) || null;
+}
+
+function buildCacheSourceKey(board, contentSourceValue) {
+  const boardKey = String(board || EXCELLENT_BOARD_DEFAULT).trim() || EXCELLENT_BOARD_DEFAULT;
+  const source = String(contentSourceValue || "").trim();
+  if (!source || source === "all") return boardKey;
+  return `${boardKey}:${source}`;
+}
+
+function resolveTaxonomyPath(boardDef, { categoryPath = "", industryPath = "" } = {}) {
+  if (!boardDef) return { categoryPath: "", industryPath: "", taxonomyPath: "" };
+  if (boardDef.taxonomyType === "industry") {
+    const path = normalizePgyIndustryPath(industryPath || "");
+    return { categoryPath: "", industryPath: path, taxonomyPath: path };
+  }
+  const path = normalizePgyCategoryPath(categoryPath || "");
+  return { categoryPath: path, industryPath: "", taxonomyPath: path };
+}
 
 function getExcellentContentCacheTtlMs(appConfig) {
   const configured = Number(appConfig?.pgy?.excellentContentCacheTtlMs || appConfig?.pgy?.cacheTtlMs || 0);
@@ -48,8 +115,8 @@ function getExcellentContentCacheTtlMs(appConfig) {
   return DEFAULT_CACHE_TTL_MS;
 }
 
-function cacheKey(sourceKey, categoryPath) {
-  return `${String(sourceKey || "")}::${String(categoryPath || "")}`;
+function cacheKey(sourceKey, taxonomyPath) {
+  return `${String(sourceKey || "")}::${String(taxonomyPath || "")}`;
 }
 
 function isCacheFresh(cache, nowMs = Date.now()) {
@@ -62,8 +129,15 @@ function hasCacheItems(cache) {
   return Array.isArray(cache?.items) && cache.items.length > 0;
 }
 
-function engagementOf(note) {
-  return Number(note?.metrics?.engagementCount || 0);
+function readOf(note) {
+  return Number(note?.metrics?.readCount || 0);
+}
+
+function publishTimeMs(note) {
+  const raw = String(note?.publishTime || "").trim();
+  if (!raw) return 0;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function mapExcellentContentError(error) {
@@ -80,7 +154,7 @@ function mapExcellentContentError(error) {
   return String(error?.message || EXCELLENT_PUBLIC_MESSAGES.EXCELLENT_CONTENT_UNAVAILABLE).slice(0, 300);
 }
 
-function filterRankAndLimitNotes(notes) {
+function filterRankAndLimitNotes(notes, { board = EXCELLENT_BOARD_DEFAULT, sourceKey = "" } = {}) {
   const seen = new Set();
   const imageNotes = [];
   for (const note of Array.isArray(notes) ? notes : []) {
@@ -92,13 +166,18 @@ function filterRankAndLimitNotes(notes) {
       ...note,
       id: noteId,
       noteId,
+      board: note.board || board,
       source: note.source || "pgy_content_square",
-      sourceKey: note.sourceKey || EXCELLENT_SOURCE_DEFAULT,
+      sourceKey: sourceKey || note.sourceKey || board,
+      content: note.content != null ? String(note.content) : "",
+      noteType: "image",
     });
   }
   imageNotes.sort((a, b) => {
-    const diff = engagementOf(b) - engagementOf(a);
-    if (diff !== 0) return diff;
+    const readDiff = readOf(b) - readOf(a);
+    if (readDiff !== 0) return readDiff;
+    const timeDiff = publishTimeMs(b) - publishTimeMs(a);
+    if (timeDiff !== 0) return timeDiff;
     return String(a.noteId).localeCompare(String(b.noteId));
   });
   return imageNotes.slice(0, EXCELLENT_LIMIT).map((note, index) => ({
@@ -107,33 +186,69 @@ function filterRankAndLimitNotes(notes) {
   }));
 }
 
-async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", sourceKey = EXCELLENT_SOURCE_DEFAULT, fetchImpl } = {}) {
+async function fetchExcellentNotesFromPgy(
+  appConfig,
+  {
+    board = EXCELLENT_BOARD_DEFAULT,
+    categoryPath = "",
+    industryPath = "",
+    contentType = null,
+    contentSource = "all",
+    sourceKey = "",
+    fetchImpl,
+  } = {},
+) {
+  const boardDef = getExcellentContentBoard(board);
+  if (!boardDef) {
+    const error = new Error("暂不支持该内容板块。");
+    error.code = "INVALID_BOARD";
+    error.statusCode = 400;
+    throw error;
+  }
+  const taxonomy = resolveTaxonomyPath(boardDef, { categoryPath, industryPath });
+  const cacheSourceKey = sourceKey || buildCacheSourceKey(boardDef.value, contentSource);
   const collected = [];
+
   for (let pageNum = 1; pageNum <= EXCELLENT_MAX_PAGES; pageNum += 1) {
     const page = await fetchPgyXhsHotNotes(appConfig, {
-      categoryPath,
+      board: boardDef.value,
+      sourceKey: cacheSourceKey,
+      categoryPath: taxonomy.categoryPath,
+      industryPath: taxonomy.industryPath,
       pageSize: EXCELLENT_PAGE_SIZE,
       pageNum,
       nd: String(EXCELLENT_WINDOW_DAYS),
       orderBy: EXCELLENT_ORDER_BY,
       sort: EXCELLENT_SORT,
-      // Request image/text notes only; engage ranking otherwise floods with videos.
-      // Do not pass contentType — V1 is full 小红书热门, not a Pgy origin subset.
       noteType: 1,
+      bizType: boardDef.bizType,
+      contentType: contentType == null || contentType === "" ? undefined : contentType,
+      contentSource,
       fetchImpl,
     });
     collected.push(
       ...(page.notes || []).map((note) => ({
         ...note,
-        sourceKey: sourceKey || EXCELLENT_SOURCE_XHS_HOT,
+        board: boardDef.value,
+        sourceKey: cacheSourceKey,
+        contentSource: contentSource === "all" ? "" : contentSource,
+        categoryPath: taxonomy.categoryPath,
+        industryPath: taxonomy.industryPath,
       })),
     );
-    const imageCount = filterRankAndLimitNotes(collected).length;
+    const imageCount = filterRankAndLimitNotes(collected, {
+      board: boardDef.value,
+      sourceKey: cacheSourceKey,
+    }).length;
     if (imageCount >= EXCELLENT_LIMIT) break;
     const pageNotes = Array.isArray(page.notes) ? page.notes : [];
     if (pageNotes.length < EXCELLENT_PAGE_SIZE) break;
   }
-  const items = filterRankAndLimitNotes(collected);
+
+  const items = filterRankAndLimitNotes(collected, {
+    board: boardDef.value,
+    sourceKey: cacheSourceKey,
+  });
   if (!items.length) {
     const error = new Error(EXCELLENT_PUBLIC_MESSAGES.PGY_EMPTY_RESULT);
     error.code = "PGY_EMPTY_RESULT";
@@ -142,28 +257,58 @@ async function fetchExcellentNotesFromPgy(appConfig, { categoryPath = "", source
   return items;
 }
 
-function buildResponse({ items, updatedAt, stale = false, lastError = "", source = EXCELLENT_SOURCE_DEFAULT } = {}) {
+function listContentSourceFilters() {
+  return EXCELLENT_CONTENT_SOURCES.map((item) => ({ value: item.value, label: item.label }));
+}
+
+function listBoardFilters() {
+  return Object.values(EXCELLENT_CONTENT_BOARDS).map((item) => ({
+    value: item.value,
+    label: item.label,
+  }));
+}
+
+function buildResponse({
+  items,
+  updatedAt,
+  stale = false,
+  lastError = "",
+  board = EXCELLENT_BOARD_DEFAULT,
+  contentSource = "all",
+  categoryPath = "",
+  industryPath = "",
+} = {}) {
+  const boardDef = getExcellentContentBoard(board) || EXCELLENT_CONTENT_BOARDS[EXCELLENT_BOARD_DEFAULT];
   return {
+    board: boardDef.value,
+    boardLabel: boardDef.label,
     items: Array.isArray(items) ? items : [],
     filters: {
-      sources: EXCELLENT_CONTENT_SOURCES.map((item) => ({ value: item.value, label: item.label })),
+      boards: listBoardFilters(),
+      contentSources: listContentSourceFilters(),
+      // V1 alias kept for older clients.
+      sources: listBoardFilters(),
     },
-    source,
+    source: boardDef.value,
+    contentSource: contentSource || "all",
+    categoryPath: categoryPath || "",
+    industryPath: industryPath || "",
     updatedAt: updatedAt || "",
     stale: Boolean(stale),
     windowDays: EXCELLENT_WINDOW_DAYS,
-    sort: "engagement_desc",
+    noteType: "image",
+    sort: "read_desc",
     lastError: lastError ? String(lastError).slice(0, 300) : "",
   };
 }
 
-function storeSuccessfulCache(appConfig, sourceKey, categoryPath, items) {
+function storeSuccessfulCache(appConfig, sourceKey, taxonomyPath, items) {
   const now = new Date();
   const ttlMs = getExcellentContentCacheTtlMs(appConfig);
   const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
   return upsertExcellentContentCache({
     sourceKey,
-    categoryPath,
+    categoryPath: taxonomyPath,
     items,
     fetchedAt: now.toISOString(),
     expiresAt,
@@ -171,23 +316,35 @@ function storeSuccessfulCache(appConfig, sourceKey, categoryPath, items) {
   });
 }
 
-async function refreshExcellentContentCache(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
+async function refreshExcellentContentCache(
+  appConfig,
+  { board, categoryPath, industryPath, contentType, contentSource, sourceKey, fetchImpl } = {},
+) {
   const items = await fetchExcellentNotesFromPgy(appConfig, {
+    board,
     categoryPath,
+    industryPath,
+    contentType,
+    contentSource,
     sourceKey,
     fetchImpl,
   });
-  return storeSuccessfulCache(appConfig, sourceKey, categoryPath, items);
+  const boardDef = getExcellentContentBoard(board);
+  const taxonomy = resolveTaxonomyPath(boardDef, { categoryPath, industryPath });
+  return storeSuccessfulCache(appConfig, sourceKey, taxonomy.taxonomyPath, items);
 }
 
-function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
-  const key = cacheKey(sourceKey, categoryPath);
+function ensureExcellentContentRefresh(appConfig, options = {}) {
+  const boardDef = getExcellentContentBoard(options.board);
+  const taxonomy = resolveTaxonomyPath(boardDef, options);
+  const sourceKey =
+    options.sourceKey || buildCacheSourceKey(boardDef?.value, options.contentSource);
+  const key = cacheKey(sourceKey, taxonomy.taxonomyPath);
   let promise = inFlightRefreshes.get(key);
   if (!promise) {
     promise = refreshExcellentContentCache(appConfig, {
+      ...options,
       sourceKey,
-      categoryPath,
-      fetchImpl,
     }).finally(() => {
       inFlightRefreshes.delete(key);
     });
@@ -196,12 +353,16 @@ function ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fet
   return promise;
 }
 
-function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl } = {}) {
-  const promise = ensureExcellentContentRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
+function scheduleBackgroundRefresh(appConfig, options = {}) {
+  const boardDef = getExcellentContentBoard(options.board);
+  const taxonomy = resolveTaxonomyPath(boardDef, options);
+  const sourceKey =
+    options.sourceKey || buildCacheSourceKey(boardDef?.value, options.contentSource);
+  const promise = ensureExcellentContentRefresh(appConfig, { ...options, sourceKey });
   promise.catch((error) => {
     const message = mapExcellentContentError(error);
     try {
-      recordExcellentContentCacheError(sourceKey, categoryPath, message);
+      recordExcellentContentCacheError(sourceKey, taxonomy.taxonomyPath, message);
     } catch (_error) {
       // Ignore cache write failures during background refresh.
     }
@@ -210,21 +371,44 @@ function scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchIm
 }
 
 async function getExcellentContents(appConfig, options = {}) {
-  const sourceDef = getExcellentContentSource(options.source);
+  // Prefer explicit board; accept legacy source= as board id.
+  const boardRaw = options.board || options.source || EXCELLENT_BOARD_DEFAULT;
+  const boardDef = getExcellentContentBoard(boardRaw);
+  if (!boardDef) {
+    const error = new Error("暂不支持该内容板块。");
+    error.code = "INVALID_BOARD";
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const contentSourceRaw = options.contentSource || options.contentSourceKey || "all";
+  const sourceDef = getExcellentContentSource(contentSourceRaw);
   if (!sourceDef) {
     const error = new Error("暂不支持该内容来源。");
     error.code = "INVALID_SOURCE";
     error.statusCode = 400;
     throw error;
   }
-  const sourceKey = sourceDef.value;
-  const categoryPath = normalizePgyCategoryPath(options.categoryPath || "");
+
+  // Enforce taxonomy isolation: ignore the wrong path for each board.
+  const taxonomy = resolveTaxonomyPath(boardDef, {
+    categoryPath: boardDef.taxonomyType === "category" ? options.categoryPath || "" : "",
+    industryPath: boardDef.taxonomyType === "industry" ? options.industryPath || "" : "",
+  });
+
+  const sourceKey = buildCacheSourceKey(boardDef.value, sourceDef.value);
   const forceRefresh = options.forceRefresh === true;
   const waitForFresh = options.waitForFresh === true;
-  // Default true: user requests may fall back to last successful cache on Pgy failure.
   const allowStaleOnError = options.allowStaleOnError !== false;
   const fetchImpl = options.fetchImpl;
-  const cache = findExcellentContentCache(sourceKey, categoryPath);
+  const cache = findExcellentContentCache(sourceKey, taxonomy.taxonomyPath);
+
+  const responseBase = {
+    board: boardDef.value,
+    contentSource: sourceDef.value,
+    categoryPath: taxonomy.categoryPath,
+    industryPath: taxonomy.industryPath,
+  };
 
   if (!forceRefresh && hasCacheItems(cache) && isCacheFresh(cache)) {
     return buildResponse({
@@ -232,27 +416,37 @@ async function getExcellentContents(appConfig, options = {}) {
       updatedAt: cache.fetchedAt,
       stale: false,
       lastError: cache.lastError,
-      source: sourceKey,
+      ...responseBase,
     });
   }
 
-  // Stale-while-revalidate: return expired cache immediately and refresh in background.
   if (!forceRefresh && !waitForFresh && hasCacheItems(cache)) {
-    scheduleBackgroundRefresh(appConfig, { sourceKey, categoryPath, fetchImpl });
+    scheduleBackgroundRefresh(appConfig, {
+      board: boardDef.value,
+      categoryPath: taxonomy.categoryPath,
+      industryPath: taxonomy.industryPath,
+      contentType: sourceDef.contentType,
+      contentSource: sourceDef.value,
+      sourceKey,
+      fetchImpl,
+    });
     return buildResponse({
       items: cache.items,
       updatedAt: cache.fetchedAt,
       stale: true,
       lastError: cache.lastError,
-      source: sourceKey,
+      ...responseBase,
     });
   }
 
-  // Cold cache, forceRefresh, or waitForFresh: await shared in-flight refresh.
   try {
     const refreshed = await ensureExcellentContentRefresh(appConfig, {
+      board: boardDef.value,
+      categoryPath: taxonomy.categoryPath,
+      industryPath: taxonomy.industryPath,
+      contentType: sourceDef.contentType,
+      contentSource: sourceDef.value,
       sourceKey,
-      categoryPath,
       fetchImpl,
     });
     if (!refreshed || !hasCacheItems(refreshed)) {
@@ -265,13 +459,13 @@ async function getExcellentContents(appConfig, options = {}) {
       updatedAt: refreshed.fetchedAt,
       stale: false,
       lastError: "",
-      source: sourceKey,
+      ...responseBase,
     });
   } catch (error) {
     const message = mapExcellentContentError(error);
     if (hasCacheItems(cache)) {
       try {
-        recordExcellentContentCacheError(sourceKey, categoryPath, message);
+        recordExcellentContentCacheError(sourceKey, taxonomy.taxonomyPath, message);
       } catch (_error) {
         // keep going
       }
@@ -282,7 +476,7 @@ async function getExcellentContents(appConfig, options = {}) {
         updatedAt: cache.fetchedAt,
         stale: true,
         lastError: message,
-        source: sourceKey,
+        ...responseBase,
       });
     }
     const publicError = new Error(message);
@@ -294,20 +488,178 @@ async function getExcellentContents(appConfig, options = {}) {
 
 async function warmExcellentContentCache(appConfig, options = {}) {
   return getExcellentContents(appConfig, {
-    source: options.source || EXCELLENT_SOURCE_DEFAULT,
+    board: options.board || options.source || EXCELLENT_BOARD_DEFAULT,
+    contentSource: options.contentSource || "all",
     categoryPath: options.categoryPath || "",
+    industryPath: options.industryPath || "",
     forceRefresh: true,
     allowStaleOnError: false,
     fetchImpl: options.fetchImpl,
   });
 }
 
+/**
+ * Warm both default boards (all taxonomy + all content sources).
+ * Throws / returns failed board if any default board cannot refresh strictly.
+ */
+async function warmAllExcellentContentBoards(appConfig, options = {}) {
+  const boards = [EXCELLENT_BOARD_XHS_HOT, EXCELLENT_BOARD_ECOMMERCE_HOT];
+  const results = [];
+  for (const board of boards) {
+    try {
+      const result = await warmExcellentContentCache(appConfig, {
+        board,
+        contentSource: "all",
+        fetchImpl: options.fetchImpl,
+      });
+      const count = Array.isArray(result?.items) ? result.items.length : 0;
+      const stale = Boolean(result?.stale);
+      const lastError = String(result?.lastError || "");
+      const ok = !stale && !lastError && count > 0;
+      results.push({
+        board,
+        ok,
+        count,
+        stale,
+        updatedAt: result?.updatedAt || "",
+        lastError: lastError || undefined,
+      });
+      if (!ok) {
+        const error = new Error(`warm failed for board ${board}`);
+        error.code = "WARM_BOARD_FAILED";
+        error.boards = results;
+        throw error;
+      }
+    } catch (error) {
+      if (error?.boards) throw error;
+      results.push({
+        board,
+        ok: false,
+        count: 0,
+        stale: true,
+        updatedAt: "",
+        lastError: mapExcellentContentError(error),
+        code: error?.code || "WARM_BOARD_FAILED",
+      });
+      const wrapped = new Error(mapExcellentContentError(error));
+      wrapped.code = error?.code || "WARM_BOARD_FAILED";
+      wrapped.boards = results;
+      throw wrapped;
+    }
+  }
+  return { ok: true, boards: results };
+}
+
+function findNoteInCaches(noteId, board) {
+  const target = String(noteId || "").trim();
+  if (!target) return null;
+  const boardKey = String(board || "").trim();
+  // Scan matching board caches via repeated known source keys (all + content sources).
+  const sourceKeys = [
+    boardKey,
+    ...EXCELLENT_CONTENT_SOURCES.filter((s) => s.value !== "all").map((s) => `${boardKey}:${s.value}`),
+  ];
+  for (const sourceKey of sourceKeys) {
+    // Empty taxonomy path first (default list).
+    const cache = findExcellentContentCache(sourceKey, "");
+    if (hasCacheItems(cache)) {
+      const hit = cache.items.find((item) => String(item.noteId || item.id) === target);
+      if (hit) {
+        return { item: hit, updatedAt: cache.fetchedAt, sourceKey, taxonomyPath: "" };
+      }
+    }
+  }
+  return null;
+}
+
+function noteHasCompleteImages(item) {
+  if (!item) return false;
+  const urls = Array.isArray(item.imageUrls) ? item.imageUrls.filter(Boolean) : [];
+  const count = Number(item.imageCount || urls.length || 0);
+  return urls.length > 0 && urls.length >= Math.min(count || urls.length, 1);
+}
+
+/**
+ * Detail strategy: list already carries full noteImages; return cache item.
+ * No upstream detail API confirmed; never fabricate body/images.
+ */
+async function getExcellentContentDetail(appConfig, { noteId, board = EXCELLENT_BOARD_DEFAULT } = {}) {
+  const boardDef = getExcellentContentBoard(board);
+  if (!boardDef) {
+    const error = new Error("暂不支持该内容板块。");
+    error.code = "INVALID_BOARD";
+    error.statusCode = 400;
+    throw error;
+  }
+  const hit = findNoteInCaches(noteId, boardDef.value);
+  if (hit?.item) {
+    return {
+      item: {
+        ...hit.item,
+        content: hit.item.content != null ? String(hit.item.content) : "",
+        imageUrls: Array.isArray(hit.item.imageUrls) ? hit.item.imageUrls : [],
+        imageCount: Number(hit.item.imageCount || hit.item.imageUrls?.length || 0),
+      },
+      fromCache: true,
+      complete: noteHasCompleteImages(hit.item),
+      updatedAt: hit.updatedAt || "",
+      detailUnavailable: !String(hit.item.content || "").trim(),
+      message: String(hit.item.content || "").trim()
+        ? ""
+        : noteHasCompleteImages(hit.item)
+          ? ""
+          : "完整内容暂时无法加载",
+    };
+  }
+  return {
+    item: null,
+    fromCache: false,
+    complete: false,
+    updatedAt: "",
+    detailUnavailable: true,
+    message: "完整内容暂时无法加载",
+  };
+}
+
+async function getExcellentContentTaxonomy(appConfig, { board = EXCELLENT_BOARD_DEFAULT, fetchImpl } = {}) {
+  const boardDef = getExcellentContentBoard(board);
+  if (!boardDef) {
+    const error = new Error("暂不支持该内容板块。");
+    error.code = "INVALID_BOARD";
+    error.statusCode = 400;
+    throw error;
+  }
+  if (boardDef.taxonomyType === "industry") {
+    if (industryTreeCache.tree && industryTreeCache.expiresAt > Date.now()) {
+      return { board: boardDef.value, taxonomyType: "industry", tree: industryTreeCache.tree };
+    }
+    const tree = await fetchPgyIndustryTree(appConfig, { fetchImpl });
+    industryTreeCache.tree = tree;
+    industryTreeCache.expiresAt = Date.now() + 30 * 60 * 1000;
+    return { board: boardDef.value, taxonomyType: "industry", tree };
+  }
+  const tree = await fetchPgyCategoryTree(appConfig, { fetchImpl });
+  return { board: boardDef.value, taxonomyType: "category", tree };
+}
+
+function getExcellentContentSourcesList() {
+  return {
+    contentSources: listContentSourceFilters(),
+  };
+}
+
 function __resetExcellentContentInFlightForTests() {
   inFlightRefreshes.clear();
+  industryTreeCache.expiresAt = 0;
+  industryTreeCache.tree = null;
 }
 
 module.exports = {
+  EXCELLENT_CONTENT_BOARDS,
   EXCELLENT_CONTENT_SOURCES,
+  EXCELLENT_BOARD_DEFAULT,
+  EXCELLENT_BOARD_XHS_HOT,
+  EXCELLENT_BOARD_ECOMMERCE_HOT,
   EXCELLENT_SOURCE_DEFAULT,
   EXCELLENT_SOURCE_XHS_HOT,
   EXCELLENT_WINDOW_DAYS,
@@ -316,10 +668,17 @@ module.exports = {
   EXCELLENT_MAX_PAGES,
   EXCELLENT_LIMIT,
   EXCELLENT_PUBLIC_MESSAGES,
+  DETAIL_CACHE_TTL_MS,
+  getExcellentContentBoard,
   getExcellentContentSource,
+  buildCacheSourceKey,
   filterRankAndLimitNotes,
   getExcellentContents,
   warmExcellentContentCache,
+  warmAllExcellentContentBoards,
+  getExcellentContentDetail,
+  getExcellentContentTaxonomy,
+  getExcellentContentSourcesList,
   getExcellentContentCacheTtlMs,
   mapExcellentContentError,
   __resetExcellentContentInFlightForTests,

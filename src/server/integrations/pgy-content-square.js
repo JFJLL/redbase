@@ -11,6 +11,7 @@ const PGY_HOT_NOTES_URL = "https://edith.xiaohongshu.com/api/pgy/content_square/
 const DEFAULT_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const PGY_ROOT_CATEGORY = "内容类目";
+const PGY_ROOT_INDUSTRY = "所属行业";
 const PGY_MAX_CATEGORY_PATH_LENGTH = 180;
 const DEFAULT_PGY_HOT_NOTES_PAGE_SIZE = 10;
 
@@ -83,22 +84,66 @@ function normalizePgyCategoryPath(value, parentValue = "") {
   return `${PGY_ROOT_CATEGORY}#${normalizedRaw}`.slice(0, PGY_MAX_CATEGORY_PATH_LENGTH);
 }
 
+/**
+ * Normalize Pgy taxonomy path with a fixed root label (内容类目 / 所属行业).
+ * Empty or bare root returns "".
+ */
+function normalizePgyTaxonomyPath(value, rootLabel, parentValue = "") {
+  const root = String(rootLabel || "").trim();
+  const raw = String(value || "").trim();
+  const parent = String(parentValue || "").trim();
+  if (!root) return "";
+  if (!raw) return "";
+  if (raw === root) return "";
+  if (raw.startsWith(`${root}#`)) return raw.slice(0, PGY_MAX_CATEGORY_PATH_LENGTH);
+
+  const normalizedRaw = raw
+    .replace(/[\\/／＞>]+/g, "#")
+    .split("#")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => part !== root)
+    .join("#");
+  if (!normalizedRaw) return "";
+
+  if (parent) {
+    const normalizedParent = normalizePgyTaxonomyPath(parent, root);
+    const parentSuffix = normalizedParent ? normalizedParent.replace(`${root}#`, "") : parent;
+    const fullPath = `${root}#${parentSuffix}#${normalizedRaw}`
+      .split("#")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .filter((part, index, all) => index === 0 || part !== all[index - 1])
+      .join("#");
+    return fullPath.slice(0, PGY_MAX_CATEGORY_PATH_LENGTH);
+  }
+
+  return `${root}#${normalizedRaw}`.slice(0, PGY_MAX_CATEGORY_PATH_LENGTH);
+}
+
+function normalizePgyIndustryPath(value, parentValue = "") {
+  return normalizePgyTaxonomyPath(value, PGY_ROOT_INDUSTRY, parentValue);
+}
+
 function buildPgyHotNotesPayload({
   categoryPath = "",
+  industryPath = "",
   pageSize = DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
   pageNum = 1,
   nd = "3",
   orderBy,
   sort,
   noteType,
+  bizType,
+  contentType,
 } = {}) {
   const payload = {
     searchWord: "",
     pageSize: Number(pageSize) || DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
     pageNum: Number(pageNum) || 1,
     platform: 1,
-    bizType: "1",
     // Defaults preserve existing trend-analysis behavior unless callers override.
+    bizType: bizType == null || bizType === "" ? "1" : String(bizType),
     orderBy: orderBy == null || orderBy === "" ? "premium_imp_num" : String(orderBy),
     nd: String(nd == null || nd === "" ? "3" : nd),
     sort: sort == null || sort === "" ? "desc" : String(sort),
@@ -107,9 +152,17 @@ function buildPgyHotNotesPayload({
   if (noteType === 1 || noteType === 2 || noteType === "1" || noteType === "2") {
     payload.noteType = Number(noteType);
   }
+  // contentType is Pgy 内容来源. Trend analysis leaves it unset. -1 means 全部 on the real page.
+  if (contentType != null && contentType !== "" && String(contentType) !== "-1") {
+    const asNum = Number(contentType);
+    payload.contentType = Number.isFinite(asNum) ? asNum : String(contentType);
+  }
+  // Both 内容类目 and 所属行业 are sent as noteContentCategory with different path prefixes.
+  const normalizedIndustryPath = normalizePgyIndustryPath(industryPath);
   const normalizedCategoryPath = normalizePgyCategoryPath(categoryPath);
-  if (normalizedCategoryPath) {
-    payload.noteContentCategory = normalizedCategoryPath;
+  const taxonomyPath = normalizedIndustryPath || normalizedCategoryPath;
+  if (taxonomyPath) {
+    payload.noteContentCategory = taxonomyPath;
   }
   return payload;
 }
@@ -458,20 +511,60 @@ function normalizePgyCategoryNode(node, parentPath = "") {
   };
 }
 
-function normalizePgyCategoryTree(rawTree) {
+function normalizePgyTaxonomyTree(rawTree, preferredRoot = PGY_ROOT_CATEGORY) {
+  const preferred = String(preferredRoot || PGY_ROOT_CATEGORY).trim() || PGY_ROOT_CATEGORY;
   const rootSource = Array.isArray(rawTree)
-    ? rawTree.find((item) => getNodeLabel(item) === PGY_ROOT_CATEGORY) || rawTree[0] || {}
+    ? rawTree.find((item) => getNodeLabel(item) === preferred) ||
+      rawTree.find((item) => getNodeLabel(item) === PGY_ROOT_CATEGORY) ||
+      rawTree[0] ||
+      {}
     : rawTree?.itemKey === "noteContentCategory" && rawTree?.itemValue
       ? rawTree
       : rawTree?.root || rawTree;
-  const root = getNodeLabel(rootSource) || PGY_ROOT_CATEGORY;
+  const root = getNodeLabel(rootSource) || preferred;
   const children = Array.isArray(rootSource?.children)
-    ? rootSource.children.map((child) => normalizePgyCategoryNode(child, root)).filter(Boolean)
+    ? rootSource.children
+        .map((child) => {
+          if (root === PGY_ROOT_INDUSTRY) {
+            const label = getNodeLabel(child);
+            if (!label) return null;
+            const rawValue = child?.itemValue || child?.value || label;
+            const value = normalizePgyIndustryPath(rawValue, root);
+            const nested = Array.isArray(child?.children)
+              ? child.children
+                  .map((grand) => {
+                    const gLabel = getNodeLabel(grand);
+                    if (!gLabel) return null;
+                    const gRaw = grand?.itemValue || grand?.value || gLabel;
+                    return {
+                      label: gLabel,
+                      value: normalizePgyIndustryPath(gRaw, value || root),
+                    };
+                  })
+                  .filter(Boolean)
+              : [];
+            return {
+              label,
+              value,
+              ...(nested.length ? { children: nested } : {}),
+            };
+          }
+          return normalizePgyCategoryNode(child, root);
+        })
+        .filter(Boolean)
     : [];
   return {
     root,
     items: children,
   };
+}
+
+function normalizePgyCategoryTree(rawTree) {
+  return normalizePgyTaxonomyTree(rawTree, PGY_ROOT_CATEGORY);
+}
+
+function normalizePgyIndustryTree(rawTree) {
+  return normalizePgyTaxonomyTree(rawTree, PGY_ROOT_INDUSTRY);
 }
 
 function collectPgyCategoryValues(items, values = new Set()) {
@@ -492,32 +585,51 @@ function asHttps(url) {
   return String(url || "").replace(/^http:\/\//, "https://");
 }
 
-function normalizePgyHotNote(raw, index, categoryPath = "") {
+function normalizePgyHotNote(raw, index, categoryPath = "", options = {}) {
   const note = raw?.noteInfo || {};
   const user = raw?.userInfo || {};
   const allImageUrls = Array.isArray(note.noteImages)
     ? note.noteImages.map((image) => asHttps(image?.imageUrl)).filter(Boolean)
     : [];
-  // Detail gallery caps at 9 images; imageCount keeps the real total for UI badges.
-  const imageUrls = allImageUrls.slice(0, 9);
+  // Keep full ordered image list for carousel; never pad/repeat covers.
+  const imageUrls = allImageUrls;
   const likeCount = Number(note.likeNum || 0);
   const favoriteCount = Number(note.favNum || 0);
   const commentCount = Number(note.cmtNum || 0);
   const noteId = String(note.noteId || "").trim();
+  const board = String(options.board || options.sourceKey || "xhs_hot");
+  const industryPath = normalizePgyIndustryPath(options.industryPath || "");
+  const normalizedCategoryPath = industryPath
+    ? ""
+    : normalizePgyCategoryPath(categoryPath || options.categoryPath || "");
+  const content =
+    note.noteDesc != null
+      ? String(note.noteDesc)
+      : note.desc != null
+        ? String(note.desc)
+        : note.content != null
+          ? String(note.content)
+          : note.text != null
+            ? String(note.text)
+            : "";
 
   return {
     id: noteId,
     source: "pgy_content_square",
-    sourceKey: "xhs_hot",
-    sourceBucket: "xhs",
-    categoryPath: normalizePgyCategoryPath(categoryPath),
+    sourceKey: board,
+    board,
+    sourceBucket: board === "ecommerce_hot" ? "ecommerce" : "xhs",
+    categoryPath: normalizedCategoryPath,
+    industryPath,
+    contentSource: String(options.contentSource || ""),
     exposureRank: index + 1,
     rank: index + 1,
     noteId,
     title: String(note.title || "").replace(/\s+/g, " ").trim(),
+    content: content.replace(/\s+/g, " ").trim(),
     noteType: Number(note.noteType) === 2 ? "video" : "image",
     publishTime: String(note.notePublishTime || ""),
-    primaryCoverUrl: imageUrls[0] || allImageUrls[0] || "",
+    primaryCoverUrl: imageUrls[0] || "",
     coverUrls: allImageUrls.slice(0, 3),
     imageUrls,
     imageCount: allImageUrls.length,
@@ -534,13 +646,17 @@ function normalizePgyHotNote(raw, index, categoryPath = "") {
       nickname: String(user.nickName || ""),
       fansCount: Number(user.fansNum || 0),
     },
-    noteUrl: noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : "",
+    noteUrl: note.noteLink
+      ? asHttps(note.noteLink)
+      : noteId
+        ? `https://www.xiaohongshu.com/explore/${noteId}`
+        : "",
   };
 }
 
-function normalizePgyHotNotes(rawNotes, categoryPath = "") {
+function normalizePgyHotNotes(rawNotes, categoryPath = "", options = {}) {
   return (Array.isArray(rawNotes) ? rawNotes : [])
-    .map((note, index) => normalizePgyHotNote(note, index, categoryPath))
+    .map((note, index) => normalizePgyHotNote(note, index, categoryPath, options))
     .filter((note) => note.title || note.primaryCoverUrl);
 }
 
@@ -552,16 +668,28 @@ async function fetchPgyCategoryTree(appConfig, options = {}) {
   return normalizePgyCategoryTree(data);
 }
 
+async function fetchPgyIndustryTree(appConfig, options = {}) {
+  const data = await withRetries(
+    () => pgyFetchJson(appConfig, PGY_CATEGORY_TREE_URL, { fetchImpl: options.fetchImpl }),
+    { retries: 2, delayMs: 800 },
+  );
+  return normalizePgyIndustryTree(data);
+}
+
 async function fetchPgyXhsHotNotes(appConfig, options = {}) {
   const categoryPath = normalizePgyCategoryPath(options.categoryPath || "");
+  const industryPath = normalizePgyIndustryPath(options.industryPath || "");
   const payload = buildPgyHotNotesPayload({
-    categoryPath,
+    categoryPath: industryPath ? "" : categoryPath,
+    industryPath,
     pageSize: options.pageSize || DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
     pageNum: options.pageNum || 1,
     nd: options.nd || "3",
     orderBy: options.orderBy,
     sort: options.sort,
     noteType: options.noteType,
+    bizType: options.bizType,
+    contentType: options.contentType,
   });
   const data = await withRetries(
     () =>
@@ -573,29 +701,43 @@ async function fetchPgyXhsHotNotes(appConfig, options = {}) {
     { retries: 2, delayMs: 800 },
   );
   const rawNotes = data?.noteList || data?.list || data?.items || [];
-  const notes = normalizePgyHotNotes(rawNotes, categoryPath);
+  const notes = normalizePgyHotNotes(rawNotes, categoryPath, {
+    board: options.board || options.sourceKey || "xhs_hot",
+    categoryPath,
+    industryPath,
+    contentSource: options.contentSource || "",
+  });
   if (!notes.length) {
     throw createPgyError("PGY_EMPTY_RESULT");
   }
   return {
     categoryPath,
+    industryPath,
     pageInfo: data?.pageInfoDto || null,
     total: Number(data?.total || data?.pageInfoDto?.total || notes.length),
     notes,
     // Request-echo fields only — not confirmation that Pgy applied this sort.
+    requestedBizType: payload.bizType,
     requestedOrderBy: payload.orderBy,
     requestedNd: payload.nd,
     requestedSort: payload.sort,
+    requestedNoteType: payload.noteType,
+    requestedContentType: payload.contentType,
   };
 }
 
 module.exports = {
   PGY_PUBLIC_MESSAGES,
   PGY_MAX_CATEGORY_PATH_LENGTH,
+  PGY_ROOT_CATEGORY,
+  PGY_ROOT_INDUSTRY,
   DEFAULT_PGY_HOT_NOTES_PAGE_SIZE,
   buildPgyHotNotesPayload,
   normalizePgyCategoryPath,
+  normalizePgyIndustryPath,
+  normalizePgyTaxonomyPath,
   normalizePgyCategoryTree,
+  normalizePgyIndustryTree,
   isPgyCategoryPathInTree,
   normalizeCookieHeader,
   parseCookieTokenList,
@@ -603,6 +745,7 @@ module.exports = {
   normalizePgyHotNote,
   normalizePgyHotNotes,
   fetchPgyCategoryTree,
+  fetchPgyIndustryTree,
   fetchPgyXhsHotNotes,
   getPgyPublicErrorMessage,
   redactSensitiveText,

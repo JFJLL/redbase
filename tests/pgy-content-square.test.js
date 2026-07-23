@@ -11,7 +11,9 @@ const {
   isPgyCategoryPathInTree,
   normalizeCookieHeader,
   normalizePgyCategoryPath,
+  normalizePgyIndustryPath,
   normalizePgyCategoryTree,
+  normalizePgyIndustryTree,
   normalizePgyHotNotes,
   parseCookieTokenList,
   parseCookieTokenText,
@@ -78,6 +80,17 @@ test("normalizes Pgy category tree and validates selected paths", () => {
         },
       ],
     },
+    {
+      itemName: "所属行业",
+      itemValue: "所属行业",
+      children: [
+        {
+          itemName: "美妆个护",
+          itemValue: "美妆个护",
+          children: [{ itemName: "彩妆", itemValue: "彩妆" }],
+        },
+      ],
+    },
   ]);
 
   assert.deepEqual(tree, {
@@ -92,6 +105,29 @@ test("normalizes Pgy category tree and validates selected paths", () => {
   });
   assert.equal(isPgyCategoryPathInTree("美妆/护肤", tree), true);
   assert.equal(isPgyCategoryPathInTree("旅行/酒店", tree), false);
+
+  const industry = normalizePgyIndustryTree([
+    {
+      itemName: "内容类目",
+      itemValue: "内容类目",
+      children: [{ itemName: "美妆", itemValue: "美妆" }],
+    },
+    {
+      itemName: "所属行业",
+      itemValue: "所属行业",
+      children: [
+        {
+          itemName: "美妆个护",
+          itemValue: "美妆个护",
+          children: [{ itemName: "彩妆", itemValue: "彩妆" }],
+        },
+      ],
+    },
+  ]);
+  assert.equal(industry.root, "所属行业");
+  assert.equal(industry.items[0].value, "所属行业#美妆个护");
+  assert.equal(industry.items[0].children[0].value, "所属行业#美妆个护#彩妆");
+  assert.equal(normalizePgyIndustryPath("美妆个护/彩妆"), "所属行业#美妆个护#彩妆");
 });
 
 test("builds Pgy hot note payload with category and exposure sort", () => {
@@ -112,30 +148,57 @@ test("builds Pgy hot note payload with category and exposure sort", () => {
   assert.equal(DEFAULT_PGY_HOT_NOTES_PAGE_SIZE, 10);
 });
 
-test("builds excellent-content Pgy payload with engagement sort overrides", () => {
-  const payload = buildPgyHotNotesPayload({
+test("builds excellent-content Pgy payload with read sort and dual boards", () => {
+  const xhs = buildPgyHotNotesPayload({
     categoryPath: "美妆/护肤",
     pageSize: 20,
     pageNum: 1,
     nd: "7",
-    orderBy: "premium_engage_num",
+    orderBy: "premium_read_num",
     sort: "desc",
     noteType: 1,
+    bizType: "1",
+    contentType: "6",
   });
-  assert.equal(payload.orderBy, "premium_engage_num");
-  assert.equal(payload.nd, "7");
-  assert.equal(payload.sort, "desc");
-  assert.equal(payload.pageSize, 20);
-  assert.equal(payload.pageNum, 1);
-  assert.equal(payload.noteType, 1);
-  assert.equal(Object.prototype.hasOwnProperty.call(payload, "contentType"), false);
-  assert.equal(payload.noteContentCategory, "内容类目#美妆#护肤");
+  assert.equal(xhs.bizType, "1");
+  assert.equal(xhs.orderBy, "premium_read_num");
+  assert.equal(xhs.nd, "7");
+  assert.equal(xhs.sort, "desc");
+  assert.equal(xhs.pageSize, 20);
+  assert.equal(xhs.pageNum, 1);
+  assert.equal(xhs.noteType, 1);
+  assert.equal(xhs.contentType, 6);
+  assert.equal(xhs.noteContentCategory, "内容类目#美妆#护肤");
+  assert.equal(Object.prototype.hasOwnProperty.call(xhs, "industryPath"), false);
+
+  const ecom = buildPgyHotNotesPayload({
+    industryPath: "美妆个护/彩妆",
+    pageSize: 20,
+    pageNum: 2,
+    nd: "7",
+    orderBy: "premium_read_num",
+    sort: "desc",
+    noteType: 1,
+    bizType: "6",
+    contentType: "12",
+  });
+  assert.equal(ecom.bizType, "6");
+  assert.equal(ecom.orderBy, "premium_read_num");
+  assert.equal(ecom.noteContentCategory, "所属行业#美妆个护#彩妆");
+  assert.equal(ecom.contentType, 12);
+  assert.equal(ecom.pageNum, 2);
+  // contentType -1 / empty means 全部: omit field
+  const allSource = buildPgyHotNotesPayload({ contentType: -1, orderBy: "premium_read_num", bizType: "1" });
+  assert.equal(Object.prototype.hasOwnProperty.call(allSource, "contentType"), false);
+
   // Default trend behavior remains exposure sort and does not force noteType/contentType.
   const defaults = buildPgyHotNotesPayload();
+  assert.equal(defaults.bizType, "1");
   assert.equal(defaults.orderBy, "premium_imp_num");
   assert.equal(defaults.nd, "3");
   assert.equal(Object.prototype.hasOwnProperty.call(defaults, "noteType"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(defaults, "contentType"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(defaults, "noteContentCategory"), false);
 });
 
 test("normalizes Pgy hot notes into prompt-safe evidence", () => {
@@ -175,7 +238,7 @@ test("normalizes Pgy hot notes into prompt-safe evidence", () => {
   assert.equal(notes[0].sourceKey, "xhs_hot");
 });
 
-test("imageCount keeps full total while imageUrls caps at 9", () => {
+test("imageUrls keep full ordered list for carousel", () => {
   const images = Array.from({ length: 12 }, (_, index) => ({
     imageUrl: `http://image.example/${index + 1}.jpg`,
   }));
@@ -197,11 +260,12 @@ test("imageCount keeps full total while imageUrls caps at 9", () => {
     "美妆",
   );
   assert.equal(notes.length, 1);
-  assert.equal(notes[0].imageUrls.length, 9);
+  assert.equal(notes[0].imageUrls.length, 12);
   assert.equal(notes[0].imageCount, 12);
   assert.equal(notes[0].primaryCoverUrl, "https://image.example/1.jpg");
   assert.equal(notes[0].coverUrls.length, 3);
   assert.equal(notes[0].coverUrls[0], "https://image.example/1.jpg");
+  assert.equal(notes[0].content, "");
 });
 
 test("Pgy fetch returns typed empty-result errors", async () => {
