@@ -5,6 +5,7 @@ const {
   getExcellentContentBoard,
   getExcellentContentSource,
   getExcellentContents,
+  refreshExcellentContents,
   getExcellentContentDetail,
   getExcellentContentTaxonomy,
   getExcellentContentSourcesList,
@@ -15,7 +16,8 @@ const {
 } = require("../integrations/pgy-content-square");
 
 async function handleExcellentContentRoutes(context, req, res, pathname) {
-  const { getSessionToken, buildApiUserLog, json, unauthorized, badRequest } = bindRouteScope(context);
+  const { getSessionToken, buildApiUserLog, json, unauthorized, badRequest, collectBody } =
+    bindRouteScope(context);
 
   function requireUser() {
     const token = getSessionToken(req);
@@ -26,6 +28,24 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     }
     req.__redbaseApiUser = buildApiUserLog(user);
     return user;
+  }
+
+  function sendExcellentError(error, fallbackMessage) {
+    const status =
+      Number(error?.statusCode) ||
+      (error?.code === "INVALID_BOARD" ||
+      error?.code === "INVALID_SOURCE" ||
+      error?.code === "INVALID_TAXONOMY"
+        ? 400
+        : 502);
+    if (status === 400) {
+      badRequest(res, error.message || "请求参数无效");
+    } else {
+      json(res, status, {
+        error: error.message || fallbackMessage,
+        code: error.code || "EXCELLENT_CONTENT_UNAVAILABLE",
+      });
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/excellent-contents/content-sources") {
@@ -46,15 +66,38 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       const result = await getExcellentContentTaxonomy(context.appConfig, { board: boardRaw });
       json(res, 200, result);
     } catch (error) {
-      const status = Number(error?.statusCode) || 502;
-      if (status === 400) {
-        badRequest(res, error.message || "请求参数无效");
-      } else {
-        json(res, status, {
-          error: error.message || "类目数据暂时不可用",
-          code: error.code || "TAXONOMY_UNAVAILABLE",
-        });
+      sendExcellentError(error, "类目数据暂时不可用");
+    }
+    return true;
+  }
+
+  // Explicit manual refresh — only path that may call Pgy note search for this feature.
+  if (req.method === "POST" && pathname === "/api/excellent-contents/refresh") {
+    if (!requireUser()) return true;
+    try {
+      const payload = (await collectBody(req)) || {};
+      const boardRaw =
+        String(payload.board || payload.source || EXCELLENT_BOARD_DEFAULT).trim() || EXCELLENT_BOARD_DEFAULT;
+      if (!getExcellentContentBoard(boardRaw)) {
+        badRequest(res, "暂不支持该内容板块。");
+        return true;
       }
+      const contentSourceRaw = String(payload.contentSource || "all").trim() || "all";
+      if (!getExcellentContentSource(contentSourceRaw)) {
+        badRequest(res, "暂不支持该内容来源。");
+        return true;
+      }
+      const categoryPath = normalizePgyCategoryPath(payload.categoryPath || "");
+      const industryPath = normalizePgyIndustryPath(payload.industryPath || "");
+      const result = await refreshExcellentContents(context.appConfig, {
+        board: boardRaw,
+        contentSource: contentSourceRaw,
+        categoryPath,
+        industryPath,
+      });
+      json(res, 200, result);
+    } catch (error) {
+      sendExcellentError(error, "优秀内容暂时无法更新，请稍后重试。");
     }
     return true;
   }
@@ -78,16 +121,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       badRequest(res, "暂不支持该内容来源。");
       return true;
     }
-    // Only accept the taxonomy field that matches the board; ignore the other.
-    const boardDef = getExcellentContentBoard(boardRaw);
-    const categoryPath =
-      boardDef?.taxonomyType === "category"
-        ? normalizePgyCategoryPath(url.searchParams.get("categoryPath") || "")
-        : "";
-    const industryPath =
-      boardDef?.taxonomyType === "industry"
-        ? normalizePgyIndustryPath(url.searchParams.get("industryPath") || "")
-        : "";
+    const categoryPath = normalizePgyCategoryPath(url.searchParams.get("categoryPath") || "");
+    const industryPath = normalizePgyIndustryPath(url.searchParams.get("industryPath") || "");
     try {
       const result = await getExcellentContentDetail(context.appConfig, {
         noteId,
@@ -98,23 +133,15 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       });
       json(res, 200, result);
     } catch (error) {
-      const status = Number(error?.statusCode) || 502;
-      if (status === 400) {
-        badRequest(res, error.message || "请求参数无效");
-      } else {
-        json(res, status, {
-          error: error.message || "详情暂时不可用",
-          code: error.code || "DETAIL_UNAVAILABLE",
-        });
-      }
+      sendExcellentError(error, "详情暂时不可用");
     }
     return true;
   }
 
+  // Cache-only list. forceRefresh / waitForFresh query flags are intentionally ignored.
   if (req.method === "GET" && pathname === "/api/excellent-contents") {
     if (!requireUser()) return true;
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    // Prefer board; legacy source= treated as board id (xhs_hot).
     const boardRaw =
       String(url.searchParams.get("board") || url.searchParams.get("source") || EXCELLENT_BOARD_DEFAULT).trim() ||
       EXCELLENT_BOARD_DEFAULT;
@@ -129,29 +156,16 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     }
     const categoryPath = normalizePgyCategoryPath(url.searchParams.get("categoryPath") || "");
     const industryPath = normalizePgyIndustryPath(url.searchParams.get("industryPath") || "");
-    const waitForFreshRaw = String(url.searchParams.get("waitForFresh") || "").trim().toLowerCase();
-    const waitForFresh = waitForFreshRaw === "1" || waitForFreshRaw === "true";
     try {
       const result = await getExcellentContents(context.appConfig, {
         board: boardRaw,
         contentSource: contentSourceRaw,
         categoryPath,
         industryPath,
-        waitForFresh,
       });
       json(res, 200, result);
     } catch (error) {
-      const status =
-        Number(error?.statusCode) ||
-        (error?.code === "INVALID_BOARD" || error?.code === "INVALID_SOURCE" ? 400 : 502);
-      if (status === 400) {
-        badRequest(res, error.message || "请求参数无效");
-      } else {
-        json(res, status, {
-          error: error.message || "优秀内容暂时不可用，请稍后重试。",
-          code: error.code || "EXCELLENT_CONTENT_UNAVAILABLE",
-        });
-      }
+      sendExcellentError(error, "优秀内容暂时不可用，请稍后重试。");
     }
     return true;
   }

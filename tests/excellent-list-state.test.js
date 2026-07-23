@@ -9,13 +9,15 @@ const sandbox = { module: { exports: {} }, exports: {} };
 const transformed = source
   .replace(/export function (\w+)/g, "function $1")
   .concat(
-    "\nmodule.exports = { shouldApplyExcellentListResult, applyExcellentListResult, applyExcellentListError, excellentContentCacheKey };\n",
+    "\nmodule.exports = { shouldApplyExcellentListResult, applyExcellentListResult, applyExcellentListError, applyExcellentRefreshResult, applyExcellentRefreshError, excellentContentCacheKey };\n",
   );
 vm.runInNewContext(transformed, { module: sandbox.module, exports: sandbox.exports });
 const {
   shouldApplyExcellentListResult,
   applyExcellentListResult,
   applyExcellentListError,
+  applyExcellentRefreshResult,
+  applyExcellentRefreshError,
   excellentContentCacheKey,
 } = sandbox.module.exports;
 
@@ -115,7 +117,7 @@ test("error clears loading so board never stays loading forever", () => {
   assert.match(slice.error, /network|失败/);
 });
 
-test("error with preserveItems keeps ready stale state", () => {
+test("error with preserveItems keeps ready items", () => {
   const slice = makeSlice({
     requestId: 2,
     status: "loading",
@@ -135,8 +137,67 @@ test("error with preserveItems keeps ready stale state", () => {
   assert.equal(applied.applied, true);
   assert.equal(applied.isActive, true);
   assert.equal(slice.status, "ready");
-  assert.equal(slice.stale, true);
   assert.equal(slice.items[0].noteId, "cached");
+});
+
+test("refresh result replaces items; refresh error keeps old items", () => {
+  const slice = makeSlice({
+    requestId: 3,
+    status: "ready",
+    items: [{ noteId: "old" }],
+    refreshing: true,
+  });
+  const ok = applyExcellentRefreshResult({
+    slice,
+    requestId: 3,
+    sessionEpoch: 1,
+    loadEpoch: 1,
+    result: {
+      items: [{ noteId: "new" }],
+      updatedAt: "2026-07-23T12:00:00.000Z",
+      hasCache: true,
+    },
+    activeBoard: "xhs_hot",
+    requestBoard: "xhs_hot",
+  });
+  assert.equal(ok.applied, true);
+  assert.equal(slice.items[0].noteId, "new");
+  assert.equal(slice.refreshing, false);
+  assert.equal(slice.refreshError, "");
+
+  slice.requestId = 4;
+  slice.refreshing = true;
+  slice.items = [{ noteId: "keep" }];
+  const failed = applyExcellentRefreshError({
+    slice,
+    requestId: 4,
+    sessionEpoch: 1,
+    loadEpoch: 1,
+    error: new Error("down"),
+    activeBoard: "xhs_hot",
+    requestBoard: "xhs_hot",
+  });
+  assert.equal(failed.applied, true);
+  assert.equal(slice.items[0].noteId, "keep");
+  assert.equal(slice.refreshing, false);
+  assert.match(slice.refreshError, /更新失败/);
+});
+
+test("list empty result marks needsUpdate", () => {
+  const slice = makeSlice({ requestId: 1, status: "loading" });
+  applyExcellentListResult({
+    slice,
+    requestId: 1,
+    sessionEpoch: 1,
+    loadEpoch: 1,
+    result: { items: [], hasCache: false, needsUpdate: true, updatedAt: "" },
+    activeBoard: "xhs_hot",
+    requestBoard: "xhs_hot",
+  });
+  assert.equal(slice.status, "empty");
+  assert.equal(slice.hasCache, false);
+  assert.equal(slice.needsUpdate, true);
+  assert.equal(slice.items.length, 0);
 });
 
 test("shouldApplyExcellentListResult gates requestId and epoch", () => {

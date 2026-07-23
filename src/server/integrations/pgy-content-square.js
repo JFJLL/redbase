@@ -581,6 +581,12 @@ function isPgyCategoryPathInTree(categoryPath, tree) {
   return collectPgyCategoryValues(tree?.items).has(normalized);
 }
 
+function isPgyIndustryPathInTree(industryPath, tree) {
+  const normalized = normalizePgyIndustryPath(industryPath);
+  if (!normalized) return true;
+  return collectPgyCategoryValues(tree?.items).has(normalized);
+}
+
 function asHttps(url) {
   return String(url || "").replace(/^http:\/\//, "https://");
 }
@@ -739,6 +745,7 @@ module.exports = {
   normalizePgyCategoryTree,
   normalizePgyIndustryTree,
   isPgyCategoryPathInTree,
+  isPgyIndustryPathInTree,
   normalizeCookieHeader,
   parseCookieTokenList,
   parseCookieTokenText,

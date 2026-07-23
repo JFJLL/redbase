@@ -5,6 +5,8 @@ const {
   getPgyPublicErrorMessage,
   normalizePgyCategoryPath,
   normalizePgyIndustryPath,
+  isPgyCategoryPathInTree,
+  isPgyIndustryPathInTree,
 } = require("../integrations/pgy-content-square");
 const {
   findExcellentContentCache,
@@ -68,6 +70,8 @@ const EXCELLENT_PUBLIC_MESSAGES = {
 
 const inFlightRefreshes = new Map();
 const industryTreeCache = { expiresAt: 0, tree: null };
+const categoryTreeCache = { expiresAt: 0, tree: null };
+const TAXONOMY_TREE_TTL_MS = 30 * 60 * 1000;
 
 function getExcellentContentBoard(boardValue) {
   const value = String(boardValue || "").trim();
@@ -277,12 +281,17 @@ function buildResponse({
   contentSource = "all",
   categoryPath = "",
   industryPath = "",
+  hasCache = false,
+  needsUpdate = false,
+  cacheAge = null,
 } = {}) {
   const boardDef = getExcellentContentBoard(board) || EXCELLENT_CONTENT_BOARDS[EXCELLENT_BOARD_DEFAULT];
+  const list = Array.isArray(items) ? items : [];
+  const resolvedHasCache = hasCache === true || list.length > 0;
   return {
     board: boardDef.value,
     boardLabel: boardDef.label,
-    items: Array.isArray(items) ? items : [],
+    items: list,
     filters: {
       boards: listBoardFilters(),
       contentSources: listContentSourceFilters(),
@@ -295,11 +304,105 @@ function buildResponse({
     industryPath: industryPath || "",
     updatedAt: updatedAt || "",
     stale: Boolean(stale),
+    hasCache: resolvedHasCache,
+    needsUpdate: Boolean(needsUpdate),
+    cacheAge: Number.isFinite(Number(cacheAge)) ? Number(cacheAge) : null,
     windowDays: EXCELLENT_WINDOW_DAYS,
     noteType: "image",
     sort: "read_desc",
     lastError: lastError ? String(lastError).slice(0, 300) : "",
   };
+}
+
+function computeCacheAgeMs(fetchedAt, nowMs = Date.now()) {
+  if (!fetchedAt) return null;
+  const fetchedMs = Date.parse(fetchedAt);
+  if (!Number.isFinite(fetchedMs)) return null;
+  return Math.max(0, nowMs - fetchedMs);
+}
+
+/**
+ * Validate taxonomy paths for a board.
+ * Empty path is always legal. Non-empty path must exist in the board's taxonomy tree.
+ * Wrong-path-type fields (industry on xhs / category on ecommerce) are rejected.
+ * Taxonomy upstream failures become safe 502 (not 400).
+ */
+async function validateExcellentTaxonomyPath(
+  appConfig,
+  { board, categoryPath = "", industryPath = "", fetchImpl } = {},
+) {
+  const boardDef = getExcellentContentBoard(board);
+  if (!boardDef) {
+    const error = new Error("暂不支持该内容板块。");
+    error.code = "INVALID_BOARD";
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const rawCategory = String(categoryPath || "").trim();
+  const rawIndustry = String(industryPath || "").trim();
+
+  if (boardDef.taxonomyType === "category") {
+    if (rawIndustry) {
+      const error = new Error("小红书热门不支持所属行业筛选。");
+      error.code = "INVALID_TAXONOMY";
+      error.statusCode = 400;
+      throw error;
+    }
+    const taxonomy = resolveTaxonomyPath(boardDef, { categoryPath: rawCategory, industryPath: "" });
+    if (!taxonomy.taxonomyPath) {
+      return taxonomy;
+    }
+    try {
+      const treeResult = await getExcellentContentTaxonomy(appConfig, {
+        board: boardDef.value,
+        fetchImpl,
+      });
+      if (!isPgyCategoryPathInTree(taxonomy.taxonomyPath, treeResult.tree)) {
+        const error = new Error("内容类目路径无效。");
+        error.code = "INVALID_TAXONOMY";
+        error.statusCode = 400;
+        throw error;
+      }
+    } catch (error) {
+      if (error?.code === "INVALID_TAXONOMY" || error?.statusCode === 400) throw error;
+      const publicError = new Error("类目数据暂时不可用，请稍后重试。");
+      publicError.code = error?.code || "TAXONOMY_UNAVAILABLE";
+      publicError.statusCode = 502;
+      throw publicError;
+    }
+    return taxonomy;
+  }
+
+  if (rawCategory) {
+    const error = new Error("电商热门不支持内容类目筛选。");
+    error.code = "INVALID_TAXONOMY";
+    error.statusCode = 400;
+    throw error;
+  }
+  const taxonomy = resolveTaxonomyPath(boardDef, { categoryPath: "", industryPath: rawIndustry });
+  if (!taxonomy.taxonomyPath) {
+    return taxonomy;
+  }
+  try {
+    const treeResult = await getExcellentContentTaxonomy(appConfig, {
+      board: boardDef.value,
+      fetchImpl,
+    });
+    if (!isPgyIndustryPathInTree(taxonomy.taxonomyPath, treeResult.tree)) {
+      const error = new Error("所属行业路径无效。");
+      error.code = "INVALID_TAXONOMY";
+      error.statusCode = 400;
+      throw error;
+    }
+  } catch (error) {
+    if (error?.code === "INVALID_TAXONOMY" || error?.statusCode === 400) throw error;
+    const publicError = new Error("行业数据暂时不可用，请稍后重试。");
+    publicError.code = error?.code || "TAXONOMY_UNAVAILABLE";
+    publicError.statusCode = 502;
+    throw publicError;
+  }
+  return taxonomy;
 }
 
 function storeSuccessfulCache(appConfig, sourceKey, taxonomyPath, items) {
@@ -353,23 +456,10 @@ function ensureExcellentContentRefresh(appConfig, options = {}) {
   return promise;
 }
 
-function scheduleBackgroundRefresh(appConfig, options = {}) {
-  const boardDef = getExcellentContentBoard(options.board);
-  const taxonomy = resolveTaxonomyPath(boardDef, options);
-  const sourceKey =
-    options.sourceKey || buildCacheSourceKey(boardDef?.value, options.contentSource);
-  const promise = ensureExcellentContentRefresh(appConfig, { ...options, sourceKey });
-  promise.catch((error) => {
-    const message = mapExcellentContentError(error);
-    try {
-      recordExcellentContentCacheError(sourceKey, taxonomy.taxonomyPath, message);
-    } catch (_error) {
-      // Ignore cache write failures during background refresh.
-    }
-  });
-  return promise;
-}
-
+/**
+ * Cache-only list read. Never calls Pgy search.
+ * Fresh and stale caches both return stored items; missing cache returns empty + needsUpdate.
+ */
 async function getExcellentContents(appConfig, options = {}) {
   // Prefer explicit board; accept legacy source= as board id.
   const boardRaw = options.board || options.source || EXCELLENT_BOARD_DEFAULT;
@@ -390,17 +480,14 @@ async function getExcellentContents(appConfig, options = {}) {
     throw error;
   }
 
-  // Enforce taxonomy isolation: ignore the wrong path for each board.
-  const taxonomy = resolveTaxonomyPath(boardDef, {
-    categoryPath: boardDef.taxonomyType === "category" ? options.categoryPath || "" : "",
-    industryPath: boardDef.taxonomyType === "industry" ? options.industryPath || "" : "",
+  const taxonomy = await validateExcellentTaxonomyPath(appConfig, {
+    board: boardDef.value,
+    categoryPath: options.categoryPath || "",
+    industryPath: options.industryPath || "",
+    fetchImpl: options.fetchImpl,
   });
 
   const sourceKey = buildCacheSourceKey(boardDef.value, sourceDef.value);
-  const forceRefresh = options.forceRefresh === true;
-  const waitForFresh = options.waitForFresh === true;
-  const allowStaleOnError = options.allowStaleOnError !== false;
-  const fetchImpl = options.fetchImpl;
   const cache = findExcellentContentCache(sourceKey, taxonomy.taxonomyPath);
 
   const responseBase = {
@@ -410,34 +497,71 @@ async function getExcellentContents(appConfig, options = {}) {
     industryPath: taxonomy.industryPath,
   };
 
-  if (!forceRefresh && hasCacheItems(cache) && isCacheFresh(cache)) {
+  if (!hasCacheItems(cache)) {
     return buildResponse({
-      items: cache.items,
-      updatedAt: cache.fetchedAt,
+      items: [],
+      updatedAt: "",
       stale: false,
-      lastError: cache.lastError,
+      lastError: "",
+      hasCache: false,
+      needsUpdate: true,
+      cacheAge: null,
       ...responseBase,
     });
   }
 
-  if (!forceRefresh && !waitForFresh && hasCacheItems(cache)) {
-    scheduleBackgroundRefresh(appConfig, {
-      board: boardDef.value,
-      categoryPath: taxonomy.categoryPath,
-      industryPath: taxonomy.industryPath,
-      contentType: sourceDef.contentType,
-      contentSource: sourceDef.value,
-      sourceKey,
-      fetchImpl,
-    });
-    return buildResponse({
-      items: cache.items,
-      updatedAt: cache.fetchedAt,
-      stale: true,
-      lastError: cache.lastError,
-      ...responseBase,
-    });
+  const fresh = isCacheFresh(cache);
+  return buildResponse({
+    items: cache.items,
+    updatedAt: cache.fetchedAt,
+    stale: !fresh,
+    lastError: cache.lastError || "",
+    hasCache: true,
+    needsUpdate: false,
+    cacheAge: computeCacheAgeMs(cache.fetchedAt),
+    ...responseBase,
+  });
+}
+
+/**
+ * Explicit user/system refresh: pull from Pgy, write cache, return latest TOP8.
+ * Failure does not delete existing cache. Same cache key shares one in-flight Promise.
+ */
+async function refreshExcellentContents(appConfig, options = {}) {
+  const boardRaw = options.board || options.source || EXCELLENT_BOARD_DEFAULT;
+  const boardDef = getExcellentContentBoard(boardRaw);
+  if (!boardDef) {
+    const error = new Error("暂不支持该内容板块。");
+    error.code = "INVALID_BOARD";
+    error.statusCode = 400;
+    throw error;
   }
+
+  const contentSourceRaw = options.contentSource || options.contentSourceKey || "all";
+  const sourceDef = getExcellentContentSource(contentSourceRaw);
+  if (!sourceDef) {
+    const error = new Error("暂不支持该内容来源。");
+    error.code = "INVALID_SOURCE";
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const taxonomy = await validateExcellentTaxonomyPath(appConfig, {
+    board: boardDef.value,
+    categoryPath: options.categoryPath || "",
+    industryPath: options.industryPath || "",
+    fetchImpl: options.fetchImpl,
+  });
+
+  const sourceKey = buildCacheSourceKey(boardDef.value, sourceDef.value);
+  const existing = findExcellentContentCache(sourceKey, taxonomy.taxonomyPath);
+
+  const responseBase = {
+    board: boardDef.value,
+    contentSource: sourceDef.value,
+    categoryPath: taxonomy.categoryPath,
+    industryPath: taxonomy.industryPath,
+  };
 
   try {
     const refreshed = await ensureExcellentContentRefresh(appConfig, {
@@ -447,7 +571,7 @@ async function getExcellentContents(appConfig, options = {}) {
       contentType: sourceDef.contentType,
       contentSource: sourceDef.value,
       sourceKey,
-      fetchImpl,
+      fetchImpl: options.fetchImpl,
     });
     if (!refreshed || !hasCacheItems(refreshed)) {
       const error = new Error(EXCELLENT_PUBLIC_MESSAGES.PGY_EMPTY_RESULT);
@@ -459,25 +583,19 @@ async function getExcellentContents(appConfig, options = {}) {
       updatedAt: refreshed.fetchedAt,
       stale: false,
       lastError: "",
+      hasCache: true,
+      needsUpdate: false,
+      cacheAge: 0,
       ...responseBase,
     });
   } catch (error) {
     const message = mapExcellentContentError(error);
-    if (hasCacheItems(cache)) {
+    if (hasCacheItems(existing)) {
       try {
         recordExcellentContentCacheError(sourceKey, taxonomy.taxonomyPath, message);
       } catch (_error) {
-        // keep going
+        // keep going; old cache items remain
       }
-    }
-    if (allowStaleOnError && hasCacheItems(cache)) {
-      return buildResponse({
-        items: cache.items,
-        updatedAt: cache.fetchedAt,
-        stale: true,
-        lastError: message,
-        ...responseBase,
-      });
     }
     const publicError = new Error(message);
     publicError.code = error?.code || "EXCELLENT_CONTENT_UNAVAILABLE";
@@ -487,13 +605,11 @@ async function getExcellentContents(appConfig, options = {}) {
 }
 
 async function warmExcellentContentCache(appConfig, options = {}) {
-  return getExcellentContents(appConfig, {
+  return refreshExcellentContents(appConfig, {
     board: options.board || options.source || EXCELLENT_BOARD_DEFAULT,
     contentSource: options.contentSource || "all",
     categoryPath: options.categoryPath || "",
     industryPath: options.industryPath || "",
-    forceRefresh: true,
-    allowStaleOnError: false,
     fetchImpl: options.fetchImpl,
   });
 }
@@ -614,25 +730,16 @@ function findNoteInCaches(
 }
 
 function noteHasCompleteImages(item) {
+  // Real Pgy list has no independent imageCount; imageCount is noteImages.length.
+  // Never claim a verified full gallery beyond returned urls.
   if (!item) return false;
   const urls = Array.isArray(item.imageUrls) ? item.imageUrls.filter(Boolean) : [];
-  if (!urls.length) return false;
-  const count = Number(item.imageCount || 0);
-  if (!Number.isFinite(count) || count <= 0) {
-    // Unknown total: treat returned urls as usable, without claiming a verified total.
-    return true;
-  }
-  return urls.length >= count;
+  return urls.length > 0;
 }
 
-function buildDetailMessage(item, complete) {
+function buildDetailMessage(item) {
   const hasContent = Boolean(String(item?.content || "").trim());
-  if (hasContent && complete) return "";
-  if (!complete && urlsCount(item) > 0) {
-    return "当前仅展示接口已返回的图片";
-  }
-  if (!hasContent && complete) return "";
-  if (!hasContent) return "完整内容暂时无法加载";
+  if (!hasContent) return "原笔记正文暂未由接口提供。";
   return "";
 }
 
@@ -652,6 +759,7 @@ async function getExcellentContentDetail(
     contentSource = "all",
     categoryPath = "",
     industryPath = "",
+    fetchImpl,
   } = {},
 ) {
   const boardDef = getExcellentContentBoard(board);
@@ -668,16 +776,21 @@ async function getExcellentContentDetail(
     error.statusCode = 400;
     throw error;
   }
-  const taxonomy = resolveTaxonomyPath(boardDef, { categoryPath, industryPath });
+  const taxonomy = await validateExcellentTaxonomyPath(appConfig, {
+    board: boardDef.value,
+    categoryPath,
+    industryPath,
+    fetchImpl,
+  });
   const hit = findNoteInCaches(noteId, boardDef.value, {
     contentSource: sourceDef.value,
     taxonomyPath: taxonomy.taxonomyPath,
   });
   if (hit?.item) {
     const urls = Array.isArray(hit.item.imageUrls) ? hit.item.imageUrls.filter(Boolean) : [];
-    const rawCount = Number(hit.item.imageCount || 0);
-    const imageCount = Number.isFinite(rawCount) && rawCount > 0 ? rawCount : urls.length;
-    const complete = noteHasCompleteImages({ ...hit.item, imageUrls: urls, imageCount: rawCount });
+    // imageCount is the number of returned note images; no independent full-gallery field.
+    const imageCount = urls.length;
+    const hasContent = Boolean(String(hit.item.content || "").trim());
     return {
       item: {
         ...hit.item,
@@ -689,12 +802,12 @@ async function getExcellentContentDetail(
       contentSource: hit.contentSource || sourceDef.value,
       taxonomyPath: hit.taxonomyPath != null ? hit.taxonomyPath : taxonomy.taxonomyPath,
       fromCache: true,
-      complete,
+      complete: urls.length > 0,
       availableImageCount: urls.length,
       imageCount,
       updatedAt: hit.updatedAt || "",
-      detailUnavailable: !String(hit.item.content || "").trim() && !complete,
-      message: buildDetailMessage({ ...hit.item, imageUrls: urls }, complete),
+      detailUnavailable: !hasContent && !urls.length,
+      message: buildDetailMessage({ ...hit.item, imageUrls: urls }),
     };
   }
   return {
@@ -708,7 +821,7 @@ async function getExcellentContentDetail(
     imageCount: 0,
     updatedAt: "",
     detailUnavailable: true,
-    message: "完整内容暂时无法加载",
+    message: "原笔记正文暂未由接口提供。",
   };
 }
 
@@ -726,10 +839,15 @@ async function getExcellentContentTaxonomy(appConfig, { board = EXCELLENT_BOARD_
     }
     const tree = await fetchPgyIndustryTree(appConfig, { fetchImpl });
     industryTreeCache.tree = tree;
-    industryTreeCache.expiresAt = Date.now() + 30 * 60 * 1000;
+    industryTreeCache.expiresAt = Date.now() + TAXONOMY_TREE_TTL_MS;
     return { board: boardDef.value, taxonomyType: "industry", tree };
   }
+  if (categoryTreeCache.tree && categoryTreeCache.expiresAt > Date.now()) {
+    return { board: boardDef.value, taxonomyType: "category", tree: categoryTreeCache.tree };
+  }
   const tree = await fetchPgyCategoryTree(appConfig, { fetchImpl });
+  categoryTreeCache.tree = tree;
+  categoryTreeCache.expiresAt = Date.now() + TAXONOMY_TREE_TTL_MS;
   return { board: boardDef.value, taxonomyType: "category", tree };
 }
 
@@ -743,6 +861,20 @@ function __resetExcellentContentInFlightForTests() {
   inFlightRefreshes.clear();
   industryTreeCache.expiresAt = 0;
   industryTreeCache.tree = null;
+  categoryTreeCache.expiresAt = 0;
+  categoryTreeCache.tree = null;
+}
+
+/** Test helper: seed taxonomy tree caches so path validation need not call Pgy. */
+function __seedExcellentTaxonomyTreeForTests({ categoryTree = null, industryTree = null } = {}) {
+  if (categoryTree) {
+    categoryTreeCache.tree = categoryTree;
+    categoryTreeCache.expiresAt = Date.now() + TAXONOMY_TREE_TTL_MS;
+  }
+  if (industryTree) {
+    industryTreeCache.tree = industryTree;
+    industryTreeCache.expiresAt = Date.now() + TAXONOMY_TREE_TTL_MS;
+  }
 }
 
 module.exports = {
@@ -765,6 +897,9 @@ module.exports = {
   buildCacheSourceKey,
   filterRankAndLimitNotes,
   getExcellentContents,
+  refreshExcellentContents,
+  ensureExcellentContentRefresh,
+  validateExcellentTaxonomyPath,
   warmExcellentContentCache,
   warmAllExcellentContentBoards,
   getExcellentContentDetail,
@@ -775,4 +910,5 @@ module.exports = {
   noteHasCompleteImages,
   findNoteInCaches,
   __resetExcellentContentInFlightForTests,
+  __seedExcellentTaxonomyTreeForTests,
 };

@@ -12,13 +12,16 @@ const { ensureStore } = require("../src/server/store");
 const {
   filterRankAndLimitNotes,
   getExcellentContents,
+  refreshExcellentContents,
   warmExcellentContentCache,
   warmAllExcellentContentBoards,
   getExcellentContentDetail,
   buildCacheSourceKey,
   mapExcellentContentError,
   noteHasCompleteImages,
+  validateExcellentTaxonomyPath,
   __resetExcellentContentInFlightForTests,
+  __seedExcellentTaxonomyTreeForTests,
 } = require("../src/server/services/excellent-content-service");
 const {
   upsertExcellentContentCache,
@@ -79,6 +82,28 @@ function pgyPage(notes) {
   };
 }
 
+function seedCategoryPaths(paths) {
+  const items = (paths || []).map((value) => ({
+    value,
+    label: String(value).split("#").pop() || value,
+    children: [],
+  }));
+  __seedExcellentTaxonomyTreeForTests({
+    categoryTree: { root: "内容类目", items },
+  });
+}
+
+function seedIndustryPaths(paths) {
+  const items = (paths || []).map((value) => ({
+    value,
+    label: String(value).split("#").pop() || value,
+    children: [],
+  }));
+  __seedExcellentTaxonomyTreeForTests({
+    industryTree: { root: "所属行业", items },
+  });
+}
+
 test("filterRankAndLimitNotes filters videos, dedupes, sorts by readCount, limits 8", () => {
   const notes = [
     makeNote("v1", { type: "video", like: 999, read: 99999 }),
@@ -113,7 +138,7 @@ test("equal readCount prefers newer publishTime then stable noteId", () => {
   assert.equal(result[2].noteId, "c");
 });
 
-test("excellent content service returns fresh cache without refetch", async () => {
+test("GET list is cache-only and does not call Pgy", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
   const items = filterRankAndLimitNotes([makeNote("1", { like: 20 }), makeNote("2", { like: 10 })]);
@@ -141,11 +166,36 @@ test("excellent content service returns fresh cache without refetch", async () =
   );
   assert.equal(fetchCount, 0);
   assert.equal(result.stale, false);
+  assert.equal(result.hasCache, true);
+  assert.equal(result.needsUpdate, false);
   assert.equal(result.items.length, 2);
   assert.equal(result.sort, "read_desc");
   assert.equal(result.windowDays, 7);
   assert.equal(result.board, "xhs_hot");
   assert.ok(result.updatedAt);
+});
+
+test("GET list without cache returns needsUpdate and does not call Pgy", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  let fetchCount = 0;
+  const result = await getExcellentContents(
+    { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+    {
+      board: "xhs_hot",
+      contentSource: "professional",
+      categoryPath: "",
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return pgyPage([makeNote("should-not")]);
+      },
+    },
+  );
+  assert.equal(fetchCount, 0);
+  assert.equal(result.hasCache, false);
+  assert.equal(result.needsUpdate, true);
+  assert.equal(result.items.length, 0);
+  assert.equal(result.updatedAt, "");
 });
 
 test("xhs and ecommerce caches are isolated by board and content source", async () => {
@@ -225,6 +275,8 @@ test("detail hits non-empty categoryPath and industryPath caches", async () => {
   const now = new Date();
   const xhsPath = "内容类目#美妆#护肤";
   const ecomPath = "所属行业#美妆个护#彩妆";
+  seedCategoryPaths([xhsPath]);
+  seedIndustryPaths([ecomPath]);
   upsertExcellentContentCache({
     sourceKey: "xhs_hot",
     categoryPath: xhsPath,
@@ -322,11 +374,8 @@ test("detail isolates contentSource and does not cross boards for same noteId", 
   assert.equal(miss.fromCache, false);
 });
 
-test("noteHasCompleteImages requires urls length >= imageCount", () => {
-  assert.equal(
-    noteHasCompleteImages({ imageUrls: ["a"], imageCount: 8 }),
-    false,
-  );
+test("noteHasCompleteImages only reflects returned urls (no independent full gallery)", () => {
+  assert.equal(noteHasCompleteImages({ imageUrls: ["a"], imageCount: 8 }), true);
   assert.equal(
     noteHasCompleteImages({
       imageUrls: Array.from({ length: 8 }, (_, i) => `u${i}`),
@@ -339,7 +388,7 @@ test("noteHasCompleteImages requires urls length >= imageCount", () => {
   assert.equal(noteHasCompleteImages(null), false);
 });
 
-test("detail incomplete images report available count without claiming full set", async () => {
+test("detail uses returned image count and empty-body copy without full-gallery claims", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
   const now = new Date();
@@ -358,11 +407,11 @@ test("detail incomplete images report available count without claiming full set"
     expiresAt: new Date(now.getTime() + 3600000).toISOString(),
   });
   const detail = await getExcellentContentDetail({}, { noteId: "partial-img", board: "xhs_hot" });
-  assert.equal(detail.complete, false);
   assert.equal(detail.availableImageCount, 1);
-  assert.equal(detail.imageCount, 8);
+  assert.equal(detail.imageCount, 1);
   assert.equal(detail.item.imageUrls.length, 1);
-  assert.match(detail.message, /仅展示接口已返回的图片|完整内容暂时无法加载/);
+  assert.match(detail.message, /原笔记正文暂未由接口提供/);
+  assert.doesNotMatch(detail.message || "", /完整图集|完整内容/);
 });
 
 test("warmAllExcellentContentBoards fails if any board fails", async () => {
@@ -389,9 +438,10 @@ test("warmAllExcellentContentBoards fails if any board fails", async () => {
   assert.ok(calls >= 1);
 });
 
-test("expired cache returns stale and refreshes in background", async () => {
+test("expired cache GET still returns cache and never calls Pgy", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
+  seedCategoryPaths(["内容类目#美妆"]);
   const oldItems = filterRankAndLimitNotes([makeNote("old", { like: 9 })]);
   const now = new Date();
   upsertExcellentContentCache({
@@ -416,20 +466,22 @@ test("expired cache returns stale and refreshes in background", async () => {
     },
   );
   assert.equal(result.stale, true);
+  assert.equal(result.hasCache, true);
+  assert.equal(result.needsUpdate, false);
   assert.equal(result.items[0].noteId, "old");
-
   await new Promise((resolve) => setTimeout(resolve, 80));
-  assert.ok(fetchCount >= 1);
-  const refreshed = findExcellentContentCache("xhs_hot", "内容类目#美妆");
-  assert.ok(refreshed.items.some((item) => item.noteId === "new1"));
+  assert.equal(fetchCount, 0);
+  const kept = findExcellentContentCache("xhs_hot", "内容类目#美妆");
+  assert.equal(kept.items[0].noteId, "old");
 });
 
-test("waitForFresh joins background refresh and returns fresh items", async () => {
+test("POST refresh pulls Pgy, writes cache, concurrent same key shares one fetch", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
+  seedCategoryPaths(["内容类目#refresh"]);
+  const categoryPath = "内容类目#refresh";
   const oldItems = filterRankAndLimitNotes([makeNote("stale-item", { like: 5 })]);
   const now = new Date();
-  const categoryPath = "内容类目#wait-fresh";
   upsertExcellentContentCache({
     sourceKey: "xhs_hot",
     categoryPath,
@@ -442,100 +494,105 @@ test("waitForFresh joins background refresh and returns fresh items", async () =
   let fetchCount = 0;
   const fetchImpl = async () => {
     fetchCount += 1;
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    return pgyPage([makeNote("fresh-a", { like: 90 }), makeNote("fresh-b", { like: 70 })]);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    return pgyPage([makeNote("fresh-a", { like: 90, read: 900 }), makeNote("fresh-b", { like: 70, read: 700 })]);
   };
-  const appConfig = { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000, excellentContentCacheTtlMs: 3600000 } };
+  const appConfig = {
+    pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000, excellentContentCacheTtlMs: 3600000 },
+  };
 
-  const stale = await getExcellentContents(appConfig, {
-    source: "xhs_hot",
-    categoryPath,
-    fetchImpl,
-  });
-  assert.equal(stale.stale, true);
-  assert.equal(stale.items[0].noteId, "stale-item");
-
-  const [freshA, freshB] = await Promise.all([
-    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, waitForFresh: true, fetchImpl }),
-    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, waitForFresh: true, fetchImpl }),
+  const [a, b] = await Promise.all([
+    refreshExcellentContents(appConfig, { board: "xhs_hot", categoryPath, fetchImpl }),
+    refreshExcellentContents(appConfig, { board: "xhs_hot", categoryPath, fetchImpl }),
   ]);
-  assert.equal(freshA.stale, false);
-  assert.equal(freshB.stale, false);
-  assert.equal(freshA.lastError, "");
-  assert.equal(freshA.items[0].noteId, "fresh-a");
+  assert.equal(a.stale, false);
+  assert.equal(b.stale, false);
+  assert.equal(a.hasCache, true);
+  assert.equal(a.items[0].noteId, "fresh-a");
   assert.equal(fetchCount, 1);
+  const stored = findExcellentContentCache("xhs_hot", categoryPath);
+  assert.equal(stored.items[0].noteId, "fresh-a");
 });
 
-test("pgy failure with allowStaleOnError true returns stale; false throws and keeps cache", async () => {
+test("refresh failure keeps old cache; two boards refresh independently", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
-  const items = filterRankAndLimitNotes([makeNote("cached", { like: 12 })]);
   const now = new Date();
   upsertExcellentContentCache({
     sourceKey: "xhs_hot",
-    categoryPath: "内容类目#数码",
-    items,
+    categoryPath: "",
+    items: filterRankAndLimitNotes([makeNote("xhs-cached", { like: 12 })]),
     fetchedAt: now.toISOString(),
-    expiresAt: new Date(now.getTime() - 1000).toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
+    lastError: "",
+  });
+  upsertExcellentContentCache({
+    sourceKey: "ecommerce_hot",
+    categoryPath: "",
+    items: filterRankAndLimitNotes([makeNote("ecom-cached", { like: 8 })]),
+    fetchedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 3600000).toISOString(),
     lastError: "",
   });
 
-  const stale = await getExcellentContents(
+  await assert.rejects(
+    () =>
+      refreshExcellentContents(
+        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+        {
+          board: "xhs_hot",
+          fetchImpl: async () => {
+            throw Object.assign(new Error("network down"), { code: "PGY_NETWORK_ERROR" });
+          },
+        },
+      ),
+    (error) => Boolean(error?.message),
+  );
+  const keptXhs = findExcellentContentCache("xhs_hot", "");
+  assert.equal(keptXhs.items[0].noteId, "xhs-cached");
+
+  __resetExcellentContentInFlightForTests();
+  const ecom = await refreshExcellentContents(
     { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
     {
-      source: "xhs_hot",
-      categoryPath: "数码",
-      forceRefresh: true,
-      allowStaleOnError: true,
-      fetchImpl: async () => {
-        throw new Error("network down");
-      },
+      board: "ecommerce_hot",
+      fetchImpl: async () => pgyPage([makeNote("ecom-new", { like: 50, read: 500 })]),
     },
   );
-  assert.equal(stale.stale, true);
-  assert.equal(stale.items[0].noteId, "cached");
-  assert.ok(stale.lastError);
-
-  __resetExcellentContentInFlightForTests();
-  await assert.rejects(
-    () =>
-      getExcellentContents(
-        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
-        {
-          source: "xhs_hot",
-          categoryPath: "数码",
-          forceRefresh: true,
-          allowStaleOnError: false,
-          fetchImpl: async () => {
-            throw Object.assign(new Error("fail"), { code: "PGY_UPSTREAM_ERROR" });
-          },
-        },
-      ),
-    (error) => Boolean(error?.message),
-  );
-  const kept = findExcellentContentCache("xhs_hot", "内容类目#数码");
-  assert.equal(kept.items[0].noteId, "cached");
-  assert.ok(kept.lastError);
-
-  __resetExcellentContentInFlightForTests();
-  await assert.rejects(
-    () =>
-      getExcellentContents(
-        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
-        {
-          source: "xhs_hot",
-          categoryPath: "内容类目#不存在类目路径xyz",
-          forceRefresh: true,
-          fetchImpl: async () => {
-            throw Object.assign(new Error("fail"), { code: "PGY_UPSTREAM_ERROR" });
-          },
-        },
-      ),
-    (error) => Boolean(error?.message),
-  );
+  assert.equal(ecom.items[0].noteId, "ecom-new");
+  assert.equal(findExcellentContentCache("xhs_hot", "").items[0].noteId, "xhs-cached");
+  assert.equal(findExcellentContentCache("ecommerce_hot", "").items[0].noteId, "ecom-new");
 });
 
-test("warmExcellentContentCache fails on stale fallback and succeeds on fresh pull", async () => {
+test("invalid taxonomy returns 400 and does not call Pgy search", async () => {
+  await ensureStore();
+  __resetExcellentContentInFlightForTests();
+  seedCategoryPaths(["内容类目#美妆"]);
+  let fetchCount = 0;
+  const fetchImpl = async () => {
+    fetchCount += 1;
+    return pgyPage([makeNote("x")]);
+  };
+  await assert.rejects(
+    () =>
+      getExcellentContents(
+        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+        { board: "xhs_hot", categoryPath: "内容类目#不存在路径xyz", fetchImpl },
+      ),
+    (error) => error.code === "INVALID_TAXONOMY" && error.statusCode === 400,
+  );
+  await assert.rejects(
+    () =>
+      refreshExcellentContents(
+        { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } },
+        { board: "xhs_hot", industryPath: "所属行业#美妆", fetchImpl },
+      ),
+    (error) => error.code === "INVALID_TAXONOMY" && error.statusCode === 400,
+  );
+  assert.equal(fetchCount, 0);
+});
+
+test("warmExcellentContentCache fails without deleting old cache and succeeds on fresh pull", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
   const items = filterRankAndLimitNotes([makeNote("warm-old", { like: 11 })]);
@@ -585,11 +642,11 @@ test("excellent content empty-result message uses 7-day copy", () => {
   assert.match(getPgyPublicErrorMessage({ code: "PGY_EMPTY_RESULT" }), /近3日/);
 });
 
-test("concurrent cold loads share one in-flight refresh", async () => {
+test("cold concurrent refresh shares one in-flight Pgy pull", async () => {
   await ensureStore();
   __resetExcellentContentInFlightForTests();
+  seedCategoryPaths(["内容类目#并发"]);
   const categoryPath = "内容类目#并发";
-  // Ensure no cache for this path
   upsertExcellentContentCache({
     sourceKey: "xhs_hot",
     categoryPath,
@@ -603,12 +660,12 @@ test("concurrent cold loads share one in-flight refresh", async () => {
   const fetchImpl = async () => {
     fetchCount += 1;
     await new Promise((resolve) => setTimeout(resolve, 40));
-    return pgyPage(Array.from({ length: 8 }, (_, i) => makeNote(`c${i}`, { like: 100 - i })));
+    return pgyPage(Array.from({ length: 8 }, (_, i) => makeNote(`c${i}`, { like: 100 - i, read: 1000 - i })));
   };
   const appConfig = { pgy: { enabled: true, cookie: "web_session=x", timeoutMs: 1000 } };
   const [a, b] = await Promise.all([
-    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, forceRefresh: true, fetchImpl }),
-    getExcellentContents(appConfig, { source: "xhs_hot", categoryPath, forceRefresh: true, fetchImpl }),
+    refreshExcellentContents(appConfig, { source: "xhs_hot", categoryPath, fetchImpl }),
+    refreshExcellentContents(appConfig, { source: "xhs_hot", categoryPath, fetchImpl }),
   ]);
   assert.equal(a.items.length, 8);
   assert.equal(b.items.length, 8);
