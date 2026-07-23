@@ -94,12 +94,12 @@ test("stale requestId is rejected after newer request", () => {
   assert.equal(isRemixResponseCurrent(state, token), false);
 });
 
-test("smart directions wait for analysis settlement", () => {
+test("smart directions never auto-generate; user must click generate", () => {
   assert.equal(shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "loading" })), false);
-  assert.equal(shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "ready" })), true);
+  assert.equal(shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "ready" })), false);
   assert.equal(
-    shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "ready", directionsAutoTriggered: true })),
+    shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "ready", directionsAutoTriggered: false })),
     false,
   );
-  assert.equal(shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "ready", loadingBrand: true })), false);
+  assert.equal(shouldAutoGenerateSmartDirections(baseState({ analysisStatus: "ready", loadingBrand: false })), false);
 });

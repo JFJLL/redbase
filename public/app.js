@@ -60,7 +60,6 @@ import {
   captureRemixRequestToken,
   nextRemixRequestId,
   isRemixResponseCurrent,
-  shouldAutoGenerateSmartDirections,
 } from "./js/excellent-remix-request.js";
 import {
   fetchRemixAnalysis,
@@ -68,6 +67,7 @@ import {
   fetchFusionPlan,
   fetchBrandRemixIdeas,
   fetchBrandProductImages,
+  claimProductImageToBrand,
   previewExcellentRemix,
   generateExcellentRemixSlide,
   completeExcellentRemix,
@@ -4971,13 +4971,12 @@ async function openExcellentRemix(noteId) {
   document.getElementById("excellentRemixModal")?.classList.add("is-open");
   setExcellentModalOpen(true);
   renderExcellentRemix();
-  // Analysis and brand load in parallel; smart directions wait for analysis settlement.
+  // Analysis and brand load in parallel; smart directions only start after user clicks generate.
   const analysisPromise = loadExcellentRemixAnalysis().catch(() => {});
   const brandPromise = excellentRemixState.brandId
     ? loadExcellentRemixBrandContext(excellentRemixState.brandId).catch(() => {})
     : Promise.resolve();
   await Promise.all([analysisPromise, brandPromise]);
-  await maybeAutoGenerateSmartDirectionsOnce();
 }
 
 function closeExcellentRemix() {
@@ -5032,14 +5031,12 @@ async function loadExcellentRemixAnalysis() {
       }
     }
     renderExcellentRemix();
-    await maybeAutoGenerateSmartDirectionsOnce();
   } catch (error) {
     if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board })) return;
     excellentRemixState.analysisError = error.message || "分析失败";
     // Keep modal open; fusion can still use server-side degraded analysis.
     excellentRemixState.analysisStatus = "degraded";
     renderExcellentRemix();
-    await maybeAutoGenerateSmartDirectionsOnce();
   }
 }
 
@@ -5079,23 +5076,11 @@ async function loadExcellentRemixBrandContext(brandId) {
     if (excellentRemixState && isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
       excellentRemixState.loadingBrand = false;
       renderExcellentRemix();
-      await maybeAutoGenerateSmartDirectionsOnce();
     }
   }
 }
 
-/**
- * Barrier: smart directions only after analysis is settled and brand is ready.
- * Auto-fires at most once per brand/instance settlement.
- */
-async function maybeAutoGenerateSmartDirectionsOnce() {
-  if (!excellentRemixState) return;
-  if (!shouldAutoGenerateSmartDirections(excellentRemixState)) return;
-  excellentRemixState.directionsAutoTriggered = true;
-  await loadExcellentRemixDirections({ auto: true });
-}
-
-async function loadExcellentRemixDirections({ auto = false } = {}) {
+async function loadExcellentRemixDirections() {
   if (!excellentRemixState || !excellentRemixState.brandId) return;
   // Hard barrier: never race ahead of analysisId / analysis settlement.
   const settled =
@@ -5103,10 +5088,8 @@ async function loadExcellentRemixDirections({ auto = false } = {}) {
     excellentRemixState.analysisStatus === "degraded" ||
     excellentRemixState.analysisStatus === "error";
   if (!settled) {
-    if (!auto) {
-      excellentRemixState.directionsError = "请等待参考分析完成后再生成内容方向。";
-      renderExcellentRemix();
-    }
+    excellentRemixState.directionsError = "请等待参考分析完成后再生成内容方向。";
+    renderExcellentRemix();
     return;
   }
   const requestId = nextRemixRequestId(excellentRemixState, "directionsRequestId");
@@ -5132,6 +5115,7 @@ async function loadExcellentRemixDirections({ auto = false } = {}) {
     excellentRemixState.selectedSmartDirectionId = excellentRemixState.smartDirections[0]?.id || "";
     excellentRemixState.directionsStatus = "ready";
     if (result.analysisId) excellentRemixState.analysisId = result.analysisId;
+    excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
     renderExcellentRemix();
   } catch (error) {
     if (isStaleSessionRequest(error) || !isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) {
@@ -5139,7 +5123,6 @@ async function loadExcellentRemixDirections({ auto = false } = {}) {
     }
     excellentRemixState.directionsStatus = "error";
     excellentRemixState.directionsError = error.message || "内容方向生成失败";
-    // Allow a single manual retry after auto failure; keep auto flag so we don't loop.
     renderExcellentRemix();
   }
 }
@@ -5187,6 +5170,9 @@ function renderExcellentRemix() {
   });
   root.querySelector("[data-remix-build-fusion]")?.addEventListener("click", () => {
     buildExcellentRemixFusionPlan().catch(() => {});
+  });
+  root.querySelector("[data-remix-generate-directions]")?.addEventListener("click", () => {
+    loadExcellentRemixDirections().catch(() => {});
   });
   root.querySelector("[data-remix-open-product-picker]")?.addEventListener("click", () => {
     openExcellentRemixProductPicker().catch(() => {});
@@ -5248,6 +5234,7 @@ async function openExcellentRemixProductPicker() {
     const result = await fetchBrandProductImages(request, brandId);
     if (!isExcellentRemixResponseCurrent(token, { noteId, board, requireBrand: true, brandId })) return;
     excellentRemixState.brandProductImages = result.images || [];
+    excellentRemixState.unassignedProductImages = result.unassignedImages || [];
     excellentRemixState.brandProductImagesStatus = "ready";
     renderExcellentRemixProductPicker();
   } catch (error) {
@@ -5255,6 +5242,7 @@ async function openExcellentRemixProductPicker() {
       return;
     }
     excellentRemixState.brandProductImages = [];
+    excellentRemixState.unassignedProductImages = [];
     excellentRemixState.brandProductImagesStatus = "error";
     excellentRemixState.assetMode = REMIX_ASSET_MODES.NONE;
     excellentRemixState.productImageIds = [];
@@ -5287,6 +5275,9 @@ async function uploadExcellentRemixBrandProductImage(file) {
         image,
         ...(excellentRemixState.brandProductImages || []).filter((item) => Number(item.id) !== Number(image.id)),
       ];
+      excellentRemixState.unassignedProductImages = (excellentRemixState.unassignedProductImages || []).filter(
+        (item) => Number(item.id) !== Number(image.id),
+      );
       excellentRemixState.brandProductImagesStatus = "ready";
       // Auto-select newly uploaded brand asset if under cap.
       if ((excellentRemixState.productImageIds || []).length < MAX_REMIX_PRODUCT_IMAGES) {
@@ -5358,20 +5349,7 @@ async function handleExcellentRemixChange(event) {
   if (target.dataset.remixContentMode) {
     excellentRemixState.contentDirectionMode = target.dataset.remixContentMode;
     excellentRemixState = invalidateAfterInputChange(excellentRemixState, {});
-    if (
-      excellentRemixState.contentDirectionMode === REMIX_CONTENT_MODES.SMART &&
-      !excellentRemixState.smartDirections.length &&
-      excellentRemixState.brandId
-    ) {
-      // Reset auto flag only for explicit user switch when directions empty and analysis settled.
-      if (
-        excellentRemixState.analysisStatus === "ready" ||
-        excellentRemixState.analysisStatus === "degraded"
-      ) {
-        excellentRemixState.directionsAutoTriggered = true;
-        await loadExcellentRemixDirections({ auto: false });
-      }
-    }
+    // Smart directions are manual-only; switching tabs never auto-generates.
     renderExcellentRemix();
     return;
   }
@@ -5435,8 +5413,40 @@ async function handleExcellentRemixChange(event) {
     return;
   }
   if (target.dataset.remixPickProduct) {
-    const imageId = Number(target.dataset.remixPickProduct);
+    let imageId = Number(target.dataset.remixPickProduct);
+    const isUnassignedPick = target.hasAttribute("data-remix-pick-unassigned");
     if (target.checked) {
+      if ((excellentRemixState.productImageIds || []).length >= MAX_REMIX_PRODUCT_IMAGES) {
+        target.checked = false;
+        showToast(`最多选择 ${MAX_REMIX_PRODUCT_IMAGES} 张产品实拍图。`);
+        return;
+      }
+      if (isUnassignedPick) {
+        try {
+          const brandId = Number(excellentRemixState.brandId);
+          const claimResult = await claimProductImageToBrand(request, imageId, brandId);
+          const claimed = claimResult?.image;
+          if (!claimed?.id) throw new Error("归属当前品牌失败");
+          // Remove from unassigned list; add/replace in brand list.
+          excellentRemixState.unassignedProductImages = (excellentRemixState.unassignedProductImages || []).filter(
+            (item) => Number(item.id) !== Number(imageId) && Number(item.id) !== Number(claimed.id),
+          );
+          excellentRemixState.brandProductImages = [
+            claimed,
+            ...(excellentRemixState.brandProductImages || []).filter((item) => Number(item.id) !== Number(claimed.id)),
+          ];
+          imageId = Number(claimed.id);
+          upsertProductImageLibrary(claimed);
+          showToast("已加入当前品牌素材库");
+        } catch (error) {
+          target.checked = false;
+          if (!isStaleSessionRequest(error)) {
+            showToast(`加入品牌失败：${error.message}`);
+          }
+          renderExcellentRemixProductPicker();
+          return;
+        }
+      }
       excellentRemixState.productImageIds = [...new Set([...(excellentRemixState.productImageIds || []), imageId])].slice(
         0,
         MAX_REMIX_PRODUCT_IMAGES,

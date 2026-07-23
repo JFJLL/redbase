@@ -79,15 +79,9 @@ export function isRemixAnalysisSettled(state) {
 }
 
 /**
- * Whether smart directions should auto-fire once after analysis + brand are ready.
+ * Smart directions are manual-only (user clicks “生成内容方向”).
+ * Kept for call-site/tests compatibility; always returns false.
  */
-export function shouldAutoGenerateSmartDirections(state) {
-  if (!state) return false;
-  if (state.contentDirectionMode !== "smart") return false;
-  if (state.directionsAutoTriggered) return false;
-  if (!state.brandId) return false;
-  if (state.loadingBrand) return false;
-  if (!isRemixAnalysisSettled(state)) return false;
-  if (state.directionsStatus === "loading" || state.directionsStatus === "ready") return false;
-  return true;
+export function shouldAutoGenerateSmartDirections(_state) {
+  return false;
 }

@@ -36,7 +36,14 @@ export async function fetchBrandRemixIdeas(requestFn, brandId) {
 }
 
 export async function fetchBrandProductImages(requestFn, brandId) {
-  return requestFn(`/api/product-images?brandId=${Number(brandId)}`);
+  return requestFn(`/api/product-images?brandId=${Number(brandId)}&includeUnassigned=1`);
+}
+
+export async function claimProductImageToBrand(requestFn, imageId, brandId) {
+  return requestFn(`/api/product-images/${Number(imageId)}/claim`, {
+    method: "POST",
+    body: JSON.stringify({ brandId: Number(brandId) }),
+  });
 }
 
 export async function previewExcellentRemix(requestFn, brandId, body) {

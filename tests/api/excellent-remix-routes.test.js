@@ -604,6 +604,39 @@ test("product images brand filter excludes other brand and unassigned", async ()
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.images.length, 1);
   assert.equal(res.body.images[0].originalName, "mine.png");
+
+  const withUnassigned = createRes();
+  await handleProductImageRoutes(
+    routeContext(),
+    createGetReq("/api/product-images?brandId=7&includeUnassigned=1"),
+    withUnassigned,
+    "/api/product-images",
+  );
+  assert.equal(withUnassigned.statusCode, 200);
+  assert.equal(withUnassigned.body.images.length, 1);
+  assert.equal(withUnassigned.body.unassignedImages.length, 1);
+  assert.equal(withUnassigned.body.unassignedImages[0].originalName, "laptop.png");
+
+  const claimRes = createRes();
+  await handleProductImageRoutes(
+    routeContext(),
+    createPostReq("/api/product-images/803/claim", { brandId: 7 }),
+    claimRes,
+    "/api/product-images/803/claim",
+  );
+  assert.equal(claimRes.statusCode, 200);
+  assert.equal(claimRes.body.image.brandId, 7);
+  assert.equal(claimRes.body.image.assetType, ASSET_TYPE_PRODUCT);
+
+  const afterClaim = createRes();
+  await handleProductImageRoutes(
+    routeContext(),
+    createGetReq("/api/product-images?brandId=7&includeUnassigned=1"),
+    afterClaim,
+    "/api/product-images",
+  );
+  assert.equal(afterClaim.body.images.length, 2);
+  assert.equal(afterClaim.body.unassignedImages.length, 0);
 });
 
 test("same file can upload to brand A and brand B independently", async () => {

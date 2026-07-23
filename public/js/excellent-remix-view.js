@@ -70,17 +70,50 @@ export function renderBrandSummaryHtml(brand, state, helpers) {
   `;
 }
 
+function canRequestSmartDirections(state) {
+  if (!state?.brandId || state.loadingBrand) return false;
+  const settled =
+    state.analysisStatus === "ready" ||
+    state.analysisStatus === "degraded" ||
+    state.analysisStatus === "error";
+  return settled && state.directionsStatus !== "loading";
+}
+
 export function renderSmartDirectionsHtml(state, helpers) {
   const { escapeHtml } = helpers;
+  const directions = state.smartDirections || [];
+  const canGenerate = canRequestSmartDirections(state);
+  const generateLabel = directions.length ? "重新生成内容方向" : "生成内容方向";
+  const actionBlock = `
+    <div class="excellent-smart-actions">
+      <button type="button" class="secondary-btn small-btn" data-remix-generate-directions ${
+        canGenerate ? "" : "disabled"
+      }>${generateLabel}</button>
+      ${
+        !state.brandId
+          ? `<p class="excellent-remix-hint">请先选择品牌，再生成内容方向。</p>`
+          : state.loadingBrand
+            ? `<p class="excellent-remix-hint">品牌详情加载中，请稍候。</p>`
+            : state.analysisStatus === "loading" || state.analysisStatus === "idle"
+              ? `<p class="excellent-remix-hint">请等待参考分析完成后再生成内容方向。</p>`
+              : `<p class="excellent-remix-hint">根据参考笔记方法与品牌信息，手动生成 3 个内容方向。</p>`
+      }
+    </div>
+  `;
   if (state.directionsStatus === "loading") {
     return `<div class="excellent-remix-status is-loading">正在生成 3 个内容方向…</div>`;
   }
   if (state.directionsError) {
-    return `<div class="excellent-remix-status is-error">${escapeHtml(state.directionsError)}。可切换“使用已有选题”或“自己描述内容”。</div>`;
+    return `
+      <div class="excellent-remix-status is-error">${escapeHtml(state.directionsError)}。可重试，或切换“使用已有选题”“自己描述内容”。</div>
+      ${actionBlock}
+    `;
   }
-  const directions = state.smartDirections || [];
   if (!directions.length) {
-    return `<div class="excellent-remix-status">选择品牌后将生成内容方向</div>`;
+    return `
+      <div class="excellent-remix-status">尚未生成内容方向，点击下方按钮开始。</div>
+      ${actionBlock}
+    `;
   }
   return `
     <div class="excellent-direction-grid">
@@ -101,6 +134,7 @@ export function renderSmartDirectionsHtml(state, helpers) {
         )
         .join("")}
     </div>
+    ${actionBlock}
   `;
 }
 
@@ -156,8 +190,8 @@ export function renderContentDirectionHtml(state, helpers) {
       <h3>4. 这次要讲什么</h3>
       <div class="excellent-mode-tabs" role="tablist" aria-label="内容方向模式">
         ${[
-          [REMIX_CONTENT_MODES.SMART, "智能生成内容方向"],
           [REMIX_CONTENT_MODES.EXISTING_IDEA, "使用已有选题"],
+          [REMIX_CONTENT_MODES.SMART, "智能生成内容方向"],
           [REMIX_CONTENT_MODES.CUSTOM, "自己描述内容"],
         ]
           .map(
@@ -386,42 +420,122 @@ export function renderExcellentRemixBodyHtml({
   `;
 }
 
+function formatPickerBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)}KB`;
+  return `${value}B`;
+}
+
+function renderProductPickerCard(image, { selected, unassigned = false, escapeHtml, authenticatedImageSrc }) {
+  const src = authenticatedImageSrc(image?.url);
+  const name = image?.originalName || "产品图";
+  const meta = [formatPickerBytes(image?.sizeBytes), String(image?.createdAt || "").slice(0, 16)]
+    .filter(Boolean)
+    .join(" · ");
+  return `
+    <label class="excellent-product-card ${selected ? "is-selected" : ""} ${unassigned ? "is-unassigned" : ""}">
+      <input type="checkbox" data-remix-pick-product="${Number(image.id)}" ${
+        unassigned ? 'data-remix-pick-unassigned="1"' : ""
+      } ${selected ? "checked" : ""} />
+      <div class="excellent-product-card-thumb">
+        ${
+          src
+            ? `<img src="${src}" alt="${escapeHtml(name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'excellent-product-card-fallback',textContent:'预览失败'}))" />`
+            : `<div class="excellent-product-card-fallback">暂无预览</div>`
+        }
+        ${unassigned ? `<span class="excellent-product-card-badge">未归属</span>` : ""}
+        ${selected ? `<span class="excellent-product-card-check" aria-hidden="true">✓</span>` : ""}
+      </div>
+      <div class="excellent-product-card-meta">
+        <strong title="${escapeHtml(name)}">${escapeHtml(name)}</strong>
+        <span>${escapeHtml(meta || "—")}</span>
+        ${unassigned ? `<em>勾选后将加入当前品牌素材库</em>` : `<em>当前品牌产品素材</em>`}
+      </div>
+    </label>
+  `;
+}
+
 export function renderBrandProductPickerHtml(state, helpers) {
   const { escapeHtml, authenticatedImageSrc } = helpers;
-  const images = state.brandProductImages || [];
+  const brandImages = state.brandProductImages || [];
+  const unassignedImages = state.unassignedProductImages || [];
   const selected = new Set((state.productImageIds || []).map(Number));
   const uploadBlock = `
-    <div class="excellent-product-upload">
-      <label class="secondary-btn small-btn excellent-product-upload-btn">
+    <div class="excellent-product-upload-bar">
+      <label class="primary-btn small-btn excellent-product-upload-btn">
         上传到当前品牌
         <input type="file" accept="image/*" data-remix-upload-brand-product hidden />
       </label>
-      <p class="excellent-remix-hint">图片将归属当前品牌素材库，可立即勾选使用；不会写入其他品牌。未归属全局素材请在此重新上传到当前品牌。</p>
+      <p class="excellent-remix-hint">支持 PNG / JPG / WEBP / GIF。图片归属当前品牌后可直接勾选使用。</p>
     </div>
   `;
   if (state.brandProductImagesStatus === "loading") {
-    return `${uploadBlock}<div class="excellent-remix-status is-loading">正在加载当前品牌产品素材…</div>`;
+    return `${uploadBlock}<div class="excellent-remix-status is-loading">正在加载产品素材…</div>`;
   }
-  if (!images.length) {
-    return `${uploadBlock}<div class="excellent-remix-status">当前品牌还没有产品实拍图。请直接「上传到当前品牌」，或从本机重新选择图片。</div>`;
+  if (state.brandProductImagesStatus === "error") {
+    return `${uploadBlock}<div class="excellent-remix-status is-error">产品素材加载失败，请关闭后重试。</div>`;
   }
+
+  const brandSection = brandImages.length
+    ? `
+      <div class="excellent-product-section">
+        <div class="excellent-product-section-head">
+          <strong>当前品牌素材</strong>
+          <span>${brandImages.length} 张</span>
+        </div>
+        <div class="excellent-product-picker-grid">
+          ${brandImages
+            .map((image) =>
+              renderProductPickerCard(image, {
+                selected: selected.has(Number(image.id)),
+                unassigned: false,
+                escapeHtml,
+                authenticatedImageSrc,
+              }),
+            )
+            .join("")}
+        </div>
+      </div>
+    `
+    : `
+      <div class="excellent-product-section">
+        <div class="excellent-product-section-head">
+          <strong>当前品牌素材</strong>
+          <span>0 张</span>
+        </div>
+        <div class="excellent-remix-status">当前品牌还没有产品实拍图。可上传，或从下方未归属素材勾选加入。</div>
+      </div>
+    `;
+
+  const unassignedSection = unassignedImages.length
+    ? `
+      <div class="excellent-product-section">
+        <div class="excellent-product-section-head">
+          <strong>未归属素材库</strong>
+          <span>${unassignedImages.length} 张</span>
+        </div>
+        <p class="excellent-remix-hint">这些图尚未绑定品牌；勾选后会自动加入当前品牌，再用于仿图文。</p>
+        <div class="excellent-product-picker-grid">
+          ${unassignedImages
+            .map((image) =>
+              renderProductPickerCard(image, {
+                selected: selected.has(Number(image.id)),
+                unassigned: true,
+                escapeHtml,
+                authenticatedImageSrc,
+              }),
+            )
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
+
   return `
     ${uploadBlock}
-    <div class="excellent-product-picker-grid">
-      ${images
-        .map((image) => {
-          const isSelected = selected.has(Number(image.id));
-          return `
-            <label class="excellent-product-pick ${isSelected ? "is-selected" : ""}">
-              <input type="checkbox" data-remix-pick-product="${image.id}" ${isSelected ? "checked" : ""} />
-              <img src="${authenticatedImageSrc(image.url)}" alt="${escapeHtml(image.originalName || "产品图")}" />
-              <span>${escapeHtml(image.originalName || "产品图")}</span>
-              <em>${escapeHtml(String(image.createdAt || "").slice(0, 16))}</em>
-            </label>
-          `;
-        })
-        .join("")}
-    </div>
-    <p class="excellent-remix-hint">最多选择 ${MAX_REMIX_PRODUCT_IMAGES} 张。已选 ${selected.size} 张。仅显示当前品牌 product 素材。</p>
+    ${brandSection}
+    ${unassignedSection}
+    <p class="excellent-remix-hint excellent-product-picker-footer-hint">最多选择 ${MAX_REMIX_PRODUCT_IMAGES} 张。已选 ${selected.size} 张。</p>
   `;
 }

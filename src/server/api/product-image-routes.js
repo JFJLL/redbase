@@ -7,6 +7,8 @@ const { allocateCounter } = require("../db/repositories/core-repository");
 const {
   listProductImagesByOwner,
   listProductImagesByOwnerAndBrand,
+  listUnassignedProductImagesByOwner,
+  claimUnassignedProductImageToBrand,
   findProductImageByOwner,
   findProductImageById,
   findDuplicateProductImage,
@@ -55,12 +57,22 @@ async function handleProductImageRoutes(context, req, res, pathname) {
         badRequest(res, "当前品牌不存在或你没有访问权限。");
         return true;
       }
-      json(res, 200, {
+      const includeUnassigned = ["1", "true", "yes"].includes(
+        String(url.searchParams.get("includeUnassigned") || "").trim().toLowerCase(),
+      );
+      const brandImages = listProductImagesByOwnerAndBrand(user.id, brandId)
+        .sort(sortProductImages)
+        .map((image) => buildProductImageView(image, appConfig));
+      const payload = {
         brandId,
-        images: listProductImagesByOwnerAndBrand(user.id, brandId)
+        images: brandImages,
+      };
+      if (includeUnassigned) {
+        payload.unassignedImages = listUnassignedProductImagesByOwner(user.id)
           .sort(sortProductImages)
-          .map((image) => buildProductImageView(image, appConfig)),
-      });
+          .map((image) => buildProductImageView(image, appConfig));
+      }
+      json(res, 200, payload);
       return true;
     }
     json(res, 200, {
@@ -137,6 +149,25 @@ async function handleProductImageRoutes(context, req, res, pathname) {
       return true;
     }
     json(res, 201, { image: buildProductImageView(image, appConfig), duplicate });
+    return true;
+  }
+
+  const productImageClaimMatch = pathname.match(/^\/api\/product-images\/(\d+)\/claim$/);
+  if (req.method === "POST" && productImageClaimMatch) {
+    const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    const payload = await collectBody(req);
+    const brandId = Number(payload?.brandId);
+    if (!Number.isFinite(brandId) || brandId <= 0 || !brandRepository.findBrandByOwner(brandId, user.id)) {
+      badRequest(res, "当前品牌不存在或你没有访问权限。");
+      return true;
+    }
+    const claimed = claimUnassignedProductImageToBrand(Number(productImageClaimMatch[1]), user.id, brandId);
+    if (!claimed) {
+      badRequest(res, "只能将未归属的素材加入当前品牌，或该图片不存在。");
+      return true;
+    }
+    json(res, 200, { image: buildProductImageView(claimed, appConfig), brandId });
     return true;
   }
 
