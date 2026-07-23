@@ -10,78 +10,268 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260707-account-business-plan" />
+    <link rel="stylesheet" href="./styles.css?v=20260723-ui-refresh-v1" />
   </head>
   <body>
     <div class="page page-landing is-active" data-page="landing">
-      <header class="landing-header">
-        <div class="logo-wrap">
-          <div class="logo-icon" aria-hidden="true">
-            <img class="logo-image" src="./assets/redbase-logo.png?v=20260428-transparent" alt="RedBase logo" />
+      <header class="landing-nav">
+        <div class="landing-nav-inner">
+          <div class="logo-wrap landing-nav-logo">
+            <div class="logo-icon" aria-hidden="true">
+              <img class="logo-image" src="./assets/redbase-logo.png?v=20260428-transparent" alt="RedBase logo" />
+            </div>
+          </div>
+          <nav class="landing-nav-links" aria-label="主导航">
+            <a href="#capabilities" class="landing-nav-link">产品能力</a>
+            <a href="#flow" class="landing-nav-link">使用流程</a>
+            <a href="#enterprise" class="landing-nav-link">企业服务</a>
+            <a href="#faq" class="landing-nav-link">常见问题</a>
+          </nav>
+          <div class="landing-nav-actions">
+            <button class="header-login" data-auth-open="login" type="button">登录</button>
+            <button class="primary-btn small-btn" data-auth-open="register" type="button">免费使用</button>
           </div>
         </div>
-        <button class="header-login" data-auth-open="login">登录 / 注册</button>
       </header>
 
       <main class="landing-main">
-        <div class="hero-badge">AI 驱动的小红书内容运营工具</div>
-        <h1 class="hero-title">
-          RedBase
-          <span>让品牌精准踩中每一个热点</span>
-        </h1>
-        <p class="hero-description">
-          上传品牌档案，AI 自动分析全网热点趋势，为你的小红书账号生成最契合的内容选题。
-          从趋势洞察到选题落地，一站式解决运营难题。
-        </p>
+        <!-- Hero -->
+        <section class="landing-hero" id="hero">
+          <div class="hero-content">
+            <div class="hero-badge">AI 驱动的小红书内容运营工具</div>
+            <h1 class="hero-title">从趋势发现到内容生产，帮助品牌持续找到值得做的内容</h1>
+            <p class="hero-description">
+              RedBase 将品牌档案、全网热点趋势、AI 选题生成和图片生产打通，
+              让内容团队从"不知道写什么"到"有方向、有参考、有产出"。
+            </p>
+            <div class="hero-actions">
+              <button class="primary-btn" data-auth-open="register" type="button">免费使用</button>
+              <button class="secondary-btn" id="heroLearnMore" type="button">了解产品能力</button>
+            </div>
+          </div>
+          <div class="hero-preview">
+            <img src="./assets/home-trend-insight.webp" alt="RedBase 趋势分析界面预览" loading="lazy" />
+          </div>
+        </section>
 
-        <div class="hero-actions">
-          <button class="primary-btn" data-auth-open="register">免费使用</button>
-          <button class="secondary-btn">了解更多</button>
-        </div>
+        <!-- Product Flow -->
+        <section class="landing-section" id="flow">
+          <h2 class="section-title">使用流程</h2>
+          <p class="section-subtitle">从品牌上下文到内容资产，每一步都有 AI 辅助</p>
+          <div class="flow-steps">
+            <div class="flow-step">
+              <div class="flow-step-num">1</div>
+              <h3>建立品牌上下文</h3>
+              <p>录入品牌定位、产品卖点和目标人群，为 AI 建立专属品牌语境。</p>
+            </div>
+            <div class="flow-step">
+              <div class="flow-step-num">2</div>
+              <h3>发现趋势机会</h3>
+              <p>从小红书站内热点、流量趋势和人群讨论中筛选与品牌匹配的方向。</p>
+            </div>
+            <div class="flow-step">
+              <div class="flow-step-num">3</div>
+              <h3>生成内容选题</h3>
+              <p>结合品牌资产和趋势判断，生成包含切入角度和推荐话题的选题方案。</p>
+            </div>
+            <div class="flow-step">
+              <div class="flow-step-num">4</div>
+              <h3>参考优秀内容</h3>
+              <p>浏览近七日高阅读图文榜单，获取灵感参考，支持一键仿图文。</p>
+            </div>
+            <div class="flow-step">
+              <div class="flow-step-num">5</div>
+              <h3>生成并复用内容资产</h3>
+              <p>生成小红书组图、朋友圈图文、公众号长图等，历史资产可复用。</p>
+            </div>
+          </div>
+        </section>
 
-        <section class="landing-section">
-          <h2 class="section-title">三步打造爆款内容</h2>
-          <p class="section-subtitle">从品牌档案到内容选题，AI 全程辅助运营决策</p>
-
-          <div class="landing-card-grid">
-            <article class="landing-card">
-              <div class="card-icon card-icon-pink">⌘</div>
-              <div class="card-image image-brand"></div>
+        <!-- Core Capabilities -->
+        <section class="landing-section" id="capabilities">
+          <h2 class="section-title">核心能力</h2>
+          <p class="section-subtitle">每个模块独立可用，组合后形成完整内容运营闭环</p>
+          <div class="capability-grid">
+            <article class="capability-card">
+              <div class="capability-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+              </div>
               <h3>品牌档案</h3>
-              <p>上传品牌介绍、产品信息和运营目标，建立完整品牌档案，为 AI 分析提供精准输入。</p>
-              <button class="card-link" data-auth-open="register" data-dashboard-tab="brands">上传品牌信息</button>
+              <p>沉淀品牌定位、产品卖点、目标受众和运营目标。品牌档案作为全局上下文，直接影响趋势筛选和选题生成的方向与语气。</p>
             </article>
-
-            <article class="landing-card">
-              <div class="card-icon card-icon-orange">↗</div>
-              <div class="card-image image-trend"></div>
-              <h3>热点洞察</h3>
-              <p>AI 自动扫描全网热点，结合品牌特征筛选出最适合借势的十大趋势、热度指数和关键词。</p>
-              <button class="card-link" data-auth-open="register" data-dashboard-tab="trends">AI 分析热点</button>
+            <article class="capability-card">
+              <div class="capability-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+              </div>
+              <h3>趋势分析</h3>
+              <p>从小红书站内热点、流量趋势、新闻动态和人群讨论中筛选趋势，每条趋势附带热度指标和品牌机会判断，并标注证据来源。</p>
             </article>
-
-            <article class="landing-card">
-              <div class="card-icon card-icon-green">◌</div>
-              <div class="card-image image-idea"></div>
-              <h3>选题生成</h3>
-              <p>基于品牌资产和热点趋势，AI 自动生成小红书风格内容选题，包含标题、切入角度和推荐话题。</p>
-              <button class="card-link" data-auth-open="register" data-dashboard-tab="ideas">智能生成选题</button>
+            <article class="capability-card">
+              <div class="capability-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>
+              </div>
+              <h3>内容选题</h3>
+              <p>将品牌资产和趋势判断转化为可执行的内容方向，包含标题、切入角度、目标人群、推荐话题和推荐理由，支持自定义补充提示词。</p>
+            </article>
+            <article class="capability-card">
+              <div class="capability-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              </div>
+              <h3>优秀内容</h3>
+              <p>浏览近七日高阅读图文榜单，支持小红书热门与电商热门两个板块。可查看多图详情，一键仿图文生成原创组图方案。</p>
+            </article>
+            <article class="capability-card">
+              <div class="capability-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              </div>
+              <h3>图片生成与历史资产</h3>
+              <p>支持小红书组图、朋友圈图文、公众号长图和一键风格化。历史生成按任务管理，可预览、下载和复用，图片保存七天。</p>
             </article>
           </div>
         </section>
 
-        <section class="cta-panel">
-          <h2>开始你的热点运营之旅</h2>
-          <p>告别选题焦虑，让 AI 成为你的内容运营助手，精准把握每一个流量机会。</p>
-          <button class="primary-btn" data-auth-open="register">免费注册使用</button>
+        <!-- Output Examples -->
+        <section class="landing-section" id="outputs">
+          <h2 class="section-title">输出成果</h2>
+          <p class="section-subtitle">产品真实输出的内容类型</p>
+          <div class="output-grid">
+            <div class="output-item">
+              <div class="output-thumb output-trend">
+                <img src="./assets/home-trend-insight.webp" alt="趋势判断输出" loading="lazy" />
+              </div>
+              <h3>趋势判断</h3>
+              <p>热度指标、品牌机会判断和证据来源</p>
+            </div>
+            <div class="output-item">
+              <div class="output-thumb output-idea">
+                <img src="./assets/home-idea-generation.webp" alt="内容选题输出" loading="lazy" />
+              </div>
+              <h3>内容选题</h3>
+              <p>标题、切入角度、推荐话题和推荐理由</p>
+            </div>
+            <div class="output-item">
+              <div class="output-thumb output-xhs">
+                <img src="./assets/home-brand-archive.webp" alt="小红书组图输出" loading="lazy" />
+              </div>
+              <h3>小红书组图</h3>
+              <p>多页图文，适配小红书发布格式</p>
+            </div>
+            <div class="output-item">
+              <div class="output-thumb output-moments">
+                <div class="output-placeholder">朋友圈图文</div>
+              </div>
+              <h3>朋友圈图文</h3>
+              <p>单页图文，适合朋友圈分享</p>
+            </div>
+            <div class="output-item">
+              <div class="output-thumb output-wechat">
+                <div class="output-placeholder">公众号长图</div>
+              </div>
+              <h3>公众号长图</h3>
+              <p>长版面图文，适合公众号嵌入</p>
+            </div>
+            <div class="output-item">
+              <div class="output-thumb output-style">
+                <div class="output-placeholder">风格化图片</div>
+              </div>
+              <h3>风格化图片</h3>
+              <p>基于产品图和风格参考生成</p>
+            </div>
+          </div>
         </section>
 
-        <section class="business-quote-section">
-          <h2>成为行业内的数据领跑者</h2>
-          <p>让决策回归理性，让增长有迹可循。立即接入 RedBase 智能内容增长中台。</p>
-          <button class="business-quote-button" data-business-quote-open type="button">获取企业优惠报价</button>
+        <!-- Enterprise Services -->
+        <section class="landing-section" id="enterprise">
+          <h2 class="section-title">企业服务</h2>
+          <p class="section-subtitle">灵活接入，按需选择</p>
+          <div class="enterprise-pricing">
+            <div class="pricing-card">
+              <div class="pricing-name">单月版</div>
+              <div class="pricing-price">¥3,500</div>
+              <div class="pricing-desc">按月灵活接入</div>
+              <ul class="pricing-features">
+                <li>每月 1000 积分</li>
+                <li>积分到期自动刷新</li>
+                <li>不结转至下月</li>
+              </ul>
+            </div>
+            <div class="pricing-card pricing-card-featured">
+              <div class="pricing-tag">年付更优惠</div>
+              <div class="pricing-name">包年版</div>
+              <div class="pricing-price">¥35,000</div>
+              <div class="pricing-desc">年度接入</div>
+              <ul class="pricing-features">
+                <li>每月 1000 积分</li>
+                <li>积分到期自动刷新</li>
+                <li>不结转至下月</li>
+              </ul>
+            </div>
+          </div>
+          <div class="enterprise-contact">
+            <img src="./assets/qrcode.png" alt="联系专属商务二维码" />
+            <p>扫码联系专属商务，获取优惠价格</p>
+          </div>
+        </section>
+
+        <!-- FAQ -->
+        <section class="landing-section" id="faq">
+          <h2 class="section-title">常见问题</h2>
+          <div class="faq-list">
+            <details class="faq-item">
+              <summary>RedBase 适合哪些用户？</summary>
+              <p>面向品牌方、营销团队和小红书内容运营人员，适合需要持续产出品牌内容但缺乏选题方向和生图能力的团队。</p>
+            </details>
+            <details class="faq-item">
+              <summary>是否必须先创建品牌？</summary>
+              <p>是的。品牌档案是趋势分析和选题生成的上下文基础，创建品牌后才能使用相关功能。品牌信息仅用于 AI 分析，不会公开。</p>
+            </details>
+            <details class="faq-item">
+              <summary>趋势数据从哪里来？</summary>
+              <p>趋势数据来自小红书站内热点、流量趋势、新闻动态和社会讨论等多个维度。每条趋势附带证据来源和更新时间。</p>
+            </details>
+            <details class="faq-item">
+              <summary>生成的内容是否可以修改？</summary>
+              <p>可以。AI 生成的选题和图片均为可编辑的初始方案，你可以在生成基础上调整文案、替换图片和修改排版。</p>
+            </details>
+            <details class="faq-item">
+              <summary>历史图片保存多久？</summary>
+              <p>历史生成图片保存七天，请及时下载。到期后图片将不可访问，但生成记录（标题、文案）仍可查看。</p>
+            </details>
+            <details class="faq-item">
+              <summary>如何联系企业服务？</summary>
+              <p>扫描上方商务二维码联系专属商务，或注册后在账号中心查看套餐和到期信息。</p>
+            </details>
+          </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="cta-panel">
+          <h2>开始你的内容运营之旅</h2>
+          <p>从趋势洞察到选题落地，让 AI 辅助你的每一次内容决策。</p>
+          <button class="primary-btn" data-auth-open="register" type="button">免费注册使用</button>
         </section>
       </main>
+
+      <!-- Footer -->
+      <footer class="landing-footer">
+        <div class="landing-footer-inner">
+          <div class="landing-footer-brand">
+            <div class="logo-icon logo-icon-sm" aria-hidden="true">
+              <img class="logo-image" src="./assets/redbase-logo.png?v=20260428-transparent" alt="RedBase logo" />
+            </div>
+            <span>RedBase</span>
+          </div>
+          <nav class="landing-footer-links" aria-label="页脚导航">
+            <a href="#capabilities">产品能力</a>
+            <a href="#enterprise">企业服务</a>
+            <a href="#faq">常见问题</a>
+          </nav>
+          <div class="landing-footer-meta">
+            <span>Copyright &copy; 2026 RedBase</span>
+            <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer nofollow">京ICP备2026045114号-1</a>
+          </div>
+        </div>
+      </footer>
     </div>
 
     <div class="modal-mask" id="businessQuoteModal">
@@ -116,14 +306,14 @@
     </div>
 
     <div class="modal-mask" id="authModal">
-      <div class="modal-panel auth-modal-panel">
+      <div class="modal-panel auth-modal-panel" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
         <div class="modal-head">
           <div>
             <div class="modal-kicker">账户访问</div>
-            <h2>欢迎来到 RedBase</h2>
+            <h2 id="authModalTitle">欢迎来到 RedBase</h2>
             <p>先完成手机号注册或登录，再进入你的品牌增长工作台。</p>
           </div>
-          <button class="modal-close" id="closeAuthModal" type="button">×</button>
+          <button class="modal-close" id="closeAuthModal" type="button" aria-label="关闭登录弹窗">×</button>
         </div>
 
         <div class="auth-shell">
@@ -150,39 +340,47 @@
             </div>
             <div class="auth-divider"><span>或使用手机号</span></div>
 
-            <div class="auth-tab-row">
-              <button class="auth-tab is-active" data-auth-tab="register" type="button">手机号注册</button>
-              <button class="auth-tab" data-auth-tab="login" type="button">手机号登录</button>
+            <div class="auth-tab-row" role="tablist" aria-label="登录/注册切换">
+              <button class="auth-tab is-active" data-auth-tab="register" type="button" role="tab" aria-selected="true">手机号注册</button>
+              <button class="auth-tab" data-auth-tab="login" type="button" role="tab" aria-selected="false">手机号登录</button>
             </div>
 
-            <form class="auth-form auth-form-active" id="registerForm">
+            <div class="auth-error" id="authError" role="alert" hidden></div>
+
+            <form class="auth-form auth-form-active" id="registerForm" novalidate>
               <label>
                 <span>手机号</span>
-                <input name="phone" placeholder="请输入手机号" required />
+                <input name="phone" placeholder="请输入手机号" required autocomplete="tel" />
               </label>
 
               <label>
                 <span>昵称</span>
-                <input name="name" placeholder="请输入你的昵称" required />
+                <input name="name" placeholder="请输入你的昵称" required autocomplete="name" />
               </label>
 
               <label>
                 <span>登录密码</span>
-                <input name="password" type="password" placeholder="至少 6 位密码" required />
+                <div class="password-field">
+                  <input name="password" type="password" placeholder="至少 6 位密码" required autocomplete="new-password" />
+                  <button class="password-toggle" type="button" aria-label="显示密码" data-password-toggle></button>
+                </div>
               </label>
 
               <button class="primary-btn auth-submit-btn" type="submit">注册并进入工作台</button>
             </form>
 
-            <form class="auth-form" id="loginForm">
+            <form class="auth-form" id="loginForm" novalidate>
               <label>
                 <span>手机号</span>
-                <input name="phone" placeholder="请输入手机号" required />
+                <input name="phone" placeholder="请输入手机号" required autocomplete="tel" />
               </label>
 
               <label>
                 <span>密码</span>
-                <input name="password" type="password" placeholder="请输入登录密码" required />
+                <div class="password-field">
+                  <input name="password" type="password" placeholder="请输入登录密码" required autocomplete="current-password" />
+                  <button class="password-toggle" type="button" aria-label="显示密码" data-password-toggle></button>
+                </div>
               </label>
 
               <div class="auth-helper">已注册账号可直接登录。</div>
@@ -202,12 +400,42 @@
             </div>
           </div>
           <nav class="sidebar-nav">
-            <button class="sidebar-item" data-tab="home"><span class="sidebar-item-icon">首</span><span class="sidebar-item-label">首页</span></button>
-            <button class="sidebar-item is-active" data-tab="brands"><span class="sidebar-item-icon">品</span><span class="sidebar-item-label">品牌档案</span></button>
-            <button class="sidebar-item" data-tab="trends"><span class="sidebar-item-icon">趋</span><span class="sidebar-item-label">趋势分析</span></button>
-            <button class="sidebar-item" data-tab="ideas"><span class="sidebar-item-icon">选</span><span class="sidebar-item-label">内容选题</span></button>
-            <button class="sidebar-item" data-tab="excellent"><span class="sidebar-item-icon">优</span><span class="sidebar-item-label">优秀内容</span></button>
-            <button class="sidebar-item" data-tab="history"><span class="sidebar-item-icon">历</span><span class="sidebar-item-label">历史生成</span></button>
+            <button class="sidebar-item" data-tab="home" data-tooltip="首页" type="button">
+              <span class="sidebar-item-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              </span>
+              <span class="sidebar-item-label">首页</span>
+            </button>
+            <button class="sidebar-item is-active" data-tab="brands" data-tooltip="品牌档案" type="button">
+              <span class="sidebar-item-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+              </span>
+              <span class="sidebar-item-label">品牌档案</span>
+            </button>
+            <button class="sidebar-item" data-tab="trends" data-tooltip="趋势分析" type="button">
+              <span class="sidebar-item-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+              </span>
+              <span class="sidebar-item-label">趋势分析</span>
+            </button>
+            <button class="sidebar-item" data-tab="ideas" data-tooltip="内容选题" type="button">
+              <span class="sidebar-item-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>
+              </span>
+              <span class="sidebar-item-label">内容选题</span>
+            </button>
+            <button class="sidebar-item" data-tab="excellent" data-tooltip="优秀内容" type="button">
+              <span class="sidebar-item-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              </span>
+              <span class="sidebar-item-label">优秀内容</span>
+            </button>
+            <button class="sidebar-item" data-tab="history" data-tooltip="历史生成" type="button">
+              <span class="sidebar-item-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>
+              </span>
+              <span class="sidebar-item-label">历史生成</span>
+            </button>
           </nav>
         </div>
 
@@ -223,11 +451,15 @@
               <div class="user-email" id="userPhone">未登录</div>
             </div>
           </button>
-          <button class="logout-btn" id="logoutButton" type="button">退出登录</button>
         </div>
       </aside>
+      <div class="sidebar-drawer-backdrop" id="sidebarDrawerBackdrop" aria-hidden="true"></div>
 
       <main class="content-area">
+        <button class="mobile-menu-btn" id="mobileMenuBtn" type="button" aria-label="打开导航菜单">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+
         <section class="tab-panel" data-tab-panel="home">
           <div class="home-shell">
             <h1 class="panel-title">RedBase</h1>
@@ -256,7 +488,7 @@
           <header class="panel-header">
             <div>
               <div class="panel-icon-title">
-                <span class="panel-icon">⌘</span>
+                <span class="panel-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></span>
                 <h1 class="panel-title">品牌档案</h1>
               </div>
               <p class="panel-subtitle">管理你的品牌信息，为 AI 分析提供输入</p>
@@ -273,8 +505,10 @@
           <header class="panel-header">
             <div>
               <div class="panel-icon-title">
-                <span class="panel-icon panel-icon-orange">↗</span>
-                <h1 class="panel-title">热点趋势分析</h1>
+                <span class="panel-icon panel-icon-orange" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                </span>
+                <h1 class="panel-title">趋势分析</h1>
               </div>
               <p class="panel-subtitle">选择品牌，AI 分析全网十大热点趋势</p>
             </div>
@@ -283,27 +517,28 @@
           <div class="brand-chip-row" id="trendBrandChips"></div>
           <div class="trend-mode-row" id="trendModeTabs"></div>
 
+          <div class="trend-config-bar">
+            <label class="xhs-category-control">
+              <span>小红书内容类目</span>
+              <select id="xhsCategorySelect" disabled>
+                <option value="">全部内容类目</option>
+              </select>
+              <small id="xhsCategoryStatus">全部内容类目</small>
+            </label>
+
+            <button class="primary-btn cost-button" id="runTrendAnalysis" type="button">
+                <span>生成热点话题</span>
+                <small>消耗 1 积分</small>
+              </button>
+
+            <button class="secondary-btn small-btn" id="trendHistoryToggle" type="button" aria-expanded="false" aria-controls="trendHistoryPanel">历史分析</button>
+          </div>
+
+          <div class="trend-history-panel" id="trendHistoryPanel" hidden>
+            <div id="historyList"></div>
+          </div>
+
           <div class="trend-screen">
-            <div class="trend-left-panel">
-              <label class="xhs-category-control">
-                <span>小红书内容类目</span>
-                <select id="xhsCategorySelect" disabled>
-                  <option value="">全部内容类目</option>
-                </select>
-                <small id="xhsCategoryStatus">全部内容类目</small>
-              </label>
-
-              <button class="primary-btn wide-btn cost-button" id="runTrendAnalysis" type="button">
-                  <span>生成小红书热点话题</span>
-                  <small>消耗 1 积分</small>
-                </button>
-
-              <section class="history-block">
-                <h3>历史分析</h3>
-                <div id="historyList"></div>
-              </section>
-            </div>
-
             <div class="trend-right-panel">
               <div class="analysis-tip" id="analysisSummary"></div>
               <div class="trend-cards" id="trendList"></div>
@@ -315,7 +550,7 @@
           <header class="panel-header">
             <div>
               <div class="panel-icon-title">
-                <span class="panel-icon panel-icon-green">◌</span>
+                <span class="panel-icon panel-icon-green" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg></span>
                 <h1 class="panel-title">内容选题</h1>
               </div>
               <p class="panel-subtitle">结合品牌资产和热点趋势，生成更适合品牌的小红书内容</p>
@@ -348,7 +583,7 @@
           <header class="panel-header excellent-panel-header">
             <div>
               <div class="panel-icon-title">
-                <span class="panel-icon excellent-panel-icon">优</span>
+                <span class="panel-icon excellent-panel-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span>
                 <h1 class="panel-title">优秀内容</h1>
               </div>
               <p class="panel-subtitle">近7日高阅读图文榜单，支持小红书热门与电商热门，可一键仿图文。</p>
@@ -389,7 +624,7 @@
           <header class="panel-header">
             <div>
               <div class="panel-icon-title">
-                <span class="panel-icon">◍</span>
+                <span class="panel-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg></span>
                 <h1 class="panel-title">历史生成</h1>
               </div>
               <p class="panel-subtitle">查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。</p>
@@ -444,7 +679,7 @@
             <h2 id="accountCenterTitle">账号信息</h2>
             <p>查看当前账号、套餐和到期状态。</p>
           </div>
-          <button class="modal-close" id="closeAccountCenterModal" type="button">×</button>
+          <button class="modal-close" id="closeAccountCenterModal" type="button" aria-label="关闭账号弹窗">×</button>
         </div>
 
         <div class="account-summary-grid">
@@ -481,6 +716,10 @@
           <p class="business-credit-note account-business-credit-note">两个版本均为每月 1000 积分；积分到期自动刷新，不会结转至下个月。</p>
           <p class="account-business-contact">联系专属客服获取优惠价格</p>
         </section>
+
+        <div class="account-logout-section">
+          <button class="danger-btn" id="logoutButton" type="button">退出登录</button>
+        </div>
       </div>
     </div>
 
@@ -665,6 +904,6 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260723-excellent-remix-v3"></script>
+    <script type="module" src="./app.js?v=20260723-ui-refresh-v1"></script>
   </body>
 </html>
