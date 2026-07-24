@@ -24,6 +24,14 @@ npm run smoke:api
 - Disposable benchmark output belongs in ignored `outputs/`; verification receipts belong in ignored `.verification/` and `artifacts/verification/`.
 - Preserve unrelated worktree changes. Do not commit, push, deploy, or enable hooks/CI without explicit user instruction.
 
+## Branch and server deployment
+
+- `master` is the canonical production branch. New feature branches must start from an up-to-date `master`.
+- The production checkout at `/home/red/work/moneyboost/redbase` must remain on `master`; do not deploy feature, rescue, or UI experiment branches.
+- The server deploy key is intentionally read-only. Push commits from an authorized local development machine, never from the server.
+- Before a server update, require a clean `git status --short`, then use `git switch master`, `git pull --ff-only origin master`, and `pm2 restart redbase`.
+- Do not use force-push, destructive reset, or branch rewriting as part of the deployment flow.
+
 ## Verification contract
 
 - `verification-policy.json` defines change risk and required verification lanes.

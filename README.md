@@ -142,6 +142,51 @@ http://127.0.0.1:3013/api/health
 http://127.0.0.1:3013
 ```
 
+## 服务器部署：固定跟随 master
+
+生产服务器目录为 `/home/red/work/moneyboost/redbase`，固定检出并拉取 `master`。服务器使用只读部署 Key 是预期配置：只允许 `fetch/pull`，提交和推送必须在有写权限的本地开发机完成。
+
+每次更新服务器前先确认工作区干净：
+
+```bash
+cd /home/red/work/moneyboost/redbase
+git status --short
+```
+
+如果命令有输出，先停止更新并处理服务器上的本地改动。工作区干净时执行：
+
+```bash
+git fetch origin
+git switch master
+git pull --ff-only origin master
+pm2 restart redbase
+```
+
+更新后确认服务器确实运行主干：
+
+```bash
+git branch --show-current
+git log -2 --oneline
+pm2 status redbase
+```
+
+日常更新只使用以下命令，不在服务器切换或部署功能分支，也不从服务器向远程仓库推送：
+
+```bash
+cd /home/red/work/moneyboost/redbase
+git switch master
+git pull --ff-only origin master
+pm2 restart redbase
+```
+
+本地开发新功能时，先更新主干，再从主干创建功能分支。测试通过后将功能分支合入并推送 `master`，服务器随后按上述流程拉取：
+
+```bash
+git switch master
+git pull --ff-only origin master
+git switch -c codex/<feature-name>
+```
+
 ## 校验
 
 ```bash
