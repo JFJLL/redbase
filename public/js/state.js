@@ -109,7 +109,9 @@ export const state = {
   editingIdeas: {},
   styleReferences: {},
   aspectRatios: {},
-  openAspectRatioKey: "",
+  creativeStylePresets: {},
+  wechatTemplates: {},
+  openCreativeSettingsKey: "",
   sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
   resumingImageTasks: false,
 };

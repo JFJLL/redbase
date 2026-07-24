@@ -28,6 +28,8 @@ const {
 } = require("../db/repositories/product-image-repository");
 const { findImageJobByOwner, upsertImageJob } = require("../db/repositories/image-job-repository");
 const {
+  applyWechatCreativeDirection,
+  applyXhsCreativeDirection,
   buildImageConceptMetadataFromIdea,
   buildXhsCarouselPackFromIdea,
   buildWechatLongImagePackFromIdea,
@@ -1071,6 +1073,12 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return true;
       }
     }
+    wechatPack = applyWechatCreativeDirection(wechatPack, {
+      template: payload.wechatTemplate,
+      brand,
+      idea,
+      aspectRatio,
+    });
     console.log("[image-job] creating wechat image job", {
       elapsedMs: Date.now() - requestStartedAt,
       userId: user.id,
@@ -1096,6 +1104,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
           logoUsed: Boolean(logoImage),
+          wechatTemplate: wechatPack.template,
           aspectRatio,
         },
       }),
@@ -1110,6 +1119,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           aspectRatio,
           metadata: {
             ...wechatPack,
+            platform: "wechat",
             aspectRatio,
             visualDirection: wechatPack.visualDirection,
             style: wechatPack.style,
@@ -1630,6 +1640,14 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
     carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
+    carouselPack = applyXhsCreativeDirection(carouselPack, {
+      stylePreset:
+        payload.visualStylePreset ||
+        (carouselPack.remixBrief || carouselPack.sourceTemplate ? "source" : "auto"),
+      brand,
+      idea,
+      aspectRatio,
+    });
     json(res, 200, {
       carouselPack: sanitizePayloadForClient(carouselPack),
       user: sanitizeUser(user),
@@ -1680,6 +1698,12 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       }
     }
     carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
+    carouselPack = applyXhsCreativeDirection(carouselPack, {
+      stylePreset: payload.visualStylePreset,
+      brand,
+      idea,
+      aspectRatio,
+    });
     const charged = await runChargedAiWork({
       user,
       cost: CREDIT_COSTS.xhsCarousel,
@@ -1695,6 +1719,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
           logoUsed: Boolean(logoImage),
+          visualStylePreset: carouselPack.creativeStyle,
           aspectRatio,
         },
       }),
@@ -1722,9 +1747,12 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               aspectRatio,
               metadata: {
                 title: `${carouselPack.title} ${slide.pageLabel}`,
-                visualDirection: slide.title,
+                visualDirection: slide.visualDirection || slide.title,
                 style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
-                composition: `小红书组图${slideIndex + 1}/4，比例${aspectRatio}，标题清晰，画面有连续组图统一性`,
+                composition:
+                  slide.composition ||
+                  `小红书组图${slideIndex + 1}/4，比例${aspectRatio}，标题清晰，画面有连续组图统一性`,
+                creativeDirection: slide.creativeDirection,
                 aspectRatio,
                 prompt: slide.prompt,
                 slideIndex,
@@ -1809,23 +1837,31 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const aspectRatio = requireAspectRatio({ aspectRatio: payload.aspectRatio || incomingPack.aspectRatio }, "xhsCarousel", res, badRequest);
     if (!aspectRatio) return true;
     const incomingSlides = Array.isArray(incomingPack.slides) ? incomingPack.slides : [];
-    let defaultPack = null;
-    if (!incomingSlides[slideIndex]?.prompt && !payload.slide?.prompt) {
+    let defaultPack;
+    try {
+      defaultPack = buildXhsCarouselPackFromIdea(idea);
+    } catch (error) {
       try {
-        defaultPack = buildXhsCarouselPackFromIdea(idea);
-      } catch (error) {
-        try {
-          defaultPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, ideaIndex));
-        } catch (fillError) {
-          contentAssetsUnavailable(res, fillError);
-          return true;
-        }
+        defaultPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, ideaIndex));
+      } catch (fillError) {
+        contentAssetsUnavailable(res, fillError);
+        return true;
       }
     }
     defaultPack = applyAspectRatioToCarouselPack(
-      defaultPack || { title: "", publishTitle: "", publishCaption: "", caption: "", slides: [] },
+      {
+        ...defaultPack,
+        ...(incomingPack.remixBrief ? { remixBrief: incomingPack.remixBrief } : {}),
+        ...(incomingPack.sourceTemplate ? { sourceTemplate: incomingPack.sourceTemplate } : {}),
+      },
       aspectRatio,
     );
+    defaultPack = applyXhsCreativeDirection(defaultPack, {
+      stylePreset: payload.visualStylePreset || incomingPack.creativeStyle,
+      brand,
+      idea,
+      aspectRatio,
+    });
     const slide = normalizeXhsCarouselSlideForJob(payload.slide || incomingSlides[slideIndex], defaultPack.slides[slideIndex], slideIndex);
     if (!slide.prompt) {
       badRequest(res, "当前页缺少服务端生图提示词，请重新生成组图方案后再试。");
@@ -1880,6 +1916,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             visualDirection: slide.visualDirection,
             style: slide.style,
             composition: slide.composition,
+            creativeDirection: defaultPack.slides[slideIndex]?.creativeDirection,
             prompt: slide.prompt,
             slideIndex,
             pageLabel: slide.pageLabel,

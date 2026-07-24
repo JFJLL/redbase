@@ -2268,6 +2268,15 @@ body {
   gap: 20px;
 }
 
+.trend-right-panel {
+  max-height: calc(100vh - 250px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 8px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .xhs-category-control {
   border-color: rgba(28, 18, 18, 0.08);
   border-radius: 4px;
@@ -2951,6 +2960,65 @@ textarea {
     linear-gradient(135deg, rgba(255, 250, 249, 0.96), rgba(255, 248, 245, 0.88));
 }
 
+.idea-creative-settings {
+  margin-top: 12px;
+}
+
+.idea-creative-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 11px;
+}
+
+.idea-creative-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(50, 37, 41, 0.09);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.idea-creative-field > span,
+.idea-creative-ratio-heading strong {
+  color: #46383d;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.idea-creative-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 34px 0 11px;
+  border: 1px solid rgba(50, 37, 41, 0.13);
+  border-radius: 9px;
+  background: #fff;
+  color: #30272a;
+  font-weight: 800;
+}
+
+.idea-creative-field small,
+.idea-creative-ratio-heading small {
+  color: #8a7c80;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.idea-creative-ratio {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(229, 72, 77, 0.09);
+}
+
+.idea-creative-ratio-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .idea-aspect-ratio {
   position: relative;
   margin-top: 4px;
@@ -3360,6 +3428,7 @@ textarea {
     border-radius: 14px;
   }
 
+  .idea-creative-grid { grid-template-columns: 1fr; }
   .idea-aspect-ratio-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
   .idea-aspect-ratio-trigger { align-items: flex-start; }
   .idea-aspect-ratio-copy small { max-width: 185px; }
@@ -3931,6 +4000,12 @@ textarea {
 
   .trend-screen {
     grid-template-columns: 1fr;
+  }
+
+  .trend-right-panel {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .brand-card,

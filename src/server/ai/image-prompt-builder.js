@@ -254,6 +254,39 @@ function inferPlatformFromMetadata(meta) {
   return "xiaohongshu";
 }
 
+function buildCreativeDirectionLayer(rawDirection) {
+  if (!rawDirection || typeof rawDirection !== "object" || Array.isArray(rawDirection)) return "";
+  const type = compactText(rawDirection.type, 20);
+  const label = compactText(rawDirection.label, 40);
+  const description = compactText(rawDirection.description, 100);
+  const style = compactText(rawDirection.style, 180);
+  const execution = compactText(rawDirection.execution, 260);
+  const layout = compactText(rawDirection.layout || rawDirection.structure, 260);
+  const avoid = compactText(rawDirection.avoid, 220);
+  const title = compactText(rawDirection.title, 100);
+  const aspectRatio = compactText(rawDirection.aspectRatio, 16);
+  const outline = Array.isArray(rawDirection.outline)
+    ? rawDirection.outline.map((item) => compactText(item, 100)).filter(Boolean).slice(0, 5)
+    : [];
+  const lines = [
+    "【创作设置】",
+    label ? `所选路线：${label}${description ? `（${description}）` : ""}` : "",
+    style ? `视觉风格：${style}` : "",
+    execution ? `光线、色彩、材质与镜头：${execution}` : "",
+    layout ? `${type === "wechat" ? "阅读结构" : "构图与信息层级"}：${layout}` : "",
+    title ? `本页/本图标题：${title}` : "",
+    type === "xhs" && rawDirection.pageRole
+      ? `本页角色：${compactText(rawDirection.pageRole, 40)}——${compactText(rawDirection.pageGoal, 160)}`
+      : "",
+    type === "xhs" && rawDirection.density ? `信息密度：${compactText(rawDirection.density, 120)}` : "",
+    type === "xhs" && rawDirection.copy ? `核心表达：${compactText(rawDirection.copy, 220)}` : "",
+    outline.length ? `内容大纲：${outline.map((item, index) => `${index + 1}. ${item}`).join("；")}` : "",
+    aspectRatio ? `画面比例：${aspectRatio}` : "",
+    avoid ? `该路线额外避免：${avoid}` : "",
+  ].filter(Boolean);
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
 /**
  * Build a complete five-layer image prompt.
  *
@@ -325,7 +358,8 @@ function buildImagePrompt(input = {}) {
   ];
   const layer5 = [`【负面约束】`, `不要：${negatives.join("、")}`].join("\n");
 
-  const basePrompt = [layer1, layer2, layer3, layer4, layer5].join("\n\n");
+  const creativeLayer = buildCreativeDirectionLayer(input.metadata?.creativeDirection);
+  const basePrompt = [layer1, layer2, layer3, layer4, creativeLayer, layer5].filter(Boolean).join("\n\n");
   const remixLayer = buildRemixBriefLayer(input.remixBrief || input.metadata?.remixBrief);
   return remixLayer ? `${basePrompt}\n\n${remixLayer}` : basePrompt;
 }
@@ -414,6 +448,7 @@ module.exports = {
   SCENE_CORE,
   NEGATIVE_CORE,
   buildImagePrompt,
+  buildCreativeDirectionLayer,
   buildRemixBriefLayer,
   resolveImagePromptContext,
   shouldSkipStructuredPrompt,
