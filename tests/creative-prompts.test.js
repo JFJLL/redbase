@@ -169,6 +169,18 @@ test("frontend wires the collapsed creative settings into generation requests an
   assert.match(appSource, /visualStylePreset:\s*getIdeaCreativeStyleSelection\(ideaIndex\)/);
   assert.match(appSource, /wechatTemplate:\s*getIdeaWechatTemplateSelection\(ideaIndex\)/);
   assert.match(styleSource, /\.trend-right-panel\s*\{[^}]*overflow-y:\s*auto/s);
+  assert.match(
+    styleSource,
+    /html:has\(\.page-dashboard\.is-active \.tab-panel\[data-tab-panel="trends"\]\.is-active\)[\s\S]*?overflow:\s*hidden/s,
+  );
+  assert.match(
+    styleSource,
+    /\.tab-panel\[data-tab-panel="trends"\]\.is-active\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s,
+  );
+  assert.match(
+    styleSource,
+    /\.tab-panel\[data-tab-panel="trends"\]\.is-active \.trend-right-panel\s*\{[^}]*height:\s*100%[^}]*max-height:\s*none/s,
+  );
   assert.match(styleSource, /@media \(max-width:\s*760px\)[\s\S]*?\.trend-right-panel\s*\{[^}]*overflow:\s*visible/s);
   assert.match(styleSource, /@media \(max-width:\s*760px\)[\s\S]*?\.idea-creative-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
 });
