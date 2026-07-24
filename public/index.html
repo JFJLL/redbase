@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20260724-ui-restore" />
+    <link rel="stylesheet" href="./styles.css?v=20260724-personal-ip-original-ui" />
   </head>
   <body>
     <div class="page page-landing is-active" data-page="landing">
@@ -204,6 +204,7 @@
           <nav class="sidebar-nav">
             <button class="sidebar-item" data-tab="home"><span class="sidebar-item-icon">首</span><span class="sidebar-item-label">首页</span></button>
             <button class="sidebar-item is-active" data-tab="brands"><span class="sidebar-item-icon">品</span><span class="sidebar-item-label">品牌档案</span></button>
+            <button class="sidebar-item" data-tab="personal"><span class="sidebar-item-icon">人</span><span class="sidebar-item-label">个人 IP</span></button>
             <button class="sidebar-item" data-tab="trends"><span class="sidebar-item-icon">趋</span><span class="sidebar-item-label">趋势分析</span></button>
             <button class="sidebar-item" data-tab="ideas"><span class="sidebar-item-icon">选</span><span class="sidebar-item-label">内容选题</span></button>
             <button class="sidebar-item" data-tab="excellent"><span class="sidebar-item-icon">优</span><span class="sidebar-item-label">优秀内容</span></button>
@@ -231,12 +232,17 @@
         <section class="tab-panel" data-tab-panel="home">
           <div class="home-shell">
             <h1 class="panel-title">RedBase</h1>
-            <p class="panel-subtitle">围绕品牌资产、热点分析和内容选题打造一站式小红书运营工作台。</p>
+            <p class="panel-subtitle">围绕品牌资产、个人 IP、热点分析和内容选题打造一站式小红书运营工作台。</p>
             <div class="home-card-grid">
               <article class="home-card">
                 <h3>品牌档案</h3>
                 <p>沉淀品牌定位、产品卖点、目标受众和运营目标，为 AI 建立清晰上下文。</p>
                 <button class="inline-link" data-tab-jump="brands">去管理品牌</button>
+              </article>
+              <article class="home-card">
+                <h3>个人 IP</h3>
+                <p>沉淀人设定位、内容支柱和表达风格，让 AI 更像你本人。</p>
+                <button class="inline-link" data-tab-jump="personal">去管理个人 IP</button>
               </article>
               <article class="home-card">
                 <h3>趋势分析</h3>
@@ -269,6 +275,25 @@
           <div class="brand-list" id="brandList"></div>
         </section>
 
+        <section class="tab-panel" data-tab-panel="personal">
+          <header class="panel-header personal-panel-header">
+            <div>
+              <div class="panel-icon-title">
+                <span class="panel-icon panel-icon-personal" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/><path d="M18 8.5l1 1 2-2"/></svg>
+                </span>
+                <h1 class="panel-title">个人 IP</h1>
+              </div>
+              <p class="panel-subtitle">管理人设定位、内容支柱和表达风格，为 AI 建立稳定的个人表达。</p>
+            </div>
+            <div class="header-actions">
+              <button class="primary-btn small-btn" id="openPersonalModal" type="button">新增个人 IP</button>
+            </div>
+          </header>
+
+          <div class="brand-list personal-profile-list" id="personalProfileList"></div>
+        </section>
+
         <section class="tab-panel" data-tab-panel="trends">
           <header class="panel-header">
             <div>
@@ -276,7 +301,7 @@
                 <span class="panel-icon panel-icon-orange">↗</span>
                 <h1 class="panel-title">热点趋势分析</h1>
               </div>
-              <p class="panel-subtitle">选择品牌，AI 分析全网十大热点趋势</p>
+              <p class="panel-subtitle">选择品牌或个人 IP，AI 分析全网十大热点趋势</p>
             </div>
           </header>
 
@@ -318,7 +343,7 @@
                 <span class="panel-icon panel-icon-green">◌</span>
                 <h1 class="panel-title">内容选题</h1>
               </div>
-              <p class="panel-subtitle">结合品牌资产和热点趋势，生成更适合品牌的小红书内容</p>
+              <p class="panel-subtitle">结合主体档案和热点趋势，生成更匹配品牌或个人 IP 的小红书内容</p>
             </div>
           </header>
 
@@ -496,13 +521,14 @@
         </div>
 
         <form class="brand-form" id="brandForm">
+          <input type="hidden" name="profileType" value="brand" />
           <div class="form-row">
             <label>
-              <span>品牌名称</span>
+              <span id="profileNameLabel">品牌名称</span>
               <input name="name" placeholder="请输入品牌名称" required />
             </label>
             <label>
-              <span>行业分类</span>
+              <span id="profileIndustryLabel">行业分类</span>
               <input name="industry" placeholder="如：美妆、食品、科技" required />
             </label>
           </div>
@@ -513,17 +539,28 @@
           </label>
 
           <label>
-            <span>品牌介绍</span>
+            <span id="profileDescriptionLabel">品牌介绍</span>
             <textarea name="description" rows="4" placeholder="描述品牌定位、品牌故事、核心价值等" required></textarea>
           </label>
 
-          <label>
-            <span>产品介绍</span>
+          <label id="profileProductField">
+            <span id="profileProductLabel">产品介绍</span>
             <textarea name="product" rows="4" placeholder="描述主要产品/服务、卖点、使用场景等" required></textarea>
           </label>
 
-          <label>
-            <span>品牌资料库</span>
+          <div class="personal-profile-fields is-hidden" id="personalProfileFields">
+            <label>
+              <span>内容支柱</span>
+              <input name="contentPillars" placeholder="用逗号分隔，如：职场成长,效率方法,真实创业" />
+            </label>
+            <label>
+              <span>个人表达风格</span>
+              <textarea name="personaStyle" rows="3" placeholder="如：真诚直接、讲具体过程、不端着，常用第一人称复盘。"></textarea>
+            </label>
+          </div>
+
+          <label id="profileKnowledgeField">
+            <span id="profileKnowledgeLabel">品牌资料库</span>
             <textarea
               name="knowledgeBase"
               rows="4"
@@ -532,7 +569,7 @@
           </label>
 
           <div class="brand-logo-field">
-            <div class="field-label">品牌 Logo</div>
+            <div class="field-label" id="profileLogoLabel">品牌 Logo</div>
             <label class="brand-logo-upload-button">
               <input id="brandLogoInput" type="file" accept="image/*" />
               <span id="brandLogoUploadText">选择 Logo 图片</span>
@@ -541,7 +578,7 @@
           </div>
 
           <label>
-            <span>运营目标</span>
+            <span id="profileGoalLabel">运营目标</span>
             <textarea name="goal" rows="4" placeholder="描述小红书账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等" required></textarea>
           </label>
 
@@ -665,6 +702,6 @@
       </div>
     </div>
 
-    <script type="module" src="./app.js?v=20260724-ui-restore"></script>
+    <script type="module" src="./app.js?v=20260724-personal-ip-original-ui"></script>
   </body>
 </html>

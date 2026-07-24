@@ -81,6 +81,7 @@ function canRequestSmartDirections(state) {
 
 export function renderSmartDirectionsHtml(state, helpers) {
   const { escapeHtml } = helpers;
+  const subjectLabel = helpers.subjectLabel || "品牌或个人 IP";
   const directions = state.smartDirections || [];
   const canGenerate = canRequestSmartDirections(state);
   const generateLabel = directions.length ? "重新生成内容方向" : "生成内容方向";
@@ -91,12 +92,12 @@ export function renderSmartDirectionsHtml(state, helpers) {
       }>${generateLabel}</button>
       ${
         !state.brandId
-          ? `<p class="excellent-remix-hint">请先选择品牌，再生成内容方向。</p>`
+          ? `<p class="excellent-remix-hint">请先选择品牌或个人 IP，再生成内容方向。</p>`
           : state.loadingBrand
-            ? `<p class="excellent-remix-hint">品牌详情加载中，请稍候。</p>`
+            ? `<p class="excellent-remix-hint">${escapeHtml(subjectLabel)}详情加载中，请稍候。</p>`
             : state.analysisStatus === "loading" || state.analysisStatus === "idle"
               ? `<p class="excellent-remix-hint">请等待参考分析完成后再生成内容方向。</p>`
-              : `<p class="excellent-remix-hint">根据参考笔记方法与品牌信息，手动生成 3 个内容方向。</p>`
+              : `<p class="excellent-remix-hint">根据参考笔记方法与${escapeHtml(subjectLabel)}档案，手动生成 3 个内容方向。</p>`
       }
     </div>
   `;
@@ -271,7 +272,7 @@ export function renderFusionPlanHtml(state, brandReady, helpers) {
                 )}（未进行图片理解，不代表参考笔记真实视觉特征）</p></div>`
               : ""
           }
-          <div><span>品牌如何进入</span><p>${escapeHtml(plan.brandIntegration || "")}</p></div>
+          <div><span>${helpers.subjectLabel === "个人 IP" ? "个人表达如何进入" : "品牌如何进入"}</span><p>${escapeHtml(plan.brandIntegration || "")}</p></div>
           <div class="excellent-fusion-slides">
             <span>四页规划</span>
             <ol>
@@ -299,6 +300,16 @@ export function renderFusionPlanHtml(state, brandReady, helpers) {
 
 export function renderAssetsHtml(brand, state, helpers) {
   const { escapeHtml, authenticatedImageSrc } = helpers;
+  if (brand?.profileType === "personal") {
+    return `
+      <section class="excellent-remix-section">
+        <h3>6. 个人 IP 视觉说明</h3>
+        <p class="excellent-remix-hint excellent-asset-intro">
+          默认根据个人档案、表达风格和真实素材原创生成。个人头像只用于识别档案，不会当作品牌 Logo 植入画面；当前模式不叠加产品素材。
+        </p>
+      </section>
+    `;
+  }
   const assets = resolveAssetFlags(state);
   const hasLogo = Boolean(brand?.logo);
   const selectedCount = assets.productImageIds.length;
@@ -362,15 +373,15 @@ export function renderExcellentRemixBodyHtml({
   return `
     ${renderReferenceCardHtml(item, state, helpers)}
     <section class="excellent-remix-section">
-      <h3>2. 选择品牌</h3>
+      <h3>2. 选择内容主体</h3>
       <label class="excellent-remix-brand-field">
-        <span>品牌</span>
+        <span>品牌 / 个人 IP</span>
         <select class="excellent-remix-brand-select" data-remix-field="brand">
           ${(helpers.brands || [])
             .map(
               (entry) =>
                 `<option value="${entry.id}" ${Number(entry.id) === Number(state.brandId) ? "selected" : ""}>${helpers.escapeHtml(
-                  entry.name,
+                  `${entry.name}${entry.profileType === "personal" ? " · 个人 IP" : ""}`,
                 )}</option>`,
             )
             .join("")}

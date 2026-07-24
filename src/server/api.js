@@ -3,6 +3,7 @@ const { handleHealthRoutes } = require("./api/health-routes");
 const { handleAuthRoutes } = require("./api/auth-routes");
 const { handleAdminRoutes } = require("./api/admin-routes");
 const { handleHistoryRoutes } = require("./api/history-routes");
+const { handlePersonalIpRoutes } = require("./api/personal-ip-routes");
 const { handleProductImageRoutes } = require("./api/product-image-routes");
 const { handleBrandRoutes } = require("./api/brand-routes");
 const { handleTrendRoutes } = require("./api/trend-routes");
@@ -14,6 +15,7 @@ const routeHandlers = [
   handleAuthRoutes,
   handleAdminRoutes,
   handleHistoryRoutes,
+  handlePersonalIpRoutes,
   handleProductImageRoutes,
   handleBrandRoutes,
   handleTrendRoutes,

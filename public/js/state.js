@@ -4,6 +4,10 @@ export const state = {
   currentPage: "landing",
   currentTab: "brands",
   brands: [],
+  creatorMaterials: [],
+  creatorMaterialsStatus: "idle",
+  creatorMaterialsError: "",
+  selectedPersonalProfileId: null,
   generationHistory: [],
   generationHistoryFilters: {
     q: "",

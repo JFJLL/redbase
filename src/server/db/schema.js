@@ -56,7 +56,25 @@ function initializeDatabaseSchema() {
       knowledge_base TEXT NOT NULL,
       logo_json TEXT NOT NULL DEFAULT '{}',
       asset_tags_json TEXT NOT NULL DEFAULT '[]',
+      profile_type TEXT NOT NULL DEFAULT 'brand',
+      content_pillars_json TEXT NOT NULL DEFAULT '[]',
+      persona_style TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS creator_materials (
+      id INTEGER PRIMARY KEY,
+      owner_user_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'idea',
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      source_date TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS analyses (
@@ -268,6 +286,8 @@ function ensureDatabaseIndexes() {
       WHERE status = 'reserved';
     CREATE INDEX IF NOT EXISTS idx_excellent_content_cache_expires
       ON excellent_content_cache(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_creator_materials_owner_brand
+      ON creator_materials(owner_user_id, brand_id, updated_at);
   `);
 }
 
@@ -321,6 +341,35 @@ function ensureSchemaUpgrades() {
   if (tableExists("brands") && !hasColumn("brands", "logo_json")) {
     db.exec("ALTER TABLE brands ADD COLUMN logo_json TEXT NOT NULL DEFAULT '{}'");
   }
+
+  if (tableExists("brands")) {
+    if (!hasColumn("brands", "profile_type")) {
+      db.exec("ALTER TABLE brands ADD COLUMN profile_type TEXT NOT NULL DEFAULT 'brand'");
+    }
+    if (!hasColumn("brands", "content_pillars_json")) {
+      db.exec("ALTER TABLE brands ADD COLUMN content_pillars_json TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!hasColumn("brands", "persona_style")) {
+      db.exec("ALTER TABLE brands ADD COLUMN persona_style TEXT NOT NULL DEFAULT ''");
+    }
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS creator_materials (
+      id INTEGER PRIMARY KEY,
+      owner_user_id INTEGER NOT NULL,
+      brand_id INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'idea',
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      source_date TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+    );
+  `);
 
   if (tableExists("product_images")) {
     if (!hasColumn("product_images", "brand_id")) {
@@ -489,6 +538,9 @@ function hasCurrentStoreSchema() {
     tableExists("trends") &&
     tableExists("ideas") &&
     hasColumn("brands", "asset_tags_json") &&
+    hasColumn("brands", "profile_type") &&
+    hasColumn("brands", "content_pillars_json") &&
+    hasColumn("brands", "persona_style") &&
     hasColumn("trends", "row_id") &&
     hasColumn("trends", "stable_key") &&
     hasColumn("trends", "scope") &&
@@ -509,7 +561,8 @@ function hasCurrentStoreSchema() {
     tableExists("credit_events") &&
     tableExists("trend_analysis_requests") &&
     tableExists("excellent_content_cache") &&
-    tableExists("excellent_content_remix_analysis_cache")
+    tableExists("excellent_content_remix_analysis_cache") &&
+    tableExists("creator_materials")
   );
 }
 

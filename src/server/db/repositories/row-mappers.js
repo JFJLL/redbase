@@ -61,6 +61,11 @@ function mapBrandRow(row) {
     knowledgeBase: row.knowledge_base,
     logo: normalizeBrandLogo(safeParseObject(row.logo_json)),
     assetTags: safeParseArray(row.asset_tags_json),
+    profileType: row.profile_type === "personal" ? "personal" : "brand",
+    contentPillars: safeParseArray(row.content_pillars_json),
+    personaStyle: row.persona_style || "",
+    materialCount: Number(row.material_count || 0),
+    materials: [],
     analyses: [],
     trends: [],
   };

@@ -10,6 +10,34 @@ const {
 } = require("../db/repositories/brand-repository");
 const { listGenerationsByOwner, deleteGenerationRows } = require("../db/repositories/generation-repository");
 
+function normalizeProfileType(value, fallback = "brand") {
+  if (value === "personal") return "personal";
+  return fallback === "personal" ? "personal" : "brand";
+}
+
+function normalizeContentPillars(value) {
+  const source = Array.isArray(value) ? value : String(value || "").split(/[\n,，]/);
+  return [...new Set(source.map((item) => String(item || "").trim().slice(0, 60)).filter(Boolean))].slice(0, 8);
+}
+
+function normalizeProfilePayload(payload, fallbackType = "brand") {
+  const profileType = normalizeProfileType(payload?.profileType, fallbackType);
+  return {
+    ...payload,
+    profileType,
+    product: String(payload?.product || "").trim(),
+    contentPillars: normalizeContentPillars(payload?.contentPillars),
+    personaStyle: String(payload?.personaStyle || "").trim().slice(0, 1000),
+  };
+}
+
+function findMissingProfileField(payload) {
+  const required = payload.profileType === "personal"
+    ? ["name", "industry", "audience", "description", "goal"]
+    : ["name", "industry", "audience", "description", "product", "goal"];
+  return required.find((key) => !String(payload[key] || "").trim());
+}
+
 async function handleBrandRoutes(context, req, res, pathname) {
   const {
     appConfig,
@@ -36,15 +64,15 @@ async function handleBrandRoutes(context, req, res, pathname) {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    const payload = await collectBody(req);
-    const required = ["name", "industry", "audience", "description", "product", "goal"];
-    const missing = required.find((key) => !payload[key]);
+    const payload = normalizeProfilePayload(await collectBody(req));
+    const missing = findMissingProfileField(payload);
     if (missing) {
       badRequest(res, `Missing field: ${missing}`);
       return true;
     }
 
     const assetTags = createBrandAssetTags(payload);
+    const subjectLabel = payload.profileType === "personal" ? "个人 IP" : "品牌";
     const profileSize = getTrendAnalysisBrandProfileSize({
       ...payload,
       knowledgeBase: payload.knowledgeBase || "",
@@ -53,7 +81,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
     if (profileSize.total > MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS) {
       badRequest(
         res,
-        `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品/服务或品牌资料库后再创建品牌档案。`,
+        `当前${subjectLabel}档案共 ${profileSize.total} 字，超过上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请精简档案内容后再创建。`,
       );
       return true;
     }
@@ -71,6 +99,10 @@ async function handleBrandRoutes(context, req, res, pathname) {
       knowledgeBase: payload.knowledgeBase || "",
       logo: null,
       assetTags,
+      profileType: payload.profileType,
+      contentPillars: payload.contentPillars,
+      personaStyle: payload.personaStyle,
+      materials: [],
       analyses: [],
       trends: [],
     };
@@ -78,11 +110,11 @@ async function handleBrandRoutes(context, req, res, pathname) {
       try {
         brand.logo = await saveBrandLogo(user, brand, {
           dataUrl: payload.logoDataUrl,
-          name: payload.logoName || "brand-logo",
+          name: payload.logoName || (payload.profileType === "personal" ? "personal-avatar" : "brand-logo"),
         });
       } catch (error) {
         if (error?.code === "PAYLOAD_TOO_LARGE") throw error;
-        badRequest(res, error.message || "品牌 Logo 上传失败");
+        badRequest(res, error.message || (payload.profileType === "personal" ? "个人头像上传失败" : "品牌 Logo 上传失败"));
         return true;
       }
     }
@@ -113,15 +145,16 @@ async function handleBrandRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const payload = await collectBody(req);
-    const required = ["name", "industry", "audience", "description", "product", "goal"];
-    const missing = required.find((key) => !payload[key]);
+    const payload = normalizeProfilePayload(await collectBody(req), brand.profileType);
+    payload.profileType = brand.profileType;
+    const missing = findMissingProfileField(payload);
     if (missing) {
       badRequest(res, `Missing field: ${missing}`);
       return true;
     }
 
     const assetTags = createBrandAssetTags(payload);
+    const subjectLabel = payload.profileType === "personal" ? "个人 IP" : "品牌";
     const profileSize = getTrendAnalysisBrandProfileSize({
       ...payload,
       knowledgeBase: payload.knowledgeBase || "",
@@ -130,7 +163,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
     if (profileSize.total > MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS) {
       badRequest(
         res,
-        `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品/服务或品牌资料库后再保存品牌档案。`,
+        `当前${subjectLabel}档案共 ${profileSize.total} 字，超过上限 ${MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS} 字。请精简档案内容后再保存。`,
       );
       return true;
     }
@@ -144,19 +177,21 @@ async function handleBrandRoutes(context, req, res, pathname) {
     brand.goal = payload.goal;
     brand.knowledgeBase = payload.knowledgeBase || "";
     brand.assetTags = assetTags;
+    brand.contentPillars = payload.contentPillars;
+    brand.personaStyle = payload.personaStyle;
 
     if (payload.logoDataUrl) {
       try {
         brand.logo = await saveBrandLogo(user, brand, {
           dataUrl: payload.logoDataUrl,
-          name: payload.logoName || "brand-logo",
+          name: payload.logoName || (payload.profileType === "personal" ? "personal-avatar" : "brand-logo"),
         });
         if (previousLogoPath) {
           await removeStoredFileIfExists(resolveStoredAssetPath(previousLogoPath));
         }
       } catch (error) {
         if (error?.code === "PAYLOAD_TOO_LARGE") throw error;
-        badRequest(res, error.message || "品牌 Logo 上传失败");
+        badRequest(res, error.message || (payload.profileType === "personal" ? "个人头像上传失败" : "品牌 Logo 上传失败"));
         return true;
       }
     }
@@ -207,7 +242,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
       const previousLogoPath = brand.logo?.storedPath || "";
       const nextLogo = await saveBrandLogo(user, brand, {
         dataUrl: payload.logoDataUrl || payload.dataUrl,
-        name: payload.logoName || payload.name || "brand-logo",
+        name: payload.logoName || payload.name || (brand.profileType === "personal" ? "personal-avatar" : "brand-logo"),
       });
       brand.logo = nextLogo;
       if (previousLogoPath) {
@@ -215,7 +250,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
       }
     } catch (error) {
       if (error?.code === "PAYLOAD_TOO_LARGE") throw error;
-      badRequest(res, error.message || "品牌 Logo 上传失败");
+      badRequest(res, error.message || (brand.profileType === "personal" ? "个人头像上传失败" : "品牌 Logo 上传失败"));
       return true;
     }
     const savedBrand = updateBrand(brand);
@@ -251,5 +286,8 @@ async function handleBrandRoutes(context, req, res, pathname) {
 }
 
 module.exports = {
+  normalizeContentPillars,
+  normalizeProfilePayload,
+  findMissingProfileField,
   handleBrandRoutes,
 };

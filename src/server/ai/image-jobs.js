@@ -358,6 +358,7 @@ async function createImageJob(
     productImages: referenceImages,
     logoImages,
     styleImages,
+    profileType: brand?.profileType,
   });
   const headers = {
     "Content-Type": "application/json",
@@ -680,7 +681,7 @@ function parseDataUrl(dataUrl) {
   };
 }
 
-function withImageReferencePrompt(metadata, { productImages, logoImages, styleImages }) {
+function withImageReferencePrompt(metadata, { productImages, logoImages, styleImages, profileType }) {
   const productCount = Array.isArray(productImages) ? productImages.length : 0;
   const logoCount = Array.isArray(logoImages) ? logoImages.length : 0;
   const styleCount = Array.isArray(styleImages) ? styleImages.length : 0;
@@ -694,7 +695,11 @@ function withImageReferencePrompt(metadata, { productImages, logoImages, styleIm
     );
   }
   if (logoCount) {
-    hints.push("请把输入的品牌 Logo 作为产品/品牌标识使用，保持 Logo 文字和图形清晰、比例正确；不要把 Logo 当成独立产品主体，也不要改写 Logo。");
+    hints.push(
+      profileType === "personal"
+        ? "输入图片是个人头像参考，只用于保持人物身份与外貌特征一致；不要把头像当成 Logo、贴纸或独立商品，不要复制证件照构图。"
+        : "请把输入的品牌 Logo 作为产品/品牌标识使用，保持 Logo 文字和图形清晰、比例正确；不要把 Logo 当成独立产品主体，也不要改写 Logo。",
+    );
   }
   if (styleCount) {
     hints.push("请参考输入的风格图来借鉴色调、光影、版式、材质和整体氛围，但不要直接复制风格图里的具体物体或文字。");

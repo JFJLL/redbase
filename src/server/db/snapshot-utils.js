@@ -112,12 +112,22 @@ function normalizeStore(input) {
       knowledgeBase: String(brand.knowledgeBase || ""),
       logo: normalizeBrandLogo(brand.logo),
       assetTags: Array.isArray(brand.assetTags) ? brand.assetTags : [],
+      profileType: brand.profileType === "personal" ? "personal" : "brand",
+      contentPillars: Array.isArray(brand.contentPillars)
+        ? brand.contentPillars.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
+        : [],
+      personaStyle: String(brand.personaStyle || "").trim(),
       analyses: Array.isArray(brand.analyses) ? brand.analyses : [],
       trends: normalizeTrendBuckets(brand.trends),
     };
 
     if (normalized.ownerUserId !== brand.ownerUserId) changed = true;
-    if (!Array.isArray(brand.assetTags) || !Array.isArray(brand.analyses) || !Array.isArray(brand.trends)) {
+    if (
+      !Array.isArray(brand.assetTags)
+      || !Array.isArray(brand.contentPillars)
+      || !Array.isArray(brand.analyses)
+      || !Array.isArray(brand.trends)
+    ) {
       changed = true;
     }
 

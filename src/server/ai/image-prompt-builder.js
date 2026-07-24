@@ -177,9 +177,15 @@ function extractBrandToneExtras(brand) {
   const industry = compactText(brand.industry, 40);
   const audience = compactText(brand.audience, 40);
   const description = compactText(brand.description, 60);
+  const personaStyle = compactText(brand.personaStyle, 100);
+  const contentPillars = Array.isArray(brand.contentPillars)
+    ? brand.contentPillars.map((item) => compactText(item, 36)).filter(Boolean).slice(0, 4)
+    : [];
   if (industry) extras.push(`行业气质：${industry}`);
   if (audience) extras.push(`面向${audience}`);
   if (description) extras.push(description);
+  if (personaStyle) extras.push(`表达气质：${personaStyle}`);
+  if (contentPillars.length) extras.push(`长期栏目：${contentPillars.join("、")}`);
   return extras;
 }
 
@@ -189,6 +195,7 @@ function extractBrandToneExtras(brand) {
  */
 function resolveImagePromptContext({ brand, product, idea, metadata, trend, contentType, platform, objective } = {}) {
   const meta = metadata && typeof metadata === "object" ? metadata : {};
+  const isPersonal = brand?.profileType === "personal";
   const resolvedContentType =
     contentType ||
     meta.contentType ||
@@ -201,13 +208,12 @@ function resolveImagePromptContext({ brand, product, idea, metadata, trend, cont
     objective ||
     meta.objective ||
     compactText(meta.title || idea?.title || brand?.goal || trend?.title, 100) ||
-    "品牌内容传播";
+    (isPersonal ? "个人 IP 内容表达" : "品牌内容传播");
   const resolvedProduct =
     product ||
     meta.product ||
     extractProductName(null, brand) ||
-    compactText(idea?.title, 80) ||
-    "品牌产品";
+    (isPersonal ? "" : compactText(idea?.title, 80) || "品牌产品");
 
   return {
     brand,
@@ -266,46 +272,57 @@ function buildImagePrompt(input = {}) {
   const platform = normalizePlatform(input.platform);
   const brandName =
     typeof input.brand === "string" ? compactText(input.brand, 60) : extractBrandName(input.brand);
+  const isPersonal = typeof input.brand === "object" && input.brand?.profileType === "personal";
   const productName = extractProductName(input.product, typeof input.brand === "object" ? input.brand : null);
-  const objective = compactText(input.objective, 100) || "品牌内容传播";
+  const objective = compactText(input.objective, 100) || (isPersonal ? "个人 IP 内容表达" : "品牌内容传播");
   const toneExtras =
     typeof input.brand === "object" ? extractBrandToneExtras(input.brand) : [];
 
   const layer1 = [
     `【视觉目标】`,
-    template.visualGoal,
+    isPersonal
+      ? "小红书个人 IP 真实内容图片，画面像本人生活或工作中的自然记录，服务第一人称表达"
+      : template.visualGoal,
     `模板：${template.label}（${contentType}）`,
     `平台：${platformLabel(platform)}`,
     `传播目标：${objective}`,
-    brandName ? `品牌：${brandName}` : "",
-    productName ? `产品：${productName}` : "",
+    brandName ? `${isPersonal ? "个人 IP" : "品牌"}：${brandName}` : "",
+    productName ? `${isPersonal ? "专长/服务（仅在内容自然需要时呈现）" : "产品"}：${productName}` : "",
   ]
     .filter(Boolean)
     .join("\n");
 
   const layer2 = [
-    `【品牌调性】`,
-    BRAND_TONE_CORE.join("、"),
-    brandName ? `呈现「${brandName}」的品牌感，不像白牌电商` : "呈现清晰品牌感，不像白牌电商",
+    `【${isPersonal ? "个人表达气质" : "品牌调性"}】`,
+    isPersonal ? "真实、自然、具体、可信、有个人识别度" : BRAND_TONE_CORE.join("、"),
+    isPersonal
+      ? (brandName ? `呈现「${brandName}」的个人内容识别度，不要企业宣传片或硬广海报感` : "呈现清晰的个人内容识别度")
+      : (brandName ? `呈现「${brandName}」的品牌感，不像白牌电商` : "呈现清晰品牌感，不像白牌电商"),
     ...toneExtras,
   ].join("\n");
 
   const layer3 = [
     `【场景】`,
     ...SCENE_CORE,
-    template.sceneFocus,
+    isPersonal
+      ? "围绕本人真实的工作、生活、观察或表达场景；人物出现时自然、不摆拍，不凭空制造成功人士符号"
+      : template.sceneFocus,
   ].join("\n");
 
   const composition = template.composition;
   const layer4 = [
     `【构图】`,
-    `主体：${composition.subject}`,
+    `主体：${isPersonal ? "人物、手部、工作台或真实场景细节作为叙事主体；没有头像参考时避免生成可被误认成真人本人的清晰正脸" : composition.subject}`,
     `光线：${composition.light}`,
     `留白：${composition.whitespace}`,
     `视角：${composition.angle}`,
   ].join("\n");
 
-  const negatives = [...NEGATIVE_CORE, ...(template.extraNegatives || [])];
+  const negatives = [
+    ...NEGATIVE_CORE,
+    ...(template.extraNegatives || []),
+    ...(isPersonal ? ["企业宣传片感", "成功学导师摆拍", "虚构奖项证书", "把个人头像当作品牌 Logo"] : []),
+  ];
   const layer5 = [`【负面约束】`, `不要：${negatives.join("、")}`].join("\n");
 
   const basePrompt = [layer1, layer2, layer3, layer4, layer5].join("\n\n");

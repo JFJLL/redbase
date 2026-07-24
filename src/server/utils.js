@@ -224,6 +224,10 @@ function sanitizeBrand(brand) {
     product: brand.product,
     goal: brand.goal,
     knowledgeBase: brand.knowledgeBase || "",
+    profileType: brand.profileType === "personal" ? "personal" : "brand",
+    contentPillars: Array.isArray(brand.contentPillars) ? brand.contentPillars : [],
+    personaStyle: brand.personaStyle || "",
+    materialCount: Number(brand.materialCount || brand.materials?.length || 0),
     logo: brand.logo
       ? {
           originalName: brand.logo.originalName || "brand-logo",
@@ -256,6 +260,10 @@ function sanitizeBrandSummary(brand) {
     industry: brand.industry,
     audience: brand.audience,
     description: brand.description,
+    profileType: brand.profileType === "personal" ? "personal" : "brand",
+    contentPillars: Array.isArray(brand.contentPillars) ? brand.contentPillars : [],
+    personaStyle: brand.personaStyle || "",
+    materialCount: Number(brand.materialCount || 0),
     logo: brand.logo
       ? {
           originalName: brand.logo.originalName || "brand-logo",
@@ -275,6 +283,15 @@ function sanitizeBrandSummary(brand) {
 function createBrandAssetTags(payload) {
   const tags = [];
   if (payload.industry) tags.push(String(payload.industry).trim());
+  if (payload.profileType === "personal") {
+    tags.push("个人IP");
+    if (Array.isArray(payload.contentPillars)) {
+      tags.push(...payload.contentPillars.slice(0, 2));
+    }
+    if (payload.personaStyle) tags.push("个人表达");
+    tags.push("内容运营");
+    return [...new Set(tags.filter(Boolean))].slice(0, 5);
+  }
   if (String(payload.goal || "").includes("品牌")) tags.push("品牌认知");
   if (String(payload.goal || "").includes("销量") || String(payload.goal || "").includes("转化")) tags.push("种草转化");
   if (payload.product) tags.push("产品卖点");

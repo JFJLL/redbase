@@ -122,6 +122,7 @@ async function init() {
   bindSidebarTabs();
   bindTabJump();
   bindBrandModal();
+  bindPersonalMaterialForm();
   bindBrandDeleteModal();
   bindImageModal();
   bindProductImageLibraryModal();
@@ -607,6 +608,7 @@ function createEmptyGenerationHistoryFilters() {
 function bindBrandModal() {
   const modal = document.getElementById("brandModal");
   const openBtn = document.getElementById("openBrandModal");
+  const openPersonalBtn = document.getElementById("openPersonalModal");
   const closeBtn = document.getElementById("closeBrandModal");
   const cancelBtn = document.getElementById("cancelBrandModal");
   const form = document.getElementById("brandForm");
@@ -617,30 +619,69 @@ function bindBrandModal() {
   const modalTitle = document.getElementById("brandModalTitle");
   const modalDescription = document.getElementById("brandModalDescription");
   const submitButton = document.getElementById("brandSubmitButton");
+  const personalFields = document.getElementById("personalProfileFields");
+  const nameLabel = document.getElementById("profileNameLabel");
+  const industryLabel = document.getElementById("profileIndustryLabel");
+  const descriptionLabel = document.getElementById("profileDescriptionLabel");
+  const productField = document.getElementById("profileProductField");
+  const productLabel = document.getElementById("profileProductLabel");
+  const knowledgeLabel = document.getElementById("profileKnowledgeLabel");
+  const logoLabel = document.getElementById("profileLogoLabel");
+  const goalLabel = document.getElementById("profileGoalLabel");
   let pendingLogo = null;
   let editingBrandId = null;
+  let activeProfileType = "brand";
 
   const setLogoPreview = (brand = null) => {
     if (!logoPreview) return;
     if (brand?.logo?.url) {
+      const assetLabel = activeProfileType === "personal" ? "个人头像" : "品牌 Logo";
       logoPreview.innerHTML = `
-        <span>当前 Logo：${escapeHtml(formatImageName(brand.logo.originalName || "品牌 Logo", 38))}</span>
-        <img src="${authenticatedImageSrc(brand.logo.url)}" alt="${escapeHtml(brand.logo.originalName || "品牌 Logo")}" />
+        <span>当前${assetLabel}：${escapeHtml(formatImageName(brand.logo.originalName || assetLabel, 38))}</span>
+        <img src="${authenticatedImageSrc(brand.logo.url)}" alt="${escapeHtml(brand.logo.originalName || assetLabel)}" />
       `;
       return;
     }
-    logoPreview.textContent = "可选上传，后续生图时可作为产品 Logo 使用。";
+    logoPreview.textContent =
+      activeProfileType === "personal"
+        ? "可选上传个人头像，仅用于识别档案与辅助视觉风格，不会作为品牌 Logo 植入图片。"
+        : "可选上传，后续生图时可作为产品 Logo 使用。";
   };
-  const setBrandModalMode = (brand = null) => {
+  const setBrandModalMode = (brand = null, requestedType = "brand") => {
     editingBrandId = brand?.id || null;
+    activeProfileType = brand?.profileType === "personal" || requestedType === "personal" ? "personal" : "brand";
+    const isPersonal = activeProfileType === "personal";
     pendingLogo = null;
     form.reset();
+    form.elements.profileType.value = activeProfileType;
+    form.elements.product.required = !isPersonal;
+    personalFields?.classList.toggle("is-hidden", !isPersonal);
+    productField?.classList.toggle("is-optional-profile-field", isPersonal);
     if (logoInput) logoInput.value = "";
-    if (modalKicker) modalKicker.textContent = editingBrandId ? "品牌资产维护" : "品牌资产录入";
-    if (modalTitle) modalTitle.textContent = editingBrandId ? "编辑品牌" : "新增品牌";
-    if (modalDescription) modalDescription.textContent = editingBrandId ? "更新品牌定位、产品信息和资料库，后续 AI 分析会使用最新内容。" : "填写品牌信息，帮助 AI 更好地理解你的需求";
-    if (submitButton) submitButton.textContent = editingBrandId ? "保存修改" : "创建品牌";
-    if (logoUploadText) logoUploadText.textContent = brand?.logo ? "更换 Logo" : "选择 Logo 图片";
+    if (modalKicker) modalKicker.textContent = isPersonal ? "个人 IP 档案" : editingBrandId ? "品牌资产维护" : "品牌资产录入";
+    if (modalTitle) modalTitle.textContent = editingBrandId ? `编辑${isPersonal ? "个人 IP" : "品牌"}` : `新增${isPersonal ? "个人 IP" : "品牌"}`;
+    if (modalDescription) {
+      modalDescription.textContent = isPersonal
+        ? "填写真实定位、目标受众、内容支柱和表达风格，后续可随时修改。"
+        : editingBrandId
+          ? "更新品牌定位、产品信息和资料库，后续 AI 分析会使用最新内容。"
+          : "填写品牌信息，帮助 AI 更好地理解你的需求";
+    }
+    if (submitButton) submitButton.textContent = editingBrandId ? "保存修改" : `创建${isPersonal ? "个人 IP" : "品牌"}`;
+    if (nameLabel) nameLabel.textContent = isPersonal ? "IP 名称 / 昵称" : "品牌名称";
+    if (industryLabel) industryLabel.textContent = isPersonal ? "内容领域" : "行业分类";
+    if (descriptionLabel) descriptionLabel.textContent = isPersonal ? "人设与定位" : "品牌介绍";
+    if (productLabel) productLabel.textContent = isPersonal ? "专长 / 服务（可选）" : "产品介绍";
+    if (knowledgeLabel) knowledgeLabel.textContent = isPersonal ? "补充背景资料" : "品牌资料库";
+    if (logoLabel) logoLabel.textContent = isPersonal ? "个人头像" : "品牌 Logo";
+    if (goalLabel) goalLabel.textContent = isPersonal ? "账号目标" : "运营目标";
+    form.elements.name.placeholder = isPersonal ? "请输入昵称或 IP 名称" : "请输入品牌名称";
+    form.elements.industry.placeholder = isPersonal ? "如：职场成长、创业、育儿" : "如：美妆、食品、科技";
+    form.elements.description.placeholder = isPersonal ? "描述你的经历、专业身份、差异化定位与希望建立的认知" : "描述品牌定位、品牌故事、核心价值等";
+    form.elements.product.placeholder = isPersonal ? "可选：描述课程、咨询或其他服务；没有可留空" : "描述主要产品/服务、卖点、使用场景等";
+    form.elements.knowledgeBase.placeholder = isPersonal ? "补充履历、专业背景、内容边界和不能编造的信息。" : "补充品牌故事、成分说明、视觉风格、核心卖点、竞品差异、适用场景等，供内容生成和生图参考。";
+    form.elements.goal.placeholder = isPersonal ? "例如建立专业影响力、积累精准粉丝、获得咨询线索" : "描述小红书账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等";
+    if (logoUploadText) logoUploadText.textContent = brand?.logo ? `更换${isPersonal ? "头像" : " Logo"}` : `选择${isPersonal ? "头像" : " Logo 图片"}`;
     setLogoPreview(brand);
     if (!brand) return;
     form.elements.name.value = brand.name || "";
@@ -650,9 +691,11 @@ function bindBrandModal() {
     form.elements.product.value = brand.product || "";
     form.elements.knowledgeBase.value = brand.knowledgeBase || "";
     form.elements.goal.value = brand.goal || "";
+    form.elements.contentPillars.value = Array.isArray(brand.contentPillars) ? brand.contentPillars.join("，") : "";
+    form.elements.personaStyle.value = brand.personaStyle || "";
   };
-  const open = (brand = null) => {
-    setBrandModalMode(brand);
+  const open = (brand = null, requestedType = "brand") => {
+    setBrandModalMode(brand, requestedType);
     modal.classList.add("is-open");
   };
   openBrandEditor = open;
@@ -660,7 +703,8 @@ function bindBrandModal() {
     modal.classList.remove("is-open");
   };
 
-  openBtn.addEventListener("click", () => open());
+  openBtn.addEventListener("click", () => open(null, "brand"));
+  openPersonalBtn?.addEventListener("click", () => open(null, "personal"));
   closeBtn.addEventListener("click", close);
   cancelBtn.addEventListener("click", close);
   modal.addEventListener("click", (event) => {
@@ -675,7 +719,8 @@ function bindBrandModal() {
       if (logoUploadText) logoUploadText.textContent = editingBrandId ? "更换 Logo" : "选择 Logo 图片";
       return;
     }
-    if (!validateSingleReferenceFile(file, "品牌 Logo")) {
+    const assetLabel = activeProfileType === "personal" ? "个人头像" : "品牌 Logo";
+    if (!validateSingleReferenceFile(file, assetLabel)) {
       logoInput.value = "";
       pendingLogo = null;
       return;
@@ -697,7 +742,7 @@ function bindBrandModal() {
     } catch (error) {
       if (isStaleSessionRequest(error)) return;
       pendingLogo = null;
-      alert(`品牌 Logo 读取失败：${error.message}`);
+      alert(`${assetLabel}读取失败：${error.message}`);
     }
   });
 
@@ -707,8 +752,9 @@ function bindBrandModal() {
     const payload = Object.fromEntries(formData.entries());
     const profileSize = getBrandProfileInputSize(payload);
     if (profileSize.total > MAX_BRAND_PROFILE_CHARS) {
+      const subjectLabel = activeProfileType === "personal" ? "个人 IP" : "品牌";
       alert(
-        `当前品牌档案共 ${profileSize.total} 字，超过上限 ${MAX_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_BRAND_PROFILE_CHARS} 字。请删减品牌介绍、产品介绍或品牌资料库后再保存。`,
+        `当前${subjectLabel}档案共 ${profileSize.total} 字，超过上限 ${MAX_BRAND_PROFILE_CHARS} 字，已超出 ${profileSize.total - MAX_BRAND_PROFILE_CHARS} 字。请删减档案内容后再保存。`,
       );
       return;
     }
@@ -737,7 +783,7 @@ function bindBrandModal() {
       if (logoUploadText) logoUploadText.textContent = "选择 Logo 图片";
       close();
       renderAll();
-      switchTab("brands");
+      switchTab(result.brand.profileType === "personal" ? "personal" : "brands");
     } catch (error) {
       alert(error.message);
     } finally {
@@ -747,10 +793,118 @@ function bindBrandModal() {
 }
 
 function getBrandProfileInputSize(payload) {
-  const fields = ["name", "industry", "audience", "description", "product", "goal", "knowledgeBase"];
+  const fields = ["name", "industry", "audience", "description", "product", "goal", "knowledgeBase", "contentPillars", "personaStyle"];
   return {
     total: fields.reduce((sum, key) => sum + String(payload?.[key] || "").trim().length, 0),
   };
+}
+
+function resetPersonalMaterialForm() {
+  const form = document.getElementById("personalMaterialForm");
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = "";
+  document.getElementById("savePersonalMaterial").textContent = "添加素材";
+  document.getElementById("cancelMaterialEdit")?.classList.add("is-hidden");
+}
+
+function bindPersonalMaterialForm() {
+  const form = document.getElementById("personalMaterialForm");
+  const cancelButton = document.getElementById("cancelMaterialEdit");
+  const list = document.getElementById("personalMaterialList");
+  if (!form || !list) return;
+
+  cancelButton?.addEventListener("click", resetPersonalMaterialForm);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const brandId = Number(state.selectedPersonalProfileId);
+    if (!brandId) {
+      showToast("请先选择一个个人 IP 档案");
+      return;
+    }
+    const payload = Object.fromEntries(new FormData(form).entries());
+    const materialId = Number(payload.id || 0);
+    delete payload.id;
+    payload.brandId = brandId;
+    payload.tags = String(payload.tags || "")
+      .split(/[,，]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    try {
+      const result = await request(materialId ? `/api/personal-materials/${materialId}` : "/api/personal-materials", {
+        method: materialId ? "PUT" : "POST",
+        body: JSON.stringify(payload),
+      });
+      const index = state.creatorMaterials.findIndex((item) => Number(item.id) === Number(result.item.id));
+      if (index >= 0) state.creatorMaterials[index] = result.item;
+      else state.creatorMaterials.unshift(result.item);
+      resetPersonalMaterialForm();
+      syncPersonalMaterialCounts();
+      renderPersonalIps();
+      showToast(materialId ? "素材已更新" : "素材已添加");
+    } catch (error) {
+      showToast(`素材保存失败：${error.message}`, 8000);
+    }
+  });
+
+  list.addEventListener("click", async (event) => {
+    const editButton = event.target.closest("[data-material-edit]");
+    if (editButton) {
+      const item = state.creatorMaterials.find((entry) => Number(entry.id) === Number(editButton.dataset.materialEdit));
+      if (!item) return;
+      form.elements.id.value = item.id;
+      form.elements.kind.value = item.kind || "experience";
+      form.elements.title.value = item.title || "";
+      form.elements.content.value = item.content || "";
+      form.elements.tags.value = Array.isArray(item.tags) ? item.tags.join("，") : "";
+      document.getElementById("savePersonalMaterial").textContent = "保存修改";
+      cancelButton?.classList.remove("is-hidden");
+      form.elements.content.focus();
+      return;
+    }
+    const deleteButton = event.target.closest("[data-material-delete]");
+    if (!deleteButton) return;
+    const item = state.creatorMaterials.find((entry) => Number(entry.id) === Number(deleteButton.dataset.materialDelete));
+    if (!item || !confirm(`确定删除素材「${item.title || "未命名素材"}」吗？`)) return;
+    try {
+      await request(`/api/personal-materials/${item.id}`, { method: "DELETE" });
+      state.creatorMaterials = state.creatorMaterials.filter((entry) => Number(entry.id) !== Number(item.id));
+      if (Number(form.elements.id.value) === Number(item.id)) resetPersonalMaterialForm();
+      syncPersonalMaterialCounts();
+      renderPersonalIps();
+      showToast("素材已删除");
+    } catch (error) {
+      showToast(`素材删除失败：${error.message}`, 8000);
+    }
+  });
+}
+
+function syncPersonalMaterialCounts() {
+  state.brands = state.brands.map((brand) => {
+    if (brand.profileType !== "personal") return brand;
+    const materialCount = state.creatorMaterials.filter((item) => Number(item.brandId) === Number(brand.id)).length;
+    return { ...brand, materialCount };
+  });
+}
+
+async function loadCreatorMaterials() {
+  if (!state.sessionToken || state.creatorMaterialsStatus === "loading") return;
+  const loadEpoch = sessionEpoch;
+  state.creatorMaterialsStatus = "loading";
+  state.creatorMaterialsError = "";
+  renderPersonalIps();
+  try {
+    const result = await request("/api/personal-materials");
+    assertSessionEpoch(loadEpoch);
+    state.creatorMaterials = Array.isArray(result.items) ? result.items : [];
+    state.creatorMaterialsStatus = "ready";
+    syncPersonalMaterialCounts();
+  } catch (error) {
+    if (isStaleSessionRequest(error)) return;
+    state.creatorMaterialsStatus = "error";
+    state.creatorMaterialsError = error.message || "素材加载失败";
+  }
+  renderPersonalIps();
 }
 
 function bindBrandDeleteModal() {
@@ -1200,7 +1354,7 @@ function bindIdeaPromptActions() {
     const brand = getSelectedBrand();
     const trend = getSelectedTrend();
     if (!brand || !trend) {
-      alert("请先选择品牌并生成热点趋势。");
+      alert("请先选择品牌或个人 IP，并生成热点趋势。");
       return;
     }
 
@@ -1277,6 +1431,10 @@ function clearSession() {
   state.sessionToken = "";
   state.currentUser = null;
   state.brands = [];
+  state.creatorMaterials = [];
+  state.creatorMaterialsStatus = "idle";
+  state.creatorMaterialsError = "";
+  state.selectedPersonalProfileId = null;
   state.generationHistory = [];
   state.generationHistoryFilters = {
     q: "",
@@ -1429,6 +1587,10 @@ async function loadBrands() {
       request("/api/product-images"),
     ]);
     state.brands = (brandResult.brands || []).map(markBrandSummary);
+    const personalProfiles = state.brands.filter((brand) => brand.profileType === "personal");
+    if (!personalProfiles.some((brand) => Number(brand.id) === Number(state.selectedPersonalProfileId))) {
+      state.selectedPersonalProfileId = personalProfiles[0]?.id || null;
+    }
     state.generationHistory = historyResult.generations;
     state.productImageLibrary = productImageResult.images || [];
     if (state.brands.length) {
@@ -1642,11 +1804,20 @@ function openBrandDeleteModal(brand) {
 async function confirmDeleteBrand(brandId, deleteGenerations) {
   try {
     setBusy(true);
+    const deletedBrand = state.brands.find((item) => item.id === brandId);
     const result = await request(`/api/brands/${brandId}`, {
       method: "DELETE",
       body: JSON.stringify({ deleteGenerations }),
     });
     state.brands = state.brands.filter((item) => item.id !== brandId);
+    if (deletedBrand?.profileType === "personal") {
+      state.creatorMaterials = state.creatorMaterials.filter((item) => Number(item.brandId) !== Number(brandId));
+      if (Number(state.selectedPersonalProfileId) === Number(brandId)) {
+        state.selectedPersonalProfileId =
+          state.brands.find((item) => item.profileType === "personal")?.id ?? null;
+        resetPersonalMaterialForm();
+      }
+    }
     if (Array.isArray(result.deletedGenerationIds) && result.deletedGenerationIds.length) {
       const deletedIds = new Set(result.deletedGenerationIds.map(Number));
       state.generationHistory = state.generationHistory.filter((item) => !deletedIds.has(Number(item.id)));
@@ -1705,6 +1876,23 @@ function normalizeTrendBucketKey(key) {
 
 function getDefaultTrendBucket(key) {
   return DEFAULT_TREND_BUCKETS.find((bucket) => bucket.key === normalizeTrendBucketKey(key)) || null;
+}
+
+const PERSONAL_TREND_BUCKET_DESCRIPTIONS = {
+  xhs: "从小红书站内高讨论、高收藏、高互动内容里筛选适合个人 IP 真诚参与的话题方向。",
+  traffic: "从可核验的标题结构、叙事节奏、场景表达和互动设计中找到个人内容的传播机会。",
+  news: "从近期新闻、行业动态和职业趋势中找到适合个人经验与观点切入的内容机会。",
+  social: "从大众情绪、生活方式变化和公共讨论中找到适合个人经历与观点表达的切口。",
+  track: "聚焦个人 IP 所在领域、同类创作者和受众决策链路里的专业内容机会。",
+  crowd: "聚焦目标读者正在经历的身份变化、真实场景、困惑与内容需求。",
+};
+
+function getTrendBucketDescription(bucket, brand = getSelectedBrand()) {
+  const fallback = getDefaultTrendBucket(bucket?.key);
+  if (brand?.profileType === "personal") {
+    return PERSONAL_TREND_BUCKET_DESCRIPTIONS[normalizeTrendBucketKey(bucket?.key)] || "适合当前个人 IP 参与和表达的话题方向。";
+  }
+  return fallback?.description || bucket?.description || "适合当前品牌借势的热点方向。";
 }
 
 function sortTrendItemsForDisplay(items) {
@@ -1883,6 +2071,9 @@ function switchTab(tab) {
   if (tab === "history") {
     refreshGenerationHistoryOnHistoryTab();
   }
+  if (tab === "personal") {
+    renderPersonalIps();
+  }
   if (tab === "excellent") {
     const slice = getExcellentBoardState();
     if (state.excellentContentBoard === "ecommerce_hot") {
@@ -1997,6 +2188,7 @@ function renderXhsCategorySelector() {
 
 function renderAll() {
   renderBrands();
+  renderPersonalIps();
   renderBrandChips();
   renderTrendModeTabs();
   renderTrendAnalysisButton();
@@ -2011,12 +2203,13 @@ function renderAll() {
 
 function renderBrands() {
   const root = document.getElementById("brandList");
-  if (!state.brands.length) {
+  const brands = state.brands.filter((brand) => brand.profileType !== "personal");
+  if (!brands.length) {
     root.innerHTML = `<article class="brand-card"><div class="brand-description">你还没有品牌档案。登录后先新增品牌，就可以开始热点分析和内容选题。</div></article>`;
     return;
   }
 
-  root.innerHTML = state.brands
+  root.innerHTML = brands
     .map(
       (brand) => `
         <article class="brand-card">
@@ -2082,6 +2275,87 @@ function renderBrands() {
   };
 }
 
+function renderPersonalIps() {
+  const profileRoot = document.getElementById("personalProfileList");
+  if (!profileRoot) return;
+
+  const profiles = state.brands.filter((brand) => brand.profileType === "personal");
+  if (!profiles.some((brand) => Number(brand.id) === Number(state.selectedPersonalProfileId))) {
+    state.selectedPersonalProfileId = profiles[0]?.id || null;
+  }
+
+  if (!profiles.length) {
+    profileRoot.innerHTML = `<article class="brand-card"><div class="brand-description">你还没有个人 IP 档案。点击右上角“新增个人 IP”，就可以开始趋势分析和内容选题。</div></article>`;
+  } else {
+    profileRoot.innerHTML = profiles
+      .map((brand) => {
+        const pillars = Array.isArray(brand.contentPillars) ? brand.contentPillars : [];
+        return `
+          <article class="brand-card personal-profile-card">
+            <div class="personal-profile-card-head">
+              <div class="personal-avatar">
+                ${
+                  brand.logo?.url
+                    ? `<img src="${authenticatedImageSrc(brand.logo.url)}" alt="${escapeHtml(brand.name)}" />`
+                    : escapeHtml(String(brand.name || "IP").slice(0, 1).toUpperCase())
+                }
+              </div>
+              <div>
+                <div class="brand-meta">
+                  <h3>${escapeHtml(brand.name)}</h3>
+                  <span class="brand-tag personal-tag">个人 IP</span>
+                </div>
+                <p>${escapeHtml(brand.industry)} · ${escapeHtml(brand.audience)}</p>
+              </div>
+            </div>
+            <div class="brand-description">${escapeHtml(brand.description)}</div>
+            ${
+              pillars.length
+                ? `<div class="personal-pillars">${pillars.map((pillar) => `<span>${escapeHtml(pillar)}</span>`).join("")}</div>`
+                : `<div class="personal-card-note">尚未设置内容支柱</div>`
+            }
+            ${brand.personaStyle ? `<div class="personal-style"><strong>表达风格：</strong>${escapeHtml(brand.personaStyle)}</div>` : ""}
+            <div class="personal-profile-stats">
+              <span>趋势 ${Number(brand.trendCount || 0)} 条</span>
+              <span>分析 ${Number(brand.analysisCount || 0)} 次</span>
+            </div>
+            <div class="brand-actions">
+              <button class="primary-btn small-btn" data-personal-action="trends" data-personal-id="${brand.id}" type="button">AI 趋势分析</button>
+              <button class="secondary-btn" data-personal-edit="${brand.id}" type="button">编辑档案</button>
+              <button class="secondary-btn danger-btn" data-personal-delete="${brand.id}" type="button">删除</button>
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  profileRoot.onclick = async (event) => {
+    const editButton = event.target.closest("[data-personal-edit]");
+    if (editButton) {
+      const brand = await ensureBrandDetailLoaded(Number(editButton.dataset.personalEdit));
+      if (brand) openBrandEditor(brand);
+      return;
+    }
+    const deleteButton = event.target.closest("[data-personal-delete]");
+    if (deleteButton) {
+      deleteBrand(Number(deleteButton.dataset.personalDelete));
+      return;
+    }
+    const actionButton = event.target.closest("[data-personal-action]");
+    if (actionButton) {
+      const brandId = Number(actionButton.dataset.personalId);
+      state.selectedPersonalProfileId = brandId;
+      state.selectedBrandId = brandId;
+      syncSelectedTrendSelection(getSelectedBrand());
+      switchTab(actionButton.dataset.personalAction || "personal");
+      renderAll();
+      ensureBrandDetailLoaded(brandId).catch((error) => showToast(`个人 IP 详情加载失败：${error.message}`, 8000));
+      return;
+    }
+  };
+}
+
 function renderBrandChips() {
   const root = document.getElementById("trendBrandChips");
   root.innerHTML = state.brands
@@ -2089,6 +2363,7 @@ function renderBrandChips() {
       (brand) => `
         <button class="brand-chip ${brand.id === state.selectedBrandId ? "is-active" : ""}" data-chip-brand="${brand.id}" type="button">
           ${escapeHtml(brand.name)}
+          ${brand.profileType === "personal" ? `<small>个人 IP</small>` : ""}
         </button>
       `,
     )
@@ -2100,7 +2375,7 @@ function renderBrandChips() {
       syncSelectedTrendSelection(getSelectedBrand());
       renderAll();
       ensureBrandDetailLoaded(state.selectedBrandId).catch((error) => {
-        showToast(`品牌详情加载失败：${error.message}`, 8000);
+        showToast(`${getSelectedBrand()?.profileType === "personal" ? "个人 IP" : "品牌"}详情加载失败：${error.message}`, 8000);
       });
     });
   });
@@ -2148,7 +2423,7 @@ function renderHistory() {
   }
 
   if (!brand.analyses.length) {
-    root.innerHTML = `<p class="analysis-tip">当前品牌还没有分析记录，点击上方按钮即可开始分析。</p>`;
+    root.innerHTML = `<p class="analysis-tip">当前${brand.profileType === "personal" ? "个人 IP" : "品牌"}还没有分析记录，点击上方按钮即可开始分析。</p>`;
     return;
   }
 
@@ -2186,17 +2461,18 @@ function renderAnalysisSummary() {
   const brand = getSelectedBrand();
 
   if (!brand) {
-    root.textContent = "先新增品牌档案，再开始基于品牌资产的热点趋势分析。";
+    root.textContent = "先新增品牌或个人 IP 档案，再开始基于主体档案的热点趋势分析。";
     return;
   }
 
   if (!isBrandDetailLoaded(brand)) {
-    root.textContent = `正在加载 ${brand.name} 的完整品牌详情和趋势记录。`;
+    root.textContent = `正在加载 ${brand.name} 的完整${brand.profileType === "personal" ? "个人 IP" : "品牌"}详情和趋势记录。`;
     return;
   }
 
   if (!brand.trends.length) {
-    root.textContent = `已为 ${brand.name} 建立品牌档案。请选择一个热点维度，点击左侧按钮只生成该维度的 10 条趋势和 20 个完整选题。`;
+    const profileLabel = brand.profileType === "personal" ? "个人 IP" : "品牌";
+    root.textContent = `已为 ${brand.name} 建立「${profileLabel}」档案。请选择一个热点维度，点击左侧按钮只生成该维度的 10 条趋势和 20 个完整选题。`;
     return;
   }
 
@@ -2221,7 +2497,7 @@ function renderTrends() {
       <article class="trend-card">
         <div>
           <h3>${escapeHtml(fallbackBucket.title)}</h3>
-          <p>${escapeHtml(fallbackBucket.description)}</p>
+          <p>${escapeHtml(getTrendBucketDescription(fallbackBucket, brand))}</p>
           <p class="analysis-tip">正在加载 ${escapeHtml(brand.name)} 的趋势和选题记录...</p>
         </div>
       </article>
@@ -2235,7 +2511,7 @@ function renderTrends() {
       <article class="trend-card">
         <div>
           <h3>${escapeHtml(fallbackBucket.title)}</h3>
-          <p>${escapeHtml(fallbackBucket.description)}</p>
+          <p>${escapeHtml(getTrendBucketDescription(fallbackBucket, brand))}</p>
           <p class="analysis-tip">当前维度还没有生成。点击左侧按钮后，将只生成这个维度的 10 条趋势和 20 个完整选题。</p>
         </div>
       </article>
@@ -2247,7 +2523,7 @@ function renderTrends() {
     <article class="trend-card">
       <div>
         <h3>${escapeHtml(getDefaultTrendBucket(bucket.key)?.title || bucket.title)}</h3>
-        <p>${escapeHtml(getDefaultTrendBucket(bucket.key)?.description || bucket.description)}</p>
+<p>${escapeHtml(getTrendBucketDescription(bucket, brand))}</p>
       </div>
     </article>
   ` + bucket.items
@@ -2320,10 +2596,18 @@ function renderIdeas() {
     <div class="idea-context-top">
       <div>
         <h3>${escapeHtml(brand.name)} × ${escapeHtml(trend.title)}</h3>
-        <p class="idea-copy">内容选题不是只追热点，而是把品牌资产、产品卖点、目标受众和运营目标一起带入，生成真正适合该品牌的小红书内容方向。</p>
+        <p class="idea-copy">${
+          brand.profileType === "personal"
+            ? "内容选题不是只追热点，而是把个人定位、真实素材、目标读者和表达风格一起带入，生成符合本人经历与人设边界的小红书内容方向。"
+            : "内容选题不是只追热点，而是把品牌资产、产品卖点、目标受众和运营目标一起带入，生成真正适合该品牌的小红书内容方向。"
+        }</p>
         <p class="idea-copy"><strong>热点适配原因：</strong>${escapeHtml(trend.reason)}</p>
-        <p class="idea-copy"><strong>品牌资料库：</strong>${escapeHtml(brand.knowledgeBase || "当前未补充品牌资料库。")}</p>
-        <p class="idea-copy"><strong>参考图片：</strong>可在下方每个选题中上传产品图、选择品牌 Logo 或添加风格参考图，并勾选后用于对应生图。</p>
+        <p class="idea-copy"><strong>${brand.profileType === "personal" ? "补充背景资料" : "品牌资料库"}：</strong>${escapeHtml(brand.knowledgeBase || `当前未补充${brand.profileType === "personal" ? "背景资料" : "品牌资料库"}。`)}</p>
+        <p class="idea-copy"><strong>参考图片：</strong>${
+          brand.profileType === "personal"
+            ? "可上传内容参考图、使用个人头像参考或添加风格参考图；系统不会把个人头像当作品牌 Logo 植入画面。"
+            : "可在下方每个选题中上传产品图、选择品牌 Logo 或添加风格参考图，并勾选后用于对应生图。"
+        }</p>
       </div>
       <div class="idea-tag-list">
         ${brand.assetTags.map((tag) => `<span class="idea-tag">${escapeHtml(tag)}</span>`).join("")}
@@ -2799,18 +3083,20 @@ function buildIdeaStylePrompt(idea) {
 function renderIdeaLogoControl(ideaIndex) {
   const brand = getSelectedBrand();
   const brandLogo = brand?.logo || null;
+  const isPersonal = brand?.profileType === "personal";
+  const assetLabel = isPersonal ? "个人头像" : "品牌 Logo";
   const logoEnabled = isBrandLogoEnabled(ideaIndex) && Boolean(brandLogo);
   return `
     <div class="idea-logo-control">
       <label class="idea-logo-check">
         <input data-use-brand-logo="${ideaIndex}" type="checkbox" ${brandLogo ? "" : "disabled"} ${logoEnabled ? "checked" : ""} />
-        <span>使用品牌 Logo</span>
+        <span>${isPersonal ? "使用个人头像作为视觉参考" : "使用品牌 Logo"}</span>
       </label>
       <div class="idea-logo-meta">
-        <span>${brandLogo ? escapeHtml(formatImageName(brandLogo.originalName || "品牌 Logo", 38)) : "未上传 Logo"}</span>
+        <span>${brandLogo ? escapeHtml(formatImageName(brandLogo.originalName || assetLabel, 38)) : `未上传${isPersonal ? "头像" : " Logo"}`}</span>
         <label class="idea-inline-upload">
           <input data-brand-logo-image="${ideaIndex}" type="file" accept="image/*" />
-          <span>${brandLogo ? "更换 Logo" : "上传 Logo"}</span>
+          <span>${brandLogo ? `更换${isPersonal ? "头像" : " Logo"}` : `上传${isPersonal ? "头像" : " Logo"}`}</span>
         </label>
       </div>
     </div>
@@ -2818,18 +3104,20 @@ function renderIdeaLogoControl(ideaIndex) {
 }
 
 function renderIdeaProductUpload(ideaIndex) {
+  const isPersonal = getSelectedBrand()?.profileType === "personal";
+  const assetLabel = isPersonal ? "内容参考图" : "产品图";
   const selection = getProductSelection(ideaIndex);
   const selectedImages = selection.images;
   const selectedCount = selectedImages.length;
   const checked = selection.useImage;
-  const fileLabel = selectedCount ? selectedImages.map((image) => image.fileName || image.name || "产品图").join("、") : "";
+  const fileLabel = selectedCount ? selectedImages.map((image) => image.fileName || image.name || assetLabel).join("、") : "";
   const selectedPreview = selectedCount
     ? `<div class="idea-product-selected-strip">${selectedImages
         .slice(0, MAX_SELECTED_PRODUCT_IMAGES)
         .map(
           (image) => `
-            <div class="idea-product-selected-preview" title="${escapeHtml(image.fileName || image.name || "产品图")}">
-              <img src="${productImageSrc(image)}" alt="${escapeHtml(image.fileName || image.name || "产品图")}" />
+            <div class="idea-product-selected-preview" title="${escapeHtml(image.fileName || image.name || assetLabel)}">
+              <img src="${productImageSrc(image)}" alt="${escapeHtml(image.fileName || image.name || assetLabel)}" />
             </div>
           `,
         )
@@ -2840,7 +3128,7 @@ function renderIdeaProductUpload(ideaIndex) {
       <div class="idea-product-upload-top idea-product-control-row">
         <div class="idea-product-summary">
           <div>
-            <div class="idea-product-upload-title">产品图参考</div>
+            <div class="idea-product-upload-title">${assetLabel}参考</div>
             <div class="idea-product-file ${selectedCount ? "has-file" : ""}" data-product-file="${ideaIndex}">
               ${
                 selectedCount
@@ -2849,7 +3137,7 @@ function renderIdeaProductUpload(ideaIndex) {
                         ? `已选择 ${selectedCount} 张：${formatImageName(fileLabel, 46)}，生图时会作为主体参考`
                         : `已选择 ${selectedCount} 张：${formatImageName(fileLabel, 46)}`,
                     )
-                  : "未选择产品图"
+                    : `未选择${assetLabel}`
               }
             </div>
             <div class="idea-product-file">最多 ${MAX_SELECTED_PRODUCT_IMAGES} 张，共 ${formatFileSize(MAX_SELECTED_PRODUCT_IMAGE_BYTES)}；当前 ${selectedCount} 张，约 ${formatFileSize(getSelectionTotalBytes(selectedImages))}</div>
@@ -2858,7 +3146,7 @@ function renderIdeaProductUpload(ideaIndex) {
         <div class="idea-product-button-stack">
           <label class="idea-upload-button">
             <input data-product-image="${ideaIndex}" type="file" accept="image/*" multiple />
-            <span>${selectedCount ? "继续上传" : "上传产品图"}</span>
+            <span>${selectedCount ? "继续上传" : `上传${assetLabel}`}</span>
           </label>
           <button class="idea-library-button" data-open-product-library="${ideaIndex}" type="button">选择已上传图片</button>
         </div>
@@ -2867,7 +3155,7 @@ function renderIdeaProductUpload(ideaIndex) {
       <div class="idea-product-actions idea-product-actions-bottom">
         <label class="idea-product-check">
           <input data-use-product-image="${ideaIndex}" type="checkbox" ${selectedCount ? "" : "disabled"} ${checked ? "checked" : ""} />
-          使用这些产品图生成图片
+          使用这些${assetLabel}生成图片
         </label>
         ${selectedCount ? `<button class="idea-product-clear" data-clear-product-image="${ideaIndex}" type="button">清除当前选择</button>` : ""}
       </div>
@@ -5069,11 +5357,12 @@ function renderExcellentRemix() {
   }
   const item = findExcellentContentById(excellentRemixState.noteId, excellentRemixState.board);
   const brand = state.brands.find((entry) => Number(entry.id) === Number(excellentRemixState.brandId));
+  const subjectLabel = brand?.profileType === "personal" ? "个人 IP" : "品牌";
   const brandReady = Boolean(brand && isBrandDetailLoaded(brand) && !excellentRemixState.loadingBrand);
   const emptyState = !state.brands.length
-    ? `<div class="excellent-remix-empty"><strong>还没有品牌档案</strong><p>请先创建品牌，再回来完成一键仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-brand type="button">去品牌档案</button></div></div>`
+    ? `<div class="excellent-remix-empty"><strong>还没有内容主体档案</strong><p>请先创建品牌或个人 IP，再回来完成一键仿图文。</p><div class="excellent-remix-empty-actions"><button class="primary-btn" data-remix-go-brand type="button">去创建档案</button></div></div>`
     : excellentRemixState.loadingBrand
-      ? `<div class="excellent-remix-empty"><strong>正在加载品牌详情…</strong><p>请稍候。</p></div>`
+      ? `<div class="excellent-remix-empty"><strong>正在加载${subjectLabel}详情…</strong><p>请稍候。</p></div>`
       : "";
 
   root.innerHTML = renderExcellentRemixBodyHtml({
@@ -5088,6 +5377,7 @@ function renderExcellentRemix() {
       authenticatedImageSrc,
       formatCompactMetric,
       brands: state.brands,
+      subjectLabel,
     },
   });
 

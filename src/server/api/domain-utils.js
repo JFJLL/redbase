@@ -10,6 +10,8 @@ function getTrendAnalysisBrandProfileSize(brand) {
     brand?.goal,
     brand?.knowledgeBase,
     ...(Array.isArray(brand?.assetTags) ? brand.assetTags : []),
+    ...(Array.isArray(brand?.contentPillars) ? brand.contentPillars : []),
+    brand?.personaStyle,
   ];
   return {
     total: fields.reduce((sum, value) => sum + String(value || "").trim().length, 0),

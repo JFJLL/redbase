@@ -7,6 +7,7 @@ const {
 } = require("../snapshot-utils");
 const { readIdeasForTrendRow } = require("../legacy-readers");
 const { allocateCounter, runTransaction } = require("./core-repository");
+const { mapCreatorMaterialRow } = require("./creator-material-repository");
 const { mapBrandRow } = require("./row-mappers");
 
 const db = getDbProxy();
@@ -19,7 +20,8 @@ function getBrandsBySql(sql, params = []) {
 
 function listBrandsByOwner(ownerUserId) {
   return getBrandsBySql(
-    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
      FROM brands WHERE owner_user_id = ? ORDER BY id DESC`,
     [Number(ownerUserId)],
   );
@@ -36,6 +38,9 @@ function listBrandSummariesByOwner(ownerUserId) {
        b.description,
        b.logo_json,
        b.asset_tags_json,
+       b.profile_type,
+       b.content_pillars_json,
+       b.persona_style,
        (
          SELECT COUNT(*)
          FROM trends t
@@ -45,7 +50,12 @@ function listBrandSummariesByOwner(ownerUserId) {
          SELECT COUNT(*)
          FROM analyses a
          WHERE a.brand_id = b.id
-       ) AS analysis_count
+       ) AS analysis_count,
+       (
+         SELECT COUNT(*)
+         FROM creator_materials m
+         WHERE m.brand_id = b.id AND m.owner_user_id = b.owner_user_id
+       ) AS material_count
      FROM brands b
      WHERE b.owner_user_id = ?
      ORDER BY b.id DESC`,
@@ -64,6 +74,10 @@ function listBrandSummariesByOwner(ownerUserId) {
         knowledge_base: "",
         logo_json: row.logo_json,
         asset_tags_json: row.asset_tags_json,
+        profile_type: row.profile_type,
+        content_pillars_json: row.content_pillars_json,
+        persona_style: row.persona_style,
+        material_count: row.material_count,
       }),
       trendCount: Number(row.trend_count || 0),
       analysisCount: Number(row.analysis_count || 0),
@@ -72,7 +86,8 @@ function listBrandSummariesByOwner(ownerUserId) {
 
 function listAllBrands() {
   return getBrandsBySql(`
-    SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+    SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+           logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
     FROM brands
     ORDER BY id DESC
   `);
@@ -80,7 +95,8 @@ function listAllBrands() {
 
 function findBrandByOwner(brandId, ownerUserId) {
   return getBrandsBySql(
-    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
      FROM brands WHERE id = ? AND owner_user_id = ?`,
     [Number(brandId), Number(ownerUserId)],
   )[0] || null;
@@ -88,7 +104,8 @@ function findBrandByOwner(brandId, ownerUserId) {
 
 function findBrandById(brandId) {
   return getBrandsBySql(
-    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
+    `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
      FROM brands WHERE id = ?`,
     [Number(brandId)],
   )[0] || null;
@@ -100,6 +117,19 @@ function hydrateBrandContent(brands) {
   const ids = brands.map((brand) => brand.id);
   const placeholders = ids.map(() => "?").join(",");
   const analysisMap = new Map();
+  const materialRows = db.prepare(`
+    SELECT id, owner_user_id, brand_id, kind, title, content, tags_json, source_date, created_at, updated_at
+    FROM creator_materials
+    WHERE brand_id IN (${placeholders})
+    ORDER BY updated_at DESC, id DESC
+  `).all(...ids);
+  for (const row of materialRows) {
+    const brand = brandMap.get(row.brand_id);
+    if (!brand || brand.profileType !== "personal") continue;
+    brand.materials.push(mapCreatorMaterialRow(row));
+    brand.materialCount = brand.materials.length;
+  }
+
   const analysisRows = db.prepare(`
     SELECT id, brand_id, name, timestamp, brand_brief_json, position
     FROM analyses
@@ -163,8 +193,10 @@ function insertBrand(input) {
   return runTransaction(() => {
     const brandId = input.id ?? allocateCounter("nextBrandId", 1);
     db.prepare(`
-      INSERT INTO brands (id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO brands (
+        id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+        logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       brandId,
       input.ownerUserId,
@@ -177,6 +209,9 @@ function insertBrand(input) {
       input.knowledgeBase || "",
       JSON.stringify(input.logo || {}),
       JSON.stringify(Array.isArray(input.assetTags) ? input.assetTags : []),
+      input.profileType === "personal" ? "personal" : "brand",
+      JSON.stringify(Array.isArray(input.contentPillars) ? input.contentPillars : []),
+      input.personaStyle || "",
     );
     return findBrandById(brandId);
   });
@@ -193,7 +228,10 @@ function updateBrandCore(brand) {
       goal = ?,
       knowledge_base = ?,
       logo_json = ?,
-      asset_tags_json = ?
+      asset_tags_json = ?,
+      profile_type = ?,
+      content_pillars_json = ?,
+      persona_style = ?
     WHERE id = ? AND owner_user_id = ?
   `).run(
     brand.name,
@@ -205,6 +243,9 @@ function updateBrandCore(brand) {
     brand.knowledgeBase || "",
     JSON.stringify(brand.logo || {}),
     JSON.stringify(Array.isArray(brand.assetTags) ? brand.assetTags : []),
+    brand.profileType === "personal" ? "personal" : "brand",
+    JSON.stringify(Array.isArray(brand.contentPillars) ? brand.contentPillars : []),
+    brand.personaStyle || "",
     brand.id,
     brand.ownerUserId,
   );
@@ -257,6 +298,7 @@ function updateCurrentTrendIdeaContentAssets(brandId, ownerUserId, trendId, idea
 
 function deleteBrandById(brandId) {
   return runTransaction(() => {
+    db.prepare("DELETE FROM creator_materials WHERE brand_id = ?").run(Number(brandId));
     db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
     db.prepare("DELETE FROM trends WHERE brand_id = ?").run(Number(brandId));
     db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(Number(brandId));

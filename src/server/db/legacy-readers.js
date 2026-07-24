@@ -42,7 +42,8 @@ function readStoreFromCurrentSchema() {
 
   const brandLogoColumn = hasColumn("brands", "logo_json") ? "logo_json" : "'{}' AS logo_json";
   const brands = db.prepare(`
-    SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, ${brandLogoColumn}, asset_tags_json
+    SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+           ${brandLogoColumn}, asset_tags_json, profile_type, content_pillars_json, persona_style
     FROM brands
     ORDER BY id DESC
   `).all().map((row) => ({
@@ -57,6 +58,9 @@ function readStoreFromCurrentSchema() {
     knowledgeBase: row.knowledge_base,
     logo: normalizeBrandLogo(safeParseObject(row.logo_json)),
     assetTags: safeParseArray(row.asset_tags_json),
+    profileType: row.profile_type === "personal" ? "personal" : "brand",
+    contentPillars: safeParseArray(row.content_pillars_json),
+    personaStyle: row.persona_style || "",
     analyses: [],
     trends: [],
   }));
@@ -292,6 +296,9 @@ function readStoreFromLegacySchema() {
     goal: row.goal,
     knowledgeBase: row.knowledge_base,
     assetTags: readLegacyBrandAssetTags(row.id),
+    profileType: "brand",
+    contentPillars: [],
+    personaStyle: "",
     analyses: [],
     trends: [],
   }));

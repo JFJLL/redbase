@@ -117,8 +117,9 @@ async function writeStore(data) {
   const deleteVerification = db.prepare("DELETE FROM verification_codes WHERE phone = ?");
   const upsertBrand = db.prepare(`
     INSERT INTO brands (
-      id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base, logo_json, asset_tags_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
+      logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       owner_user_id = excluded.owner_user_id,
       name = excluded.name,
@@ -129,7 +130,10 @@ async function writeStore(data) {
       goal = excluded.goal,
       knowledge_base = excluded.knowledge_base,
       logo_json = excluded.logo_json,
-      asset_tags_json = excluded.asset_tags_json
+      asset_tags_json = excluded.asset_tags_json,
+      profile_type = excluded.profile_type,
+      content_pillars_json = excluded.content_pillars_json,
+      persona_style = excluded.persona_style
   `);
   const deleteBrand = db.prepare("DELETE FROM brands WHERE id = ?");
   const deleteBrandIdeas = db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)");
@@ -413,6 +417,9 @@ async function writeStore(data) {
         brand.knowledgeBase || "",
         JSON.stringify(brand.logo || {}),
         JSON.stringify(Array.isArray(brand.assetTags) ? brand.assetTags : []),
+        brand.profileType === "personal" ? "personal" : "brand",
+        JSON.stringify(Array.isArray(brand.contentPillars) ? brand.contentPillars : []),
+        brand.personaStyle || "",
       );
       deleteBrandContent(brand.id);
       insertBrandContent(brand);
