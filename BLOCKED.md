@@ -6,3 +6,7 @@
 
 ## 业务 Agent 上报区（集成时由总控处理）
 - 无
+
+## Insights Agent（trends / ideas）上报
+1. 【公共层诉求】品牌数据缺少跨 feature 共享机制：趋势/选题页在 `features/trends/stores/insights.ts` 内独立加载 `/api/brands?summary=1` 与 `/api/brands/:id`。进入趋势页时会强制刷新品牌摘要（新增/删除/改名可同步），但品牌档案页对详情字段（如品牌资料库 knowledgeBase、品牌 Logo）的编辑在同一 SPA 会话内不会同步到已缓存的品牌详情。建议公共层提供共享的品牌 store 或品牌数据失效通知；在此之前该差异与旧版"单页全局 state"行为的偏差仅限于此。
+2. 【跨 Agent 契约】旧版 ideas tab 内嵌的四个生图按钮（朋友圈图/公众号长图/小红书组图/风格化图）属于生图任务域（Content Agent，路由 /app/generation）。IdeasView 以「去生成内容」按钮跳转 `{ name: "generation", query: { brandId, trendId, ideaIndex } }` 承接。需要 Content Agent 的 GenerationView 支持读取这三个 query 参数恢复品牌×趋势×选题上下文，请总控协调该契约。
