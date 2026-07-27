@@ -576,6 +576,7 @@ body:has(.page-landing.is-active)::before {
   width: 100%;
   aspect-ratio: 3 / 4;
   object-fit: cover;
+  object-position: center;
 }
 
 .excellent-grid b,
@@ -665,6 +666,7 @@ body:has(.page-landing.is-active)::before {
   aspect-ratio: 3 / 4;
   border-radius: 8px;
   object-fit: cover;
+  object-position: center;
 }
 
 .float-chip {
@@ -974,7 +976,8 @@ body:has(.page-landing.is-active)::before {
 
 .card-media {
   margin-top: 20px;
-  height: 110px;
+  height: auto;
+  aspect-ratio: 5 / 2;
   overflow: hidden;
   border-radius: 12px;
 }
@@ -983,6 +986,7 @@ body:has(.page-landing.is-active)::before {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
 }
 
 .topic-preview {
@@ -1043,9 +1047,11 @@ body:has(.page-landing.is-active)::before {
 
 .history-preview img {
   width: 100%;
-  height: 105px;
+  height: auto;
+  aspect-ratio: 2 / 1;
   border-radius: 10px;
   object-fit: cover;
+  object-position: center;
 }
 
 .workflow-step {
@@ -1188,9 +1194,11 @@ body:has(.page-landing.is-active)::before {
 
 .learning-panel > img {
   width: 100%;
-  height: 260px;
+  height: auto;
+  aspect-ratio: 5 / 6;
   border-radius: 14px;
   object-fit: cover;
+  object-position: center;
 }
 
 .learning-panel > div {
@@ -1234,6 +1242,7 @@ body:has(.page-landing.is-active)::before {
   aspect-ratio: 3 / 4;
   border-radius: 11px;
   object-fit: cover;
+  object-position: center;
 }
 
 .compare-table-wrap {
@@ -1292,7 +1301,8 @@ body:has(.page-landing.is-active)::before {
 }
 
 .outputs-grid article > div {
-  height: 260px;
+  height: auto;
+  aspect-ratio: 3 / 2;
   overflow: hidden;
   background: var(--landing-paper-2);
 }
@@ -1301,6 +1311,7 @@ body:has(.page-landing.is-active)::before {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
   transition: transform 0.5s ease;
 }
 
@@ -1667,7 +1678,7 @@ body:has(.page-landing.is-active)::before {
   .compare-table-wrap table { min-width: 720px; }
   .outputs-grid { grid-template-columns: 1fr; }
   .outputs-grid article { display: grid; grid-template-columns: 0.9fr 1.1fr; }
-  .outputs-grid article > div { height: 210px; grid-row: span 2; }
+  .outputs-grid article > div { height: auto; aspect-ratio: 3 / 2; grid-row: span 2; }
   .outputs-grid h3 { align-self: end; }
   .pricing-grid { grid-template-columns: 1fr; }
   .footer-grid { grid-template-columns: 2fr 1fr 1fr; }
@@ -1700,9 +1711,9 @@ body:has(.page-landing.is-active)::before {
   .workflow-copy h3 { font-size: 27px; }
   .workflow-panel { padding: 18px; }
   .learning-panel { grid-template-columns: 1fr; }
-  .learning-panel > img { height: 190px; }
+  .learning-panel > img { height: auto; aspect-ratio: 5 / 6; }
   .outputs-grid article { display: block; }
-  .outputs-grid article > div { height: 230px; }
+  .outputs-grid article > div { height: auto; aspect-ratio: 3 / 2; }
   .business-strip { align-items: stretch; flex-direction: column; }
   .commercial-cta-panel { padding: 54px 22px; }
   .footer-grid { grid-template-columns: 1fr 1fr; }

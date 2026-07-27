@@ -26,14 +26,34 @@ test("landing calls to action stay connected to the real application flows", () 
 
 test("landing media is local and desktop layout prevents horizontal overflow", () => {
   assert.doesNotMatch(indexHtml, /image\.qwenlm\.ai/);
-  assert.match(indexHtml, /\.\/assets\/landing-content-xhs-v2\.webp/);
-  assert.match(indexHtml, /\.\/assets\/landing-content-moments-v2\.webp/);
-  assert.match(indexHtml, /\.\/assets\/landing-content-longform-v2\.webp/);
-  assert.doesNotMatch(indexHtml, /landing-content-[^"' ]+-v1\.webp/);
+  for (const asset of [
+    "landing-excellent-source-01.webp",
+    "landing-excellent-source-02.webp",
+    "landing-excellent-source-03.webp",
+    "landing-generated-xhs-01.webp",
+    "landing-generated-xhs-02.webp",
+    "landing-generated-xhs-03.webp",
+    "landing-capability-excellent.webp",
+    "landing-history-thumb-01.webp",
+    "landing-history-thumb-02.webp",
+    "landing-history-thumb-03.webp",
+    "landing-learning-example.webp",
+    "landing-output-xhs.webp",
+    "landing-output-moments.webp",
+    "landing-output-longform.webp",
+  ]) {
+    assert.match(indexHtml, new RegExp(`\\./assets/${asset.replaceAll(".", "\\.")}`));
+  }
+  assert.doesNotMatch(indexHtml, /landing-content-[^"' ]+-v\d+\.webp/);
   assert.match(indexHtml, /href="\/assets\/favicon\.ico"/);
   assert.match(indexHtml, /href="\/assets\/favicon-32\.png"/);
   assert.match(indexHtml, /href="\/assets\/apple-touch-icon\.png"/);
   assert.doesNotMatch(indexHtml, /\.\/assets\/home-(trend-insight|idea-generation|brand-archive)\.webp/);
+  assert.match(indexHtml, /landing-v3\.css\?v=20260727-gpt-image-assets-v1/);
   assert.match(landingCss, /\.hero-grid\s*\{[\s\S]*grid-template-columns:\s*1\.02fr 0\.98fr/);
+  assert.match(landingCss, /\.card-media\s*\{[\s\S]*aspect-ratio:\s*5\s*\/\s*2/);
+  assert.match(landingCss, /\.history-preview img\s*\{[\s\S]*aspect-ratio:\s*2\s*\/\s*1/);
+  assert.match(landingCss, /\.learning-panel > img\s*\{[\s\S]*aspect-ratio:\s*5\s*\/\s*6/);
+  assert.match(landingCss, /\.outputs-grid article > div\s*\{[\s\S]*aspect-ratio:\s*3\s*\/\s*2/);
   assert.match(landingCss, /\.compare-table-wrap\s*\{[\s\S]*overflow:\s*hidden/);
 });
