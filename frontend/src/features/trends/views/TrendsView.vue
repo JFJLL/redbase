@@ -4,7 +4,7 @@
 // renderTrendAnalysisButton / renderXhsCategorySelector / renderHistory /
 // renderAnalysisSummary / renderTrends / restoreAnalysisSnapshot / deleteAnalysisSnapshot。
 import { computed, onMounted, onScopeDispose, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ApiError, isAbortError } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
@@ -32,6 +32,7 @@ import type { TrendItem } from "../model/types";
 
 const store = useInsightsStore();
 const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 const scope = useAbortScope();
 const handleUnauthorized = useUnauthorizedHandler();
@@ -125,10 +126,27 @@ async function loadPage(): Promise<void> {
     if (isAbortError(error) || handleUnauthorized(error)) return;
     return;
   }
+  applyRouteBrandId();
   store.loadXhsCategories(scope.signalFor("xhs-categories")).catch((error) => {
     if (!isAbortError(error)) handleUnauthorized(error);
   });
   await loadSelectedBrandDetail();
+}
+
+// 品牌档案页「AI趋势分析」按 ?brandId= 跳转过来时预选该品牌；
+// 无效或不存在的 brandId 忽略，保持默认选中行为。
+function applyRouteBrandId(): void {
+  const raw = route.query.brandId;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value == null || value === "") return;
+  const brandId = Number(value);
+  if (!Number.isInteger(brandId) || brandId <= 0) return;
+  if (!store.brands.some((item) => Number(item.id) === brandId)) return;
+  if (store.selectedBrandId !== brandId) {
+    store.selectedBrandId = brandId;
+    store.selectedTrendId = null;
+    store.syncSelectedTrendSelection();
+  }
 }
 
 async function loadSelectedBrandDetail(): Promise<void> {
