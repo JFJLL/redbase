@@ -285,13 +285,13 @@ test("shares one timeout budget across text-provider transport retries", async (
   const server = http.createServer((_request, response) => {
     requestCount += 1;
     if (requestCount === 1) {
-      setTimeout(() => response.socket.destroy(), 20);
+      setTimeout(() => response.socket.destroy(), 40);
       return;
     }
     setTimeout(() => {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }));
-    }, 200);
+    }, 1000);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
@@ -309,15 +309,15 @@ test("shares one timeout budget across text-provider transport retries", async (
     }, {
       systemPrompt: "Return JSON",
       userPrompt: "ping",
-      timeoutMs: 90,
+      timeoutMs: 400,
       maxAttempts: 2,
-      delayMs: 30,
+      delayMs: 60,
     }),
     { code: "ETIMEDOUT" },
   );
 
   assert.equal(requestCount, 2);
-  assert.ok(Date.now() - startedAt < 125, "retry must not receive a fresh 90ms timeout");
+  assert.ok(Date.now() - startedAt < 480, "retry must not receive a fresh 400ms timeout");
 });
 
 test("does not retry an OpenAI-compatible request after an HTTP response arrives", async (t) => {

@@ -29,6 +29,7 @@ const DEFAULT_APP_CONFIG = {
   textProvider: {
     apiStyle: "openai",
     model: "deepseek/deepseek-v4-flash",
+    rerankModel: "",
     baseUrl: "",
     openaiBaseUrl: "https://llm.runninghub.ai/v1",
     anthropicBaseUrl: "",
@@ -230,6 +231,9 @@ function loadAppConfig() {
     textProvider: {
       apiStyle: String(process.env.TEXT_API_STYLE || merged.textProvider.apiStyle || "google").trim(),
       model: String(process.env.TEXT_MODEL || merged.textProvider.model || "").trim(),
+      // Optional low-cost reranker model for trend evidence slotting; falls back
+      // to the main text model when unset.
+      rerankModel: String(process.env.TREND_RERANK_MODEL || merged.textProvider.rerankModel || "").trim(),
       baseUrl: String(process.env.TEXT_BASE_URL || merged.textProvider.baseUrl || "").trim(),
       openaiBaseUrl: String(process.env.TEXT_OPENAI_BASE_URL || merged.textProvider.openaiBaseUrl || "").trim(),
       anthropicBaseUrl: String(process.env.TEXT_ANTHROPIC_BASE_URL || merged.textProvider.anthropicBaseUrl || "").trim(),
