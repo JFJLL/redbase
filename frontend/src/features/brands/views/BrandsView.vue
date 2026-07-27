@@ -1,17 +1,324 @@
 <script setup lang="ts">
-// 品牌档案（占位视图）。归属：Core Agent。
-// 迁移要求：保持现有 API、字段、按钮结果、错误提示、加载状态和权限行为。
+import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import { isAbortError, isUnauthorized } from "@/shared/api/client";
+import { useAuthStore } from "@/shared/stores/auth";
+import { useAbortScope } from "@/shared/composables/useAbortScope";
+import {
+  deleteBrand as requestDeleteBrand,
+  fetchBrandDetail,
+  fetchBrandSummaries,
+  fetchGenerationHistory,
+  type BrandDetail,
+  type BrandSummary,
+  type GenerationRecord,
+} from "../api";
+import ProfileFormModal from "../components/ProfileFormModal.vue";
+import ProfileDeleteModal from "../components/ProfileDeleteModal.vue";
+
+// Brands tab. Ported from the legacy renderBrands()/loadBrands() flow in
+// public/app.js — same endpoints, card fields, copy and action buttons.
+
+const router = useRouter();
+const auth = useAuthStore();
+const { signalFor } = useAbortScope();
+
+const brands = ref<BrandSummary[]>([]);
+const generations = ref<GenerationRecord[]>([]);
+const loading = ref(false);
+const loadError = ref("");
+const actionError = ref("");
+
+const formOpen = ref(false);
+const editingBrand = ref<BrandDetail | null>(null);
+
+const deleteTarget = ref<BrandSummary | null>(null);
+const deleting = ref(false);
+
+const brandCards = computed(() => brands.value.filter((brand) => brand.profileType !== "personal"));
+
+function handleUnauthorizedError(): void {
+  auth.handleUnauthorized();
+  router.push({ name: "login" });
+}
+
+async function load(): Promise<void> {
+  loading.value = true;
+  loadError.value = "";
+  try {
+    // Legacy loadBrands() fetches summaries and generation history together;
+    // the history feeds the delete dialog's generation counter.
+    const [brandData, historyData] = await Promise.all([
+      fetchBrandSummaries(signalFor("brands")),
+      fetchGenerationHistory(signalFor("history")),
+    ]);
+    brands.value = brandData.brands;
+    generations.value = historyData.generations;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (isUnauthorized(error)) {
+      handleUnauthorizedError();
+      return;
+    }
+    loadError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(load);
+
+function openCreate(): void {
+  editingBrand.value = null;
+  actionError.value = "";
+  formOpen.value = true;
+}
+
+async function openEdit(brandId: number): Promise<void> {
+  actionError.value = "";
+  try {
+    const data = await fetchBrandDetail(brandId, signalFor("brand-detail"));
+    editingBrand.value = data.brand;
+    formOpen.value = true;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (isUnauthorized(error)) {
+      handleUnauthorizedError();
+      return;
+    }
+    actionError.value = `品牌详情加载失败：${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function handleSaved(): Promise<void> {
+  formOpen.value = false;
+  editingBrand.value = null;
+  await load();
+}
+
+function generationCountFor(brandId: number): number {
+  return generations.value.filter((item) => Number(item.brandId) === Number(brandId)).length;
+}
+
+function openDelete(brand: BrandSummary): void {
+  actionError.value = "";
+  deleteTarget.value = brand;
+}
+
+async function confirmDelete(deleteGenerations: boolean): Promise<void> {
+  const target = deleteTarget.value;
+  if (!target) return;
+  deleting.value = true;
+  actionError.value = "";
+  try {
+    await requestDeleteBrand(target.id, deleteGenerations);
+    deleteTarget.value = null;
+    await load();
+  } catch (error) {
+    if (isUnauthorized(error)) {
+      handleUnauthorizedError();
+      return;
+    }
+    actionError.value = `品牌删除失败：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    deleting.value = false;
+  }
+}
+
+function goTrends(brandId: number): void {
+  // Legacy switched tab with the brand pre-selected; the SPA passes the brand
+  // through the route query instead (shared selected-brand store is公共层).
+  router.push({ name: "trends", query: { brandId: String(brandId) } });
+}
 </script>
 
 <template>
-  <section class="feature-placeholder">
-    <h1>品牌档案</h1>
-    <p>页面迁移中（Core Agent 白名单范围）。</p>
+  <section class="tab-panel is-active" data-testid="brands-view">
+    <header class="panel-header">
+      <div>
+        <div class="panel-icon-title">
+          <span class="panel-icon">⌘</span>
+          <h1 class="panel-title">品牌档案</h1>
+        </div>
+        <p class="panel-subtitle">管理你的品牌信息，为 AI 分析提供输入</p>
+      </div>
+      <div class="header-actions">
+        <button class="primary-btn small-btn" type="button" @click="openCreate">新增品牌</button>
+      </div>
+    </header>
+
+    <p v-if="actionError" class="form-error" role="alert">{{ actionError }}</p>
+
+    <div class="brand-list">
+      <article v-if="loading" class="brand-card">
+        <div class="brand-description">加载中...</div>
+      </article>
+      <article v-else-if="loadError" class="brand-card">
+        <div class="brand-description form-error" role="alert">品牌加载失败：{{ loadError }}</div>
+        <div class="brand-actions">
+          <button class="secondary-btn" type="button" @click="load">重试</button>
+        </div>
+      </article>
+      <article v-else-if="!brandCards.length" class="brand-card">
+        <div class="brand-description">你还没有品牌档案。登录后先新增品牌，就可以开始热点分析和内容选题。</div>
+      </article>
+      <template v-else>
+        <article v-for="brand in brandCards" :key="brand.id" class="brand-card" data-testid="brand-card">
+          <div class="brand-card-head">
+            <div>
+              <div class="brand-meta">
+                <h3>{{ brand.name }}</h3>
+                <span class="brand-tag">{{ brand.industry }}</span>
+              </div>
+              <div class="brand-description">
+                <strong>目标受众：</strong>{{ brand.audience }}
+                <br /><br />
+                {{ brand.description }}
+              </div>
+              <div class="panel-subtitle">趋势 {{ Number(brand.trendCount || 0) }} 条 · 分析 {{ Number(brand.analysisCount || 0) }} 次</div>
+            </div>
+          </div>
+          <div class="brand-actions">
+            <button class="primary-btn small-btn" type="button" @click="goTrends(brand.id)">AI趋势分析</button>
+            <button class="secondary-btn" type="button" @click="openEdit(brand.id)">编辑</button>
+            <button class="secondary-btn danger-btn" type="button" @click="openDelete(brand)">删除</button>
+          </div>
+        </article>
+      </template>
+    </div>
+
+    <ProfileFormModal
+      :open="formOpen"
+      profile-type="brand"
+      :brand="editingBrand"
+      @close="formOpen = false"
+      @saved="handleSaved"
+    />
+    <ProfileDeleteModal
+      :open="Boolean(deleteTarget)"
+      :brand-name="deleteTarget?.name || ''"
+      :generation-count="deleteTarget ? generationCountFor(deleteTarget.id) : 0"
+      :deleting="deleting"
+      @close="deleteTarget = null"
+      @confirm="confirmDelete"
+    />
   </section>
 </template>
 
 <style scoped>
-.feature-placeholder {
-  padding: 24px;
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.panel-icon-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(255, 36, 66, 0.1);
+  color: var(--color-brand, #ff2442);
+  font-size: 1.2rem;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.panel-subtitle {
+  margin: 8px 0 0;
+  color: var(--color-text-secondary, #646a73);
+  font-size: 14px;
+}
+
+.brand-list {
+  display: grid;
+  gap: 18px;
+}
+
+.brand-card {
+  border: 1px solid var(--color-border, #e4e6eb);
+  border-radius: 14px;
+  padding: 22px;
+  background: var(--color-surface, #fff);
+  display: grid;
+  gap: 16px;
+}
+
+.brand-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-meta h3 {
+  margin: 0;
+}
+
+.brand-tag {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 36, 66, 0.1);
+  color: var(--color-brand, #ff2442);
+  font-size: 12px;
+}
+
+.brand-description {
+  margin-top: 12px;
+  color: var(--color-text-secondary, #4a4f58);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.brand-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary-btn {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 16px;
+  background: var(--color-brand, #ff2442);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.secondary-btn {
+  border: 1px solid var(--color-border, #e4e6eb);
+  border-radius: 8px;
+  padding: 8px 16px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.danger-btn {
+  color: #d64545;
+  border-color: rgba(214, 69, 69, 0.4);
+}
+
+.form-error {
+  margin: 0 0 16px;
+  color: #d64545;
+  font-size: 13px;
+  white-space: pre-wrap;
 }
 </style>

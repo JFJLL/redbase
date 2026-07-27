@@ -5,4 +5,4 @@
 2. `npm ci` 首次失败：本地有一个自 2026-07-24 起运行的 `node server.js`（PID 40268）锁住 `better_sqlite3.node`。已停止该进程后重跑通过。若该服务是使用者有意保留的，请在需要时用 `npm start` 重启。
 
 ## 业务 Agent 上报区（集成时由总控处理）
-- 无
+- [Core Agent] 跨 tab 的“当前选中品牌/个人 IP”在旧版存于全局 state（brands/personal 点“AI趋势分析”后 trends/ideas tab 复用同一选中项）。共享 store 属公共层（frontend/src/shared/ 禁改），Core 侧暂用 `router.push({ name: "trends", query: { brandId } })` 传递选中品牌。请总控集成时评估是否在 shared/stores 增加 selected-brand store，并让 trends/ideas 读取 `brandId` query 或该 store。
