@@ -1,17 +1,432 @@
 <script setup lang="ts">
-// 历史生成（占位视图）。归属：Content Agent。
-// 迁移要求：保持现有 API、字段、按钮结果、错误提示、加载状态和权限行为。
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
+import { isAbortError, isUnauthorized } from "@/shared/api/client";
+import { useAuthStore } from "@/shared/stores/auth";
+import { useAbortScope } from "@/shared/composables/useAbortScope";
+import {
+  HISTORY_TYPE_LABELS,
+  KNOWN_ASPECT_RATIOS,
+  createEmptyGenerationHistoryFilters,
+  deleteGeneration,
+  fetchBrands,
+  fetchGenerationHistory,
+  getGenerationPrimaryImageUrl,
+  matchesGenerationHistoryFilters,
+  safeImageSrc,
+  type GenerationHistoryItem,
+  type HistoryBrand,
+} from "../api";
+
+// 历史生成：列表 + 筛选 + 详情查看 + 删除。签名图片 URL 直接使用后端返回值。
+const router = useRouter();
+const auth = useAuthStore();
+const scope = useAbortScope();
+
+const filters = reactive(createEmptyGenerationHistoryFilters());
+const generations = ref<GenerationHistoryItem[]>([]);
+const brands = ref<HistoryBrand[]>([]);
+const loading = ref(false);
+const loadError = ref("");
+const detailItem = ref<GenerationHistoryItem | null>(null);
+const detailImageUrl = ref("");
+let filterTimer: ReturnType<typeof setTimeout> | null = null;
+
+const visibleHistory = computed(() => generations.value.filter((item) => matchesGenerationHistoryFilters(item, filters)));
+const hasFilters = computed(() => Boolean(filters.q || filters.brandId || filters.type || filters.from || filters.to));
+
+const TYPE_OPTIONS = [...HISTORY_TYPE_LABELS.entries()];
+
+function aspectRatioOf(item: GenerationHistoryItem): string {
+  const ratio = String(item.payload?.aspectRatio || "");
+  return KNOWN_ASPECT_RATIOS.has(ratio) ? ratio : "";
+}
+
+function typeLabel(item: GenerationHistoryItem): string {
+  return HISTORY_TYPE_LABELS.get(item.type) || item.type;
+}
+
+function formatTime(value?: string): string {
+  if (!value) return "";
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+async function handleUnauthorizedError(error: unknown): Promise<boolean> {
+  if (!isUnauthorized(error)) return false;
+  auth.handleUnauthorized();
+  await router.push({ name: "login" });
+  return true;
+}
+
+async function loadHistory() {
+  loading.value = true;
+  try {
+    const result = await fetchGenerationHistory(filters, scope.signalFor("history"));
+    generations.value = result.generations || [];
+    loadError.value = "";
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    loadError.value = `加载历史失败：${(error as Error).message}`;
+  } finally {
+    loading.value = false;
+  }
+}
+
+function scheduleLoad(useDelay: boolean) {
+  if (filterTimer) clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => loadHistory(), useDelay ? 280 : 0);
+}
+
+function resetFilters() {
+  Object.assign(filters, createEmptyGenerationHistoryFilters());
+  loadHistory();
+}
+
+async function removeItem(generationId: number) {
+  const item = generations.value.find((generation) => Number(generation.id) === Number(generationId));
+  if (!item) return;
+  if (!confirm(`确定删除「${item.cardTitle || item.ideaTitle || "这条生成内容"}」吗？删除后将无法找回。`)) return;
+  try {
+    await deleteGeneration(generationId, scope.signalFor(`delete-${generationId}`));
+    generations.value = generations.value.filter((generation) => Number(generation.id) !== Number(generationId));
+    if (detailItem.value && Number(detailItem.value.id) === Number(generationId)) closeDetail();
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    alert(`删除失败：${(error as Error).message}`);
+  }
+}
+
+function openDetail(item: GenerationHistoryItem, slideUrl = "") {
+  detailItem.value = item;
+  detailImageUrl.value = slideUrl || getGenerationPrimaryImageUrl(item);
+}
+
+function closeDetail() {
+  detailItem.value = null;
+  detailImageUrl.value = "";
+}
+
+async function loadBrands() {
+  try {
+    const result = await fetchBrands(scope.signalFor("brands"));
+    brands.value = result.brands || [];
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    // 品牌下拉加载失败不阻断历史列表。
+  }
+}
+
+onMounted(() => {
+  loadBrands();
+  loadHistory();
+});
+
+onUnmounted(() => {
+  if (filterTimer) clearTimeout(filterTimer);
+});
 </script>
 
 <template>
-  <section class="feature-placeholder">
-    <h1>历史生成</h1>
-    <p>页面迁移中（Content Agent 白名单范围）。</p>
+  <section class="history-view">
+    <header class="view-header">
+      <h1>历史生成</h1>
+      <p class="view-subtitle">7 天内的生成记录会保留在这里，可搜索、筛选、查看与删除。</p>
+    </header>
+
+    <div class="history-filters">
+      <input
+        v-model="filters.q"
+        type="search"
+        placeholder="搜索标题 / 摘要 / 品牌"
+        data-test="history-search"
+        @input="scheduleLoad(true)"
+      />
+      <select v-model="filters.brandId" data-test="history-brand" @change="scheduleLoad(false)">
+        <option value="">全部品牌</option>
+        <option v-for="brand in brands" :key="brand.id" :value="String(brand.id)">{{ brand.name }}</option>
+      </select>
+      <select v-model="filters.type" data-test="history-type" @change="scheduleLoad(false)">
+        <option value="">全部类型</option>
+        <option v-for="[value, label] in TYPE_OPTIONS" :key="value" :value="value">{{ label }}</option>
+      </select>
+      <input v-model="filters.from" type="date" @change="scheduleLoad(false)" />
+      <input v-model="filters.to" type="date" @change="scheduleLoad(false)" />
+      <button type="button" class="secondary-btn" @click="resetFilters">重置</button>
+    </div>
+
+    <p v-if="loadError" class="history-error" data-test="history-error">{{ loadError }}</p>
+    <p v-else-if="loading && !generations.length" class="history-loading">正在加载历史生成…</p>
+
+    <div v-if="!loading && !visibleHistory.length && !loadError" class="history-empty" data-test="history-empty">
+      {{
+        hasFilters
+          ? "没有找到符合筛选条件的历史生成记录。"
+          : "你还没有任何生成记录。去内容选题页生成朋友圈图、公众号长图或小红书组图后，这里会自动沉淀下来。"
+      }}
+    </div>
+
+    <article v-for="item in visibleHistory" :key="item.id" class="history-card" data-test="history-card">
+      <div class="history-card-top">
+        <div>
+          <div class="history-card-meta">
+            <span class="brand-tag">{{ item.channelLabel }}</span>
+            <span class="brand-tag">{{ typeLabel(item) }}</span>
+            <span v-if="aspectRatioOf(item)" class="brand-tag">{{ aspectRatioOf(item) }}</span>
+            <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
+            <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
+              已改图 {{ (item.payload?.editHistory || []).length }} 次
+            </span>
+          </div>
+          <h3>{{ item.cardTitle }}</h3>
+          <div class="history-card-ref">{{ item.brandName }} · {{ item.trendTitle }}</div>
+          <div class="history-card-ref">{{ item.ideaTitle }}</div>
+        </div>
+        <div class="history-card-actions">
+          <button
+            v-if="getGenerationPrimaryImageUrl(item)"
+            type="button"
+            class="secondary-btn"
+            @click="openDetail(item)"
+          >
+            查看
+          </button>
+          <button type="button" class="secondary-btn" data-test="history-delete" @click="removeItem(item.id)">删除</button>
+        </div>
+      </div>
+
+      <div v-if="item.type === 'moments'" class="history-copy">
+        <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
+        <p v-if="item.payload?.visualDirection"><strong>视觉方向：</strong>{{ item.payload?.visualDirection }}</p>
+      </div>
+      <div v-else-if="item.type === 'wechat'" class="history-copy">
+        <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
+        <p v-if="item.payload?.intro"><strong>文章导语：</strong>{{ item.payload?.intro }}</p>
+      </div>
+      <div v-else class="history-copy">
+        <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
+        <p v-if="item.payload?.publishCaption"><strong>发布文案：</strong>{{ item.payload?.publishCaption }}</p>
+      </div>
+
+      <div v-if="item.type === 'xhsCarousel'" class="history-grid">
+        <img
+          v-for="(slide, index) in (item.payload?.slides || []).slice(0, 4).filter((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))"
+          :key="index"
+          :src="safeImageSrc(slide.imageUrl || slide.previewUrl)"
+          :alt="slide.title || ''"
+          loading="lazy"
+          decoding="async"
+          @click="openDetail(item, safeImageSrc(slide.imageUrl || slide.previewUrl))"
+        />
+      </div>
+      <button
+        v-else-if="item.previewUrl"
+        type="button"
+        class="history-preview"
+        @click="openDetail(item)"
+      >
+        <img :src="safeImageSrc(item.previewUrl)" :alt="item.cardTitle || ''" loading="lazy" decoding="async" />
+      </button>
+    </article>
+
+    <div v-if="detailItem" class="history-modal" @click.self="closeDetail()">
+      <div class="history-modal-body">
+        <header class="history-modal-header">
+          <h3>{{ detailItem.cardTitle || "历史图片" }}</h3>
+          <button type="button" class="secondary-btn" @click="closeDetail()">关闭</button>
+        </header>
+        <p class="history-card-ref">{{ detailItem.channelLabel }} · {{ typeLabel(detailItem) }}</p>
+        <img v-if="detailImageUrl" :src="detailImageUrl" alt="历史生成图片" class="history-modal-image" />
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.feature-placeholder {
-  padding: 24px;
+.history-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.view-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.view-subtitle {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-filters input,
+.history-filters select {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.secondary-btn {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.history-error {
+  color: var(--color-brand);
+  font-size: 13px;
+}
+
+.history-loading,
+.history-empty {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  background: var(--color-surface);
+}
+
+.history-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-card-top h3 {
+  margin: 6px 0 4px;
+  font-size: 16px;
+}
+
+.history-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.brand-tag {
+  font-size: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--color-text-secondary);
+}
+
+.history-card-time {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.history-card-ref {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.history-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+
+.history-copy {
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-copy p {
+  margin: 0;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.history-grid img {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+}
+
+.history-preview {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-preview img {
+  max-width: 240px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.history-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.history-modal-body {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  max-width: 640px;
+  max-height: 90vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.history-modal-image {
+  max-width: 100%;
+  border-radius: var(--radius-md);
 }
 </style>

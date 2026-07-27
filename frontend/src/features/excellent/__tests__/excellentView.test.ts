@@ -1,0 +1,208 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia } from "pinia";
+import { createMemoryHistory, createRouter, type Router } from "vue-router";
+import ExcellentView from "../views/ExcellentView.vue";
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+function makeRouter(): Router {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/", name: "home", component: { template: "<div />" } },
+      { path: "/login", name: "login", component: { template: "<div />" } },
+    ],
+  });
+}
+
+const LIST_ITEMS = [
+  { noteId: "n1", title: "露营装备清单", imageUrls: ["/img/a.jpg"], metrics: { readCount: 10 } },
+  { noteId: "n2", title: "晨间护肤流程", imageUrls: ["/img/b.jpg"], metrics: { readCount: 20 } },
+];
+
+type FetchCall = { url: string; init?: RequestInit };
+
+function installFetchMock(handlers: (url: string, init?: RequestInit) => Response | undefined, calls: FetchCall[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      const response = handlers(url, init);
+      if (!response) throw new Error(`unhandled fetch: ${url}`);
+      return response;
+    }),
+  );
+}
+
+function defaultHandlers(url: string): Response | undefined {
+  if (url.startsWith("/api/excellent-contents/content-sources")) {
+    return jsonResponse(200, { contentSources: [{ value: "buyer", label: "买手推荐" }] });
+  }
+  if (url.startsWith("/api/excellent-contents/taxonomy")) {
+    return jsonResponse(200, { tree: { items: [{ label: "美妆", value: "小红书#美妆" }] } });
+  }
+  if (url.startsWith("/api/excellent-contents?")) {
+    return jsonResponse(200, {
+      board: "xhs_hot",
+      contentSource: "all",
+      categoryPath: "",
+      items: LIST_ITEMS,
+      updatedAt: "2026-07-01T08:00:00.000Z",
+      hasCache: true,
+    });
+  }
+  return undefined;
+}
+
+describe("ExcellentView", () => {
+  let calls: FetchCall[];
+
+  beforeEach(() => {
+    calls = [];
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  async function mountView(handlers: (url: string, init?: RequestInit) => Response | undefined = defaultHandlers) {
+    installFetchMock(handlers, calls);
+    const router = makeRouter();
+    await router.push("/");
+    await router.isReady();
+    const wrapper = mount(ExcellentView, {
+      global: { plugins: [createPinia(), router] },
+    });
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("loads the cache-only list with board/contentSource params and renders cards", async () => {
+    const wrapper = await mountView();
+
+    const listCall = calls.find((call) => call.url.startsWith("/api/excellent-contents?"));
+    expect(listCall).toBeTruthy();
+    expect(listCall!.url).toContain("board=xhs_hot");
+    expect(listCall!.url).toContain("contentSource=all");
+
+    const cards = wrapper.findAll('[data-test="excellent-card"]');
+    expect(cards).toHaveLength(2);
+    expect(wrapper.text()).toContain("露营装备清单");
+    expect(wrapper.text()).toContain("晨间护肤流程");
+  });
+
+  it("posts the draft filters snapshot on 更新内容 and commits them on success", async () => {
+    const wrapper = await mountView((url, init) => {
+      if (url === "/api/excellent-contents/refresh") {
+        const body = JSON.parse(String(init?.body));
+        return jsonResponse(200, {
+          board: body.board,
+          contentSource: body.contentSource,
+          categoryPath: body.categoryPath,
+          industryPath: body.industryPath,
+          items: LIST_ITEMS,
+          updatedAt: "2026-07-02T09:00:00.000Z",
+        });
+      }
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="filter-source"]').setValue("buyer");
+    await wrapper.find('[data-test="filter-category"]').setValue("小红书#美妆");
+    // Dropdown changes only touch the draft filters — a pending hint is shown.
+    expect(wrapper.find('[data-test="excellent-status"]').text()).toBe(
+      "筛选条件将在点击“更新内容”后生效，当前仍展示上一次保存的数据。",
+    );
+    expect(calls.some((call) => call.url === "/api/excellent-contents/refresh")).toBe(false);
+
+    await wrapper.find('[data-test="refresh-button"]').trigger("click");
+    await flushPromises();
+
+    const refreshCall = calls.find((call) => call.url === "/api/excellent-contents/refresh");
+    expect(refreshCall).toBeTruthy();
+    expect(refreshCall!.init?.method).toBe("POST");
+    expect(JSON.parse(String(refreshCall!.init?.body))).toEqual({
+      board: "xhs_hot",
+      contentSource: "buyer",
+      categoryPath: "小红书#美妆",
+      industryPath: "",
+    });
+    // Draft filters committed: the dirty hint is gone.
+    expect(wrapper.find('[data-test="excellent-status"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="toast"]').text()).toContain("已更新至");
+  });
+
+  it("keeps old items, rolls back drafts and shows the backend error verbatim on refresh failure", async () => {
+    const wrapper = await mountView((url) => {
+      if (url === "/api/excellent-contents/refresh") {
+        return jsonResponse(502, { error: "优秀内容暂时无法更新，请稍后重试。" });
+      }
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="filter-source"]').setValue("buyer");
+    await wrapper.find('[data-test="refresh-button"]').trigger("click");
+    await flushPromises();
+
+    // Old items are preserved and the refresh error copy matches the legacy UI.
+    expect(wrapper.findAll('[data-test="excellent-card"]')).toHaveLength(2);
+    expect(wrapper.find('[data-test="excellent-status"]').text()).toBe("更新失败，当前仍展示上一次保存的数据。");
+    // Toast carries the backend error text verbatim.
+    expect(wrapper.find('[data-test="toast"]').text()).toBe("优秀内容暂时无法更新，请稍后重试。");
+    // Draft dropdown rolled back to the formal value.
+    expect((wrapper.find('[data-test="filter-source"]').element as HTMLSelectElement).value).toBe("all");
+  });
+
+  it("shows the empty-state copy when the cache has no items", async () => {
+    const wrapper = await mountView((url) => {
+      if (url.startsWith("/api/excellent-contents?")) {
+        return jsonResponse(200, { board: "xhs_hot", contentSource: "all", items: [], hasCache: false });
+      }
+      return defaultHandlers(url);
+    });
+
+    expect(wrapper.find('[data-test="excellent-empty"]').text()).toContain(
+      "该筛选条件暂无已保存内容，请点击“更新内容”获取最新数据。",
+    );
+  });
+
+  it("opens the remix modal, posts remix-analysis and degrades with the backend error text", async () => {
+    const wrapper = await mountView((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(503, { error: "参考方法分析暂时不可用" });
+      }
+      if (url.startsWith("/api/brands")) {
+        return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      }
+      if (url.includes("/excellent-remix-ideas")) {
+        return jsonResponse(200, { brandId: 7, ideas: [] });
+      }
+      void init;
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+
+    const analysisCall = calls.find((call) => call.url.includes("/remix-analysis"));
+    expect(analysisCall).toBeTruthy();
+    expect(analysisCall!.url).toBe("/api/excellent-contents/n1/remix-analysis");
+    expect(JSON.parse(String(analysisCall!.init?.body))).toEqual({
+      board: "xhs_hot",
+      contentSource: "all",
+      categoryPath: "",
+      industryPath: "",
+    });
+    // Analysis failure degrades but keeps the flow open with the backend error verbatim.
+    expect(wrapper.find('[data-test="analysis-error"]').text()).toBe("参考方法分析暂时不可用");
+    expect(wrapper.find('[data-test="remix-brand"]').exists()).toBe(true);
+  });
+});
