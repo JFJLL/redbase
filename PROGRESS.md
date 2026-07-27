@@ -64,4 +64,4 @@
 - [x] 任务 2 单条验收、targeted repair、降级必达
 - [x] 任务 3 API warnings + 前端提示 + 积分
 - [x] 任务 4 回归测试 + README + 反向验证（红→绿）
-- [ ] 分三段提交（搜索重排 / 结果交付 / API与测试）+ verify-change.ps1 + 推送分支
+- [x] 分三段提交（搜索重排 `7e2a87a` / 结果交付 `36496b2` / API与测试 `d3ca478`）+ verify-change.ps1 全绿（另以 `-RiskOverride R2` 跑过 static+unit+integration 全命令泳道）+ 分支已推送 `origin/codex/trend-delivery-guarantee-v1`，未合并 master
