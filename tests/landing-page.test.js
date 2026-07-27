@@ -26,9 +26,14 @@ test("landing calls to action stay connected to the real application flows", () 
 
 test("landing media is local and desktop layout prevents horizontal overflow", () => {
   assert.doesNotMatch(indexHtml, /image\.qwenlm\.ai/);
-  assert.match(indexHtml, /\.\/assets\/home-trend-insight\.webp/);
-  assert.match(indexHtml, /\.\/assets\/home-idea-generation\.webp/);
-  assert.match(indexHtml, /\.\/assets\/home-brand-archive\.webp/);
+  assert.match(indexHtml, /\.\/assets\/landing-content-xhs-v2\.webp/);
+  assert.match(indexHtml, /\.\/assets\/landing-content-moments-v2\.webp/);
+  assert.match(indexHtml, /\.\/assets\/landing-content-longform-v2\.webp/);
+  assert.doesNotMatch(indexHtml, /landing-content-[^"' ]+-v1\.webp/);
+  assert.match(indexHtml, /href="\/assets\/favicon\.ico"/);
+  assert.match(indexHtml, /href="\/assets\/favicon-32\.png"/);
+  assert.match(indexHtml, /href="\/assets\/apple-touch-icon\.png"/);
+  assert.doesNotMatch(indexHtml, /\.\/assets\/home-(trend-insight|idea-generation|brand-archive)\.webp/);
   assert.match(landingCss, /\.hero-grid\s*\{[\s\S]*grid-template-columns:\s*1\.02fr 0\.98fr/);
   assert.match(landingCss, /\.compare-table-wrap\s*\{[\s\S]*overflow:\s*hidden/);
 });
