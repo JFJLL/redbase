@@ -5,6 +5,7 @@ const ROOT = path.resolve(__dirname, "..", "..");
 const PROJECT_ENV_FILE = path.join(ROOT, ".env");
 loadProjectEnvFile(PROJECT_ENV_FILE);
 const PUBLIC_DIR = path.join(ROOT, "public");
+const DIST_PUBLIC_DIR = path.join(ROOT, "dist", "public");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = process.env.REDBASE_DB_FILE || path.join(DATA_DIR, "redbase.sqlite");
 const CONFIG_FILE = path.join(ROOT, "config.local.json");
@@ -423,6 +424,7 @@ function parseListConfig(envValue, localValue, legacyValue = "") {
 module.exports = {
   ROOT,
   PUBLIC_DIR,
+  DIST_PUBLIC_DIR,
   DATA_DIR,
   DB_FILE,
   CONFIG_FILE,

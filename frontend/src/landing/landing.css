@@ -1,0 +1,69 @@
+/* Landing styles (Core agent owns this file). System font stack only —
+   external font requests are forbidden by the performance budget. */
+:root {
+  --landing-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --landing-brand: #ff2442;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--landing-font);
+  color: #1f2329;
+  background: #fff;
+}
+
+.landing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 32px;
+}
+
+.landing-logo {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--landing-brand);
+}
+
+.landing-nav {
+  display: flex;
+  gap: 12px;
+}
+
+.landing-cta {
+  display: inline-block;
+  padding: 8px 20px;
+  border-radius: 999px;
+  border: 1px solid #e4e6eb;
+  color: #1f2329;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.landing-cta-primary {
+  background: var(--landing-brand);
+  border-color: var(--landing-brand);
+  color: #fff;
+}
+
+.landing-hero {
+  text-align: center;
+  padding: 96px 24px;
+}
+
+.landing-hero h1 {
+  font-size: 40px;
+  margin: 0 0 16px;
+}
+
+.landing-hero p {
+  font-size: 18px;
+  color: #646a73;
+  margin: 0 0 32px;
+}
