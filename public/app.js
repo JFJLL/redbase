@@ -1405,6 +1405,7 @@ function bindAnalysisButton() {
       if (!generatedBucket || generatedBucket.items?.length !== 10) {
         throw new Error("服务端未返回完整的 10 条趋势，本次结果未应用。");
       }
+      notifyTrendAnalysisWarnings(result.warnings, generatedBucket.items.length);
       const mergedBrand = mergeGeneratedTrendResult(result.brand, bucketKey);
       updateCurrentUser(result.user);
       replaceBrand(mergedBrand);
@@ -1425,6 +1426,22 @@ function bindAnalysisButton() {
       }
     }
   });
+}
+
+// Non-blocking notice for degraded/unverified trend items. A degraded batch is
+// still a success — never raise the failure dialog for it.
+function notifyTrendAnalysisWarnings(warnings, itemCount = 10) {
+  const list = Array.isArray(warnings) ? warnings : [];
+  if (!list.length) return;
+  const degradedIndexes = new Set(
+    list
+      .filter((warning) => ["TREND_ITEM_DEGRADED", "TREND_ITEM_FALLBACK"].includes(warning?.code) && Number.isInteger(warning?.trendIndex))
+      .map((warning) => warning.trendIndex),
+  );
+  const message = degradedIndexes.size
+    ? `已返回 ${itemCount} 条趋势，其中 ${degradedIndexes.size} 条为待验证/降级内容。`
+    : `已返回 ${itemCount} 条趋势（${list.map((warning) => String(warning?.message || warning?.code || "提示")).slice(0, 2).join("；")}）。`;
+  showToast(message, 8000);
 }
 
 function getTrendAnalysisRequestKey(brandId, bucketKey) {

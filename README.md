@@ -65,6 +65,7 @@ ANYSEARCH_API_KEYS=<key-1>,<key-2>
 
 - `textProvider.apiStyle`：文本模型接口类型，默认 `openai`
 - `textProvider.model`：文本模型名，默认 `deepseek/deepseek-v4-flash`
+- `textProvider.rerankModel` / `TREND_RERANK_MODEL`：趋势证据重排使用的低成本模型；未配置时复用 `textProvider.model`，走同一文本服务接口
 - `textProvider.baseUrl`：Google 风格文本接口地址，仅兼容旧配置
 - `textProvider.openaiBaseUrl`：OpenAI 兼容接口地址，默认 `https://llm.runninghub.ai/v1`
 - `textProvider.anthropicBaseUrl`：Anthropic 兼容接口地址
@@ -109,9 +110,11 @@ ANYSEARCH_API_KEYS=<key-1>,<key-2>
 
 飞书企业登录使用 `/api/auth/feishu/start?app=<key>` 发起 OAuth，回调地址为 `/api/auth/feishu/callback`。服务端会根据 OAuth `state` 找回对应的 `feishu.apps[]`，用该应用的 `appSecret` 换取用户信息，再用该应用的 `tenantKeys` 校验企业身份；不再需要维护员工 open_id 白名单。
 
-趋势分析采用“AnySearch 检索证据 → DeepSeek V4 Flash 结构化生成”的两阶段流程，不再调用 Gemini 内置 Google Search。网页走 `general.general`；社会话题会补充微博、知乎结果，流量、赛道和人群等适合社媒信号的维度补充知乎。服务端会去重、限制摘要、过滤私网/占位/失效 URL、划分来源级别，并要求每条趋势返回真实 `evidenceIds`。社媒和低可信来源只用于发现讨论方向，不能单独证明硬事实。
+趋势分析采用“AnySearch 检索证据 → 低成本模型重排聚类 → DeepSeek V4 Flash 结构化生成”的流程，不再调用 Gemini 内置 Google Search。查询由 1 条品牌名/产品精确查询加品类、人群、趋势维度宽查询组成；网页走 `general.general`，社会话题会补充微博、知乎结果，流量、赛道和人群等适合社媒信号的维度补充知乎。服务端会去重、限制摘要、过滤私网/占位/失效 URL、划分来源级别，并要求每条趋势返回真实 `evidenceIds`。宽泛的正则相关性不再整批硬删候选：最多 30 条安全过滤后的候选交给重排模型聚成至多 10 个证据槽位（`topic/brandFit/brandLink/allowedClaims/avoidClaims`），重排失败时回退确定性评分并附 warning，不会中止生成。社媒和低可信来源只用于发现讨论方向，不能单独证明硬事实。
 
-`小红书热点话题` 仍优先使用蒲公英近 3 日曝光排序前 10 条帖子；Pgy 默认失败即中止本次分析，避免误扣积分。显式开启 `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK` 后才会降级到 AnySearch。
+结果按“单条验收、结果必达”交付：非小红书维度最多 3 次逻辑模型调用（重排 1 + 主生成 1 + 单条修复 1），合格条目直接保留，只把坏条目的具体字段送去一次 targeted repair；修复后仍有问题就本地去掉无依据强断言、补齐结构并降级返回，不再因个别条目丢弃整批 10 条。成功响应的 `warnings` 数组会标注待验证/降级条目，前端以非阻断提示展示；降级成功仍按现有流程保存并扣一次积分，真正无来源时才失败且不扣积分。
+
+`小红书热点话题` 仍优先使用蒲公英近 3 日曝光排序前 10 条帖子；Pgy 有数据时只调用一次主模型，不做业务内容否决或整批重写，模型不可解析或不足 10 条时按对应 Pgy 笔记补成完整卡片并附 warning。Pgy 默认失败即中止本次分析，避免误扣积分；显式开启 `PGY_CONTENT_SQUARE_ALLOW_SEARCH_FALLBACK` 后才会降级到 AnySearch。
 
 ## 启动
 
