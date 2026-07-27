@@ -3500,6 +3500,25 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           });
           break;
         }
+        if ((effectiveAnySearchEvidence?.evidence || []).length) {
+          // Search money is already spent and evidence slots exist: a
+          // transport-level failure, timeout, or zero output on the very first
+          // model call degrades to evidence-slot cards instead of failing the
+          // whole request. Only a truly empty search source still fails.
+          console.warn("[trend-analysis] main model call failed; degrading from evidence slots", {
+            brandId: brand.id,
+            brandName: brand.name,
+            requestMode,
+            code: error?.code || "UNKNOWN",
+            message: String(error?.message || "unknown error").slice(0, 200),
+          });
+          analysisWarnings.push({
+            code: "TREND_MODEL_UNAVAILABLE",
+            message: "主模型暂时不可用，本批趋势由证据槽位本地降级生成。",
+          });
+          candidateBuckets = candidateBuckets || [];
+          break;
+        }
         throw error;
       }
       modelTiming.requestMs += Date.now() - modelStartedAt;

@@ -120,6 +120,22 @@ test("deterministic slots never pick completely irrelevant candidates while rele
   const usedIds = new Set(slots.map((slot) => slot.evidenceIds[0]));
   assert.deepEqual([...usedIds].sort(), ["C1", "C2"]);
   assert.ok(slots.every((slot) => slot.topic && slot.brandLink && Array.isArray(slot.avoidClaims)));
+  // Only 2 relevant candidates: reused sources must split into distinct
+  // scene/content-form slots — all ten topics stay unique.
+  assert.equal(new Set(slots.map((slot) => slot.topic)).size, 10);
+});
+
+test("a reused-source fallback carries a slot-reuse warning alongside unique topics", async () => {
+  const searchEvidence = { evidence: [], candidates: mixedCandidateFixture() };
+  const plan = await buildRerankedEvidencePlan({ textProvider: {} }, brand, [{ key: "news", title: "新闻热点趋势" }], searchEvidence, {
+    trendCount: 10,
+    textModelImpl: async () => {
+      throw new Error("rerank model unavailable");
+    },
+  });
+  assert.equal(plan.slots.length, 10);
+  assert.equal(new Set(plan.slots.map((slot) => slot.topic)).size, 10);
+  assert.ok(plan.warnings.some((warning) => warning.code === "EVIDENCE_SLOT_REUSED"));
 });
 
 test("rerank model failure degrades to deterministic slots with a warning and keeps going", async () => {
@@ -164,6 +180,52 @@ test("TREND_RERANK_MODEL overrides the model only for rerank calls and falls bac
   assert.equal(withOverride.textProvider.model, "cheap-model");
   const withoutOverride = { textProvider: { model: "main-model", rerankModel: "" } };
   assert.equal(resolveRerankAppConfig(withoutOverride), withoutOverride);
+});
+
+test("a real but completely irrelevant candidate picked by the rerank model is dropped", async () => {
+  const searchEvidence = { evidence: [], candidates: mixedCandidateFixture() };
+  const plan = await buildRerankedEvidencePlan({ textProvider: {} }, brand, [{ key: "news", title: "新闻热点趋势" }], searchEvidence, {
+    trendCount: 10,
+    textModelImpl: async () => ({
+      slots: [
+        { candidateId: "C1", topic: "LightMate 用户口碑", bucketFit: 90, brandFit: 92 },
+        // C3 exists in the candidate pool but is brandRelevant=false and
+        // trafficRelevant=false — the model must not resurrect it.
+        { candidateId: "C3", topic: "篮球联赛最新比分", bucketFit: 88, brandFit: 80 },
+      ],
+    }),
+  });
+  assert.equal(plan.usedModel, true);
+  assert.equal(plan.slots.length, 1);
+  assert.deepEqual(plan.evidence.map((item) => item.id), ["S1"]);
+  assert.ok(plan.evidence.every((item) => !/篮球|钢铁/.test(item.title)));
+});
+
+test("a first-call transport failure with evidence still delivers ten degraded cards", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  const result = await generateAiTrendSet({
+    searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7800, {
+    bucketKey: "news",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      const error = new Error("connect ETIMEDOUT upstream");
+      error.code = "ETIMEDOUT";
+      throw error;
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.degraded === true));
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.equal(
+    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
+    10,
+  );
 });
 
 test("generation plan lines carry rerank slot anchors and claim boundaries", () => {

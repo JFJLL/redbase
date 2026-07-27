@@ -9,6 +9,8 @@ const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/serv
 const { insertUser, insertSession, findUserById } = require("../src/server/db/repositories/auth-repository");
 const { insertBrand, findBrandByOwner } = require("../src/server/db/repositories/brand-repository");
 const { handleTrendRoutes } = require("../src/server/api/trend-routes");
+const { generateAiTrendSet } = require("../src/server/ai/trend-service");
+const { clearAnySearchCache } = require("../src/server/integrations/anysearch");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -182,4 +184,61 @@ test("the persisted analysis record keeps the delivered snapshot for the degrade
   assert.ok(analysis, "degraded delivery must still create an analysis record");
   const snapshotBucket = (analysis.trendSnapshot || []).find((bucket) => bucket.key === "traffic");
   assert.equal(snapshotBucket.items.length, 10);
+});
+
+test("a first-call transport failure with evidence still delivers ten cards and charges once", async () => {
+  clearAnySearchCache();
+  const before = findUserById(1).credits;
+  const evidenceMarkdown = [
+    "## Query 1: precise",
+    "### 1. 家居照明折叠桌面灯用户讨论",
+    "- **URL**: https://www.ce.cn/lighting-a",
+    "- Published: 2026-07-16 Source: ce.cn 家居照明与折叠桌面灯的租房使用讨论。",
+    "## Query 2: broad",
+    "### 1. 家居照明小空间内容趋势",
+    "- **URL**: https://www.xinhuanet.com/lighting-b",
+    "- Published: 2026-07-15 Source: xinhuanet.com 家居照明小空间场景内容形式。",
+  ].join("\n");
+  let modelCalls = 0;
+  // End-to-end through the real trend service: the main model dies at
+  // transport level on its only call, yet the route still completes the
+  // normal success transaction (saved + charged once) from evidence slots.
+  const context = {
+    appConfig: { security: { assetSigningSecret: "test-secret" } },
+    async generateAiTrendSet(brand, baseId, options) {
+      return generateAiTrendSet({
+        searchProvider: { enabled: true, socialEnabled: false, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+        textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+        security: { assetSigningSecret: "test-secret" },
+      }, brand, baseId, {
+        ...options,
+        anySearchOptions: {
+          now: new Date("2026-07-17T04:00:00.000Z"),
+          requestImpl: async () => evidenceMarkdown,
+        },
+        textModelImpl: async () => {
+          modelCalls += 1;
+          const error = new Error("socket hang up before response");
+          error.code = "ECONNRESET";
+          throw error;
+        },
+      });
+    },
+  };
+
+  const res = createRes();
+  await handleTrendRoutes(
+    context,
+    createJsonReq("/api/brands/40/analyses", { requestId: "delivery-transport-1", bucketKey: "track" }, "redbase_session=delivery-credit-token"),
+    res,
+    "/api/brands/40/analyses",
+  );
+  assert.equal(res.statusCode, 200);
+  assert.equal(modelCalls, 1);
+  assert.equal(res.body.user.credits, before - 1);
+  assert.equal(findUserById(1).credits, before - 1);
+  const bucket = res.body.brand.trends.find((entry) => entry.key === "track");
+  assert.equal(bucket.items.length, 10);
+  assert.ok(res.body.warnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.ok(res.body.warnings.some((warning) => warning.code === "TREND_ITEM_FALLBACK"));
 });

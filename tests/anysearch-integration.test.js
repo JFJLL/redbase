@@ -1857,10 +1857,10 @@ test("bounds repeatedly invalid focused repairs to two logical model calls", asy
   assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("leaves truncated-response transport retries to the provider instead of starting a second content generation", async () => {
+test("degrades from evidence slots when the first model call fails at transport level", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 5725, {
@@ -1868,12 +1868,21 @@ test("leaves truncated-response transport retries to the provider instead of sta
     anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
     textModelImpl: async () => {
       modelCalls += 1;
-      if (modelCalls === 1) throw new SyntaxError("Unexpected end of JSON input: truncated model response");
-      return generatedTrendBatch("连接恢复后的真实模型趋势", { bucketKey: "traffic" });
+      throw new SyntaxError("Unexpected end of JSON input: truncated model response");
     },
-  }), /本次分析未能获取到可用热点/);
+  });
 
+  // Search already paid + evidence exists: one failed transport-level call
+  // ends in ten local evidence cards instead of a failed request. Transport
+  // retries stay inside the provider; no second content generation starts.
   assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.degraded === true));
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.equal(
+    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
+    10,
+  );
 });
 
 test("regenerates the full model batch when more than four cards are invalid", async () => {

@@ -70,15 +70,39 @@ function buildSlotFromCandidate(candidate, brand, bucketKey, extras = {}) {
 // Deterministic fallback: keep the existing score-based ordering, prefer
 // brand/bucket-relevant candidates, and never pick a completely irrelevant
 // candidate while relevant ones exist. When fewer relevant candidates than
-// slots are available, relevant candidates are cycled instead.
+// slots are available, a reused source is split into distinct, explicit
+// scene/content-form slots — topics are always unique across the batch.
+const SLOT_ANGLE_VARIANTS = [
+  "用户提问整理",
+  "内容形式观察",
+  "场景案例拆解",
+  "误区与边界核对",
+  "实操步骤记录",
+  "对比与选择要点",
+  "新手常见困惑",
+  "过程记录视角",
+  "观点差异对照",
+  "可执行清单",
+];
+
 function buildDeterministicEvidenceSlots(candidates, brand, bucketKey, trendCount = RERANK_SLOT_LIMIT) {
   const pool = Array.isArray(candidates) ? candidates.filter((item) => item?.id) : [];
   if (!pool.length) return [];
   const relevant = pool.filter((item) => isCandidateRelevant(item, bucketKey));
   const usable = relevant.length ? relevant : pool;
   const slotCount = Math.max(1, Math.min(RERANK_SLOT_LIMIT, Number(trendCount || RERANK_SLOT_LIMIT)));
-  return Array.from({ length: slotCount }, (_, index) =>
-    buildSlotFromCandidate(usable[index % usable.length], brand, bucketKey));
+  const seenTopics = new Set();
+  return Array.from({ length: slotCount }, (_, index) => {
+    const candidate = usable[index % usable.length];
+    const reuseRound = Math.floor(index / usable.length);
+    const baseTopic = sanitizeEvidenceText(candidate.title || candidate.snippet || candidate.id, 60);
+    let topic = reuseRound === 0
+      ? baseTopic
+      : `${baseTopic}｜${SLOT_ANGLE_VARIANTS[(index - usable.length) % SLOT_ANGLE_VARIANTS.length]}`;
+    if (seenTopics.has(topic)) topic = `${topic}｜槽位${index + 1}`;
+    seenTopics.add(topic);
+    return buildSlotFromCandidate(candidate, brand, bucketKey, { topic });
+  });
 }
 
 function buildRerankSystemPrompt(trendCount) {
@@ -125,6 +149,10 @@ function normalizeModelSlots(result, candidates, brand, bucketKey, trendCount) {
     ).toUpperCase();
     const candidate = candidateById.get(rawId);
     if (!candidate) continue;
+    // The model must not resurrect a completely irrelevant candidate: re-check
+    // the deterministic relevance flags before accepting the slot. Unknown ids
+    // and off-brand/off-bucket candidates are both dropped here.
+    if (!isCandidateRelevant(candidate, bucketKey)) continue;
     const topic = sanitizeEvidenceText(rawSlot.topic || candidate.title, 80);
     const dedupeKey = `${rawId}:${topic}`;
     if (seen.has(dedupeKey)) continue;
@@ -220,6 +248,15 @@ async function buildRerankedEvidencePlan(appConfig, brand, bucketMeta, searchEvi
   const slots = usedModel
     ? modelSlots
     : buildDeterministicEvidenceSlots(candidates, brand, bucketKey, trendCount);
+  if (!usedModel && slots.length) {
+    const uniqueSources = new Set(slots.map((slot) => String(slot.evidenceIds?.[0] || "")));
+    if (uniqueSources.size < slots.length) {
+      warnings.push({
+        code: "EVIDENCE_SLOT_REUSED",
+        message: "相关候选不足，部分槽位复用同一来源并拆分为不同场景/内容形式（topic 已去重）。",
+      });
+    }
+  }
   if (!slots.length) {
     return { evidence: searchEvidence?.evidence || [], slots: [], warnings, usedModel: false };
   }

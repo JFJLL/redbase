@@ -30,7 +30,13 @@
 - 其余五类：主生成 1 + targeted repair 1（循环 `generationAttempt >= 1` 即止）；修复调用失败不再抛错（catch 内 break→本地降级）；剩余问题走 `applyLocalDeliveryDegrade`：安全问题剥离句子/换中性文案（`trend-result-normalizer.js`），结构问题本地补齐，warning-only 问题保留原卡+warning；不足 10 条用证据槽位 `buildFallbackTrendCard` 补齐；清理后仍不安全的卡整卡替换为降级卡。
 - 逻辑调用上限：XHS 1；其他 3（重排1+主生成1+修复1），共享 `ai-call-budget`（上限 5，未改）。
 - `TREND_MODEL_VALIDATION_FAILED` 仅在“无模型条目且无证据可降级”时抛出；预算耗尽且零产出时仍抛 `TREND_AI_CALL_BUDGET_EXCEEDED`（不扣积分）。
-- 决策记录：主生成传输级硬失败（非预算、非解析问题）在非 XHS 路径仍走原失败路径（不扣积分）——此时模型无任何产出，纯确定性 10 卡质量过低且原测试契约如此；XHS 因 Pgy 内容已付费可直接成卡故不受此限。
+- 收口更新（2026-07-27 第二轮）：非 XHS 维度在 AnySearch 已有可用 evidence/slots 时，即使主模型第一次调用发生传输级异常、超时或零产出，也用证据槽位本地生成恰好 10 条降级卡并附 `TREND_MODEL_UNAVAILABLE` + `TREND_ITEM_FALLBACK` warnings，走现有成功事务扣 1 次积分；只有搜索来源本身为空时才失败不扣分。（此前“首调传输失败仍失败”的决策已废除并从 BLOCKED 移除。）
+
+## 收口轮（2026-07-27 第二轮，在 .worktrees/trend-delivery 执行）
+
+- reranker `normalizeModelSlots`：接受模型槽位前再次调用 `isCandidateRelevant(candidate, bucketKey)`——模型选中真实存在但 brandRelevant=false 且 trafficRelevant=false 的候选时直接丢弃，不再只过滤不存在的编号。
+- 确定性 fallback `buildDeterministicEvidenceSlots`：候选不足 10 条时，同一来源按 `SLOT_ANGLE_VARIANTS`（用户提问整理/内容形式观察/场景案例拆解等）拆成不同且明确的场景/内容形式槽位；topic 全批唯一（冲突兜底追加槽位号）；发生来源复用时由 `buildRerankedEvidencePlan` 附 `EVIDENCE_SLOT_REUSED` warning。
+- 新增回归：首调传输异常（服务级 ETIMEDOUT + API 级 ECONNRESET 经真实服务端到端扣 1 分）、rerank 模型选真实无关候选 C3 被丢弃、2 个相关候选时 10 槽位 topic 全唯一（fallback 附 reuse warning）；更新旧契约测试“截断响应→整体失败”为“截断响应→10 张降级卡”。
 
 ## 任务 3 warnings 透出（已完成）
 
