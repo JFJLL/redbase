@@ -138,6 +138,7 @@ const HISTORY_TYPE_LABELS = new Map([
 
 async function init() {
   bindLandingEntry();
+  bindLandingExperience();
   bindSidebarControls();
   bindAccountCenterModal();
   bindSidebarTabs();
@@ -608,6 +609,116 @@ function bindLandingEntry() {
       }
     });
   });
+}
+
+function bindLandingExperience() {
+  const landingPage = document.querySelector(".page-landing");
+  if (!landingPage) return;
+
+  const heroCopy = {
+    trend: ["值得跟进的内容机会", "从趋势信号中筛选与品牌真正相关的方向"],
+    excellent: ["可以学习的优秀内容", "查看热门内容并提取结构与表达方式"],
+    idea: ["可以直接执行的内容方向", "把品牌、趋势和内容参考变成结构化选题"],
+    generate: ["可以继续生产的图文资产", "从选题进入多类型内容生成与历史记录"],
+  };
+  const heroPanelTitle = document.getElementById("heroPanelTitle");
+  const heroPanelSub = document.getElementById("heroPanelSub");
+
+  landingPage.querySelectorAll("[data-hero-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const selected = button.dataset.heroTab;
+      landingPage.querySelectorAll("[data-hero-tab]").forEach((item) => {
+        const isActive = item.dataset.heroTab === selected;
+        item.classList.toggle("active", isActive);
+        item.setAttribute("aria-selected", String(isActive));
+      });
+      landingPage.querySelectorAll("[data-hero-panel]").forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.heroPanel === selected);
+      });
+      if (heroPanelTitle) heroPanelTitle.textContent = heroCopy[selected]?.[0] || "";
+      if (heroPanelSub) heroPanelSub.textContent = heroCopy[selected]?.[1] || "";
+    });
+  });
+
+  const profileData = {
+    brand: [
+      ["定位", "高品质家庭健康品牌"],
+      ["人群", "家庭健康决策者"],
+      ["目标", "建立价格价值感"],
+    ],
+    personal: [
+      ["人设", "品牌策略与内容专家"],
+      ["受众", "市场与内容从业者"],
+      ["目标", "持续输出专业观点"],
+    ],
+  };
+  const profilePreview = document.getElementById("landingProfilePreview");
+  landingPage.querySelectorAll("[data-profile]").forEach((button) => {
+    button.addEventListener("click", () => {
+      landingPage.querySelectorAll("[data-profile]").forEach((item) => item.classList.toggle("active", item === button));
+      if (!profilePreview) return;
+      profilePreview.replaceChildren(
+        ...(profileData[button.dataset.profile] || []).map(([label, value]) => {
+          const row = document.createElement("div");
+          const strong = document.createElement("strong");
+          strong.textContent = label;
+          row.append(strong, document.createTextNode(value));
+          return row;
+        }),
+      );
+    });
+  });
+
+  landingPage.querySelectorAll(".faq-question").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = button.closest("article");
+      const isOpen = item?.classList.toggle("open") || false;
+      button.setAttribute("aria-expanded", String(isOpen));
+    });
+  });
+
+  const navInner = document.getElementById("landingNavInner");
+  const menuButton = document.getElementById("landingMenuButton");
+  menuButton?.addEventListener("click", () => {
+    const isOpen = navInner?.classList.toggle("mobile-open") || false;
+    menuButton.setAttribute("aria-expanded", String(isOpen));
+  });
+
+  const navLinks = [...landingPage.querySelectorAll(".nav-links a")];
+  navLinks.forEach((link) => {
+    link.addEventListener("click", () => {
+      navInner?.classList.remove("mobile-open");
+      menuButton?.setAttribute("aria-expanded", "false");
+    });
+  });
+
+  const revealItems = landingPage.querySelectorAll(".landing-reveal");
+  if ("IntersectionObserver" in window) {
+    const revealObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("visible");
+          revealObserver.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.1 },
+    );
+    revealItems.forEach((item) => revealObserver.observe(item));
+
+    const sectionObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          navLinks.forEach((link) => link.classList.toggle("active", link.getAttribute("href") === `#${entry.target.id}`));
+        });
+      },
+      { rootMargin: "-30% 0px -60% 0px" },
+    );
+    landingPage.querySelectorAll("main section[id]").forEach((section) => sectionObserver.observe(section));
+  } else {
+    revealItems.forEach((item) => item.classList.add("visible"));
+  }
 }
 
 function bindSidebarTabs() {
