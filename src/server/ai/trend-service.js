@@ -46,6 +46,14 @@ const {
   formatMarketSignalsPromptBlock,
   isEmptyPlatitude,
 } = require("./trend-signal-extractor");
+const { buildRerankedEvidencePlan } = require("./trend-evidence-reranker");
+const {
+  classifyTrendIssues,
+  buildFallbackTrendCard,
+  buildPgyFallbackTrendCard,
+  sanitizeTrendCardLocally,
+  buildDegradedItemWarning,
+} = require("./trend-result-normalizer");
 const {
   TASKS: EVALUATION_TASKS,
   PROMPT_VERSIONS,
@@ -733,11 +741,25 @@ function buildAnySearchGenerationPlan(searchEvidence, trendCount = TREND_ITEMS_P
     ? searchEvidence.evidence.filter((item) => item?.id)
     : [];
   if (!evidence.length) return "";
+  const evidenceById = new Map(evidence.map((item) => [String(item.id).toUpperCase(), item]));
+  const rerankSlots = Array.isArray(searchEvidence?.rerankSlots) && searchEvidence.rerankSlots.length
+    ? searchEvidence.rerankSlots
+    : null;
   const count = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(trendCount || TREND_ITEMS_PER_BUCKET)));
   const slots = Array.from({ length: count }, (_, index) => {
-    const item = evidence[index % evidence.length];
+    const rerankSlot = rerankSlots?.[index % rerankSlots.length] || null;
+    const item = (rerankSlot && evidenceById.get(String(rerankSlot.evidenceIds?.[0] || "").toUpperCase()))
+      || evidence[index % evidence.length];
     const [route, boundary] = ANYSEARCH_GENERATION_SLOT_ROUTES[index % ANYSEARCH_GENERATION_SLOT_ROUTES.length];
-    return `${index + 1}. stableKey 必须为 "slot-${String(index + 1).padStart(2, "0")}"；evidenceIds 必须恰好为 ["${String(item.id).toUpperCase()}"]；主路线：${route}；来源锚点：${sanitizeEvidenceText(item.title || item.snippet || item.id, 80)}；边界：${boundary}。`;
+    const slotExtras = rerankSlot
+      ? [
+          rerankSlot.topic ? `；话题锚点：${sanitizeEvidenceText(rerankSlot.topic, 80)}` : "",
+          rerankSlot.brandLink ? `；品牌连接：${sanitizeEvidenceText(rerankSlot.brandLink, 120)}` : "",
+          rerankSlot.allowedClaims?.length ? `；可支撑表述：${rerankSlot.allowedClaims.join("、")}` : "",
+          rerankSlot.avoidClaims?.length ? `；禁写表述：${rerankSlot.avoidClaims.join("、")}` : "",
+        ].join("")
+      : "";
+    return `${index + 1}. stableKey 必须为 "slot-${String(index + 1).padStart(2, "0")}"；evidenceIds 必须恰好为 ["${String(item.id).toUpperCase()}"]；主路线：${route}；来源锚点：${sanitizeEvidenceText(item.title || item.snippet || item.id, 80)}；边界：${boundary}${slotExtras}。`;
   });
   return [
     `本批 ${count} 个生成槽位（这是证据与内容路线的结构约束，不是可复制的文案模板）：`,
@@ -2993,6 +3015,143 @@ function attachAnalysisWarnings(trendBuckets, warnings = []) {
   return trendBuckets;
 }
 
+// Safety + structural issues only — the XHS/Pgy path skips business gates
+// (duplicates, self-scores, grounding, generic copy, intensity wording).
+function getXhsPgyDeliveryIssues(trendBuckets, brand) {
+  const structural = getTrendStructureIssues(trendBuckets, [TREND_BUCKET_META[0]])
+    .filter((issue) => [
+      "missing-trend-field", "missing-idea-field", "idea-count",
+      "missing-trend-tags", "missing-idea-tags", "invalid-score",
+    ].includes(issue.reason));
+  return [
+    ...structural,
+    ...getUnsupportedHardClaimIssues(trendBuckets),
+    ...getUnsupportedBrandClaimIssues(trendBuckets, brand),
+    ...getMedicineSafetyIssues(trendBuckets, brand),
+    ...getInlineEvidenceReferenceIssues(trendBuckets),
+  ];
+}
+
+// XHS delivery guarantee: normalize whatever the single model call returned,
+// strip unsafe copy locally, then top the bucket up to 10 cards straight from
+// the Pgy notes (order preserved so evidence snapshots stay aligned).
+function fillXhsBucketsFromPgy({ candidateBuckets, pgyEvidence, brand, bucketMeta, baseId }) {
+  const warnings = [];
+  const notes = Array.isArray(pgyEvidence?.notes) ? pgyEvidence.notes : [];
+  const meta = bucketMeta[0];
+  const sourceBucket = (candidateBuckets || []).find((bucket) => bucket.key === meta.key) || { items: [] };
+  let items = (sourceBucket.items || []).slice(0, TREND_ITEMS_PER_BUCKET);
+  const issues = getXhsPgyDeliveryIssues([{ key: meta.key, items }], brand);
+  const issuesByIndex = new Map();
+  for (const issue of issues) {
+    if (!Number.isInteger(issue.trendIndex)) continue;
+    if (!issuesByIndex.has(issue.trendIndex)) issuesByIndex.set(issue.trendIndex, []);
+    issuesByIndex.get(issue.trendIndex).push(issue);
+  }
+  items = items.map((item, index) => {
+    const itemIssues = issuesByIndex.get(index) || [];
+    if (!itemIssues.length) return item;
+    const topic = String(notes[index]?.title || item.title || "").slice(0, 40);
+    const { card } = sanitizeTrendCardLocally(item, itemIssues, { brand, topic });
+    warnings.push(buildDegradedItemWarning(meta.key, index, itemIssues.map((issue) => issue.reason)));
+    return card;
+  });
+  while (items.length < TREND_ITEMS_PER_BUCKET && notes[items.length]) {
+    const index = items.length;
+    items.push(buildPgyFallbackTrendCard({ note: notes[index], brand, index, baseId }));
+    warnings.push({
+      code: "TREND_ITEM_FALLBACK",
+      bucketKey: meta.key,
+      trendIndex: index,
+      message: `第 ${index + 1} 条由 Pgy 热门笔记直接补齐（降级）。`,
+    });
+  }
+  // Residual safety issues after local stripping: replace the card entirely.
+  for (const issue of [...getUnsupportedBrandClaimIssues([{ key: meta.key, items }], brand), ...getMedicineSafetyIssues([{ key: meta.key, items }], brand)]) {
+    if (!Number.isInteger(issue.trendIndex) || !notes[issue.trendIndex]) continue;
+    items[issue.trendIndex] = buildPgyFallbackTrendCard({ note: notes[issue.trendIndex], brand, index: issue.trendIndex, baseId });
+    warnings.push(buildDegradedItemWarning(meta.key, issue.trendIndex, [issue.reason]));
+  }
+  return {
+    buckets: [{ key: meta.key, title: meta.title, description: meta.description, items: items.slice(0, TREND_ITEMS_PER_BUCKET) }],
+    warnings,
+  };
+}
+
+// Non-XHS delivery guarantee: keep valid cards, strip/patch bad ones locally,
+// and fill remaining slots from reranked evidence so exactly 10 cards return
+// with warnings instead of a whole-batch validation failure.
+function applyLocalDeliveryDegrade({ candidateBuckets, issues, anySearchEvidence, brand, bucketMeta, baseId }) {
+  const warnings = [];
+  const evidenceList = (anySearchEvidence?.evidence || []).filter((item) => item?.id);
+  const evidenceById = new Map(evidenceList.map((item) => [String(item.id).toUpperCase(), item]));
+  const rerankSlots = Array.isArray(anySearchEvidence?.rerankSlots) && anySearchEvidence.rerankSlots.length
+    ? anySearchEvidence.rerankSlots
+    : null;
+  const classified = classifyTrendIssues(issues || []);
+  const perItemIssues = new Map();
+  for (const issue of [...classified.safety, ...classified.structural, ...classified.warningOnly]) {
+    if (!issue?.bucketKey || !Number.isInteger(issue.trendIndex)) continue;
+    const key = `${issue.bucketKey}:${issue.trendIndex}`;
+    if (!perItemIssues.has(key)) perItemIssues.set(key, []);
+    perItemIssues.get(key).push(issue);
+  }
+  const buckets = bucketMeta.map((meta) => {
+    const sourceBucket = (candidateBuckets || []).find((bucket) => bucket.key === meta.key) || { items: [] };
+    let items = (sourceBucket.items || []).slice(0, TREND_ITEMS_PER_BUCKET);
+    items = items.map((item, index) => {
+      const itemIssues = perItemIssues.get(`${meta.key}:${index}`) || [];
+      if (!itemIssues.length) return item;
+      const slot = rerankSlots?.[index % rerankSlots.length] || null;
+      const citedId = normalizeEvidenceIds(item.evidenceIds)[0];
+      const topic = slot?.topic
+        || evidenceById.get(citedId || "")?.title
+        || String(item.title || "").slice(0, 40);
+      const localFixable = itemIssues.filter((issue) => !classified.warningOnly.includes(issue));
+      const card = localFixable.length
+        ? sanitizeTrendCardLocally(item, localFixable, { brand, topic }).card
+        : item;
+      if (evidenceList.length && !normalizeEvidenceIds(card.evidenceIds).every((id) => evidenceById.has(id))) {
+        card.evidenceIds = slot?.evidenceIds?.length
+          ? [...slot.evidenceIds]
+          : [String(evidenceList[index % evidenceList.length].id)];
+      }
+      warnings.push(buildDegradedItemWarning(meta.key, index, itemIssues.map((issue) => issue.reason)));
+      return card;
+    });
+    while (items.length < TREND_ITEMS_PER_BUCKET && (rerankSlots?.length || evidenceList.length)) {
+      const index = items.length;
+      const slot = rerankSlots?.[index % rerankSlots.length] || null;
+      const evidence = slot
+        ? evidenceById.get(String(slot.evidenceIds?.[0] || "").toUpperCase())
+        : evidenceList[index % evidenceList.length];
+      items.push(buildFallbackTrendCard({ slot, evidence, brand, index, baseId }));
+      warnings.push({
+        code: "TREND_ITEM_FALLBACK",
+        bucketKey: meta.key,
+        trendIndex: index,
+        message: `第 ${index + 1} 条由证据槽位本地补齐（降级）。`,
+      });
+    }
+    return { key: meta.key, title: meta.title, description: meta.description, items: items.slice(0, TREND_ITEMS_PER_BUCKET) };
+  });
+  // Safety net: any card still carrying unsafe copy after stripping is
+  // replaced outright with a neutral evidence-based fallback card.
+  for (const issue of [...getUnsupportedBrandClaimIssues(buckets, brand), ...getMedicineSafetyIssues(buckets, brand)]) {
+    if (!issue?.bucketKey || !Number.isInteger(issue.trendIndex)) continue;
+    const bucket = buckets.find((entry) => entry.key === issue.bucketKey);
+    if (!bucket?.items?.[issue.trendIndex]) continue;
+    const index = issue.trendIndex;
+    const slot = rerankSlots?.[index % (rerankSlots?.length || 1)] || null;
+    const evidence = slot
+      ? evidenceById.get(String(slot.evidenceIds?.[0] || "").toUpperCase())
+      : evidenceList[index % Math.max(1, evidenceList.length)];
+    bucket.items[index] = buildFallbackTrendCard({ slot, evidence, brand, index, baseId });
+    warnings.push(buildDegradedItemWarning(issue.bucketKey, index, [issue.reason]));
+  }
+  return { buckets, warnings };
+}
+
 async function resolvePgyEvidenceForTrendAnalysis(appConfig, brand, bucketMeta, options = {}) {
   if (!bucketMeta.some((bucket) => bucket.key === "xhs")) return null;
   if (options.pgyEvidence) return options.pgyEvidence;
@@ -3082,6 +3241,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         })
       : null;
     const searchDurationMs = Date.now() - searchStartedAt;
+    const analysisWarnings = [];
+    let effectiveAnySearchEvidence = anySearchEvidence;
     if (anySearchEvidence) {
       console.log("[trend-analysis] AnySearch evidence ready", {
         brandId: brand.id,
@@ -3094,6 +3255,33 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         durationMs: searchDurationMs,
         cacheHit: Boolean(anySearchEvidence.cacheHit),
       });
+      // Candidate rerank (1 logical call). Injected test models keep the legacy
+      // evidence order unless they opt in with an explicit rerankModelImpl.
+      const rerankImpl = options.rerankModelImpl
+        || (options.textModelImpl ? null : callTextModelJson);
+      if (rerankImpl) {
+        const rerankPlan = await buildRerankedEvidencePlan(appConfig, brand, selectedBucketMeta, anySearchEvidence, {
+          trendCount: TREND_ITEMS_PER_BUCKET,
+          textModelImpl: rerankImpl,
+          aiBudget,
+        });
+        analysisWarnings.push(...rerankPlan.warnings);
+        if (rerankPlan.slots.length && rerankPlan.evidence.length) {
+          effectiveAnySearchEvidence = {
+            ...anySearchEvidence,
+            evidence: rerankPlan.evidence,
+            rerankSlots: rerankPlan.slots,
+          };
+        }
+        console.log("[trend-analysis] evidence rerank ready", {
+          brandId: brand.id,
+          brandName: brand.name,
+          usedModel: rerankPlan.usedModel,
+          slotCount: rerankPlan.slots.length,
+          evidenceCount: rerankPlan.evidence.length,
+          aiBudget: aiBudget.snapshot(),
+        });
+      }
     }
     // Evidence Normalize -> Signal Extraction -> Trend Opportunity Generation
     // Deterministic signal extraction uses 0 model calls but still shares the budget marker.
@@ -3136,6 +3324,10 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     let candidateBuckets = null;
     let lastValidationIssues = [];
     let budgetExceeded = false;
+    // Delivery policy: the XHS/Pgy path is a single main-model call with local
+    // Pgy top-up; other buckets get one main generation plus at most one
+    // model repair before the local degrade path takes over.
+    const isPgyXhsFlow = Boolean(pgyEvidence) && !anySearchEvidence;
     const modelDeadlineAt = Date.now() + Math.max(
       1000,
       Number(options.trendModelBudgetMs || TREND_ANALYSIS_MODEL_BUDGET_MS),
@@ -3180,13 +3372,13 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       const userPrompt = repairPlan
         ? buildTargetedTrendRepairUserPrompt(brand, {
             pgyEvidence,
-            anySearchEvidence,
+            anySearchEvidence: effectiveAnySearchEvidence,
             brandIntelligence,
             marketSignals,
           }, repairPlan, candidateBuckets, lastValidationIssues)
         : buildTrendAnalysisUserPrompt(brand, {
             pgyEvidence,
-            anySearchEvidence,
+            anySearchEvidence: effectiveAnySearchEvidence,
             brandIntelligence,
             marketSignals,
             xhsCategoryPath: options.xhsCategoryPath,
@@ -3216,7 +3408,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         requestMode,
         expectedCount: repairPlan ? repairCount : TREND_ITEMS_PER_BUCKET,
         evidenceProvider: anySearchEvidence ? "anysearch" : "pgy",
-        evidenceCount: anySearchEvidence?.evidence?.length || pgyEvidence?.notes?.length || 0,
+        evidenceCount: effectiveAnySearchEvidence?.evidence?.length || pgyEvidence?.notes?.length || 0,
         userPromptLength: userPrompt.length,
         transportAttemptsAllowed,
         aiBudget: aiBudget.snapshot(),
@@ -3284,6 +3476,30 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           });
           break;
         }
+        if (isPgyXhsFlow) {
+          // Pgy notes are already paid, verifiable content. A model failure on
+          // the single XHS call degrades to Pgy-built cards instead of failing.
+          console.warn("[trend-analysis] xhs model call failed; falling back to Pgy cards", {
+            brandId: brand.id,
+            brandName: brand.name,
+            code: error?.code || "UNKNOWN",
+            message: String(error?.message || "unknown error").slice(0, 200),
+          });
+          candidateBuckets = candidateBuckets || [];
+          break;
+        }
+        if (generationAttempt >= 1) {
+          // The repair call failed after a paid main generation: keep what we
+          // have and let the local degrade path finish the batch with warnings.
+          console.warn("[trend-analysis] repair model call failed; degrading locally", {
+            brandId: brand.id,
+            brandName: brand.name,
+            requestMode,
+            code: error?.code || "UNKNOWN",
+            message: String(error?.message || "unknown error").slice(0, 200),
+          });
+          break;
+        }
         throw error;
       }
       modelTiming.requestMs += Date.now() - modelStartedAt;
@@ -3316,17 +3532,40 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         );
       }
       if (anySearchEvidence) {
-        const resolvedReferences = resolveInlineEvidenceReferences(candidateBuckets, anySearchEvidence);
+        const resolvedReferences = resolveInlineEvidenceReferences(candidateBuckets, effectiveAnySearchEvidence);
         candidateBuckets = resolvedReferences.trendBuckets;
         modelTiming.citationReferencesResolved += resolvedReferences.resolvedCount;
       }
       modelTiming.normalizationMs += Date.now() - normalizationStartedAt;
+      if (isPgyXhsFlow) {
+        // Single XHS call: no business gates, no batch rewrite. Strip unsafe
+        // copy locally and top the bucket up from Pgy notes with warnings.
+        const pgyDelivery = fillXhsBucketsFromPgy({
+          candidateBuckets,
+          pgyEvidence,
+          brand,
+          bucketMeta: selectedBucketMeta,
+          baseId,
+        });
+        analysisWarnings.push(...pgyDelivery.warnings);
+        trendBuckets = finalizeModelTrendBuckets(
+          attachEvidenceSnapshots(pgyDelivery.buckets, null, pgyEvidence),
+          selectedBucketMeta,
+          baseId,
+        );
+        Object.defineProperty(trendBuckets, "marketSignals", {
+          value: marketSignals,
+          enumerable: false,
+          configurable: true,
+        });
+        break;
+      }
       let validationIssues = repairIssues.length
         ? repairIssues
         : getTrendGenerationIssues(
             candidateBuckets,
             selectedBucketMeta,
-            anySearchEvidence,
+            effectiveAnySearchEvidence,
             brand,
             pgyEvidence,
             validationNow,
@@ -3338,7 +3577,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           : getTrendGenerationIssues(
               userVisibleBuckets,
               selectedBucketMeta,
-              anySearchEvidence,
+              effectiveAnySearchEvidence,
               brand,
               pgyEvidence,
               validationNow,
@@ -3353,7 +3592,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             ];
           } else {
             trendBuckets = finalizeModelTrendBuckets(
-              attachEvidenceSnapshots(qualityFiltered, anySearchEvidence, pgyEvidence),
+              attachEvidenceSnapshots(qualityFiltered, effectiveAnySearchEvidence, pgyEvidence),
               selectedBucketMeta,
               baseId,
             );
@@ -3395,11 +3634,41 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         });
         break;
       }
-      if (generationAttempt >= 1 && !canUseFinalFieldScopedTrendRepair(validationIssues)) break;
+      // One main generation plus at most one model repair (or full retry when
+      // the first output was unparsable). Anything left after that goes to the
+      // local degrade path instead of another model call.
+      if (generationAttempt >= 1) break;
+    }
+
+    if (!trendBuckets && isPgyXhsFlow) {
+      const pgyDelivery = fillXhsBucketsFromPgy({
+        candidateBuckets: candidateBuckets || [],
+        pgyEvidence,
+        brand,
+        bucketMeta: selectedBucketMeta,
+        baseId,
+      });
+      if (pgyDelivery.buckets[0]?.items?.length === TREND_ITEMS_PER_BUCKET) {
+        analysisWarnings.push(...pgyDelivery.warnings);
+        trendBuckets = finalizeModelTrendBuckets(
+          attachEvidenceSnapshots(pgyDelivery.buckets, null, pgyEvidence),
+          selectedBucketMeta,
+          baseId,
+        );
+        Object.defineProperty(trendBuckets, "marketSignals", {
+          value: marketSignals,
+          enumerable: false,
+          configurable: true,
+        });
+      }
     }
 
     if (!trendBuckets) {
-      if (budgetExceeded || aiBudget.exhausted()) {
+      const hasModelItems = Boolean(
+        candidateBuckets?.some((bucket) => (bucket.items || []).length),
+      );
+      const canDegradeLocally = Boolean((effectiveAnySearchEvidence?.evidence || []).length);
+      if ((budgetExceeded || aiBudget.exhausted()) && !hasModelItems) {
         const partial = buildBudgetExceededPartial(aiBudget);
         console.warn("[trend-analysis] AI call budget exceeded; partial stop without complete trends", {
           brandId: brand.id,
@@ -3408,6 +3677,47 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           ...partial,
         });
         // Required shape is attached on the error as partial + reason (and partialResult).
+        throwBudgetExceeded(aiBudget);
+      }
+      if (hasModelItems || canDegradeLocally) {
+        // Delivery guarantee: search and model spend already happened, so keep
+        // valid cards, patch/replace the bad ones locally, and fill the rest
+        // from reranked evidence. Warnings mark every degraded position.
+        const degraded = applyLocalDeliveryDegrade({
+          candidateBuckets: candidateBuckets || [],
+          issues: lastValidationIssues,
+          anySearchEvidence: effectiveAnySearchEvidence,
+          brand,
+          bucketMeta: selectedBucketMeta,
+          baseId,
+        });
+        const shortBucket = degraded.buckets.find((bucket) => bucket.items.length !== TREND_ITEMS_PER_BUCKET);
+        if (!shortBucket) {
+          analysisWarnings.push(...degraded.warnings);
+          console.warn("[trend-analysis] delivering degraded trends with warnings", {
+            brandId: brand.id,
+            brandName: brand.name,
+            bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
+            warningCount: degraded.warnings.length,
+            issueReasons: [...new Set((lastValidationIssues || []).map((issue) => issue.reason))].slice(0, 10),
+          });
+          trendBuckets = finalizeModelTrendBuckets(
+            attachEvidenceSnapshots(degraded.buckets, effectiveAnySearchEvidence, pgyEvidence),
+            selectedBucketMeta,
+            baseId,
+          );
+          Object.defineProperty(trendBuckets, "marketSignals", {
+            value: marketSignals,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+      }
+    }
+
+    if (!trendBuckets) {
+      if (budgetExceeded || aiBudget.exhausted()) {
+        // No model output and no evidence to degrade from.
         throwBudgetExceeded(aiBudget);
       }
       const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。`);
@@ -3435,6 +3745,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       localRepairMs: 0,
       repairedFields: 0,
       filled: 0,
+      warningsCount: analysisWarnings.length,
       generated: trendBuckets.reduce((sum, bucket) => sum + bucket.items.length, 0),
       returned: trendBuckets.reduce((sum, bucket) => sum + bucket.items.length, 0),
       totalDurationMs: Date.now() - startedAt,
@@ -3487,7 +3798,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         message: evaluationError?.message || "unknown error",
       });
     }
-    return attachAnalysisWarnings(trendBuckets, []);
+    return attachAnalysisWarnings(trendBuckets, analysisWarnings);
   } catch (error) {
     if (isAiCallBudgetExceededError(error)) {
       console.warn("[trend-analysis] AI call budget exceeded", {
@@ -3725,6 +4036,10 @@ module.exports = {
   attachEvidenceSnapshots,
   getAnySearchEvidenceCoverageIssues,
   hasValidAnySearchEvidenceCoverage,
+  getXhsPgyDeliveryIssues,
+  fillXhsBucketsFromPgy,
+  applyLocalDeliveryDegrade,
+  buildAnySearchGenerationPlan,
   generateAiTrendSet,
   regenerateTrendIdeas,
   ensureTrendIdeaContentAssets,
