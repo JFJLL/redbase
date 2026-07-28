@@ -4,6 +4,19 @@
 
 # PROGRESS — 前端重构记录
 
+## 主干同步轮（2026-07-28，任务：合入最新 master + warning 迁移 + 首次部署安全）
+- 任务1 合并：`git merge --no-ff origin/master`（496de64）。冲突处理：PROGRESS/BLOCKED 分节合并（前端重构记录 + 趋势交付记录）；config.js 同时保留 DIST_PUBLIC_DIR 与 rerankModel/TREND_RERANK_MODEL；README 双侧说明并存；public/ 整目录按任务3 要求恢复 master 版本作只读 fallback（dist/public 存在时不进入新页面网络请求，生产首次成功部署后另开清理提交删除）；src/server/ai、trend-routes、AnySearch、趋势测试全取 master。合并 commit 0f8a3a4。
+- 任务2 warnings：TrendAnalysisWarning 类型（code/message/trendIndex）+ model/analysisWarnings.ts（buildTrendWarningNotice：概要句 + 去重 message，语义对齐 master notifyTrendAnalysisWarnings）+ TrendsView 成功分支非阻断黄条提示（409 轮询最终成功同路径），4 个组件测试（普通成功不提示/降级成功/409 后降级成功/去重）。commit a426bf8。
+- 任务3 首次部署安全：scripts/deploy-rollback.cjs（回滚顺序固定：恢复 dist 或首次部署移除新 dist 回退旧 public → git checkout --detach OLD_SHA → npm ci → pm2 restart → 四路径复测旧版本；sha 严格校验；exec/smoke 可注入）；deploy-server.sh 在 pull 前记录 OLD_SHA、烟测失败调用完整回滚；tests/deploy-rollback.test.js 8 用例覆盖任务要求 5 项；README 同步。commit 781595f（bash -n 通过，LF）。
+- 任务4 验收：
+  - Node 24.11.1：check 0、root 426/426、integration 176/176、eval:ai 126/126、frontend 154/154（跳过全 0）、build 0、budget PASS（15.4/39.6KB）、git diff --check 0。
+  - Node 20.20.0（.worktrees/node20c，v20 二进制直跑）：双 npm ci、68 check 文件 0 失败、426/176/126、vue-tsc 0 错、vitest 154、build、budget PASS。注：npm rebuild better-sqlite3 须在 PATH 前置 v20 时执行，否则产物为 v24 ABI（本机沙箱环境问题，非代码问题）。
+  - 测试总数：root 426 = 合并前我方 400 + master 新增 26（delivery 18 + anysearch/text-provider 净增 8），frontend 154 = 150 + warnings 4；两边测试零丢失。
+  - 四路径烟测全 200；官网零 Vue/工作台 chunk；旧 public 文件不进入新页面请求。
+  - 浏览器 warning 证据：真实 /app/trends 页拦截注入带 4 条 warnings 的成功响应 → 黄条提示可见（背景 rgb(255,248,236)），概要“已返回 10 条趋势，其中 2 条为待验证/降级内容”，message 去重 4→3，10 卡渲染、无失败框。
+  - 首次部署回滚红灯→绿灯：restoreFrontendArtifacts 首次部署模式移走 dist/public → `/` 实测返回旧 public 前端（48273 字节、引用 app.js）且 /api/health 200 → 恢复 dist 后 `/` 回到 Vue 构建（hashed landing script，无 app.js 标签）。
+- 六维度各 10 条与降级仅扣一次积分：由并入的 master 测试覆盖并通过（tests/trend-delivery-guarantee.test.js + trend-delivery-credits.test.js，18/18）。
+
 ## 最终修复轮（2026-07-28，基线 af820d50ab340dfef4211b9b06b603e7e46a2bbb）
 ### 任务0 取证（开发机 Node 24.11.1）
 - git status 干净；HEAD=af820d50ab340dfef4211b9b06b603e7e46a2bbb（与文档基线一致）
