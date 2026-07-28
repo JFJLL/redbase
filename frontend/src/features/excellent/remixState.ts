@@ -193,7 +193,8 @@ export function canGenerateFusionPlan(state: ExcellentRemixState | null, brandRe
     state &&
       brandReady &&
       state.brandId &&
-      (state.analysisStatus === "ready" || state.analysisStatus === "degraded") &&
+      // 参考学习分析改为惰性触发：idle 也可发起融合（生成前会自动补分析）。
+      (state.analysisStatus === "idle" || state.analysisStatus === "ready" || state.analysisStatus === "degraded") &&
       hasValidContentDirection(state) &&
       state.fusionStatus !== "loading",
   );

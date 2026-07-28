@@ -332,6 +332,17 @@ const filteredIdeas = computed(() =>
 const remixCanGenerateFusion = computed(() => canGenerateFusionPlan(remix.value, !loadingBrand.value));
 const remixCanSubmit = computed(() => canSubmitExcellentRemix(remix.value, !loadingBrand.value));
 
+// AI 学习结果：只展示面向用户的摘要短句，不展示 JSON/prompt/技术字段。
+const remixLearningSummary = computed(() => {
+  const summary = remix.value?.analysis?.learningSummary;
+  return (Array.isArray(summary) ? summary : [])
+    .filter((item) => typeof item === "string" && item.trim())
+    .slice(0, 8);
+});
+const learningStatusLabel = computed(() =>
+  remix.value?.analysis?.analysisMode === "multimodal" ? "AI已读取参考图片" : "基于标题和结构分析",
+);
+
 async function openRemix(item: ExcellentNote) {
   const board = activeBoard.value;
   const boardSlice = slices[board];
@@ -349,8 +360,8 @@ async function openRemix(item: ExcellentNote) {
   submitError.value = "";
   submitSlides.value = [];
   completeContext.value = null;
-  // 参考方法分析与品牌加载并行；智能方向由用户手动触发。
-  loadRemixAnalysis();
+  // 参考学习分析改为惰性触发：首次点“生成内容方向”（或直接生成融合方案）时
+  // 才调分析，命中 30 天缓存则直接读取，降低无意义模型消耗。品牌照常预加载。
   loadRemixBrands();
 }
 
@@ -386,6 +397,20 @@ async function loadRemixAnalysis() {
     state.analysisStatus = "degraded";
     state.analysisError = (error as Error).message;
   }
+}
+
+// 首次需要时才触发参考学习分析；并发入口（内容方向/融合）共享同一请求。
+let remixAnalysisPromise: Promise<void> | null = null;
+async function ensureRemixAnalysis() {
+  const state = remix.value;
+  if (!state) return;
+  if (state.analysisStatus === "ready" || state.analysisStatus === "degraded") return;
+  if (!remixAnalysisPromise) {
+    remixAnalysisPromise = loadRemixAnalysis().finally(() => {
+      remixAnalysisPromise = null;
+    });
+  }
+  await remixAnalysisPromise;
 }
 
 async function loadRemixBrands() {
@@ -453,6 +478,9 @@ async function generateDirections() {
   if (!state?.brandId) return;
   state.directionsStatus = "loading";
   state.directionsError = "";
+  // 首次点击先触发参考学习分析（命中 30 天缓存则直接读取）。
+  await ensureRemixAnalysis();
+  if (remix.value !== state) return;
   try {
     const result = await fetchContentDirections(
       state.noteId,
@@ -486,6 +514,9 @@ async function generateFusion() {
   if (!state || !remixCanGenerateFusion.value) return;
   state.fusionStatus = "loading";
   state.fusionError = "";
+  // 自定义/已有选题模式可能未点过“生成内容方向”，融合前自动补参考学习分析。
+  await ensureRemixAnalysis();
+  if (remix.value !== state) return;
   try {
     const result = await fetchFusionPlan(state.noteId, buildFusionRequestBody(state), scope.signalFor("remix-fusion"));
     if (remix.value !== state) return;
@@ -789,23 +820,40 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 一键仿图文弹窗 -->
+    <!-- 一键仿图文弹窗（按钮名不变；弹窗与说明改为参考学习定位） -->
     <div v-if="remixOpen && remix" class="excellent-modal" @click.self="closeRemix()">
       <div class="excellent-modal-body remix-body">
         <header class="excellent-modal-header">
-          <h3>一键仿图文</h3>
+          <div>
+            <h3>参考优秀内容生成品牌原创图文</h3>
+            <p class="remix-subtitle">学习参考内容的表达方法，不复制原图、原排版与原品牌。</p>
+          </div>
           <button type="button" class="secondary-btn" @click="closeRemix()">关闭</button>
         </header>
 
         <section class="remix-section">
           <h4>参考方法分析</h4>
-          <p v-if="remix.analysisStatus === 'loading'" class="excellent-loading">正在分析参考内容…</p>
+          <p v-if="remix.analysisStatus === 'idle'" class="excellent-loading" data-test="analysis-idle">
+            点击“生成内容方向”后，AI 将学习参考内容的表达方法。
+          </p>
+          <p v-else-if="remix.analysisStatus === 'loading'" class="excellent-loading">正在学习参考内容…</p>
           <p v-else-if="remix.analysisStatus === 'degraded'" class="excellent-error" data-test="analysis-error">
             {{ remix.analysisError }}
           </p>
           <p v-else-if="remix.analysis" class="remix-analysis" data-test="analysis-ready">
             {{ remix.analysis.referenceTopic || "参考方法已就绪" }}
           </p>
+          <!-- AI 学习结果：默认折叠，只展示面向用户的摘要短句。 -->
+          <details v-if="remix.analysis" class="remix-learning" data-test="learning-summary">
+            <summary>AI已学习（展开查看）</summary>
+            <p class="remix-learning-status" data-test="learning-status">{{ learningStatusLabel }}</p>
+            <p v-if="remix.analysis?.warning" class="excellent-error" data-test="learning-warning">
+              {{ remix.analysis?.warning }}
+            </p>
+            <ul class="remix-learning-list">
+              <li v-for="(point, index) in remixLearningSummary" :key="index" data-test="learning-point">✓ {{ point }}</li>
+            </ul>
+          </details>
           <div class="remix-focus">
             <label v-for="option in LEARNING_FOCUS_OPTIONS" :key="option.value" class="remix-focus-item">
               <input
@@ -1305,5 +1353,38 @@ onUnmounted(() => {
 .remix-analysis {
   font-size: 13px;
   margin: 0;
+}
+
+.remix-subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.remix-learning {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.remix-learning summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.remix-learning-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.remix-learning-list {
+  margin: 6px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 </style>

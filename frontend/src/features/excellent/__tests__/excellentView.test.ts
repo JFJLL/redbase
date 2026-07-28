@@ -174,22 +174,32 @@ describe("ExcellentView", () => {
     );
   });
 
-  it("opens the remix modal, posts remix-analysis and degrades with the backend error text", async () => {
+  it("defers remix-analysis to the first 生成内容方向 click and degrades without blocking", async () => {
     const wrapper = await mountView((url, init) => {
       if (url.includes("/remix-analysis")) {
         return jsonResponse(503, { error: "参考方法分析暂时不可用" });
       }
-      if (url.startsWith("/api/brands")) {
-        return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, { directions: [{ id: "d1", title: "方向一" }], analysisId: "", brandId: 7 });
       }
       if (url.includes("/excellent-remix-ideas")) {
         return jsonResponse(200, { brandId: 7, ideas: [] });
+      }
+      if (url.startsWith("/api/brands")) {
+        return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
       }
       void init;
       return defaultHandlers(url);
     });
 
     await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+
+    // 打开弹窗不再立即调参考分析（降低无意义模型消耗），展示惰性提示。
+    expect(calls.some((call) => call.url.includes("/remix-analysis"))).toBe(false);
+    expect(wrapper.find('[data-test="analysis-idle"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
     await flushPromises();
 
     const analysisCall = calls.find((call) => call.url.includes("/remix-analysis"));
@@ -201,8 +211,10 @@ describe("ExcellentView", () => {
       categoryPath: "",
       industryPath: "",
     });
-    // Analysis failure degrades but keeps the flow open with the backend error verbatim.
+    // 分析失败降级但流程继续：错误原文展示，内容方向照常请求并渲染。
     expect(wrapper.find('[data-test="analysis-error"]').text()).toBe("参考方法分析暂时不可用");
+    expect(calls.some((call) => call.url.includes("/content-directions"))).toBe(true);
+    expect(wrapper.text()).toContain("方向一");
     expect(wrapper.find('[data-test="remix-brand"]').exists()).toBe(true);
   });
 });

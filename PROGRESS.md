@@ -22,8 +22,13 @@
   - 外层分析行：multimodal 结果 TTL 同步 30 天（MULTIMODAL_ANALYSIS_TTL_MS），metadata_only 仍 7 天。
   - 新增 `src/server/services/excellent-vision-storage-provider.js`：StorageProvider 预留接口，driver=local 直传 URL，未来 aliyun 驱动接 OSS；本阶段不下载、不落盘。
   - 验证：node --check 通过；tests/excellent-remix-service + api 路由 66/66，skip 0。
-- [ ] Task4：首次“生成内容方向”才触发分析
-- [ ] Task5：前端 AI 学习结果区域（默认折叠 + 视觉状态文案）
+- [x] Task4：首次“生成内容方向”才触发分析
+  - ExcellentView.openRemix 不再立即调 remix-analysis；ensureRemixAnalysis 在首次“生成内容方向”或生成融合方案前惰性触发（并发共享同一请求）；命中 30 天缓存由后端直接返回，不重复调模型。remixState.canGenerateFusionPlan 允许 idle（融合前自动补分析）。
+- [x] Task5：前端 AI 学习结果区域
+  - 弹窗标题/说明改为“参考优秀内容生成品牌原创图文”（列表按钮仍叫“一键仿图文”）。
+  - 新增 AI 学习结果 <details>（默认折叠）：✓ 摘要短句列表（learningSummary，不展示 JSON/prompt/技术字段）；视觉状态文案 multimodal=“AI已读取参考图片”/metadata_only=“基于标题和结构分析”；降级 warning 展示。types.ts 补 learningSummary/warning。
+  - 既有用例同步新行为（弹窗打开不调分析、首次点击触发、降级不阻断且方向继续）。
+  - 验证：typecheck:frontend 0 错；test:frontend 27 文件 154/154，skip 0。
 - [ ] Task6：测试覆盖 5 类场景
 - [ ] 门禁 + 4 个 commit
 

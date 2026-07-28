@@ -71,6 +71,10 @@ export interface RemixAnalysis {
   analysisId?: string;
   analysisMode?: string;
   referenceTopic?: string;
+  /** 面向用户的学习摘要（不含 JSON/prompt/技术字段）。 */
+  learningSummary?: string[];
+  /** 多模态降级时的诚实提示，例如“未成功读取参考图片…”。 */
+  warning?: string;
   meta?: { multimodalUsed?: boolean; [key: string]: unknown };
   visualLanguage?: { source?: string; [key: string]: unknown };
   [key: string]: unknown;
