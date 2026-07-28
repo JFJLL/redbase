@@ -131,10 +131,18 @@ export interface XhsCategoryTreeResponse {
   items?: XhsCategoryNode[];
 }
 
+/** 趋势分析非阻断警告（最新接口：降级/待验证内容提示，不影响扣费与结果）。 */
+export interface TrendAnalysisWarning {
+  code?: string;
+  message?: string;
+  /** 降级条目定位（TREND_ITEM_DEGRADED / TREND_ITEM_FALLBACK 时出现）。 */
+  trendIndex?: number;
+}
+
 export interface TrendAnalysisResponse {
   brand: InsightsBrand;
   user: SessionUser;
-  warnings: string[];
+  warnings: TrendAnalysisWarning[];
   replayed?: boolean;
 }
 

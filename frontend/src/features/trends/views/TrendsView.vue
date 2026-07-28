@@ -28,6 +28,7 @@ import {
 } from "../model/trendBuckets";
 import { getTrendAnalysisKey, useInsightsStore } from "../stores/insights";
 import { useUnauthorizedHandler } from "../composables/useUnauthorizedHandler";
+import { buildTrendWarningNotice, type TrendWarningNotice } from "../model/analysisWarnings";
 import type { TrendItem } from "../model/types";
 
 const store = useInsightsStore();
@@ -40,6 +41,9 @@ const handleUnauthorized = useUnauthorizedHandler();
 const deleting = ref(false);
 const analysisError = ref("");
 const analysisNotice = ref("");
+// 非阻断 warning 提示（迁移自 master notifyTrendAnalysisWarnings）：
+// 降级批次仍是成功，只展示提示，不弹失败框、不退款。
+const analysisWarning = ref<TrendWarningNotice | null>(null);
 const historyError = ref("");
 const detailError = ref("");
 
@@ -190,6 +194,7 @@ async function handleRunAnalysis(): Promise<void> {
   if (!brandId || store.isAnalysisLoading(brandId, key)) return;
   analysisError.value = "";
   analysisNotice.value = "";
+  analysisWarning.value = null;
   store.setAnalysisBusy(brandId, key, true);
   activeBusyKeys.add(getTrendAnalysisKey(brandId, key));
   try {
@@ -223,6 +228,8 @@ async function attemptAnalysis(brandId: number, key: string): Promise<void> {
     if (!generatedBucket || generatedBucket.items?.length !== 10) {
       throw new Error("服务端未返回完整的 10 条趋势，本次结果未应用。");
     }
+    // 成功即成功：warnings 只产生非阻断提示（409 轮询复取的最终成功同样走这里）。
+    analysisWarning.value = buildTrendWarningNotice(result.warnings, generatedBucket.items.length);
     store.applyAnalysisResult(brandId, key, result);
     store.clearAnalysisRequestId(brandId, key);
     analysisNotice.value = "";
@@ -419,6 +426,14 @@ function goToIdeas(trend: TrendItem): void {
 
         <p v-if="analysisNotice" class="analysis-notice" data-test="analysis-notice">{{ analysisNotice }}</p>
         <p v-if="analysisError" class="analysis-error" data-test="analysis-error">{{ analysisError }}</p>
+        <aside v-if="analysisWarning" class="analysis-warning" data-test="analysis-warning">
+          <p class="analysis-warning-summary" data-test="analysis-warning-summary">{{ analysisWarning.summary }}</p>
+          <ul class="analysis-warning-list">
+            <li v-for="message in analysisWarning.messages" :key="message" data-test="analysis-warning-message">
+              {{ message }}
+            </li>
+          </ul>
+        </aside>
 
         <section class="history-block">
           <h3>历史分析</h3>
@@ -703,6 +718,27 @@ function goToIdeas(trend: TrendItem): void {
   font-size: 13px;
   color: var(--color-danger);
   white-space: pre-line;
+}
+
+/* 非阻断 warning：黄色提示条，区别于失败红与常规灰。 */
+.analysis-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #f0c78a;
+  border-radius: var(--radius-md);
+  background: #fff8ec;
+  font-size: 13px;
+  color: #8a5a00;
+}
+
+.analysis-warning-summary {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.analysis-warning-list {
+  margin: 0;
+  padding-left: 18px;
 }
 
 .history-block {
