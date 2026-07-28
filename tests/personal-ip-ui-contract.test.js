@@ -4,12 +4,11 @@
 // 映射变化：
 // - 旧 id="openPersonalModal" 按钮 → @click="openCreateProfile" 按钮（同文案）。
 // - 旧 renderPersonalIps() 渲染片段 → PersonalIpView 模板中的 brand-card 列表。
-// - 【真实缺口，已记入 BLOCKED.md 业务 Agent 上报区】旧契约要求个人 IP 页
-//   不渲染/不加载创作者素材库（不出现 materialCount、不 loadCreatorMaterials），
-//   但新 PersonalIpView 重建了素材 CRUD（material-section、素材条数统计、
-//   选中档案后自动 loadMaterials）。下方保留仍然成立的同强度禁止断言
-//   （旧素材库 DOM id、旧全局加载器、旧样式类不得复活）；被新实现推翻的
-//   materialCount / 自动加载禁止无法原样保留，缺口如实上报。
+// - 【缺口已在最终修复轮修复】旧契约要求个人 IP 页不渲染/不加载创作者素材库；
+//   现按产品决定用 MATERIAL_LIBRARY_ENABLED=false 门控关闭素材库的自动加载与
+//   管理界面（实现保留但不可达，后续另开产品需求）。下方断言为旧线上契约的
+//   同强度版本：门控必须为 false，渲染与自动加载都必须被门控约束，且不得
+//   存在绕过门控的渲染路径；旧素材库 DOM id、全局加载器、样式类禁止复活。
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -36,8 +35,11 @@ test("personal IP page never resurrects the legacy creator material library wiri
   assert.doesNotMatch(personalView, /id="personalMaterial(?:Panel|Form|List)"/);
   assert.doesNotMatch(personalView, /personalMaterial|creatorMaterials|loadCreatorMaterials/);
   assert.doesNotMatch(personalView, /\.personal-material-panel/);
-  // 新实现的素材加载必须限定在选中档案的作用域内并走 AbortScope，
-  // 不允许出现旧的全局素材库入口（无档案时不得渲染素材区）。
-  assert.match(personalView, /<section v-if="selectedProfile" class="material-section"/);
-  assert.match(personalView, /fetchMaterials\(brandId, signalFor\("materials"\)\)/);
+  // 修复后的旧线上契约：素材库默认关闭——门控常量必须为 false，
+  // 管理界面渲染与自动加载都必须挂在该门控之下（不可达）。
+  assert.match(personalView, /const MATERIAL_LIBRARY_ENABLED = false/);
+  assert.match(personalView, /<section v-if="MATERIAL_LIBRARY_ENABLED && selectedProfile" class="material-section"/);
+  assert.match(personalView, /if \(MATERIAL_LIBRARY_ENABLED && brandId != null\) void loadMaterials\(brandId\)/);
+  // 素材区不得存在任何绕过门控的渲染路径。
+  assert.doesNotMatch(personalView, /<section v-if="selectedProfile" class="material-section"/);
 });
