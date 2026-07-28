@@ -1,12 +1,393 @@
 /**
  * Image job API for the generation feature. Mirrors public/js/api-client.js
- * pollImageJob semantics and image-generation-routes request bodies.
+ * pollImageJob semantics plus the legacy idea-driven generation flows from
+ * public/app.js (moments / wechat long image / xhs carousel / style image)
+ * and the product image library endpoints (product-image-routes.js).
  */
 import { apiFetch } from "@/shared/api/client";
 import type { SessionUser } from "@/shared/types/api";
 
 export const IMAGE_JOB_MAX_WAIT_MS = 10 * 60 * 1000;
 export const IMAGE_JOB_POLL_INTERVAL_MS = 5000;
+
+// —— Legacy constants (public/app.js lines 105-129, public/js/config.js) ——
+export const IMAGE_ASPECT_RATIOS = ["21:9", "16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16", "9:21"];
+export const SMART_ASPECT_RATIO_DEFAULTS: Readonly<Record<string, string>> = Object.freeze({
+  moments: "3:4",
+  wechat: "9:21",
+  xhsCarousel: "3:4",
+  styleImage: "3:4",
+});
+export const WECHAT_ASPECT_RATIO_WARNING_DISABLED_KEY = "redbase:wechat-aspect-ratio-warning-disabled";
+export const MAX_SELECTED_PRODUCT_IMAGES = 10;
+export const MAX_SELECTED_PRODUCT_IMAGE_BYTES = 30 * 1024 * 1024;
+export const MAX_SINGLE_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+
+export interface CreativeOption {
+  value: string;
+  label: string;
+  description: string;
+}
+
+export const XHS_CREATIVE_STYLE_OPTIONS: readonly CreativeOption[] = Object.freeze([
+  { value: "auto", label: "智能匹配", description: "根据选题内容自动选择更合适的视觉路线" },
+  { value: "lifestyle", label: "真实生活方式", description: "自然光、真实使用场景与轻松抓拍感" },
+  { value: "editorial", label: "杂志编辑感", description: "克制高级，适合审美与品牌内容" },
+  { value: "native_note", label: "原生笔记感", description: "便签、圈画和真实记录，弱化广告感" },
+  { value: "knowledge", label: "专业知识卡", description: "步骤清晰，适合教程、科普与方法论" },
+  { value: "checklist", label: "清单攻略型", description: "编号、清单和收藏提示，适合攻略避坑" },
+  { value: "review", label: "产品测评型", description: "细节特写、对比和真实使用证据" },
+  { value: "mood", label: "情绪氛围型", description: "少文字、电影感，适合故事与情绪表达" },
+  { value: "collage", label: "拼贴灵感型", description: "多图拼贴、纸张肌理和灵感板气质" },
+  { value: "minimal_brand", label: "极简品牌型", description: "单主体、统一品牌色与精致留白" },
+]);
+
+export const WECHAT_TEMPLATE_OPTIONS: readonly CreativeOption[] = Object.freeze([
+  { value: "auto", label: "智能匹配", description: "根据文章主题自动选择长图结构" },
+  { value: "editorial", label: "深度观点", description: "行业洞察、品牌观点与趋势解读" },
+  { value: "tutorial", label: "干货教程", description: "步骤方法、操作指南和科普内容" },
+  { value: "report", label: "行业报告", description: "数据卡片、趋势拆解和专业结论" },
+  { value: "story", label: "品牌故事", description: "人物、时间线和品牌幕后内容" },
+  { value: "product", label: "产品说明", description: "从真实痛点与场景解释产品价值" },
+  { value: "minimal", label: "极简长图", description: "少字强观点，适合封面式传播" },
+]);
+
+/** getResolvedIdeaAspectRatio semantics: "smart" maps to the per-type default. */
+export function resolveAspectRatio(selection: string, type: keyof typeof SMART_ASPECT_RATIO_DEFAULTS | string): string {
+  const valid = selection === "smart" || IMAGE_ASPECT_RATIOS.includes(selection) ? selection : "smart";
+  return valid === "smart" ? SMART_ASPECT_RATIO_DEFAULTS[type] || "3:4" : valid;
+}
+
+// —— Brand detail (GET /api/brands/:id, brand-routes.js sanitizeBrand) ——
+
+export interface IdeaDetail {
+  title: string;
+  summary: string;
+  angle: string;
+  brandFit: string;
+  audience: string;
+  hook: string;
+  tags: string[];
+  contentAssets?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface TrendDetail {
+  id: number;
+  title: string;
+  category?: string;
+  summary?: string;
+  ideas: IdeaDetail[];
+  [key: string]: unknown;
+}
+
+export interface TrendBucket {
+  key: string;
+  title: string;
+  description: string;
+  items: TrendDetail[];
+}
+
+export interface BrandLogoView {
+  originalName: string;
+  url: string;
+  [key: string]: unknown;
+}
+
+export interface BrandDetail {
+  id: number;
+  name: string;
+  profileType: "brand" | "personal";
+  logo: BrandLogoView | null;
+  trends: TrendBucket[];
+  [key: string]: unknown;
+}
+
+export function fetchBrandDetail(brandId: number, signal?: AbortSignal): Promise<{ brand: BrandDetail }> {
+  return apiFetch(`/api/brands/${brandId}`, { signal });
+}
+
+/** getSelectedTrend semantics: trends are buckets; find the trend across all buckets. */
+export function findTrendInBrand(brand: BrandDetail | null, trendId: number): TrendDetail | null {
+  if (!brand) return null;
+  for (const bucket of brand.trends || []) {
+    const found = (bucket.items || []).find((item) => Number(item.id) === trendId);
+    if (found) return found;
+  }
+  return null;
+}
+
+// —— Product image library (product-image-routes.js) ——
+
+export interface ProductImageView {
+  id: number;
+  originalName: string;
+  url: string;
+  mimeType?: string;
+  sizeBytes: number;
+  createdAt?: string;
+  lastUsedAt?: string;
+  brandId?: number;
+  assetType?: string;
+}
+
+/** productImages request-body entry, matching getSelectedProductImages output. */
+export interface ProductImageInput {
+  id?: number;
+  name?: string;
+  dataUrl?: string;
+}
+
+export function fetchProductImages(signal?: AbortSignal): Promise<{ images: ProductImageView[] }> {
+  return apiFetch("/api/product-images", { signal });
+}
+
+export function uploadProductImage(
+  body: { name: string; dataUrl: string; brandId?: number },
+  signal?: AbortSignal,
+): Promise<{ image: ProductImageView; duplicate?: boolean }> {
+  return apiFetch("/api/product-images", { method: "POST", body, signal });
+}
+
+export function deleteProductImage(imageId: number, signal?: AbortSignal): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/product-images/${imageId}`, { method: "DELETE", signal });
+}
+
+export function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取图片文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+// —— Idea-driven generation requests (image-generation-routes.js) ——
+
+export interface IdeaImageJobSubmitResult {
+  jobId?: string;
+  user?: SessionUser;
+  [key: string]: unknown;
+}
+
+export interface MomentsImageRequest {
+  productImages: ProductImageInput[];
+  useBrandLogo: boolean;
+  aspectRatio: string;
+}
+
+/** POST /api/brands/:brandId/trends/:trendId/ideas/:ideaIndex/image (app.js 4004). */
+export function submitMomentsImage(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: MomentsImageRequest,
+  signal?: AbortSignal,
+): Promise<IdeaImageJobSubmitResult> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/image`, { method: "POST", body, signal });
+}
+
+export interface WechatLongImageRequest extends MomentsImageRequest {
+  wechatTemplate: string;
+}
+
+export interface WechatPack {
+  title?: string;
+  publishTitle?: string;
+  intro?: string;
+  outline?: string[];
+  positioning?: string;
+  cta?: string;
+  aspectRatio?: string;
+  imageUrl?: string;
+  previewUrl?: string;
+  [key: string]: unknown;
+}
+
+export interface WechatLongImageSubmitResult extends IdeaImageJobSubmitResult {
+  wechatPack?: WechatPack;
+}
+
+/** POST .../wechat-long-image (app.js 4084). */
+export function submitWechatLongImage(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: WechatLongImageRequest,
+  signal?: AbortSignal,
+): Promise<WechatLongImageSubmitResult> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/wechat-long-image`, {
+    method: "POST",
+    body,
+    signal,
+  });
+}
+
+// —— XHS carousel three-phase flow (app.js 4287-4460) ——
+
+export interface CarouselSlide {
+  title?: string;
+  pageLabel?: string;
+  visualDirection?: string;
+  style?: string;
+  composition?: string;
+  prompt?: string;
+  copy?: string;
+  imageUrl?: string;
+  previewUrl?: string;
+  isGenerating?: boolean;
+  isQueued?: boolean;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface CarouselPack {
+  title?: string;
+  publishTitle?: string;
+  publishCaption?: string;
+  caption?: string;
+  aspectRatio?: string;
+  carouselGroupId?: string;
+  slides: CarouselSlide[];
+  [key: string]: unknown;
+}
+
+export function previewXhsCarousel(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: { aspectRatio: string; visualStylePreset: string; carouselPack?: CarouselPack },
+  signal?: AbortSignal,
+): Promise<{ carouselPack?: CarouselPack; user?: SessionUser }> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/xhs-carousel/preview`, {
+    method: "POST",
+    body,
+    signal,
+  });
+}
+
+export interface XhsCarouselSlideRequest {
+  carouselPack: CarouselPack;
+  slide: CarouselSlide;
+  productImages: ProductImageInput[];
+  useBrandLogo: boolean;
+  visualStylePreset: string;
+  aspectRatio: string;
+}
+
+export interface XhsCarouselSlideSubmitResult {
+  slideJob?: { slideIndex: number; jobId: string };
+  creditEventId?: number | null;
+  user?: SessionUser;
+  [key: string]: unknown;
+}
+
+export function submitXhsCarouselSlide(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  slideIndex: number,
+  body: XhsCarouselSlideRequest,
+  signal?: AbortSignal,
+): Promise<XhsCarouselSlideSubmitResult> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/xhs-carousel/slides/${slideIndex}`, {
+    method: "POST",
+    body,
+    signal,
+  });
+}
+
+export function completeXhsCarousel(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: { carouselPack: CarouselPack; creditEventId: number | null },
+  signal?: AbortSignal,
+): Promise<{ generation?: Record<string, unknown>; creditEventId?: number | null; user?: SessionUser }> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/xhs-carousel/complete`, {
+    method: "POST",
+    body,
+    signal,
+  });
+}
+
+/** enrichXhsCarouselSlides (app.js 4150): default per-slide labels and copy. */
+export function enrichXhsCarouselSlides(pack: CarouselPack): CarouselSlide[] {
+  const slides = Array.isArray(pack?.slides) ? pack.slides.slice(0, 4) : [];
+  return slides.map((slide, index) => ({
+    ...slide,
+    pageLabel: slide.pageLabel || `第 ${index + 1} 张`,
+    visualDirection: slide.visualDirection || slide.title || `第 ${index + 1} 张视觉方向`,
+    style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
+    composition:
+      slide.composition || `小红书组图${index + 1}/4，比例${pack.aspectRatio || "3:4"}，标题清晰，画面有连续组图统一性。`,
+    prompt: slide.prompt || "",
+    isGenerating: false,
+    error: "",
+  }));
+}
+
+export function createXhsCarouselGroupId(brandId: number, trendId: number, ideaIndex: number): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `xhs-${brandId}-${trendId}-${ideaIndex}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/** Signed URLs come from the backend as-is; only obvious protocols pass through. */
+export function safeImageSrc(value: unknown): string {
+  const src = String(value || "");
+  if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("/")) return src;
+  return "";
+}
+
+export function hasXhsCarouselSlideImage(slide: CarouselSlide | null | undefined): boolean {
+  return Boolean(safeImageSrc(slide?.imageUrl || slide?.previewUrl));
+}
+
+// —— Style image (app.js 6362-6400) ——
+
+export interface StyleImageRequest {
+  title: string;
+  stylePrompt: string;
+  useBrandLogo: boolean;
+  aspectRatio: string;
+  styleReferenceImages: Array<{ name?: string; dataUrl?: string }>;
+}
+
+export function submitStyleImage(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: StyleImageRequest,
+  signal?: AbortSignal,
+): Promise<IdeaImageJobSubmitResult> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/style-image`, { method: "POST", body, signal });
+}
+
+/** buildIdeaStylePrompt (app.js 3269): label the idea fields for the prompt. */
+export function buildIdeaStylePrompt(idea: IdeaDetail | null | undefined): string {
+  const parts: Array<[string, unknown]> = [
+    ["选题标题", idea?.title],
+    ["内容摘要", idea?.summary],
+    ["切入角度", idea?.angle],
+    ["品牌结合方式", idea?.brandFit],
+    ["面向人群", idea?.audience],
+    ["开头钩子", idea?.hook],
+  ];
+  return parts
+    .map(([label, value]) => {
+      const text = String(value || "").trim();
+      return text ? `${label}：${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** refreshGenerationHistoryAfterGeneration semantics: unfiltered GET /api/history. */
+export function refreshGenerationHistory(signal?: AbortSignal): Promise<{ generations: unknown[] }> {
+  return apiFetch("/api/history", { signal });
+}
+
+// —— Image edit + job polling (round 1, unchanged) ——
 
 export interface ImageJobStatusResult {
   status?: string;
