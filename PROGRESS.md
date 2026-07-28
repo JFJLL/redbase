@@ -31,14 +31,21 @@
 - [x] 任务1：static.js 改造（dist/public 优先、/app//admin SPA 刷新、旧 public 回退；新增 5 个后端测试，npm test 438/438、跳过 0）
 - [x] 任务1：scripts/build-frontend.cjs（临时目录构建+原子替换+失败不动线上目录）与 scripts/check-asset-budget.cjs（预算首跑 PASS：官网 1.2KB/100KB，工作台共享 37.9KB/250KB，10 业务路由全部懒加载）
 - [x] 任务1：基础 commit + 三个 worktree（基础 commit 48e137b64795c57335d751ec26983777ffe799e9；worktree：.worktrees/core=codex/fe-core、.worktrees/insights=codex/fe-insights、.worktrees/content=codex/fe-content，均已装好 frontend 依赖）
-- [ ] 任务2：Core Agent 交付
-- [ ] 任务2：Insights Agent 交付
-- [ ] 任务2：Content Agent 交付
-- [ ] 任务3：按序合并 + 删除旧入口
+- [x] 任务2：Core Agent 交付（commit 146c899 → 二轮无追加；landing/auth/brands/personal 迁移，含飞书登录、品牌 CRUD+产品图上传、个人 IP）
+- [x] 任务2：Insights Agent 交付（commit eab2b11 + edec753 preselect brand；trends 轮询/证据链/机会点，ideas 选题生成与编辑）
+- [x] 任务2：Content Agent 交付（commit 0fd65d4 + ce894a0 生图四通道与产品图；excellent+remix、generation、history、admin）
+- [x] 任务3：按序合并（Core→Insights→Content，BLOCKED.md 冲突已手工合并）+ 删除旧入口（public/index.html/app.js/styles.css/landing-v3.css/admin.*/js；根 check 脚本去掉 public 引用，commit 42ed604）
 - [x] 任务3：旧前端契约测试迁移（18 个失败测试同强度迁到 Vue 实现；commit 0edaf1b；root 388/388、integration 176/176、frontend 135/135，跳过均 0，总数 523 ≥ 基线 521；6 条缺口已上报 BLOCKED.md）
-- [ ] 任务3：性能收口（字体/懒加载/预算脚本）
-- [ ] 任务3：部署流程更新（deploy/、scripts/、docs/）
-- [ ] 完成条件：双 Node 验证 + 红绿灯演示 + 最终提交
+- [x] 任务3：性能收口（系统中文字体栈、无 Google Fonts；首屏图 eager+fetchpriority、非首屏 lazy；预算脚本 PASS：官网 15.4KB/100KB、工作台 39.5KB/250KB、10 路由懒加载、官网无 Vue chunk）
+- [x] 任务3：部署流程更新（scripts/deploy-server.sh：干净区→拉 master→双 npm ci→临时目录构建原子切换→check/test/integration/frontend/budget→pm2 restart→四路径烟测，失败前置中止；README 部署章节同步；deploy/nginx 全量代理 Node 无需改）
+- [x] 完成条件：双 Node 验证 + 红绿灯演示 + 最终提交（见下）
+
+## 验收证据（对话已贴实际输出）
+- 开发机 Node 24.11.1：npm ci ✓、check ✓、npm test 388/388、integration 176/176、frontend 135/135（跳过均 0）、build ✓、budget PASS、三入口+SPA刷新+favicon 烟测全 200、官网无 base/app chunk。
+- 真实 Node 20.20.0（D:\Tools\nvm\v20.20.0，独立 worktree .worktrees/node20）：npm ci（后端+前端）✓、check ✓、node --test tests 388/388、integration 176/176、frontend typecheck 0 错误、vitest 135/135（跳过均 0）、build-frontend 原子替换 ✓、budget PASS。
+- 红灯→绿灯演示①（预算）：官网 main.ts 强行 import vue → budget FAIL（landing shares chunk … must not load Vue，exit 1）；还原后 PASS。
+- 红灯→绿灯演示②（原子替换）：landing 注入 TS 类型错误 → build 在 typecheck 阶段失败 exit 1、dist/public 未被触碰（untouched=True）；还原后 build exit 0。
+- 测试总数：root 388 + integration 176 + frontend 135 = 699（原生前端 68 个契约用例已 1:1 迁入 frontend），跳过 0；均 ≥ 基线。
 
 ## 决策与“建议”替换记录
 - 依赖精确版本（均经 registry engines 核验兼容 Node 20.20.0 与 24.11.1）：vue@3.5.40、vue-router@4.6.4、pinia@3.0.4、vite@7.3.6、@vitejs/plugin-vue@6.0.8、typescript@5.9.3、vue-tsc@3.3.8、vitest@4.1.10、@vue/test-utils@2.4.11、happy-dom@20.11.1、@types/node@20.19.43。

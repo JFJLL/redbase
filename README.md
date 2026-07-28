@@ -153,13 +153,27 @@ cd /home/red/work/moneyboost/redbase
 git status --short
 ```
 
-如果命令有输出，先停止更新并处理服务器上的本地改动。工作区干净时执行：
+如果命令有输出，先停止更新并处理服务器上的本地改动。工作区干净时执行统一更新脚本（包含前端锁定安装、临时目录构建 + 原子切换、完整测试、重启与烟测；构建或测试失败会在重启前中止，不会覆盖当前可用版本）：
+
+```bash
+bash scripts/deploy-server.sh
+```
+
+等价的手工步骤（顺序不可调整，任何一步失败都不得执行 `pm2 restart`）：
 
 ```bash
 git fetch origin
 git switch master
 git pull --ff-only origin master
+npm ci
+npm --prefix frontend ci
+npm run build            # 构建进临时目录，成功后原子替换 dist/public
+npm run check && npm test && npm run test:integration && npm run test:frontend && npm run budget
 pm2 restart redbase
+curl -fsS http://127.0.0.1:3013/api/health
+curl -fsS -o /dev/null http://127.0.0.1:3013/
+curl -fsS -o /dev/null http://127.0.0.1:3013/app/
+curl -fsS -o /dev/null http://127.0.0.1:3013/admin/
 ```
 
 更新后确认服务器确实运行主干：
@@ -174,9 +188,7 @@ pm2 status redbase
 
 ```bash
 cd /home/red/work/moneyboost/redbase
-git switch master
-git pull --ff-only origin master
-pm2 restart redbase
+bash scripts/deploy-server.sh
 ```
 
 本地开发新功能时，先更新主干，再从主干创建功能分支。测试通过后将功能分支合入并推送 `master`，服务器随后按上述流程拉取：
