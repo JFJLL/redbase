@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Machine-checkable asset budgets for the built frontend (dist/public).
+// Machine-checkable asset budgets for the built frontend. By default the
+// live dist/public is checked; pass `--dir <candidate>` to audit a staged
+// candidate directory (its .vite/manifest.json and files) before promotion.
 // Budgets are hard limits — raising them is forbidden by the project rules:
 //   1. Landing initial JS+CSS (gzip, summed)  <= 100 KB
 //   2. Workspace shared initial JS (gzip)     <= 250 KB
@@ -11,7 +13,26 @@ const path = require("path");
 const zlib = require("zlib");
 
 const ROOT = path.resolve(__dirname, "..");
-const DIST = path.join(ROOT, "dist", "public");
+
+function parseTargetDir(argv) {
+  let dir = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--dir") {
+      dir = argv[i + 1];
+      if (!dir) {
+        console.error("[budget] --dir requires a directory argument");
+        process.exit(2);
+      }
+      i += 1;
+    } else {
+      console.error(`[budget] unknown argument: ${argv[i]} (usage: check-asset-budget.cjs [--dir <dir>])`);
+      process.exit(2);
+    }
+  }
+  return dir ? path.resolve(dir) : path.join(ROOT, "dist", "public");
+}
+
+const DIST = parseTargetDir(process.argv.slice(2));
 const MANIFEST_PATH = path.join(DIST, ".vite", "manifest.json");
 
 const LANDING_BUDGET_BYTES = 100 * 1024;

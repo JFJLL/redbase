@@ -153,27 +153,37 @@ cd /home/red/work/moneyboost/redbase
 git status --short
 ```
 
-如果命令有输出，先停止更新并处理服务器上的本地改动。工作区干净时执行统一更新脚本（包含前端锁定安装、临时目录构建 + 原子切换、完整测试、重启与烟测；构建或测试失败会在重启前中止，不会覆盖当前可用版本）：
+如果命令有输出，先停止更新并处理服务器上的本地改动。工作区干净时执行统一更新脚本（候选目录构建 → 候选目录预算检查 → 全部测试 → promote 发布 → pm2 重启 → 四路径烟测；promote 之前任何失败都不会改动 dist/public，烟测失败自动回滚到上一版本并以非零码退出）：
 
 ```bash
 bash scripts/deploy-server.sh
 ```
 
-等价的手工步骤（顺序不可调整，任何一步失败都不得执行 `pm2 restart`）：
+等价的手工步骤（顺序不可调整，promote 之前任何一步失败都不得继续）：
 
 ```bash
-git fetch origin
+git status --short          # 必须无输出
 git switch master
 git pull --ff-only origin master
 npm ci
 npm --prefix frontend ci
-npm run build            # 构建进临时目录，成功后原子替换 dist/public
-npm run check && npm test && npm run test:integration && npm run test:frontend && npm run budget
+node scripts/build-frontend.cjs --stage-dir dist/.public-candidate-manual   # 构建候选目录，不触碰 dist/public
+node scripts/check-asset-budget.cjs --dir dist/.public-candidate-manual     # 对候选目录跑预算四条规则
+npm run check && npm test && npm run test:integration && npm run test:frontend
+node scripts/build-frontend.cjs --promote dist/.public-candidate-manual     # 旧版本保存到 dist/.public-previous
 pm2 restart redbase
 curl -fsS http://127.0.0.1:3013/api/health
 curl -fsS -o /dev/null http://127.0.0.1:3013/
 curl -fsS -o /dev/null http://127.0.0.1:3013/app/
 curl -fsS -o /dev/null http://127.0.0.1:3013/admin/
+```
+
+烟测失败时回滚到 promote 保存的备份（deploy-server.sh 会自动执行这三步并重新烟测旧版本）：
+
+```bash
+node scripts/build-frontend.cjs --rollback dist/.public-previous
+pm2 restart redbase
+curl -fsS http://127.0.0.1:3013/api/health   # 加上 /、/app/、/admin/ 共四路径复验
 ```
 
 更新后确认服务器确实运行主干：

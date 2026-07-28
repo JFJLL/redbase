@@ -108,13 +108,32 @@ function buildStaticHeaders(req, filePath, stat, safePath) {
 }
 
 function getCacheControl(req, safePath, ext) {
-  const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  const hasVersionQuery = requestUrl.searchParams.has("v");
   if (ext === ".html") return "no-cache";
-  if (safePath.startsWith("/assets/") || hasVersionQuery) {
+  if (hasHashedAssetName(safePath)) {
     return "public, max-age=31536000, immutable";
   }
+  // Fixed-name files (logo, qrcode.png, favicon, landing screenshots) can be
+  // replaced in place by a deploy, so they must revalidate on every request:
+  // no-cache keeps the ETag/Last-Modified 304 flow cheap while guaranteeing
+  // clients pick up a swapped file immediately. (Chosen over a short max-age
+  // so a stale logo can never outlive a deploy.)
   return "no-cache";
+}
+
+// Only files whose name carries a Vite content hash (e.g. index-BAs2n8Qq.js,
+// Vite default: exactly 8 base64url chars [A-Za-z0-9_-]) may be cached
+// forever — their content can never change under the same URL. Accepted
+// suffixes: exactly 8 chars possibly containing "-" (the Vite default, e.g.
+// "DTvmMv-j"), or 8+ chars without "-" (longer configured hashes). The
+// suffix must also contain a letter and a digit-or-uppercase so plain words
+// in fixed asset names ("landing-output-longform.webp",
+// "home-idea-generation.png", "banner-20260701.png") never match. The rare
+// all-lowercase hash falls back to no-cache, which is the safe direction.
+const HASHED_ASSET_NAME = /-([A-Za-z0-9_]{8,}|[A-Za-z0-9_-]{8})\.[A-Za-z0-9]+$/;
+
+function hasHashedAssetName(safePath) {
+  const match = HASHED_ASSET_NAME.exec(path.basename(safePath));
+  return Boolean(match) && /[A-Za-z]/.test(match[1]) && /[A-Z0-9]/.test(match[1]);
 }
 
 function buildEtag(stat) {
@@ -144,5 +163,6 @@ module.exports = {
   resolveStaticRoot,
   mapRequestPath,
   spaFallbackPath,
+  hasHashedAssetName,
   resetStaticRootCacheForTests,
 };
