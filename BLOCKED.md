@@ -4,7 +4,7 @@
 
 ## 需要使用者决定的事项
 1. AGENTS.md 验证契约 vs 任务书门禁：任务书（唯一任务来源）只要求 check/test/test:integration/eval:ai/typecheck:frontend/test:frontend/build/git diff --check，已全部执行并通过。AGENTS.md 另要求 `scripts/verify-change.ps1` 产生带指纹的 receipt，且本次改动按 verification-policy 会命中 R2（kimi-browser + agent-review 证据 lane）。verify-change 按未提交 diff 计算指纹（提交后 PlanOnly 显示 changedFiles 为空、R0），Kimi 浏览器验收与独立评审属任务书范围外的额外流程，未自行扩大范围执行。如需补 R2 完整 lane（含浏览器验收/独立评审/receipt），请明确指示。
-2. 未 push：任务书要求“提交 codex/excellent-multimodal-v1”（4 个 commit 已完成），未明确要求 push；按 AGENTS 规则不在无指示时 push。
+2. 【已解决】push：使用者已明确指示推送，`git push -u origin codex/excellent-multimodal-v1` 完成，origin 分支指向 a9daff2。
 
 ## 已按既定处置方式解决（记录备查）
 1. 主 checkout 被前次会话切到 `codex/excellent-multimodal-v1`（=origin/master，零差异），与“基于 origin/master 在 .worktrees 建分支”冲突：已 detach 主 checkout、删除零差异分支后按文档重建 worktree（与 2026-07-28 趋势复核轮的同类处置一致）。主 checkout 未提交的 PROGRESS.md（前次任务记录）保留未动。

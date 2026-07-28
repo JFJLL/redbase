@@ -48,6 +48,7 @@
   - 运行时缓存行落库：excellent_content_remix_analysis_cache 出现 demo-note-1 / v4-excellent-learning-1 / metadata_only（7 天 TTL，符合 metadata 模式设计；30 天多模态 TTL 由单测断言覆盖）。
   - 截图：.verification/excellent-learning-summary-browser.png；验收后服务器已停止。
 - [x] 4 个 commit：db190eb feat: add excellent content multimodal analysis / 932cdbe feat: cache excellent content vision results / 0f8e8d9 feat: expose excellent learning summary UI / （本次）test: cover excellent multimodal flow
+- [x] push：使用者指示后 `git push -u origin codex/excellent-multimodal-v1` 完成，origin/codex/excellent-multimodal-v1 = a9daff2a73be7b59cfd9bc926dfd676ae95072ee。
 
 本文件按任务线分节维护：前端重构（codex/frontend-vue-rebuild）与趋势“结果必达”交付（origin/master）。合并 master 时两边记录均完整保留，不覆盖。
 
