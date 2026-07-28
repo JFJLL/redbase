@@ -14,10 +14,13 @@ const {
   selectVisionImageUrls,
   analyzeExcellentContentVision,
   VISION_FALLBACK_WARNING,
+  VISION_CACHE_TTL_MS,
 } = require("./excellent-content-vision-service");
 
 const ANALYSIS_VERSION = "v4-excellent-learning-1";
 const ANALYSIS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// 多模态分析的外层行与视觉缓存同周期（30 天），同一参考内容不重复调模型。
+const MULTIMODAL_ANALYSIS_TTL_MS = VISION_CACHE_TTL_MS;
 const MAX_ANALYZE_IMAGES = 9;
 const inFlightAnalyses = new Map();
 
@@ -474,7 +477,7 @@ async function analyzeExcellentNoteForRemix(appConfig, options = {}) {
             analysis,
             modelName: appConfig?.textProvider?.model || "",
             createdAt: now.toISOString(),
-            expiresAt: new Date(now.getTime() + ANALYSIS_TTL_MS).toISOString(),
+            expiresAt: new Date(now.getTime() + MULTIMODAL_ANALYSIS_TTL_MS).toISOString(),
             lastError: "",
           });
           return {
@@ -645,6 +648,7 @@ function __resetRemixAnalysisInFlightForTests() {
 module.exports = {
   ANALYSIS_VERSION,
   ANALYSIS_TTL_MS,
+  MULTIMODAL_ANALYSIS_TTL_MS,
   MAX_ANALYZE_IMAGES,
   buildSourceSignature,
   buildMetadataOnlyAnalysis,

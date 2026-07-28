@@ -1,12 +1,23 @@
 const crypto = require("crypto");
 const { callVisionModelJson } = require("../ai/text-provider");
+const {
+  findRemixAnalysisCache,
+  upsertRemixAnalysisCache,
+} = require("../db/repositories/excellent-remix-analysis-cache-repository");
+const { createExcellentVisionStorageProvider } = require("./excellent-vision-storage-provider");
 
 // 参考优秀内容的多模态理解：学习方法，不复制结果。
 // 第一版按产品决策直接把图片 URL 传给多模态模型；失败降级 metadata_only，
 // 永远不能阻断优秀内容流程。
 const VISION_ANALYSIS_VERSION = "excellent-vision-v1";
+// 同一优秀内容的视觉学习结果全局共享（不分用户），缓存 30 天。
+const VISION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// 缓存键 = noteId + imageSignature；复用现有分析缓存表时用固定命名空间占位 board 列。
+const VISION_CACHE_BOARD_KEY = "vision";
 const MAX_VISION_IMAGES = 4;
 const VISION_FALLBACK_WARNING = "未成功读取参考图片，本次基于标题和内容结构分析";
+const inFlightVisionAnalyses = new Map();
+const defaultStorageProvider = createExcellentVisionStorageProvider();
 
 function compactText(value, max = 240) {
   return String(value || "")
@@ -149,10 +160,28 @@ function buildMetadataOnlyOutcome(imageSignature) {
   };
 }
 
+function isVisionCacheFresh(row) {
+  if (!row?.analysis || typeof row.analysis !== "object") return false;
+  if (row.analysis.analysisMode !== "multimodal") return false;
+  if (!row.expiresAt) return false;
+  const expires = Date.parse(row.expiresAt);
+  return Number.isFinite(expires) && expires > Date.now();
+}
+
+function findVisionAnalysisCache(noteId, imageSignature) {
+  return findRemixAnalysisCache({
+    noteId,
+    boardKey: VISION_CACHE_BOARD_KEY,
+    sourceSignature: imageSignature,
+    analysisVersion: VISION_ANALYSIS_VERSION,
+  });
+}
+
 /**
  * 多模态理解入口。输入 { noteId, imageUrls, title, metadata }。
+ * 命中 30 天缓存（noteId + imageSignature，跨用户共享）时不调模型；
  * 成功返回 multimodal 学习结果；模型失败返回 metadata_only 降级结果，
- * 不抛错、不阻断优秀内容流程。
+ * 不抛错、不阻断优秀内容流程；降级结果不写入 30 天缓存，下次仍可重试多模态。
  */
 async function analyzeExcellentContentVision(appConfig, options = {}) {
   const noteId = compactText(options.noteId, 80);
@@ -162,7 +191,25 @@ async function analyzeExcellentContentVision(appConfig, options = {}) {
     return buildMetadataOnlyOutcome(imageSignature);
   }
 
+  const cached = findVisionAnalysisCache(noteId, imageSignature);
+  if (isVisionCacheFresh(cached)) {
+    return { ...cached.analysis, imageSignature, fromCache: true };
+  }
+
+  const inFlightKey = `${noteId}|${imageSignature}`;
+  let promise = inFlightVisionAnalyses.get(inFlightKey);
+  if (!promise) {
+    promise = runVisionAnalysis(appConfig, { noteId, urls, imageSignature, options }).finally(() => {
+      inFlightVisionAnalyses.delete(inFlightKey);
+    });
+    inFlightVisionAnalyses.set(inFlightKey, promise);
+  }
+  return promise;
+}
+
+async function runVisionAnalysis(appConfig, { noteId, urls, imageSignature, options }) {
   const modelImpl = typeof options.visionModelImpl === "function" ? options.visionModelImpl : callVisionModelJson;
+  const storageProvider = options.storageProvider || defaultStorageProvider;
   const { systemPrompt, userPrompt } = buildVisionPrompts({
     noteId,
     title: options.title,
@@ -170,10 +217,12 @@ async function analyzeExcellentContentVision(appConfig, options = {}) {
     metadata: options.metadata || {},
   });
   try {
+    // StorageProvider 预留接口：local 驱动直接透传 URL，未来 OSS 驱动在此替换。
+    const imageInputs = await storageProvider.resolveImageInputs(urls);
     const raw = await modelImpl(appConfig, {
       systemPrompt,
       userPrompt,
-      imageUrls: urls,
+      imageUrls: imageInputs.map((input) => input.url),
       temperature: 0.2,
       maxOutputTokens: 1400,
       maxAttempts: 2,
@@ -183,18 +232,40 @@ async function analyzeExcellentContentVision(appConfig, options = {}) {
     if (!normalized) {
       return buildMetadataOnlyOutcome(imageSignature);
     }
+    const now = new Date();
+    // 只缓存成功的 multimodal 结果；只存分析结果与签名，不存图片/URL。
+    upsertRemixAnalysisCache({
+      noteId,
+      boardKey: VISION_CACHE_BOARD_KEY,
+      sourceSignature: imageSignature,
+      analysisVersion: VISION_ANALYSIS_VERSION,
+      analysisMode: "multimodal",
+      analysis: normalized,
+      modelName: appConfig?.textProvider?.model || "",
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + VISION_CACHE_TTL_MS).toISOString(),
+      lastError: "",
+    });
     return { ...normalized, imageSignature, fromCache: false };
   } catch (_error) {
     return buildMetadataOnlyOutcome(imageSignature);
   }
 }
 
+function __resetVisionAnalysisInFlightForTests() {
+  inFlightVisionAnalyses.clear();
+}
+
 module.exports = {
   VISION_ANALYSIS_VERSION,
+  VISION_CACHE_TTL_MS,
+  VISION_CACHE_BOARD_KEY,
   MAX_VISION_IMAGES,
   VISION_FALLBACK_WARNING,
   selectVisionImageUrls,
   buildImageSignature,
   normalizeVisionAnalysis,
+  findVisionAnalysisCache,
   analyzeExcellentContentVision,
+  __resetVisionAnalysisInFlightForTests,
 };

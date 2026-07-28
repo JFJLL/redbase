@@ -17,7 +17,11 @@
   - text-provider 新增 `callVisionModelJson`：OpenAI 兼容 chat/completions 的 image_url 内容块；google/anthropic 接入方式快速失败供调用方降级。
   - excellent-remix-analysis-service：ANALYSIS_VERSION 升到 v4-excellent-learning-1；supportsMultimodalVision 真实判断（apiKey+openai 兼容）；buildMultimodalAnalysis 把视觉学习结果映射到现有分析结构；normalizeAnalysis 支持 multimodal + learningSummary + warning；analyzeExcellentNoteForRemix 优先多模态、失败附 warning 继续 metadata 路径；fusion-service 透传 visionModelImpl。
   - 验证：node --check 4 文件通过；tests/excellent-remix-service 36/36、api 路由 40/40，skip 0。
-- [ ] Task3：30天缓存（noteId+imageSignature，复用现有缓存表新命名空间，无 schema 变更）+ StorageProvider 预留接口
+- [x] Task3：30天缓存 + StorageProvider 预留接口
+  - 视觉缓存：key = noteId + imageSignature（固定命名空间 boardKey="vision"、analysisVersion=excellent-vision-v1），复用现有 `excellent_content_remix_analysis_cache` 表，无 schema 变更；全局共享不分用户；TTL 30 天；只存 analysisResult/imageSignature/createdAt/expiresAt，不存图片或原 URL；降级结果不写缓存，下次仍可重试多模态；并发同键共享 in-flight promise。
+  - 外层分析行：multimodal 结果 TTL 同步 30 天（MULTIMODAL_ANALYSIS_TTL_MS），metadata_only 仍 7 天。
+  - 新增 `src/server/services/excellent-vision-storage-provider.js`：StorageProvider 预留接口，driver=local 直传 URL，未来 aliyun 驱动接 OSS；本阶段不下载、不落盘。
+  - 验证：node --check 通过；tests/excellent-remix-service + api 路由 66/66，skip 0。
 - [ ] Task4：首次“生成内容方向”才触发分析
 - [ ] Task5：前端 AI 学习结果区域（默认折叠 + 视觉状态文案）
 - [ ] Task6：测试覆盖 5 类场景
