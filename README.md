@@ -181,12 +181,10 @@ curl -fsS -o /dev/null http://127.0.0.1:3013/app/
 curl -fsS -o /dev/null http://127.0.0.1:3013/admin/
 ```
 
-烟测失败时回滚到 promote 保存的备份（deploy-server.sh 会自动执行这三步并重新烟测旧版本）：
+烟测失败时执行完整回滚（deploy-server.sh 会自动调用；`OLD_SHA` 为本次部署 `git pull` 前记录的提交）。禁止只回滚前端目录后继续运行新后端源码，回滚顺序固定为：恢复 dist/public（首次部署没有旧 dist 时移除失败的新 dist，使服务回退旧 public）→ 源码 `git checkout --detach OLD_SHA` → `npm ci` 恢复旧依赖 → `pm2 restart` → 对旧版本重跑四路径烟测：
 
 ```bash
-node scripts/build-frontend.cjs --rollback dist/.public-previous
-pm2 restart redbase
-curl -fsS http://127.0.0.1:3013/api/health   # 加上 /、/app/、/admin/ 共四路径复验
+node scripts/deploy-rollback.cjs --old-sha "$OLD_SHA" --backup dist/.public-previous
 ```
 
 更新后确认服务器确实运行主干：

@@ -44,6 +44,10 @@ if [ -n "$(git status --short)" ]; then
   exit 1
 fi
 git switch master
+# OLD_SHA is captured BEFORE pulling: a failed smoke check rolls sources,
+# dependencies and frontend artifacts all back to this commit together.
+OLD_SHA="$(git rev-parse HEAD)"
+echo "[deploy] OLD_SHA=${OLD_SHA}"
 git pull --ff-only origin master
 
 echo "[deploy] 2/9 installing locked dependencies (backend + frontend)"
@@ -78,17 +82,15 @@ if smoke_all; then
   exit 0
 fi
 
-echo "[deploy] 9/9 smoke checks failed — rolling back to ${BACKUP_DIR}" >&2
-if [ ! -d "${BACKUP_DIR}" ]; then
-  echo "[deploy] no backup directory exists (first deploy?); cannot roll back automatically." >&2
-  exit 1
-fi
-node scripts/build-frontend.cjs --rollback "${BACKUP_DIR}"
-pm2 restart redbase
-sleep 2
-if smoke_all; then
-  echo "[deploy] rollback verified healthy; the new build was rejected. Investigate before redeploying." >&2
+echo "[deploy] 9/9 smoke checks failed — full rollback to OLD_SHA ${OLD_SHA}" >&2
+# Full rollback: frontend artifacts (backup, or legacy public/ on a first
+# deploy without dist backup) + server sources at OLD_SHA + old dependencies
+# + pm2 restart + re-smoke of the OLD version. Rolling back only the frontend
+# while the new backend keeps running is forbidden.
+node scripts/deploy-rollback.cjs --old-sha "${OLD_SHA}" --backup "${BACKUP_DIR}" --app-url "${APP_URL}" && ROLLBACK_STATUS=0 || ROLLBACK_STATUS=$?
+if [ "${ROLLBACK_STATUS}" -eq 0 ]; then
+  echo "[deploy] rollback verified healthy on the old version; the new build was rejected. Investigate before redeploying." >&2
 else
-  echo "[deploy] rollback smoke checks STILL failing; manual intervention required." >&2
+  echo "[deploy] rollback completed but the old version smoke checks are STILL failing; manual intervention required." >&2
 fi
 exit 1
