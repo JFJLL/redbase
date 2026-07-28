@@ -1,5 +1,36 @@
 # PROGRESS — RedBase 前端 Vue 3 重构（总控账本）
 
+## 最终修复轮（2026-07-28，基线 af820d50ab340dfef4211b9b06b603e7e46a2bbb）
+### 任务0 取证（开发机 Node 24.11.1）
+- git status 干净；HEAD=af820d50ab340dfef4211b9b06b603e7e46a2bbb（与文档基线一致）
+- npm ci：首跑 EPERM（今晨启动的两个本地 `node server.js` PID 26040/33868 占用 better_sqlite3，端口 3098/3099；已停止，重启用 npm start）→ 重跑 exit 0；frontend ci exit 0
+- check exit 0；npm test 388/388、integration 176/176、frontend 135/135，跳过/todo 全 0
+- npm run build exit 0（原子替换 dist/public）；budget PASS：官网 15.4KB/100KB、工作台共享 39.5KB/250KB、10 路由懒加载、官网无 Vue chunk
+### 修复轮状态
+- [x] 任务0 取证
+- [x] worktree：.worktrees/parity=codex/fe-final-parity、.worktrees/release=codex/fe-final-release
+- [x] Parity：任务1 品牌/个人IP 变更后趋势选题缓存失效（shared/stores/brandDataVersion.ts）+ fileToDataUrl AbortSignal 账号隔离（shared/utils/fileToDataUrl.ts）——commit d5e6395
+- [x] Parity：任务2 选题级创作设置（ideaCreativeSettings.ts，按 品牌:趋势:选题 键）+ 组图逐页提示词/单页生成/生成后改图(/api/image-edits)/单页重试不重复成功页/提交保序+轮询并发/complete 仅一次 + 风格化图真实参考图 + 仿图文并行轮询——commit d5e6395
+- [x] Parity：任务4 趋势桌面独立滚动+760px 降级、个人 IP 素材库 MATERIAL_LIBRARY_ENABLED=false 门控隐藏——commit d5e6395
+- [x] Release：任务3 build-frontend --stage-dir/--promote/--rollback、budget --dir、deploy-server.sh 九步含烟测失败自动回滚、static.js 仅 Vite 哈希文件 immutable（固定图片 no-cache）、README 对齐、新增 tests/build-frontend-modes.test.js——commit ae2986e
+- [x] 集成合并（零代码冲突；唯一红灯为 tests/personal-ip-ui-contract.test.js 旧缺口断言与修复后契约冲突，总控同强度更新为门控契约，commit 55fd6bc）
+- [x] 双 Node 验证 + 红绿灯证据（见下）
+- [x] BLOCKED.md 逐项标记证据（favicon 项按要求删除记录）
+
+### 修复轮验收证据（对话中已贴完整输出）
+- 完成条件1（双 Node 全绿，跳过 0）：
+  - Node 24.11.1：npm ci×2、check exit 0、root 400/400、integration 176/176、frontend 150/150、build exit 0、budget PASS（15.4KB/39.6KB）。
+  - Node 20.20.0（D:\Tools\nvm\v20.20.0，worktree .worktrees/node20b）：npm ci×2 exit 0、68 个 check 文件 0 失败、root 400/400、integration 176/176、vue-tsc 0 错误、vitest 150/150、build exit 0、budget PASS。首跑 root 30 失败系 better_sqlite3 被 npm 子进程按 v24 ABI 编译（沙箱 PATH 干扰），`npm rebuild better-sqlite3`（v20 node 直跑）后全绿——环境问题非代码问题。
+  - 测试总数 400+176+150=726 ≥ 任务0 基线 400+176+135=711，跳过/todo 全 0。
+- 完成条件2（行为）：品牌编辑后趋势重取新资料（brandCacheInvalidation 2 用例）；读取图片中切账号 0 次上传（sessionSafeUpload 5 用例）；选题设置独立（ideaCreativeFlow 6 用例）；组图逐页提示词/改图/单页重试/并发轮询（ideaGeneration 并发用例 + legacyRemixRequest#7 + remixParallelPolling 2 用例）。红灯演示：notifyBrandDataChanged 临时 no-op → brandCacheInvalidation 2 用例失败（expected 1 to be 2）→ 还原后 2/2 通过。
+- 完成条件3（发布安全）：候选目录预算红灯（删 manifest → --dir exit 1）前后 dist/public sha256 摘要一字不变（ed8be4f4…完全一致），还原绿灯摘要仍不变；promote 候选 B（marker）→ 模拟烟测失败 → --rollback → dist/public 摘要严格恢复为 A、marker 消失。build-frontend-modes.test.js 9 用例覆盖同类失败路径。
+- 完成条件4（缓存与隔离）：运行时实测 /assets/qrcode.png、favicon.ico、redbase-logo.png → Cache-Control: no-cache；哈希文件 landing-BhREy-ry.js → public, max-age=31536000, immutable；官网 HTML 不含 base-/app- chunk（false）；budget 规则4 PASS。
+- 完成条件5：BLOCKED.md 当前有效区为“无”，历史项逐条标记证据，favicon 项已删。
+- 集成验收轮次：第 1 轮 1 个红灯（personal-ip 契约测试）→ 总控修正 → 第 2 轮全绿。共用 2/3 轮。
+- 决策记录：personal-ip-ui-contract.test.js 的两条正断言由“素材区限定作用域”更新为“门控关闭 + 无绕过路径”——这是修复缺口后向旧线上契约的同强度回归，非放宽（旧断言描述的是缺口期临时状态）。
+- 环境备注：node20b worktree 已用于验证，目录含 node_modules 沙箱无法删除，可手工清理（git worktree remove 注销后）。
+
+
 ## 十行纲要（任务0核对后）
 1. 目标：原生前端迁移为 Vue3+Vite+TS 三入口（`/`、`/app/`、`/admin/`），官网不加载工作台代码，后端/DB/API 语义不变。
 2. 并行边界：总控改根 package*、config.js、static.js、deploy/、scripts/、docs/、frontend 公共层；Core=landing/auth/brands/personal；Insights=trends/ideas；Content=excellent/generation/history/admin。
