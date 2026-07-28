@@ -36,6 +36,36 @@ function mountTrends(handler: FetchHandler) {
   return { wrapper, fetchMock, auth, router };
 }
 
+/** 先把路由推到带 query 的地址（如 /?brandId=8）再挂载，模拟品牌档案页跳转。 */
+async function mountTrendsAt(handler: FetchHandler, path: string) {
+  const fetchMock = installFetchMock(handler);
+  const { pinia, auth, router } = setupApp();
+  await router.push(path);
+  await router.isReady();
+  const wrapper = mount(TrendsView, { global: { plugins: [pinia, router] } });
+  return { wrapper, fetchMock, auth, router };
+}
+
+/** 两个品牌的摘要 + 指定品牌详情 + 类目（预选测试用）。 */
+function twoBrandHandler(detailBrandId: number): FetchHandler {
+  return (url, init) => {
+    const method = String(init?.method || "GET");
+    if (method === "GET" && url === "/api/brands?summary=1") {
+      return jsonResponse(200, {
+        brands: [makeBrandSummary(), makeBrandSummary({ id: 8, name: "第二品牌" })],
+      });
+    }
+    if (method === "GET" && url === `/api/brands/${detailBrandId}`) {
+      const overrides = detailBrandId === 8 ? { id: 8, name: "第二品牌" } : {};
+      return jsonResponse(200, { brand: makeBrandDetail([makeTrend(801)], overrides) });
+    }
+    if (method === "GET" && url === "/api/trends/xhs/categories") {
+      return jsonResponse(200, XHS_CATEGORY_TREE);
+    }
+    return undefined;
+  };
+}
+
 /** 基础接口：品牌摘要 + 品牌详情 + 小红书类目。 */
 function baseHandler(detailItems = [makeTrend(501)]): FetchHandler {
   return (url, init) => {
@@ -198,5 +228,40 @@ describe("TrendsView", () => {
 
     expect(mounted.auth.user).toBeNull();
     expect(mounted.router.currentRoute.value.name).toBe("login");
+  });
+
+  it("preselects the brand from ?brandId= once summaries are loaded", async () => {
+    const mounted = await mountTrendsAt(twoBrandHandler(8), "/?brandId=8");
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    await flushPromises();
+
+    const store = useInsightsStore();
+    expect(store.selectedBrandId).toBe(8);
+    // 详情只按预选品牌加载，不再拉默认品牌
+    expect(callsTo(mounted.fetchMock, "/api/brands/8", "GET")).toHaveLength(1);
+    expect(callsTo(mounted.fetchMock, "/api/brands/7", "GET")).toHaveLength(0);
+    expect(wrapper.find(".brand-chip.is-active").text()).toContain("第二品牌");
+  });
+
+  it("ignores an invalid ?brandId= and keeps the default selection", async () => {
+    const mounted = await mountTrendsAt(twoBrandHandler(7), "/?brandId=999");
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    await flushPromises();
+
+    const store = useInsightsStore();
+    expect(store.selectedBrandId).toBe(7);
+    expect(callsTo(mounted.fetchMock, "/api/brands/7", "GET")).toHaveLength(1);
+    expect(wrapper.find(".brand-chip.is-active").text()).toContain("红磨坊咖啡");
+  });
+
+  it("ignores a non-numeric ?brandId= and keeps the default selection", async () => {
+    const mounted = await mountTrendsAt(twoBrandHandler(7), "/?brandId=abc");
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    await flushPromises();
+
+    expect(useInsightsStore().selectedBrandId).toBe(7);
   });
 });
