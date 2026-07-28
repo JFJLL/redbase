@@ -697,6 +697,84 @@ async function callTextModelJson(appConfig, {
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
 }
 
+/**
+ * Multimodal JSON call: sends reference image URLs as OpenAI-style image_url
+ * content parts alongside the text prompt. Only the OpenAI-compatible
+ * chat/completions style supports this; other styles fail fast so callers can
+ * degrade to metadata-only analysis without blocking their flow.
+ */
+async function callVisionModelJson(appConfig, {
+  systemPrompt,
+  userPrompt,
+  imageUrls = [],
+  temperature = 0.2,
+  timeoutMs,
+  retries,
+  maxAttempts,
+  delayMs,
+  maxOutputTokens,
+  maxResponseBytes,
+  onTelemetry,
+}) {
+  const provider = appConfig?.textProvider || {};
+  assertConfigured(provider.apiKey, "文本模型 API Key");
+  if (provider.apiStyle === "google" || provider.apiStyle === "anthropic") {
+    const error = new Error("当前文本模型接入方式不支持图片输入。");
+    error.code = "VISION_STYLE_UNSUPPORTED";
+    error.retryable = false;
+    throw error;
+  }
+  const safeImageUrls = (Array.isArray(imageUrls) ? imageUrls : [])
+    .map((url) => String(url || "").trim())
+    .filter((url) => /^https?:\/\//i.test(url));
+  if (!safeImageUrls.length) {
+    const error = new Error("没有可用的参考图片地址。");
+    error.code = "VISION_NO_IMAGES";
+    error.retryable = false;
+    throw error;
+  }
+  const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2;
+  const outputTokenLimit = Number.isFinite(Number(maxOutputTokens))
+    ? Number(maxOutputTokens)
+    : Number.isFinite(Number(provider.maxOutputTokens))
+      ? Number(provider.maxOutputTokens)
+      : null;
+  const requestBody = JSON.stringify({
+    model: provider.model,
+    temperature: modelTemperature,
+    response_format: { type: "json_object" },
+    ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: userPrompt },
+          ...safeImageUrls.map((url) => ({ type: "image_url", image_url: { url } })),
+        ],
+      },
+    ],
+  });
+  const data = await withRetries(
+    (attempt) => {
+      onTelemetry?.({ type: "attempt", attempt });
+      return fetchJson(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${provider.apiKey}`,
+        },
+        body: requestBody,
+        onTelemetry,
+        timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
+        maxResponseBytes: Number.isFinite(Number(maxResponseBytes)) ? Number(maxResponseBytes) : undefined,
+      });
+    },
+    buildRetryOptions({ retries, maxAttempts, delayMs }),
+  );
+  return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
+}
+
 function buildTextProviderEndpoint(appConfig) {
   if (appConfig.textProvider.apiStyle === "anthropic") {
     return joinUrl(appConfig.textProvider.anthropicBaseUrl, "/messages");
@@ -720,6 +798,7 @@ module.exports = {
   extractTextFromAnthropicResponse,
   extractTextFromGoogleResponse,
   callTextModelJson,
+  callVisionModelJson,
   buildTextProviderEndpoint,
   buildTextProviderRequestOptions,
   createPinnedTextProviderLookup,

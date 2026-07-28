@@ -632,6 +632,7 @@ async function generateContentDirections(
     categoryPath,
     industryPath,
     textModelImpl,
+    visionModelImpl,
     analyzeImpl,
   } = {},
 ) {
@@ -658,6 +659,7 @@ async function generateContentDirections(
       categoryPath: safeCategoryPath,
       industryPath: safeIndustryPath,
       textModelImpl,
+      visionModelImpl,
     });
   }
 
@@ -1869,6 +1871,7 @@ async function buildExcellentRemixFusionPlan(appConfig, options = {}) {
       categoryPath: options.categoryPath || "",
       industryPath: options.industryPath || "",
       textModelImpl: options.textModelImpl,
+      visionModelImpl: options.visionModelImpl,
     });
   }
 

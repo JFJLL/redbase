@@ -10,8 +10,13 @@ const {
   recordRemixAnalysisCacheError,
 } = require("../db/repositories/excellent-remix-analysis-cache-repository");
 const { callTextModelJson } = require("../ai/text-provider");
+const {
+  selectVisionImageUrls,
+  analyzeExcellentContentVision,
+  VISION_FALLBACK_WARNING,
+} = require("./excellent-content-vision-service");
 
-const ANALYSIS_VERSION = "v3-content-direction-1";
+const ANALYSIS_VERSION = "v4-excellent-learning-1";
 const ANALYSIS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_ANALYZE_IMAGES = 9;
 const inFlightAnalyses = new Map();
@@ -128,6 +133,12 @@ function buildMetadataOnlyAnalysis(note, board) {
       `按参考图文页数节奏规划页面角色（当前观察到约 ${imageCount} 张图）`,
       "只迁移表达方法，不迁移原品牌与可识别版式",
     ].filter(Boolean),
+    // 面向用户的学习摘要：metadata 模式下诚实声明只基于标题与结构。
+    learningSummary: [
+      `标题钩子：${hook.description}`,
+      `页面节奏：按约 ${imageCount || 4} 页图文逐层展开信息`,
+      "转化方式：以可收藏的方法总结促成互动",
+    ],
     originalityConstraints: [
       "不得复制参考笔记标题原文与可识别表述",
       "不得复制原图人物、原品牌、Logo、水印与具体版式",
@@ -209,6 +220,13 @@ function normalizeAnalysis(raw, note, board) {
       .map((item) => compactText(item, 120))
       .filter(Boolean)
       .slice(0, 8),
+    learningSummary: (
+      Array.isArray(raw.learningSummary) && raw.learningSummary.length ? raw.learningSummary : fallback.learningSummary
+    )
+      .map((item) => compactText(item, 120))
+      .filter(Boolean)
+      .slice(0, 8),
+    ...(compactText(raw.warning, 160) ? { warning: compactText(raw.warning, 160) } : {}),
     originalityConstraints: (
       Array.isArray(raw.originalityConstraints) ? raw.originalityConstraints : fallback.originalityConstraints
     )
@@ -219,7 +237,8 @@ function normalizeAnalysis(raw, note, board) {
       sourceImageCount: Number(note?.imageCount || note?.imageUrls?.length || 0) || 0,
       sourceReadCount: Number(note?.metrics?.readCount || 0) || 0,
       hasBodyText: Boolean(compactText(note?.content, 20)),
-      multimodalUsed: false,
+      multimodalUsed: analysisMode === "multimodal",
+      ...(Number(raw.meta?.visionImageCount) > 0 ? { visionImageCount: Number(raw.meta.visionImageCount) } : {}),
     },
   };
 
@@ -231,17 +250,82 @@ function normalizeAnalysis(raw, note, board) {
   return analysis;
 }
 
-function supportsMultimodalVision(_appConfig) {
-  // Current text-provider path only accepts system/user text prompts.
-  // Do not pretend multimodal vision is available.
-  return false;
+function supportsMultimodalVision(appConfig) {
+  const provider = appConfig?.textProvider || {};
+  if (!String(provider.apiKey || "").trim()) return false;
+  // 仅 OpenAI 兼容的 chat/completions 接受 image_url 内容块；
+  // google/anthropic 接入方式走 metadata_only，不假装能看图。
+  return provider.apiStyle !== "google" && provider.apiStyle !== "anthropic";
+}
+
+/**
+ * 把多模态学习结果映射到现有分析结构，下游内容方向/融合方案无需感知来源差异。
+ */
+function buildMultimodalAnalysis(note, board, vision) {
+  const fallback = buildMetadataOnlyAnalysis(note, board);
+  const pages = Array.isArray(vision?.structure?.pages) ? vision.structure.pages : [];
+  const slideRoles = pages.length
+    ? pages.map((page, index) => ({
+        sourceIndex: index,
+        role: compactText(page?.role, 40) || fallback.narrativeStructure.slideRoles[index]?.role || `页面${index + 1}`,
+        contentFunction:
+          compactText(page?.focus, 120) ||
+          fallback.narrativeStructure.slideRoles[index]?.contentFunction ||
+          "承载当前页信息重点",
+      }))
+    : fallback.narrativeStructure.slideRoles;
+
+  return {
+    ...fallback,
+    analysisMode: "multimodal",
+    hookPattern: {
+      type: compactText(vision?.structure?.hook?.type, 40) || fallback.hookPattern.type,
+      description: compactText(vision?.structure?.hook?.description, 200) || fallback.hookPattern.description,
+      titleFormula: compactText(vision?.structure?.hook?.titleFormula, 120) || fallback.hookPattern.titleFormula,
+    },
+    narrativeStructure: {
+      summary: compactText(vision?.structure?.narrativeFlow, 320) || fallback.narrativeStructure.summary,
+      slideRoles,
+    },
+    visualLanguage: {
+      layout: compactText(vision?.visualLanguage?.layout, 80) || fallback.visualLanguage.layout,
+      textDensity: compactText(vision?.visualLanguage?.textDensity, 80) || "图文比例均衡（图片观察）",
+      imageTextRatio:
+        compactText(vision?.visualLanguage?.imageTextRatio, 80) || "以图承载信息、文字点题（图片观察）",
+      colorMood: compactText(vision?.visualLanguage?.color, 80) || fallback.visualLanguage.colorMood,
+      typography: compactText(vision?.visualLanguage?.typography, 80) || fallback.visualLanguage.typography,
+      composition: compactText(vision?.visualLanguage?.composition, 120) || fallback.visualLanguage.composition,
+      source: "reference_image",
+      confidence: "medium",
+    },
+    conversionPattern: {
+      type: fallback.conversionPattern.type,
+      description:
+        compactText(
+          [vision?.conversion?.saveReason, vision?.conversion?.interaction].filter(Boolean).join("；"),
+          200,
+        ) || fallback.conversionPattern.description,
+    },
+    usableLearningPoints: (Array.isArray(vision?.learningSummary) ? vision.learningSummary : [])
+      .map((item) => compactText(item, 120))
+      .filter(Boolean)
+      .slice(0, 8)
+      .concat(["只迁移表达方法，不迁移原品牌与可识别版式"])
+      .slice(0, 8),
+    learningSummary: (Array.isArray(vision?.learningSummary) ? vision.learningSummary : [])
+      .map((item) => compactText(item, 120))
+      .filter(Boolean)
+      .slice(0, 8),
+    meta: {
+      ...fallback.meta,
+      multimodalUsed: true,
+      visionImageCount: selectVisionImageUrls(note?.imageUrls).length,
+    },
+  };
 }
 
 async function analyzeWithOptionalModel(appConfig, note, board, { textModelImpl } = {}) {
   const base = buildMetadataOnlyAnalysis(note, board);
-  if (supportsMultimodalVision(appConfig)) {
-    // Reserved for future vision-capable provider wiring.
-  }
 
   const modelImpl = textModelImpl || callTextModelJson;
   if (!appConfig?.textProvider?.apiKey || typeof modelImpl !== "function") {
@@ -361,10 +445,54 @@ async function analyzeExcellentNoteForRemix(appConfig, options = {}) {
   if (!promise) {
     promise = (async () => {
       try {
+        // 优先多模态：真实读参考图片；失败降级 metadata_only，不阻断流程。
+        let visionOutcome = null;
+        if (supportsMultimodalVision(appConfig) && selectVisionImageUrls(note?.imageUrls).length) {
+          visionOutcome = await analyzeExcellentContentVision(appConfig, {
+            noteId,
+            boardKey: boardDef.value,
+            imageUrls: note.imageUrls,
+            title: note.title,
+            metadata: {
+              board: boardDef.value,
+              categoryPath: note.categoryPath || "",
+              industryPath: note.industryPath || "",
+            },
+            visionModelImpl: options.visionModelImpl,
+          });
+        }
+
+        const now = new Date();
+        if (visionOutcome?.analysisMode === "multimodal") {
+          const analysis = normalizeAnalysis(buildMultimodalAnalysis(note, boardDef.value, visionOutcome), note, boardDef.value);
+          upsertRemixAnalysisCache({
+            noteId,
+            boardKey: boardDef.value,
+            sourceSignature,
+            analysisVersion: ANALYSIS_VERSION,
+            analysisMode: analysis.analysisMode,
+            analysis,
+            modelName: appConfig?.textProvider?.model || "",
+            createdAt: now.toISOString(),
+            expiresAt: new Date(now.getTime() + ANALYSIS_TTL_MS).toISOString(),
+            lastError: "",
+          });
+          return {
+            ...analysis,
+            sourceSignature,
+            analysisId: cacheKey,
+            fromCache: false,
+            modelName: appConfig?.textProvider?.model || "",
+          };
+        }
+
         const analysis = await analyzeWithOptionalModel(appConfig, note, boardDef.value, {
           textModelImpl: options.textModelImpl,
         });
-        const now = new Date();
+        if (visionOutcome?.warning) {
+          // 多模态尝试过但未成功：向用户诚实说明本次分析依据。
+          analysis.warning = compactText(visionOutcome.warning, 160) || VISION_FALLBACK_WARNING;
+        }
         upsertRemixAnalysisCache({
           noteId,
           boardKey: boardDef.value,
@@ -520,6 +648,7 @@ module.exports = {
   MAX_ANALYZE_IMAGES,
   buildSourceSignature,
   buildMetadataOnlyAnalysis,
+  buildMultimodalAnalysis,
   normalizeAnalysis,
   supportsMultimodalVision,
   analyzeExcellentNoteForRemix,

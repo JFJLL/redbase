@@ -1,5 +1,28 @@
 # PROGRESS
 
+# PROGRESS — 优秀内容 V1 多模态学习（2026-07-28，codex/excellent-multimodal-v1）
+
+任务：优秀内容“一键仿图文”升级为多模态参考学习：真实图片理解 + 30 天分析缓存 + 学习摘要展示 + 惰性触发（首次“生成内容方向”）。不碰积分/收费/OSS/运营后台/数据库 schema。
+
+## 状态账本
+- [x] 任务0：基线与 worktree
+  - `git fetch origin --prune` 完成；origin/master = b415280da7ee56dea6c90b4d1959b68b5359d518。
+  - 异常处置：发现主 checkout 已被前次会话切到 `codex/excellent-multimodal-v1`（=origin/master，零差异）；已 `git switch --detach b415280`、删除零差异分支，再按文档重建 `git worktree add .worktrees/excellent-multimodal-v1 -b codex/excellent-multimodal-v1 origin/master`。主 checkout 未提交的 PROGRESS.md（前次趋势复核记录）保留未动。
+- [x] 任务检查：实际核实现状链路未传图片
+  - excellent-remix-analysis-service：`supportsMultimodalVision` 硬编码 false；`analyzeWithOptionalModel` 只传 title/imageCount 等元数据文本，强制 `analysisMode: metadata_only`；7 天 TTL 缓存在 `excellent_content_remix_analysis_cache` 表。
+  - text-provider：`callTextModelJson` 仅接收 system/user 纯文本，无 image 内容块通道；默认 apiStyle=openai（chat/completions，支持 image_url 内容块）。
+  - 前端 ExcellentView：`openRemix` 弹窗打开即调 `loadRemixAnalysis`；无学习摘要展示。
+- [x] Task1+2：excellent-content-vision-service 多模态分析 + 最多4图URL直传 + metadata_only 降级
+  - 新增 `src/server/services/excellent-content-vision-service.js`：selectVisionImageUrls（封面→第2/3/4页，最多4张，仅 http(s)）、buildImageSignature（noteId+host/path 摘要哈希，不落原 URL）、normalizeVisionAnalysis（面向用户输出，拦截 URL/复制指引/技术字段）、analyzeExcellentContentVision（失败返回 metadata_only+warning，不抛错）。
+  - text-provider 新增 `callVisionModelJson`：OpenAI 兼容 chat/completions 的 image_url 内容块；google/anthropic 接入方式快速失败供调用方降级。
+  - excellent-remix-analysis-service：ANALYSIS_VERSION 升到 v4-excellent-learning-1；supportsMultimodalVision 真实判断（apiKey+openai 兼容）；buildMultimodalAnalysis 把视觉学习结果映射到现有分析结构；normalizeAnalysis 支持 multimodal + learningSummary + warning；analyzeExcellentNoteForRemix 优先多模态、失败附 warning 继续 metadata 路径；fusion-service 透传 visionModelImpl。
+  - 验证：node --check 4 文件通过；tests/excellent-remix-service 36/36、api 路由 40/40，skip 0。
+- [ ] Task3：30天缓存（noteId+imageSignature，复用现有缓存表新命名空间，无 schema 变更）+ StorageProvider 预留接口
+- [ ] Task4：首次“生成内容方向”才触发分析
+- [ ] Task5：前端 AI 学习结果区域（默认折叠 + 视觉状态文案）
+- [ ] Task6：测试覆盖 5 类场景
+- [ ] 门禁 + 4 个 commit
+
 本文件按任务线分节维护：前端重构（codex/frontend-vue-rebuild）与趋势“结果必达”交付（origin/master）。合并 master 时两边记录均完整保留，不覆盖。
 
 # PROGRESS — 前端重构记录
