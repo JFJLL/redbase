@@ -9,6 +9,7 @@ const {
   resolveStaticRoot,
   mapRequestPath,
   spaFallbackPath,
+  hasHashedAssetName,
   resetStaticRootCacheForTests,
 } = require("../src/server/static");
 
@@ -23,14 +24,16 @@ function makeTempRoots() {
   fs.writeFileSync(path.join(distDir, "app", "index.html"), "<html>app-entry</html>");
   fs.writeFileSync(path.join(distDir, "admin", "index.html"), "<html>admin-entry</html>");
   fs.writeFileSync(path.join(distDir, "assets", "chunk-abc.js"), "console.log(1);");
+  fs.writeFileSync(path.join(distDir, "assets", "chunk-BAs2n8Qq.js"), "console.log(2);");
+  fs.writeFileSync(path.join(distDir, "assets", "qrcode.png"), "fake-png-bytes");
   fs.mkdirSync(publicDir, { recursive: true });
   fs.writeFileSync(path.join(publicDir, "index.html"), "<html>legacy-index</html>");
   fs.writeFileSync(path.join(publicDir, "admin.html"), "<html>legacy-admin</html>");
   return { base, distDir, publicDir };
 }
 
-function makeRequest(pathname) {
-  return { url: pathname, headers: { host: "localhost" } };
+function makeRequest(pathname, headers = {}) {
+  return { url: pathname, headers: { host: "localhost", ...headers } };
 }
 
 function makeResponse() {
@@ -49,9 +52,9 @@ function makeResponse() {
   return res;
 }
 
-async function request(pathname, overrides) {
+async function request(pathname, overrides, headers = {}) {
   const res = makeResponse();
-  await serveStatic(makeRequest(pathname), res, pathname, overrides);
+  await serveStatic(makeRequest(pathname, headers), res, pathname, overrides);
   return res;
 }
 
@@ -108,7 +111,7 @@ test("dist mode: missing hashed assets stay 404 instead of returning HTML", asyn
   const overrides = { distDir, publicDir };
   resetStaticRootCacheForTests();
 
-  const asset = await request("/assets/chunk-abc.js", overrides);
+  const asset = await request("/assets/chunk-BAs2n8Qq.js", overrides);
   assert.equal(asset.statusCode, 200);
   assert.equal(asset.headers["Cache-Control"], "public, max-age=31536000, immutable");
 
@@ -117,6 +120,59 @@ test("dist mode: missing hashed assets stay 404 instead of returning HTML", asyn
 
   const outside = await request("/../server.js", overrides);
   assert.equal(outside.statusCode, 404);
+});
+
+test("cache policy: only Vite content-hashed filenames get immutable", () => {
+  // Real Vite output: name-<8+ base64url chars> mixing case/digits.
+  assert.equal(hasHashedAssetName("/assets/chunk-BAs2n8Qq.js"), true);
+  assert.equal(hasHashedAssetName("/assets/index-C3xY_9zW.css"), true);
+  assert.equal(hasHashedAssetName("/assets/landing-D1qT7fKm2A.webp"), true);
+  // Vite default hashes may contain "-" (exactly 8 base64url chars).
+  assert.equal(hasHashedAssetName("/assets/AdminDashboardView-DTvmMv-j.js"), true);
+  assert.equal(hasHashedAssetName("/assets/landing-BhREy-ry.js"), true);
+  // Fixed-name legacy assets must never match, even with long word suffixes.
+  assert.equal(hasHashedAssetName("/assets/qrcode.png"), false);
+  assert.equal(hasHashedAssetName("/assets/redbase-logo.png"), false);
+  assert.equal(hasHashedAssetName("/assets/favicon-32.png"), false);
+  assert.equal(hasHashedAssetName("/assets/landing-output-longform.webp"), false);
+  assert.equal(hasHashedAssetName("/assets/home-idea-generation.png"), false);
+  assert.equal(hasHashedAssetName("/assets/landing-excellent-source-01.webp"), false);
+  assert.equal(hasHashedAssetName("/assets/banner-20260701.png"), false);
+  assert.equal(hasHashedAssetName("/assets/chunk-abc.js"), false);
+  assert.equal(hasHashedAssetName("/index.html"), false);
+});
+
+test("cache policy: fixed-name assets revalidate (no immutable) and support 304", async () => {
+  const { distDir, publicDir } = makeTempRoots();
+  const overrides = { distDir, publicDir };
+  resetStaticRootCacheForTests();
+
+  // Unhashed name inside /assets/ must NOT be immutable anymore.
+  const qrcode = await request("/assets/qrcode.png", overrides);
+  assert.equal(qrcode.statusCode, 200);
+  assert.equal(qrcode.headers["Cache-Control"], "no-cache");
+  assert.ok(qrcode.headers.ETag, "fixed-name asset keeps an ETag for revalidation");
+  assert.ok(qrcode.headers["Last-Modified"], "fixed-name asset keeps Last-Modified");
+
+  // Conditional revalidation answers 304 without a body.
+  const revalidated = await request("/assets/qrcode.png", overrides, { "if-none-match": qrcode.headers.ETag });
+  assert.equal(revalidated.statusCode, 304);
+  assert.equal(revalidated.body, null);
+
+  // A ?v= query no longer grants immutable to an unhashed file.
+  const versionedRes = makeResponse();
+  await serveStatic(makeRequest("/assets/qrcode.png?v=3"), versionedRes, "/assets/qrcode.png", overrides);
+  assert.equal(versionedRes.statusCode, 200);
+  assert.equal(versionedRes.headers["Cache-Control"], "no-cache");
+
+  // Short/unhashed chunk-style names revalidate too.
+  const unhashedChunk = await request("/assets/chunk-abc.js", overrides);
+  assert.equal(unhashedChunk.statusCode, 200);
+  assert.equal(unhashedChunk.headers["Cache-Control"], "no-cache");
+
+  // HTML stays no-cache.
+  const landing = await request("/", overrides);
+  assert.equal(landing.headers["Cache-Control"], "no-cache");
 });
 
 test("legacy mode without a build keeps the original behavior", async () => {
