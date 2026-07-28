@@ -30,11 +30,12 @@
 - [x] 任务1：frontend/ 公共骨架（三入口 Vite+TS+Router+Pinia+Vitest；typecheck 通过、12 个前端测试全绿、构建通过）
 - [x] 任务1：static.js 改造（dist/public 优先、/app//admin SPA 刷新、旧 public 回退；新增 5 个后端测试，npm test 438/438、跳过 0）
 - [x] 任务1：scripts/build-frontend.cjs（临时目录构建+原子替换+失败不动线上目录）与 scripts/check-asset-budget.cjs（预算首跑 PASS：官网 1.2KB/100KB，工作台共享 37.9KB/250KB，10 业务路由全部懒加载）
-- [ ] 任务1：基础 commit + 三个 worktree
+- [x] 任务1：基础 commit + 三个 worktree（基础 commit 48e137b64795c57335d751ec26983777ffe799e9；worktree：.worktrees/core=codex/fe-core、.worktrees/insights=codex/fe-insights、.worktrees/content=codex/fe-content，均已装好 frontend 依赖）
 - [ ] 任务2：Core Agent 交付
 - [ ] 任务2：Insights Agent 交付
 - [ ] 任务2：Content Agent 交付
 - [ ] 任务3：按序合并 + 删除旧入口
+- [x] 任务3：旧前端契约测试迁移（18 个失败测试同强度迁到 Vue 实现；commit 0edaf1b；root 388/388、integration 176/176、frontend 135/135，跳过均 0，总数 523 ≥ 基线 521；6 条缺口已上报 BLOCKED.md）
 - [ ] 任务3：性能收口（字体/懒加载/预算脚本）
 - [ ] 任务3：部署流程更新（deploy/、scripts/、docs/）
 - [ ] 完成条件：双 Node 验证 + 红绿灯演示 + 最终提交
@@ -46,3 +47,4 @@
 - “浏览器测试”基础设施：沿用仓库既定的 Kimi WebBridge 浏览器验收门（AGENTS.md），不引入 Playwright 重依赖；单元/组件测试用 vitest+happy-dom；三入口烟测走 HTTP 探测。原因：减少新增二进制依赖对服务器 Node 20.20.0 环境的风险。
 - 旧 /assets/* 非哈希图片（logo、landing 图、favicon、二维码）继续由 public/assets 提供：构建时合并复制进 dist/public/assets，避免在 frontend/ 重复提交 6MB 二进制。
 - 工作台外壳（WorkspaceShell/Home/NotFound）按“公共组件”由总控实现并冻结在 src/app/，Core Agent 不需要改公共 router 即可完成登录/品牌/个人 IP 迁移。
+- worktree 建在仓库内 .worktrees/（已 gitignore）而非仓库外：文件工具沙箱禁止写 workspace 之外的路径。遗留空目录 D:\download\pic-vec\redbase-wt-{core,insights,content} 已从 git 注销但沙箱无法删除文件夹，可手工清理。

@@ -22,3 +22,4 @@ redbase-model-cost-estimate.md
 docs/
 .codegraph/
 artifacts/
+.worktrees/
