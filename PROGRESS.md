@@ -55,3 +55,5 @@
 - 旧 /assets/* 非哈希图片（logo、landing 图、favicon、二维码）继续由 public/assets 提供：构建时合并复制进 dist/public/assets，避免在 frontend/ 重复提交 6MB 二进制。
 - 工作台外壳（WorkspaceShell/Home/NotFound）按“公共组件”由总控实现并冻结在 src/app/，Core Agent 不需要改公共 router 即可完成登录/品牌/个人 IP 迁移。
 - worktree 建在仓库内 .worktrees/（已 gitignore）而非仓库外：文件工具沙箱禁止写 workspace 之外的路径。遗留空目录 D:\download\pic-vec\redbase-wt-{core,insights,content} 已从 git 注销但沙箱无法删除文件夹，可手工清理。
+- Node 20.20.0 验证在 .worktrees/node20 中用 D:\Tools\nvm\v20.20.0 的 node.exe 直接执行（不经 npm run）：本机沙箱会把 npm run 子进程的 `node` 解析到 PATH 上的其他版本，直接二进制才能保证真实 20.20.0；该 worktree 已 `git worktree remove` 注销登记，目录含 node_modules 沙箱删不掉，可手工清理。
+- 集成验收轮次：第 1 轮发现 18 个旧前端契约测试红灯（旧入口删除所致）→ 同强度迁移；第 2 轮全部绿灯。共用 2/3 轮。
