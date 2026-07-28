@@ -24,6 +24,8 @@ const DEFAULT_MIN_EVIDENCE = 2;
 const DEFAULT_REQUEST_RETRIES = 3;
 const DEFAULT_DAILY_QUERY_LIMIT = 950;
 const DEFAULT_MAX_CACHE_ENTRIES = 100;
+// Candidate pool handed to the trend evidence reranker (20-30 items).
+const DEFAULT_RERANK_CANDIDATE_LIMIT = 30;
 const MAX_ANYSEARCH_RESPONSE_BYTES = 10 * 1024 * 1024;
 const evidenceCache = new Map();
 let dailyBudgetState = { date: "", keys: {} };
@@ -295,6 +297,20 @@ function buildTrafficMarketingCategoryText(brand) {
   return buildCategorySearchText(brand);
 }
 
+// One precise brand/product query anchors search on the brand itself; the other
+// queries stay broad (category/audience/trend dimension) and must not require
+// the brand name. The medicine traffic profile skips the precise query so its
+// query text stays free of product and medical terms.
+function buildBrandPreciseQueryText(brand, bucketKey, now = new Date()) {
+  if (bucketKey === "traffic" && isMedicineSearchProfile(brand)) return "";
+  const name = truncateQueryValue(brand?.name || "");
+  const product = truncateQueryValue(brand?.product || "");
+  if (!name && !product) return "";
+  const date = formatShanghaiDate(now);
+  const parts = [date, name, product && product !== name ? product : "", "小红书 用户讨论 口碑 最近30天"];
+  return truncateQueryValue(parts.filter(Boolean).join(" "), 120);
+}
+
 function isSafeTrafficEvidenceForMedicineBrand(item) {
   const text = `${item?.title || ""} ${item?.snippet || ""}`;
   return !/(?:药品|用药|感冒|发烧|咳嗽|症状|疾病|医疗|医学|诊疗|医生|药师|营养品|保健品|奶粉|乳铁蛋白|DHA|心理健康|黄疸|治疗|预防|功效|配方|成分)/i.test(text);
@@ -349,7 +365,11 @@ function buildAnySearchQueries(brand, bucketMeta, config = {}, now = new Date())
   const maxResults = Math.max(1, Math.min(10, Number(config.maxResultsPerQuery || DEFAULT_MAX_RESULTS_PER_QUERY)));
   const generalDomain = String(config.domain || GENERAL_DOMAIN);
   const generalSubDomain = String(config.subDomain || GENERAL_SUB_DOMAIN);
-  const generalQueries = buildGeneralQueryTexts(brand, bucketKey, now).map((query) => ({
+  const preciseQueryText = buildBrandPreciseQueryText(brand, bucketKey, now);
+  const generalQueries = [
+    ...(preciseQueryText ? [preciseQueryText] : []),
+    ...buildGeneralQueryTexts(brand, bucketKey, now),
+  ].map((query) => ({
     query,
     domain: generalDomain,
     sub_domain: generalSubDomain,
@@ -1252,7 +1272,11 @@ function getAnySearchCacheSize() {
 }
 
 function getEvidenceCandidates(normalized, config) {
-  const candidateLimit = Math.max(Number(config.maxEvidence || DEFAULT_MAX_EVIDENCE) + 4, 8);
+  const poolLimit = Math.max(
+    8,
+    Math.min(40, Number(config.rerankCandidateLimit || DEFAULT_RERANK_CANDIDATE_LIMIT)),
+  );
+  const candidateLimit = Math.max(Number(config.maxEvidence || DEFAULT_MAX_EVIDENCE) + 4, poolLimit);
   const socialCandidateLimit = Math.min(
     12,
     Math.max(Number(config.maxSocialEvidence ?? DEFAULT_MAX_SOCIAL_EVIDENCE) + 6, 8),
@@ -1307,24 +1331,37 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
   const accessibilityCache = new Map();
   const bucketKey = getBucketKey(bucketMeta);
   const medicineTraffic = bucketKey === "traffic" && isMedicineSearchProfile(brand);
+  // Safety filters stay hard: unsafe URLs/private hosts/broken pages are dropped
+  // inside normalizeEvidence, and medicine brands never see medical/supplement
+  // copy. Broad regex relevance is no longer a hard veto — it is recorded as a
+  // per-candidate signal so the evidence reranker (or its deterministic
+  // fallback) can pick the final slots without losing normal candidates.
   const normalized = normalizeEvidence(parsed, config)
-    .filter((item) => medicineTraffic
-      ? isMedicineTrafficMarketingEvidenceRelevant(item, brand)
-      : isMarketingEvidenceRelevant(item, brand));
-  const bucketRelevant = bucketKey === "traffic"
-    ? normalized.filter(isTrafficMarketingEvidenceRelevant)
-    : normalized;
-  const currentTrendEvidence = bucketRelevant.filter((item) => isCurrentTrendEvidenceUsable(
+    .filter((item) => (medicineTraffic ? isSafeTrafficEvidenceForMedicineBrand(item) : true));
+  const currentTrendEvidence = normalized.filter((item) => isCurrentTrendEvidenceUsable(
     item,
     options.now || new Date(),
   ));
   const accessible = await getAccessibleEvidence(currentTrendEvidence, config, options, accessibilityCache);
-  const evidence = selectEvidence(accessible, {
+  const selectionOptions = {
     ...config,
     now: options.now || new Date(),
     preferRecent: ["traffic", "news", "social"].includes(bucketKey),
     preferMarketingContent: bucketKey === "traffic",
-  });
+  };
+  const evidence = selectEvidence(accessible, selectionOptions);
+  const candidatePoolLimit = Math.max(
+    8,
+    Math.min(40, Number(config.rerankCandidateLimit || DEFAULT_RERANK_CANDIDATE_LIMIT)),
+  );
+  const candidates = sortEvidenceForSelection(accessible, selectionOptions)
+    .slice(0, candidatePoolLimit)
+    .map((item, index) => ({
+      id: `C${index + 1}`,
+      ...item,
+      brandRelevant: isMarketingEvidenceRelevant(item, brand),
+      trafficRelevant: isTrafficMarketingEvidenceRelevant(item),
+    }));
   const reliableCount = countReliableEvidence(evidence);
   const minEvidence = Math.max(
     1,
@@ -1345,6 +1382,7 @@ async function fetchAnySearchEvidence(appConfig, brand, bucketMeta, options = {}
     subDomain: config.subDomain || GENERAL_SUB_DOMAIN,
     queries,
     evidence,
+    candidates,
     rawResultCount: parsed.length,
     reliableCount,
     retrievedAt: new Date().toISOString(),
@@ -1369,6 +1407,7 @@ module.exports = {
   SOCIAL_DOMAIN,
   SOCIAL_SUB_DOMAIN,
   buildAnySearchQueries,
+  buildBrandPreciseQueryText,
   parseAnySearchMarkdown,
   normalizeEvidence,
   normalizeEvidencePublishedAt,

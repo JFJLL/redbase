@@ -181,10 +181,13 @@ async function handleTrendRoutes(context, req, res, pathname) {
       creditCost: CREDIT_COSTS.analysis,
     });
     if (reservation.status === "completed") {
+      const replayedAnalysisId = Number(reservation.request?.analysis_id || 0);
+      const replayedAnalysis = (reservation.brand?.analyses || [])
+        .find((analysis) => Number(analysis.id) === replayedAnalysisId);
       json(res, 200, {
         brand: sanitizeBrand(reservation.brand, appConfig),
         user: sanitizeUser(reservation.user),
-        warnings: [],
+        warnings: Array.isArray(replayedAnalysis?.warnings) ? replayedAnalysis.warnings : [],
         replayed: true,
       });
       return true;
@@ -215,6 +218,11 @@ async function handleTrendRoutes(context, req, res, pathname) {
         userId: user.id,
         analysisId,
       });
+      // analysisWarnings is a non-enumerable marker on the generated buckets;
+      // degraded-but-delivered results stay a success (saved + charged once).
+      const analysisWarnings = Array.isArray(generatedTrends.analysisWarnings)
+        ? generatedTrends.analysisWarnings
+        : [];
       const completion = completeTrendAnalysisRequest({
         requestId,
         userId: user.id,
@@ -233,6 +241,7 @@ async function handleTrendRoutes(context, req, res, pathname) {
             id: analysisId,
             name: `${currentBrand.name} - ${selectedBucket.title}`,
             timestamp: formatTimestamp(),
+            warnings: analysisWarnings,
             trendSnapshot: cloneTrendBuckets(generatedTrends),
           });
           currentBrand.trends = mergeGeneratedTrendBucket(currentBrand.trends, generatedTrends);
@@ -242,7 +251,7 @@ async function handleTrendRoutes(context, req, res, pathname) {
       json(res, 200, {
         brand: sanitizeBrand(completion.brand, appConfig),
         user: sanitizeUser(completion.user),
-        warnings: [],
+        warnings: analysisWarnings,
         replayed: completion.replayed,
       });
     } catch (error) {

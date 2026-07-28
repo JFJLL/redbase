@@ -1,5 +1,7 @@
 # BLOCKED
 
+# BLOCKED — 前端重构记录
+
 ## 需要产品决定的事项（当前有效）
 - 无
 
@@ -23,3 +25,11 @@
 4. 【Core/auth】FileReader 读取窗口无 abort 防护。 —— 【已解决，最终修复轮】`frontend/src/shared/utils/fileToDataUrl.ts` 支持 AbortSignal：读取前预检、abort 时调 FileReader.abort()、onload 后二次检查再决定是否上传；ProfileFormModal 与 ProductImagePanel 统一接入。证据：sessionSafeUpload.test.ts（读取中 notifyAuthReset → FileReader.abort 被调、0 次 POST /api/product-images、列表不写入）。
 （原第 5 条 favicon link 缺口已修复，按最终修复轮任务4要求删除该记录。）
 6. 【Content/excellent】组图/仿图文串行等待弱于旧版并发。 —— 【已解决，最终修复轮】组图与优秀内容仿图文均改为“提交保序 + 轮询并发”（4 页不整体串行），单页失败可独立重试且不重复成功页、complete 仅一次。证据：ideaGeneration.test.ts 并发轮询用例（fake timers 下多 job 同时在飞）、legacyRemixRequest.test.ts 第 7 用例（提交保序+并行轮询）、remixParallelPolling.test.ts（2 用例）。
+
+# BLOCKED — 趋势交付记录（来自 origin/master）
+
+- 基线 `npm test` 存在 1 个既有失败（tests/text-provider.test.js:283，Windows/Node24 计时敏感，探针证实为定时器粒度导致的环境性失败，非逻辑回归）。已以等比放大时间刻度方式修复，语义保持“重试共享一个超时预算”。若这被认为属于“放宽旧断言”，请复核；本人判断是修复环境不稳定测试而非放宽验收。
+- warnings 无法持久化到数据库（任务禁止改 schema/migration）：分析记录中的 `warnings` 字段在 snapshot 归一化时被丢弃，replay 响应中的 warnings 回落为空数组。首次成功响应已携带完整 warnings，replay 的核心语义（不重复扣分、不重复生成）不受影响。如需 replay 也带 warnings，需要 schema 变更，超出本次界限。
+- `canUseFinalFieldScopedTrendRepair` 在新循环里不再被调用（原“第三次字段级修补”入口被 2 次调用上限取代），函数保留未删（顺手删除属顺手重构，按界限记录于此，未执行）。
+
+（其余无）

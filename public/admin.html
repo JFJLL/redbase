@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RedBase 管理后台</title>
+    <link rel="icon" href="/assets/redbase-logo.png?v=20260428-transparent" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/admin.css?v=20260707-user-search" />
+  </head>
+  <body>
+    <section class="admin-auth" id="adminAuth">
+      <div class="auth-card">
+        <img class="auth-logo" src="/assets/redbase-logo.png?v=20260428-transparent" alt="RedBase" />
+        <h1>管理后台</h1>
+        <p>使用有后台权限的账号登录，查看用户、使用额度、消耗流水和生成内容。</p>
+        <form class="admin-login-form" id="adminLoginForm">
+          <label>
+            <span>手机号</span>
+            <input name="phone" autocomplete="username" placeholder="请输入手机号" required />
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="请输入登录密码" required />
+          </label>
+          <button class="primary-btn" type="submit">登录后台</button>
+          <div class="form-error" id="adminLoginError"></div>
+        </form>
+      </div>
+    </section>
+
+    <section class="admin-shell is-hidden" id="adminShell">
+      <aside class="admin-sidebar">
+        <div>
+          <img class="admin-logo" src="/assets/redbase-logo.png?v=20260428-transparent" alt="RedBase" />
+          <nav class="admin-nav">
+            <a href="#overview">总览</a>
+            <a href="#users">用户管理</a>
+            <a href="#brands">品牌档案</a>
+            <a href="#usage">消耗流水</a>
+            <a href="#generations">生成内容</a>
+          </nav>
+        </div>
+        <div class="admin-user-box">
+          <div id="adminUserName">管理员</div>
+          <button class="ghost-btn" id="adminLogoutButton" type="button">退出后台</button>
+        </div>
+      </aside>
+
+      <main class="admin-main">
+        <header class="admin-topbar" id="overview">
+          <div>
+            <h1>RedBase 管理后台</h1>
+            <p>集中查看用户额度、使用额度消耗和内容生成记录。</p>
+          </div>
+          <button class="secondary-btn" id="refreshAdminButton" type="button">刷新数据</button>
+        </header>
+
+        <section class="stats-grid" id="adminStats"></section>
+
+        <section class="admin-panel" id="users">
+          <div class="panel-head">
+            <div>
+              <h2>用户管理</h2>
+              <p>查看每个用户当前额度、总消耗使用额度、生成次数，并手动加额度。</p>
+            </div>
+            <div class="panel-actions">
+              <input
+                class="compact-search"
+                id="adminUserSearchInput"
+                type="search"
+                placeholder="搜索手机号或昵称"
+                autocomplete="off"
+                aria-label="搜索手机号或昵称"
+              />
+              <span class="search-result-pill" id="adminUserSearchSummary" hidden></span>
+            </div>
+          </div>
+
+          <form class="credit-form" id="creditForm">
+            <div class="credit-user-field">
+              <label class="field-label" for="creditUserSearchInput">搜索用户</label>
+              <div class="user-picker" id="creditUserPicker">
+                <input
+                  id="creditUserSearchInput"
+                  type="search"
+                  placeholder="输入手机号或昵称"
+                  autocomplete="off"
+                  aria-controls="creditUserOptions"
+                  aria-expanded="false"
+                />
+                <input id="creditUserId" name="userId" type="hidden" required />
+                <div class="user-picker-options" id="creditUserOptions" hidden></div>
+                <div class="user-picker-selected" id="creditUserSelected" hidden></div>
+              </div>
+            </div>
+            <label>
+              <span>增加额度</span>
+              <input name="amount" type="number" min="1" step="1" placeholder="例如 100" required />
+            </label>
+            <label>
+              <span>备注</span>
+              <input name="note" placeholder="例如：线下充值 / 活动赠送" />
+            </label>
+            <button class="primary-btn" type="submit">确认加额度</button>
+          </form>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>用户</th>
+                  <th>账号类型</th>
+                  <th>当前额度</th>
+                  <th>总消耗使用额度</th>
+                  <th>已加额度</th>
+                  <th>生成次数</th>
+                  <th>品牌数</th>
+                  <th>最近活跃</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="adminUserRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="brands">
+          <div class="panel-head">
+            <div>
+              <h2>品牌档案</h2>
+              <p>查看各个用户创建的品牌档案完整内容，包括品牌介绍、产品介绍、资料库、运营目标和 Logo 状态。</p>
+            </div>
+            <select class="compact-select" id="brandUserFilter"></select>
+          </div>
+          <div class="admin-brand-list" id="brandArchiveList"></div>
+        </section>
+
+        <section class="admin-panel" id="usage">
+          <div class="panel-head">
+            <div>
+              <h2>消耗流水</h2>
+              <p>记录每一次扣额度和管理员加额度操作。</p>
+            </div>
+            <select class="compact-select" id="usageUserFilter"></select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>用户</th>
+                  <th>动作</th>
+                  <th>使用额度</th>
+                  <th>关联内容</th>
+                </tr>
+              </thead>
+              <tbody id="usageRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="generations">
+          <div class="panel-head">
+            <div>
+              <h2>生成内容</h2>
+              <p>查看每个用户生成了什么内容、对应品牌趋势和每次生成消耗。</p>
+            </div>
+            <select class="compact-select" id="generationUserFilter"></select>
+          </div>
+          <div class="generation-list" id="generationList"></div>
+        </section>
+      </main>
+    </section>
+
+    <div class="modal-mask" id="generationModal">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker" id="generationModalKicker">生成内容详情</div>
+            <h2 id="generationModalTitle">内容详情</h2>
+          </div>
+          <button class="modal-close" id="closeGenerationModal" type="button">×</button>
+        </div>
+        <div id="generationDetail"></div>
+      </div>
+    </div>
+
+    <script src="/admin.js?v=20260707-user-search"></script>
+  </body>
+</html>

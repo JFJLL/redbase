@@ -106,11 +106,11 @@ function markdownFixture({ includeSecondReliable = true } = {}) {
           "- Published: 2026-07-15 Source: xinhuanet.com 家居照明的便携与小空间成为讨论场景。",
         ]
       : []),
-    "## Query 3: social",
+    "## Query 4: social",
     "### 1. 微博用户讨论",
     "- **URL**: https://m.weibo.cn/status/123",
     "- Source: weibo.com 用户讨论桌面拥挤与移动照明。",
-    "## Query 4: social",
+    "## Query 5: social",
     "### 1. 知乎用户讨论",
     "- **URL**: https://www.zhihu.com/question/456",
     "- Source: zhihu.com 用户讨论租房照明。",
@@ -216,30 +216,38 @@ function generatedTrendBatch(prefix, options = {}) {
 
 test("routes general and social-media searches by trend bucket", () => {
   const socialQueries = buildAnySearchQueries(brand, { key: "social" }, {}, fixedNow);
-  assert.equal(socialQueries.length, 4);
+  assert.equal(socialQueries.length, 5);
+  // One precise brand/product query first, then broad category/audience queries.
+  assert.match(socialQueries[0].query, /LightMate/);
+  assert.match(socialQueries[0].query, /折叠桌面灯/);
   assert.equal(socialQueries[0].sub_domain, GENERAL_SUB_DOMAIN);
   assert.equal(socialQueries[1].sub_domain, GENERAL_SUB_DOMAIN);
+  assert.equal(socialQueries[2].sub_domain, GENERAL_SUB_DOMAIN);
+  assert.doesNotMatch(socialQueries[1].query, /LightMate/);
+  assert.doesNotMatch(socialQueries[2].query, /LightMate/);
   assert.deepEqual(
-    socialQueries.slice(2).map((query) => [query.sub_domain, query.sub_domain_params.type]),
+    socialQueries.slice(3).map((query) => [query.sub_domain, query.sub_domain_params.type]),
     [
       [SOCIAL_SUB_DOMAIN, "weibo"],
       [SOCIAL_SUB_DOMAIN, "zhihu"],
     ],
   );
-  assert.match(socialQueries[2].sub_domain_params.keyword, /家居照明/);
+  assert.match(socialQueries[3].sub_domain_params.keyword, /家居照明/);
 
   const newsQueries = buildAnySearchQueries(brand, { key: "news" }, {}, fixedNow);
-  assert.equal(newsQueries.length, 2);
+  assert.equal(newsQueries.length, 3);
   assert.ok(newsQueries.every((query) => query.sub_domain === GENERAL_SUB_DOMAIN));
+  assert.match(newsQueries[0].query, /LightMate/);
 
   const trafficQueries = buildAnySearchQueries(brand, { key: "traffic" }, {}, fixedNow);
-  assert.equal(trafficQueries.length, 4);
-  assert.doesNotMatch(trafficQueries[0].query, /折叠桌面灯/);
-  assert.match(trafficQueries[0].query, /家居照明/);
-  assert.match(trafficQueries[0].query, /品牌 内容营销 社媒运营/);
-  assert.match(trafficQueries[1].query, /消费者沟通 用户情绪 内容创作/);
-  assert.doesNotMatch(trafficQueries[2].query, /内容趋势 内容趋势/);
-  assert.deepEqual(trafficQueries.slice(2).map((query) => query.sub_domain_params.type), ["weibo", "zhihu"]);
+  assert.equal(trafficQueries.length, 5);
+  assert.match(trafficQueries[0].query, /LightMate/);
+  assert.doesNotMatch(trafficQueries[1].query, /折叠桌面灯/);
+  assert.match(trafficQueries[1].query, /家居照明/);
+  assert.match(trafficQueries[1].query, /品牌 内容营销 社媒运营/);
+  assert.match(trafficQueries[2].query, /消费者沟通 用户情绪 内容创作/);
+  assert.doesNotMatch(trafficQueries[3].query, /内容趋势 内容趋势/);
+  assert.deepEqual(trafficQueries.slice(3).map((query) => query.sub_domain_params.type), ["weibo", "zhihu"]);
 
   const medicineBrand = {
     ...brand,
@@ -249,6 +257,8 @@ test("routes general and social-media searches by trend bucket", () => {
     audience: "儿童家长",
   };
   const medicineTrafficQueries = buildAnySearchQueries(medicineBrand, { key: "traffic" }, {}, fixedNow);
+  // Medicine traffic skips the precise brand/product query entirely.
+  assert.equal(medicineTrafficQueries.length, 4);
   const medicineTrafficText = medicineTrafficQueries
     .map((query) => `${query.query || ""} ${query.sub_domain_params?.keyword || ""}`)
     .join(" ");
@@ -1232,13 +1242,13 @@ test("returns initial marketing evidence without an authoritative fallback reque
   );
 
   assert.equal(requestCount, 1);
-  assert.equal(result.queries.length, 3);
+  assert.equal(result.queries.length, 4);
   assert.equal(result.rawResultCount, 3);
   assert.equal(result.evidence.length, 3);
   assert.equal(result.reliableCount, 0);
 });
 
-test("rejects accessible search noise that is unrelated to the brand or product", async () => {
+test("keeps accessible off-brand results as candidates flagged not brand-relevant", async () => {
   clearAnySearchCache();
   const unrelatedMarkdown = [
     "## Query 1: noise",
@@ -1251,26 +1261,29 @@ test("rejects accessible search noise that is unrelated to the brand or product"
     "- 钢材出口、港口库存和期货价格。",
   ].join("\n");
 
-  await assert.rejects(
-    fetchAnySearchEvidence(
-      {
-        searchProvider: {
-          enabled: true,
-          minReliableEvidence: 2,
-          urlCheckEnabled: true,
-          cacheTtlMs: 0,
-        },
+  // Broad regex relevance no longer hard-deletes candidates: the reranker (or
+  // its deterministic fallback) decides slots, so the fetch itself succeeds and
+  // every candidate carries an explicit relevance flag.
+  const result = await fetchAnySearchEvidence(
+    {
+      searchProvider: {
+        enabled: true,
+        minReliableEvidence: 2,
+        urlCheckEnabled: true,
+        cacheTtlMs: 0,
       },
-      { ...brand, name: "小快克", industry: "大健康", product: "儿童感冒药", audience: "宝妈家庭" },
-      { key: "xhs" },
-      {
-        now: fixedNow,
-        requestImpl: async () => unrelatedMarkdown,
-        urlChecker: async () => true,
-      },
-    ),
-    { code: "ANYSEARCH_INSUFFICIENT_EVIDENCE" },
+    },
+    { ...brand, name: "小快克", industry: "大健康", product: "儿童感冒药", audience: "宝妈家庭" },
+    { key: "xhs" },
+    {
+      now: fixedNow,
+      requestImpl: async () => unrelatedMarkdown,
+      urlChecker: async () => true,
+    },
   );
+  assert.equal(result.evidence.length, 2);
+  assert.equal(result.candidates.length, 2);
+  assert.ok(result.candidates.every((candidate) => candidate.brandRelevant === false));
 });
 
 test("keeps relevant marketing evidence for long free-form product descriptions", async () => {
@@ -1493,7 +1506,7 @@ test("generates ten lean AnySearch trends in one model call", async () => {
   assert.match(result[0].items[0].evidence[0].snippet, /舒适用光/);
 });
 
-test("rejects unsupported hard claims on the Pgy path and repairs only the bad trend", async () => {
+test("delivers the single xhs model call and strips unsupported hard claims locally", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -1513,24 +1526,27 @@ test("rejects unsupported hard claims on the Pgy path and repairs only the bad t
     pgyEvidence,
     textModelImpl: async () => {
       modelCalls += 1;
-      const batch = generatedTrendBatch(modelCalls === 1 ? "Pgy原始" : "Pgy模型修正", {
+      const batch = generatedTrendBatch("Pgy原始", {
         bucketKey: "xhs",
         category: "小红书热点",
         topic: "折叠桌面灯小空间照明方向",
         evidenceIds: [],
       });
-      if (modelCalls === 1) batch.trendBuckets[0].items[0].reason += "销量增长99%，市场排名第一。";
+      batch.trendBuckets[0].items[0].reason += "销量增长99%，市场排名第一。";
       return batch;
     },
   });
 
-  assert.equal(modelCalls, 2);
+  // The Pgy path makes exactly one main model call; the unsupported claim is
+  // stripped locally instead of triggering a repair round-trip.
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
   assert.equal(result[0].items.filter((item) => item.title.includes("Pgy原始")).length, 10);
-  assert.equal(result[0].items.filter((item) => item.reason.includes("Pgy模型修正")).length, 1);
   assert.doesNotMatch(JSON.stringify(result), /销量增长99%|市场排名第一/);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("rejects Pgy trends that share only one generic bigram or a short AI token", async () => {
+test("delivers the single xhs model output without grounding business gates", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -1566,14 +1582,15 @@ test("rejects Pgy trends that share only one generic bigram or a short AI token"
     pgyEvidence,
     textModelImpl: async () => {
       modelCalls += 1;
-      return modelCalls === 1
-        ? makeMixedBatch("错位", "手机充电宝推荐与移动电源容量选择", "AI敏感肌面霜与夜间护肤")
-        : makeMixedBatch("对齐", "新能源汽车充电政策与公共充电桩", "AI公共交通调度与公交线路规划");
+      return makeMixedBatch("错位", "手机充电宝推荐与移动电源容量选择", "AI敏感肌面霜与夜间护肤");
     },
   });
 
-  assert.equal(modelCalls, 2);
-  assert.doesNotMatch(JSON.stringify(result), /手机充电宝|移动电源容量|敏感肌面霜|夜间护肤/);
+  // Grounding/duplication business gates are intentionally skipped on the Pgy
+  // path — one model call, ten cards delivered, no batch rewrite.
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.match(JSON.stringify(result), /手机充电宝|移动电源容量/);
 });
 
 test("does not treat sparse Pgy notes as evidence for ten unrelated trends", async () => {
@@ -1676,7 +1693,7 @@ test("applies a model rewrite only to rejected fields and preserves safe model c
   assert.doesNotMatch(JSON.stringify(repaired), /90%|医疗级|绝对放心/);
 });
 
-test("uses one final model field patch only when the first rewrite leaves a small scoped residue", async () => {
+test("degrades locally when the single model repair leaves a scoped residue", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const result = await generateAiTrendSet({
@@ -1695,9 +1712,12 @@ test("uses one final model field patch only when the first rewrite leaves a smal
     },
   });
 
-  assert.equal(modelCalls, 3);
+  // Main generation + one targeted repair. The repair's remaining hard claim
+  // is stripped locally instead of a third model call.
+  assert.equal(modelCalls, 2);
+  assert.equal(result[0].items.length, 10);
   assert.doesNotMatch(JSON.stringify(result), /90%|引发家长讨论/);
-  assert.match(result[0].items.find((item) => item.rank === 1).ideas[0].hook, /最容易忽略的条件/);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
 test("repairs numbered near-clones instead of accepting superficial wording changes", async () => {
@@ -1785,11 +1805,11 @@ test("retries incomplete model output and returns only the second model response
   assert.deepEqual(result[0].items.map((item) => item.score), [...result[0].items.map((item) => item.score)].sort((a, b) => b - a));
 });
 
-test("stops after one validation rewrite instead of starting an unbounded third model call", async () => {
+test("stops after one validation rewrite and degrades the residue instead of a third model call", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const prompts = [];
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 5650, {
@@ -1799,25 +1819,24 @@ test("stops after one validation rewrite instead of starting an unbounded third 
       modelCalls += 1;
       prompts.push(request.userPrompt);
       if (modelCalls === 1) return ["not-json"];
-      if (modelCalls === 2) {
-        const invalidRewrite = generatedTrendBatch("二次仍不完整", { bucketKey: "traffic" });
-        invalidRewrite.trendBuckets[0].items[0].ideas[0].tags = [];
-        return invalidRewrite;
-      }
-      return {
-        items: [generatedTrendBatch("三次模型修正", { bucketKey: "traffic" }).trendBuckets[0].items[0]],
-      };
+      const invalidRewrite = generatedTrendBatch("二次仍不完整", { bucketKey: "traffic" });
+      invalidRewrite.trendBuckets[0].items[0].ideas[0].tags = [];
+      return invalidRewrite;
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
   assert.equal(modelCalls, 2);
   assert.match(prompts[1], /上一次输出未通过服务端校验/);
+  // The residue (one card missing idea tags) is patched locally with a warning.
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.ideas.every((idea) => idea.tags.length >= 3)));
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
 test("bounds repeatedly invalid focused repairs to two logical model calls", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 5675, {
@@ -1830,15 +1849,18 @@ test("bounds repeatedly invalid focused repairs to two logical model calls", asy
       if (modelCalls === 1) return batch;
       return { items: [batch.trendBuckets[0].items[0]] };
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
   assert.equal(modelCalls, 2);
+  // One bad card must never sink the other nine: it is repaired locally.
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("leaves truncated-response transport retries to the provider instead of starting a second content generation", async () => {
+test("degrades from evidence slots when the first model call fails at transport level", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 5725, {
@@ -1846,12 +1868,21 @@ test("leaves truncated-response transport retries to the provider instead of sta
     anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
     textModelImpl: async () => {
       modelCalls += 1;
-      if (modelCalls === 1) throw new SyntaxError("Unexpected end of JSON input: truncated model response");
-      return generatedTrendBatch("连接恢复后的真实模型趋势", { bucketKey: "traffic" });
+      throw new SyntaxError("Unexpected end of JSON input: truncated model response");
     },
-  }), /本次分析未能获取到可用热点/);
+  });
 
+  // Search already paid + evidence exists: one failed transport-level call
+  // ends in ten local evidence cards instead of a failed request. Transport
+  // retries stay inside the provider; no second content generation starts.
   assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.degraded === true));
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.equal(
+    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
+    10,
+  );
 });
 
 test("regenerates the full model batch when more than four cards are invalid", async () => {
@@ -1998,24 +2029,31 @@ test("returns ten trends when AnySearch has only one relevant evidence item", as
   assert.ok(result[0].items.every((item) => item.title.includes("稀疏证据趋势")));
 });
 
-test("rejects a model response with no recognizable trend instead of charging for ten templates", async () => {
+test("delivers evidence-based fallback cards when the model output stays unparsable", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(
-    generateAiTrendSet({
-      searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
-      textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
-    }, brand, 5900, {
-      bucketKey: "traffic",
-      anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
-      textModelImpl: async () => {
-        modelCalls += 1;
-        return ["sorry", "no json"];
-      },
-    }),
-    /模型连续 2 次未返回完整、可核验且互不重复的 10 条趋势/,
-  );
+  const result = await generateAiTrendSet({
+    searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 5900, {
+    bucketKey: "traffic",
+    anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
+    textModelImpl: async () => {
+      modelCalls += 1;
+      return ["sorry", "no json"];
+    },
+  });
+
+  // Search money is already spent: two unparsable model rounds end in ten
+  // deterministic evidence-based cards, each flagged as a degraded fallback.
   assert.equal(modelCalls, 2);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) => item.degraded === true));
+  assert.ok(result[0].items.every((item) => item.evidenceIds.length >= 1));
+  assert.equal(
+    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
+    10,
+  );
 });
 
 test("retries duplicate trends instead of rewriting model copy locally", async () => {
