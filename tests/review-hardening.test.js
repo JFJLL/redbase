@@ -411,38 +411,65 @@ test("wechat long image content accepts AI-generated brand-specific copy", () =>
   assert.equal(pack.outline.length, 4);
 });
 
+// 迁移说明：以下两个用例原断言 public/app.js 与 public/js/state.js，已随旧前端
+// 删除，改为断言新实现（同强度）：
+//   frontend/src/features/trends/views/TrendsView.vue   （bindAnalysisButton → handleRunAnalysis/attemptAnalysis/finishAnalysis）
+//   frontend/src/features/trends/stores/insights.ts     （state.js trendAnalysisLoadingKeys + setTrendAnalysisBusy → setAnalysisBusy）
+//   frontend/src/features/trends/model/trendBuckets.ts  （sortTrendItemsForDisplay / getTrendBucketsForBrand / mergeGeneratedTrendResult / formatTrendAnalysisError）
 test("trend analysis loading state is scoped by brand and bucket", () => {
-  const appSource = readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
-  const stateSource = readFileSync(path.join(__dirname, "../public/js/state.js"), "utf8");
-  const analysisHandler = appSource.slice(appSource.indexOf("function bindAnalysisButton"), appSource.indexOf("function formatTrendAnalysisError"));
+  const viewSource = readFileSync(
+    path.join(__dirname, "../frontend/src/features/trends/views/TrendsView.vue"),
+    "utf8",
+  );
+  const storeSource = readFileSync(
+    path.join(__dirname, "../frontend/src/features/trends/stores/insights.ts"),
+    "utf8",
+  );
+  const modelSource = readFileSync(
+    path.join(__dirname, "../frontend/src/features/trends/model/trendBuckets.ts"),
+    "utf8",
+  );
+  const analysisHandler = viewSource.slice(
+    viewSource.indexOf("async function handleRunAnalysis"),
+    viewSource.indexOf("function schedulePoll"),
+  );
 
-  assert.match(stateSource, /trendAnalysisLoadingKeys:\s*\[\]/);
-  assert.match(analysisHandler, /setTrendAnalysisBusy\(brandId, bucketKey, true\)/);
-  assert.match(analysisHandler, /setTrendAnalysisBusy\(brandId, bucketKey, false\)/);
+  assert.match(storeSource, /trendAnalysisLoadingKeys:\s*\[\] as string\[\]/);
+  assert.match(analysisHandler, /store\.setAnalysisBusy\(brandId, key, true\)/);
+  // finishAnalysis 是旧 setTrendAnalysisBusy(brandId, bucketKey, false) 的作用域化等价物
+  assert.match(analysisHandler, /finishAnalysis\(brandId, key\);/);
+  assert.match(
+    viewSource,
+    /function finishAnalysis\(brandId: number, key: string\)[\s\S]*?setAnalysisBusy\(brandId, key, false\)/,
+  );
   assert.ok(
-    analysisHandler.indexOf("setTrendAnalysisBusy(brandId, bucketKey, true)")
-      < analysisHandler.indexOf("await ensureBrandDetailLoaded(brandId)"),
+    analysisHandler.indexOf("store.setAnalysisBusy(brandId, key, true)")
+      < analysisHandler.indexOf("await store.ensureBrandDetail(brandId"),
     "loading guard must be set before awaiting brand details to prevent duplicate analysis requests",
   );
-  assert.doesNotMatch(analysisHandler, /setBusy\(true\)/);
+  // 分析流程不得触发全局 busy（旧 setBusy(true) 的等价禁止）
+  assert.doesNotMatch(analysisHandler, /setBusy\(true\)|pageBusy\.value\s*=\s*true/);
   assert.match(analysisHandler, /requestId/);
   assert.match(analysisHandler, /generatedBucket\.items\?\.length !== 10/);
-  assert.match(analysisHandler, /mergeGeneratedTrendResult\(result\.brand, bucketKey\)/);
+  assert.match(storeSource, /mergeGeneratedTrendResult\(previous, result\.brand, bucketKey\)/);
   assert.doesNotMatch(analysisHandler, /showTrendAnalysisWarnings/);
-  assert.match(appSource, /isTrendAnalysisLoading\(brand\.id, bucketKey\)/);
-  assert.match(appSource, /previousBucket\?\.items\?\.length \? previousBucket : incomingBucket/);
-  assert.match(appSource, /message\.includes\("热点搜索服务"\)/);
+  assert.match(viewSource, /store\.isAnalysisLoading\(brand\.value\.id, bucketKey\.value\)/);
+  assert.match(modelSource, /previousBucket\?\.items\?\.length \? previousBucket : incomingBucket/);
+  assert.match(modelSource, /message\.includes\("热点搜索服务"\)/);
 });
 
 test("trend display sorts every loaded bucket by score and refreshes visible ranks", () => {
-  const appSource = readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
-  const sortHelper = appSource.slice(
-    appSource.indexOf("function sortTrendItemsForDisplay"),
-    appSource.indexOf("function getTrendBucketsForBrand"),
+  const modelSource = readFileSync(
+    path.join(__dirname, "../frontend/src/features/trends/model/trendBuckets.ts"),
+    "utf8",
   );
-  const bucketHelper = appSource.slice(
-    appSource.indexOf("function getTrendBucketsForBrand"),
-    appSource.indexOf("function firstTrendBucket"),
+  const sortHelper = modelSource.slice(
+    modelSource.indexOf("export function sortTrendItemsForDisplay"),
+    modelSource.indexOf("export function getTrendBucketsForBrand"),
+  );
+  const bucketHelper = modelSource.slice(
+    modelSource.indexOf("export function getTrendBucketsForBrand"),
+    modelSource.indexOf("export function firstTrendBucket"),
   );
 
   assert.match(sortHelper, /right\.score - left\.score/);

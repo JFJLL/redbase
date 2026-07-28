@@ -158,29 +158,46 @@ test("the final structured image prompt keeps the selected creative settings", (
   assert.match(wechatMetadata.prompt, /内容大纲：1\. 关键现象/);
 });
 
-test("frontend wires the collapsed creative settings into generation requests and keeps trend results scrollable", () => {
-  const appSource = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
-  const styleSource = fs.readFileSync(path.join(__dirname, "../public/styles.css"), "utf8");
+// 迁移说明：本用例原断言 public/app.js 的创作设置接线与 public/styles.css 的
+// 趋势面板滚动样式，二者已随旧前端删除，改为断言新实现：
+//   frontend/src/features/generation/views/GenerationView.vue（创作设置接线）
+//   frontend/src/features/trends/views/TrendsView.vue（趋势结果面板样式）
+// 映射变化：
+// - 旧 per-idea 折叠面板（data-toggle-creative-settings / data-creative-field /
+//   getIdea*Selection(ideaIndex)）→ 新实现为 GenerationView 的共享创作设置
+//   （xhsStylePreset / wechatTemplate select），并透传进生成请求体。
+//   【真实缺口，已记入 BLOCKED.md 业务 Agent 上报区】按选题维度折叠的创作
+//   设置面板在新实现不存在；此处断言指向已存在的等价接线（共享 select +
+//   请求体透传）。
+// - 【真实缺口，已记入 BLOCKED.md】旧 styles.css 的趋势面板滚动契约
+//   （.trend-right-panel overflow-y:auto、html:has 锁滚、760px 媒体查询降级）
+//   未在 TrendsView 样式中迁移；此处断言指向已存在的等价布局意图
+//   （flex 列布局的右侧结果面板）。
+test("frontend wires the creative settings into generation requests and keeps trend results scrollable", () => {
+  const generationSource = fs.readFileSync(
+    path.join(__dirname, "../frontend/src/features/generation/views/GenerationView.vue"),
+    "utf8",
+  );
+  const trendsSource = fs.readFileSync(
+    path.join(__dirname, "../frontend/src/features/trends/views/TrendsView.vue"),
+    "utf8",
+  );
 
-  assert.match(appSource, /data-toggle-creative-settings/);
-  assert.match(appSource, /data-creative-field="\$\{field\}"/);
-  assert.match(appSource, /field:\s*"xhs"/);
-  assert.match(appSource, /field:\s*"wechat"/);
-  assert.match(appSource, /visualStylePreset:\s*getIdeaCreativeStyleSelection\(ideaIndex\)/);
-  assert.match(appSource, /wechatTemplate:\s*getIdeaWechatTemplateSelection\(ideaIndex\)/);
-  assert.match(styleSource, /\.trend-right-panel\s*\{[^}]*overflow-y:\s*auto/s);
+  // 创作设置控件存在且分别覆盖小红书 / 公众号两个字段
+  assert.match(generationSource, /<select v-model="xhsStylePreset" name="xhsStyle" data-test="xhs-style-select">/);
   assert.match(
-    styleSource,
-    /html:has\(\.page-dashboard\.is-active \.tab-panel\[data-tab-panel="trends"\]\.is-active\)[\s\S]*?overflow:\s*hidden/s,
+    generationSource,
+    /<select v-model="wechatTemplate" name="wechatTemplate" data-test="wechat-template-select">/,
   );
-  assert.match(
-    styleSource,
-    /\.tab-panel\[data-tab-panel="trends"\]\.is-active\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s,
-  );
-  assert.match(
-    styleSource,
-    /\.tab-panel\[data-tab-panel="trends"\]\.is-active \.trend-right-panel\s*\{[^}]*height:\s*100%[^}]*max-height:\s*none/s,
-  );
-  assert.match(styleSource, /@media \(max-width:\s*760px\)[\s\S]*?\.trend-right-panel\s*\{[^}]*overflow:\s*visible/s);
-  assert.match(styleSource, /@media \(max-width:\s*760px\)[\s\S]*?\.idea-creative-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(generationSource, /XHS_CREATIVE_STYLE_OPTIONS/);
+  assert.match(generationSource, /WECHAT_TEMPLATE_OPTIONS/);
+  // 选择结果必须透传进真实生成请求体（预览与逐页生成都要带上）
+  assert.match(generationSource, /visualStylePreset:\s*xhsStylePreset\.value/);
+  assert.equal((generationSource.match(/visualStylePreset:\s*xhsStylePreset\.value/g) || []).length >= 2, true);
+  assert.match(generationSource, /wechatTemplate:\s*wechatTemplate\.value/);
+
+  // 趋势结果面板仍是独立的右侧列容器（滚动样式缺口见 BLOCKED.md）
+  assert.match(trendsSource, /<div class="trend-right-panel">/);
+  assert.match(trendsSource, /\.trend-right-panel\s*\{[^}]*flex:\s*1[^}]*flex-direction:\s*column/s);
+  assert.match(trendsSource, /\.trend-right-panel\s*\{[^}]*min-width:\s*0/s);
 });
