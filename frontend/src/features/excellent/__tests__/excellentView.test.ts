@@ -217,4 +217,80 @@ describe("ExcellentView", () => {
     expect(wrapper.text()).toContain("方向一");
     expect(wrapper.find('[data-test="remix-brand"]').exists()).toBe(true);
   });
+
+  function remixHandlers(analysis: Record<string, unknown>) {
+    return (url: string, init?: RequestInit): Response | undefined => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis });
+      }
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, { directions: [{ id: "d1", title: "方向一" }], analysisId: analysis.analysisId, brandId: 7 });
+      }
+      if (url.includes("/excellent-remix-ideas")) {
+        return jsonResponse(200, { brandId: 7, ideas: [] });
+      }
+      if (url.startsWith("/api/brands")) {
+        return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      }
+      void init;
+      return defaultHandlers(url);
+    };
+  }
+
+  it("renders the collapsed AI learning summary with the multimodal status copy", async () => {
+    const wrapper = await mountView(
+      remixHandlers({
+        analysisId: "an-1",
+        analysisMode: "multimodal",
+        referenceTopic: "露营装备清单",
+        meta: { multimodalUsed: true },
+        learningSummary: ["封面采用问题型标题", "前3页形成痛点-方法-总结结构", "视觉偏生活化信息卡表达"],
+      }),
+    );
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    // 弹窗刚打开：尚未分析，无学习结果区域。
+    expect(wrapper.find('[data-test="learning-summary"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+
+    const details = wrapper.find('[data-test="learning-summary"]');
+    expect(details.exists()).toBe(true);
+    // 默认折叠（details 无 open 属性）。
+    expect((details.element as HTMLDetailsElement).open).toBe(false);
+    expect(wrapper.find('[data-test="learning-status"]').text()).toBe("AI已读取参考图片");
+    const points = wrapper.findAll('[data-test="learning-point"]');
+    expect(points.map((point) => point.text())).toEqual([
+      "✓ 封面采用问题型标题",
+      "✓ 前3页形成痛点-方法-总结结构",
+      "✓ 视觉偏生活化信息卡表达",
+    ]);
+    expect(wrapper.find('[data-test="learning-warning"]').exists()).toBe(false);
+  });
+
+  it("shows the metadata_only status copy and the degrade warning verbatim", async () => {
+    const wrapper = await mountView(
+      remixHandlers({
+        analysisId: "an-2",
+        analysisMode: "metadata_only",
+        referenceTopic: "露营装备清单",
+        meta: { multimodalUsed: false },
+        learningSummary: ["标题钩子：清单承诺结构"],
+        warning: "未成功读取参考图片，本次基于标题和内容结构分析",
+      }),
+    );
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="learning-status"]').text()).toBe("基于标题和结构分析");
+    expect(wrapper.find('[data-test="learning-warning"]').text()).toBe(
+      "未成功读取参考图片，本次基于标题和内容结构分析",
+    );
+    expect(wrapper.findAll('[data-test="learning-point"]')).toHaveLength(1);
+  });
 });

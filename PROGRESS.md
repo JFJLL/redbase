@@ -29,8 +29,25 @@
   - 新增 AI 学习结果 <details>（默认折叠）：✓ 摘要短句列表（learningSummary，不展示 JSON/prompt/技术字段）；视觉状态文案 multimodal=“AI已读取参考图片”/metadata_only=“基于标题和结构分析”；降级 warning 展示。types.ts 补 learningSummary/warning。
   - 既有用例同步新行为（弹窗打开不调分析、首次点击触发、降级不阻断且方向继续）。
   - 验证：typecheck:frontend 0 错；test:frontend 27 文件 154/154，skip 0。
-- [ ] Task6：测试覆盖 5 类场景
-- [ ] 门禁 + 4 个 commit
+- [x] Task6：测试覆盖 5 类场景（无 .skip/.todo，无既有断言削弱）
+  - 新增 tests/excellent-content-vision-service.test.js（8 用例）：①多模态成功（4 图URL→analysisMode=multimodal，校验传入模型的图片为前4张，无URL/prompt泄漏）；②模型失败→metadata_only+固定 warning 且 generateContentDirections 继续产出3方向；③缓存命中：第二次请求不调模型（含标题变化后 imageSignature 层兜底），并断言缓存行 expiresAt-createdAt=30天、不含图片URL；④缓存过期：两层过期后重新分析（模型调用数 1→2）；另覆盖降级结果不写缓存、StorageProvider local 驱动/aliyun 拒绝、supportsMultimodalVision 矩阵、≤4图选择策略。
+  - 前端 excellentView.test.ts 新增 2 用例：⑤学习摘要正确展示（默认折叠、multimodal 状态文案、✓ 条目）；metadata_only 状态文案 + warning 原文展示。
+- [x] 门禁（全部在本 worktree 执行，退出码均 0）
+  - `npm run check` exit 0
+  - `npm test` → 434/434，skipped 0，todo 0（基线 426 + 新增 8）
+  - `npm run test:integration` → 176/176，skipped 0（=基线）
+  - `npm run eval:ai` → 126/126，skipped 0（=基线）
+  - `npm run typecheck:frontend` exit 0（vue-tsc 0 错）
+  - `npm run test:frontend` → 27 文件 156/156（基线 154 + 新增 2），skip 0
+  - `npm run build` exit 0；`git diff --check` exit 0
+  - 未改 package.json/lockfile/数据库 schema/积分系统
+- [x] 浏览器验收（真实服务器 + 真实页面，本 worktree PORT=3213，无 API key 环境）
+  - 种子：.verification/seed-excellent-demo.js（ignored）写入演示用户/品牌/4图优秀笔记缓存；登录 13900001234 成功。
+  - 弹窗打开：标题“参考优秀内容生成品牌原创图文”+副标题；惰性提示展示；服务器日志确认此时无 remix-analysis 请求。
+  - 点“生成内容方向”：日志顺序 POST remix-analysis(200) → POST content-directions(200)；3 个方向渲染；AI学习结果 <details> 默认折叠，展开后状态“基于标题和结构分析”（本地无 apiKey → metadata_only，诚实标注）+ 3 条 ✓ 摘要短句，无 JSON/prompt/技术字段。
+  - 运行时缓存行落库：excellent_content_remix_analysis_cache 出现 demo-note-1 / v4-excellent-learning-1 / metadata_only（7 天 TTL，符合 metadata 模式设计；30 天多模态 TTL 由单测断言覆盖）。
+  - 截图：.verification/excellent-learning-summary-browser.png；验收后服务器已停止。
+- [x] 4 个 commit：db190eb feat: add excellent content multimodal analysis / 932cdbe feat: cache excellent content vision results / 0f8e8d9 feat: expose excellent learning summary UI / （本次）test: cover excellent multimodal flow
 
 本文件按任务线分节维护：前端重构（codex/frontend-vue-rebuild）与趋势“结果必达”交付（origin/master）。合并 master 时两边记录均完整保留，不覆盖。
 
