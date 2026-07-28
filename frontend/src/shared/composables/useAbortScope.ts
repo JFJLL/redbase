@@ -12,6 +12,16 @@ export function notifyAuthReset(): void {
   }
 }
 
+/** Module-level auth-reset subscription (legacy sessionEpoch bump equivalent)
+ *  for state that lives outside a component scope, e.g. the per-idea creative
+ *  settings memory store. Returns an unsubscribe function. */
+export function onAuthReset(listener: ScopeListener): () => void {
+  logoutListeners.add(listener);
+  return () => {
+    logoutListeners.delete(listener);
+  };
+}
+
 export interface AbortScope {
   /** Fresh signal for one logical request; aborts previous signal from the
    *  same key so stale responses can never overwrite newer state. */

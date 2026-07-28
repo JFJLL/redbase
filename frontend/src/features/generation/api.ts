@@ -153,15 +153,6 @@ export function deleteProductImage(imageId: number, signal?: AbortSignal): Promi
   return apiFetch(`/api/product-images/${imageId}`, { method: "DELETE", signal });
 }
 
-export function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("读取图片文件失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
 // —— Idea-driven generation requests (image-generation-routes.js) ——
 
 export interface IdeaImageJobSubmitResult {
@@ -238,6 +229,9 @@ export interface CarouselSlide {
   isGenerating?: boolean;
   isQueued?: boolean;
   error?: string;
+  /** 生成后的单页改图输入（旧版 slide edit textarea 状态）。 */
+  editPrompt?: string;
+  isEditing?: boolean;
   [key: string]: unknown;
 }
 

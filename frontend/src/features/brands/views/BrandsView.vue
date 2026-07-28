@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
+import { notifyBrandDataChanged } from "@/shared/stores/brandDataVersion";
 import {
   deleteBrand as requestDeleteBrand,
   fetchBrandDetail,
@@ -90,9 +91,11 @@ async function openEdit(brandId: number): Promise<void> {
   }
 }
 
-async function handleSaved(): Promise<void> {
+async function handleSaved(brand: BrandDetail): Promise<void> {
   formOpen.value = false;
   editingBrand.value = null;
+  // 品牌新增/编辑成功：使趋势/选题的品牌缓存失效（brandDataVersion）。
+  notifyBrandDataChanged(brand?.id);
   await load();
 }
 
@@ -113,6 +116,8 @@ async function confirmDelete(deleteGenerations: boolean): Promise<void> {
   try {
     await requestDeleteBrand(target.id, deleteGenerations);
     deleteTarget.value = null;
+    // 品牌删除成功：同样使品牌缓存失效。
+    notifyBrandDataChanged(target.id);
     await load();
   } catch (error) {
     if (isUnauthorized(error)) {

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { isUnauthorized } from "@/shared/api/client";
+import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
+import { useAbortScope } from "@/shared/composables/useAbortScope";
+import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import {
   createBrand,
   updateBrand,
@@ -25,6 +27,7 @@ const props = defineProps<{
 
 const router = useRouter();
 const auth = useAuthStore();
+const scope = useAbortScope();
 
 const emit = defineEmits<{
   (event: "close"): void;
@@ -95,15 +98,6 @@ watch(
   { immediate: true },
 );
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 function formatFileSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
@@ -123,10 +117,13 @@ async function handleLogoChange(): Promise<void> {
     return;
   }
   try {
-    pendingLogo.value = { name: file.name, dataUrl: await fileToDataUrl(file) };
+    // 账号切换/登出时中断读取（notifyAuthReset → signal abort → FileReader.abort()）。
+    const signal = scope.signalFor("logo-file-read");
+    pendingLogo.value = { name: file.name, dataUrl: await fileToDataUrl(file, signal) };
     errorMessage.value = "";
   } catch (error) {
     pendingLogo.value = null;
+    if (isAbortError(error)) return;
     errorMessage.value = `${assetLabel.value}读取失败：${error instanceof Error ? error.message : String(error)}`;
   }
 }

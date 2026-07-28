@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
+import { notifyBrandDataChanged } from "@/shared/stores/brandDataVersion";
 import {
   deleteBrand as requestDeleteBrand,
   fetchBrandDetail,
@@ -106,11 +107,15 @@ watch(
   { immediate: true },
 );
 
+// 本轮产品决定：个人 IP 页不提供素材库（旧线上未展示）。不自动加载、
+// 不渲染管理界面；实现代码保留但不可达，待后续产品需求再开放。
+const MATERIAL_LIBRARY_ENABLED = false;
+
 watch(selectedProfileId, (brandId) => {
   materials.value = [];
   materialsError.value = "";
   resetMaterialForm();
-  if (brandId != null) void loadMaterials(brandId);
+  if (MATERIAL_LIBRARY_ENABLED && brandId != null) void loadMaterials(brandId);
 });
 
 async function loadMaterials(brandId: number): Promise<void> {
@@ -226,9 +231,11 @@ async function openEditProfile(brandId: number): Promise<void> {
   }
 }
 
-async function handleSaved(): Promise<void> {
+async function handleSaved(brand: BrandDetail): Promise<void> {
   formOpen.value = false;
   editingBrand.value = null;
+  // 个人 IP 新增/编辑成功：使趋势/选题的品牌缓存失效（brandDataVersion）。
+  notifyBrandDataChanged(brand?.id);
   await load();
 }
 
@@ -244,6 +251,8 @@ async function confirmDelete(deleteGenerations: boolean): Promise<void> {
   try {
     await requestDeleteBrand(target.id, deleteGenerations);
     deleteTarget.value = null;
+    // 个人 IP 删除成功：同样使品牌缓存失效。
+    notifyBrandDataChanged(target.id);
     await load();
   } catch (error) {
     if (isUnauthorized(error)) {
@@ -338,7 +347,7 @@ function avatarInitial(name: string): string {
       </template>
     </div>
 
-    <section v-if="selectedProfile" class="material-section" data-testid="material-section">
+    <section v-if="MATERIAL_LIBRARY_ENABLED && selectedProfile" class="material-section" data-testid="material-section">
       <h2>「{{ selectedProfile.name }}」的个人素材</h2>
       <p class="panel-subtitle">积累亲身经历、案例、观点和金句，AI 生成内容时会引用这些素材。</p>
 

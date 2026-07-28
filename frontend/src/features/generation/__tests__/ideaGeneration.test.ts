@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { createMemoryHistory, createRouter, type Router } from "vue-router";
 import GenerationView from "../views/GenerationView.vue";
 import { IMAGE_JOB_POLL_INTERVAL_MS } from "../api";
+import { clearIdeaCreativeSettings } from "../ideaCreativeSettings";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -116,6 +117,11 @@ function callBody(fetchMock: ReturnType<typeof vi.fn>, method: string, urlPrefix
 }
 
 describe("GenerationView idea context", () => {
+  beforeEach(() => {
+    // 创作设置按键位记忆是模块级 store，测试间必须清空避免串值。
+    clearIdeaCreativeSettings();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

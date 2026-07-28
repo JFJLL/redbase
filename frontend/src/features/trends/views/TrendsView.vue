@@ -599,6 +599,39 @@ function goToIdeas(trend: TrendItem): void {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* 旧版桌面端独立滚动（styles.css .trend-right-panel）。 */
+  max-height: calc(100vh - 250px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 8px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* 旧版桌面端页面锁滚语义：趋势页激活时整页不滚，由右侧结果面板独立滚动。 */
+@media (min-width: 761px) {
+  :global(html:has(.trends-panel)),
+  :global(body:has(.trends-panel)) {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+/* 窄屏降级（旧版 ≤760px）：整页滚动、单列布局，右侧面板不再独立滚动。 */
+@media (max-width: 760px) {
+  .trend-screen {
+    flex-direction: column;
+  }
+
+  .trend-left-panel {
+    width: 100%;
+  }
+
+  .trend-right-panel {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
 }
 
 .xhs-category-control {

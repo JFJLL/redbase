@@ -13,10 +13,10 @@
  * - shouldAutoGenerateSmartDirections no longer exists: the Vue view only
  *   calls fetchContentDirections from the user-triggered generateDirections
  *   handler (asserted statically against ExcellentView.vue).
- * - The legacy concurrency-cap queue for slide generation was replaced by a
- *   strictly sequential submit loop; the "sequential submission with a
- *   consistent per-page request body" test covers the still-applicable
- *   request-body/ordering semantics.
+ * - The legacy concurrency-cap queue for slide generation maps to the Vue
+ *   submit flow: slide submission stays ordered while image-job polling runs
+ *   in parallel via Promise.all; the "ordered submission with parallel
+ *   polling" test covers the request-body/ordering/concurrency semantics.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -205,15 +205,15 @@ describe("excellent remix request scoping (legacy contract)", () => {
     expect(/onMounted\([^)]*generateDirections/.test(viewSource)).toBe(false);
   });
 
-  it("slides are submitted sequentially with a consistent per-page request body", () => {
-    // Replaces the legacy concurrency-cap queue semantics: the Vue submit
-    // flow awaits generateExcellentRemixSlide inside a plain for loop (one
-    // slide at a time, in order) and sends the same body shape for every
-    // page, all bound to the same abort signal.
+  it("slides are submitted in order with a consistent per-page body and parallel polling", () => {
+    // Legacy excellent-remix-request.js queue semantics: submissions stay
+    // ordered (await generateExcellentRemixSlide inside a plain for loop),
+    // but image-job polling is concurrent — each slide's pollImageJob promise
+    // is collected and awaited together, never inline per page.
     const loopMatch = viewSource.match(
       /for \(let slideIndex = 0; slideIndex < \(pack\.slides \|\| \[\]\)\.length; slideIndex \+= 1\) \{[\s\S]*?\n    \}/,
     );
-    expect(loopMatch, "sequential slide submit loop must exist").not.toBeNull();
+    expect(loopMatch, "ordered slide submit loop must exist").not.toBeNull();
     const loop = loopMatch?.[0] ?? "";
     expect(loop).toMatch(/await generateExcellentRemixSlide\(/);
     for (const field of [
@@ -230,9 +230,13 @@ describe("excellent remix request scoping (legacy contract)", () => {
     ]) {
       expect(loop.includes(field), `slide request body must include ${field}`).toBe(true);
     }
-    // each page waits for its own image job before the next page starts
-    expect(loop).toMatch(/await pollImageJob\(/);
-    // no parallel fan-out: the view never submits slides via Promise.all
+    // polling must NOT block the next submission: pollImageJob is collected
+    // into slidePolls inside the loop instead of being awaited inline...
+    expect(loop).not.toMatch(/await pollImageJob\(/);
+    expect(loop).toMatch(/slidePolls\.push\(\s*\n?\s*pollImageJob\(/);
+    // ...and all page polls are awaited together after the submit loop.
+    expect(viewSource).toMatch(/await Promise\.all\(slidePolls\)/);
+    // submission itself is never fanned out in parallel.
     expect(/Promise\.all\([^)]*generateExcellentRemixSlide/.test(viewSource)).toBe(false);
   });
 });

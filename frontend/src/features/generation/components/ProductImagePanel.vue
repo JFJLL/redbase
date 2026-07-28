@@ -4,13 +4,13 @@ import { useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
+import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import {
   MAX_SELECTED_PRODUCT_IMAGES,
   MAX_SELECTED_PRODUCT_IMAGE_BYTES,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
   deleteProductImage,
   fetchProductImages,
-  fileToDataUrl,
   uploadProductImage,
   type ProductImageView,
 } from "../api";
@@ -103,8 +103,12 @@ async function handleUpload(event: Event) {
   message.value = "";
   try {
     for (const file of files) {
-      const dataUrl = await fileToDataUrl(file);
-      const result = await uploadProductImage({ name: file.name, dataUrl }, scope.signalFor(`upload-${file.name}`));
+      // 读取与上传共用同一 signal：账号切换（notifyAuthReset）时读取被中止，
+      // 且读取完成后 signal 已 abort 的情况下 uploadProductImage 也不会发出 POST。
+      const signal = scope.signalFor(`upload-${file.name}`);
+      const dataUrl = await fileToDataUrl(file, signal);
+      if (signal.aborted) return;
+      const result = await uploadProductImage({ name: file.name, dataUrl }, signal);
       const image = result.image;
       if (!image) continue;
       images.value = [image, ...images.value.filter((item) => item.id !== image.id)];

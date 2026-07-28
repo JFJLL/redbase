@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
+import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import ProductImagePanel from "../components/ProductImagePanel.vue";
 import {
+  getIdeaCreativeSettings,
+  getIdeaSettingsKey,
+  saveIdeaCreativeSettings,
+  type StyleReferenceImage,
+} from "../ideaCreativeSettings";
+import {
   IMAGE_ASPECT_RATIOS,
+  MAX_SINGLE_UPLOAD_IMAGE_BYTES,
   SMART_ASPECT_RATIO_DEFAULTS,
   WECHAT_ASPECT_RATIO_WARNING_DISABLED_KEY,
   WECHAT_TEMPLATE_OPTIONS,
@@ -119,7 +127,7 @@ async function loadBrandContext() {
 
 onMounted(loadBrandContext);
 
-// —— Shared generation controls ——
+// —— Shared generation controls（按 品牌ID:趋势ID:选题序号 键位独立记忆，旧版按选题记忆语义） ——
 const aspectRatioSelection = ref("smart");
 const wechatTemplate = ref("auto");
 const xhsStylePreset = ref("auto");
@@ -127,6 +135,46 @@ const useBrandLogo = ref(false);
 
 const selectedProductIds = ref<number[]>([]);
 const loadedProductImages = ref<ProductImageView[]>([]);
+const styleReference = ref<StyleReferenceImage | null>(null);
+
+const ideaSettingsKey = computed(() =>
+  getIdeaSettingsKey(queryBrandId.value, queryTrendId.value, queryIdeaIndex.value),
+);
+
+/** 进入选题时恢复该选题自己的创作设置（getIdea*Selection 语义）。 */
+function restoreIdeaSettings(): void {
+  const settings = getIdeaCreativeSettings(ideaSettingsKey.value);
+  aspectRatioSelection.value = settings.aspectRatioSelection;
+  xhsStylePreset.value = settings.visualStylePreset;
+  wechatTemplate.value = settings.wechatTemplate;
+  useBrandLogo.value = settings.useBrandLogo;
+  selectedProductIds.value = [...settings.selectedProductIds];
+  styleReference.value = settings.styleReference;
+}
+
+restoreIdeaSettings();
+
+// 切换选题：重载上下文并恢复目标选题自己的设置，不得串值。
+watch(ideaSettingsKey, () => {
+  restoreIdeaSettings();
+  void loadBrandContext();
+});
+
+// 设置变化即写回当前选题键位（会话内生效）。
+watch(
+  [aspectRatioSelection, xhsStylePreset, wechatTemplate, useBrandLogo, selectedProductIds, styleReference],
+  () => {
+    saveIdeaCreativeSettings(ideaSettingsKey.value, {
+      aspectRatioSelection: aspectRatioSelection.value,
+      visualStylePreset: xhsStylePreset.value,
+      wechatTemplate: wechatTemplate.value,
+      useBrandLogo: useBrandLogo.value,
+      selectedProductIds: selectedProductIds.value,
+      styleReference: styleReference.value,
+    });
+  },
+  { deep: true },
+);
 
 // getSelectedProductImages semantics: library images submit as { id, name }.
 const selectedProductImageInputs = computed<ProductImageInput[]>(() =>
@@ -300,6 +348,7 @@ async function generateXhsCarousel() {
   startGeneration("xhsCarousel", "正在准备小红书组图方案...");
   carousel.pack = null;
   carousel.creditEventId = null;
+  carouselCompleted.value = false;
   try {
     const previewResult = await previewXhsCarousel(
       context.brandId,
@@ -332,12 +381,17 @@ async function generateXhsCarousel() {
   }
 }
 
-async function generateCarouselSlide(slideIndex: number) {
+/**
+ * 提交单页任务（不等待出图）。返回 jobId；已成功页/生成中直接跳过，
+ * 请求体带 slide（含每页可编辑 prompt），对齐旧版 slide 请求体与后端
+ * xhsCarouselSlideMatch 分支。
+ */
+async function submitCarouselSlideRequest(slideIndex: number): Promise<string | null> {
   const context = currentContext();
   const pack = carousel.pack;
-  if (!context || !pack) return;
+  if (!context || !pack) return null;
   const slide = pack.slides[slideIndex];
-  if (!slide || hasXhsCarouselSlideImage(slide) || slide.isGenerating) return;
+  if (!slide || hasXhsCarouselSlideImage(slide) || slide.isGenerating) return null;
   const aspectRatio = pack.aspectRatio || resolveAspectRatio(aspectRatioSelection.value, "xhsCarousel");
   const signal = scope.signalFor(`xhs-slide-${slideIndex}`);
   slide.isGenerating = true;
@@ -361,7 +415,24 @@ async function generateCarouselSlide(slideIndex: number) {
     applyUser(result.user);
     carousel.creditEventId = result.creditEventId ?? carousel.creditEventId;
     if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
-    const concept = await pollImageJob(result.slideJob.jobId, { signal, onUser: applyUser });
+    return result.slideJob.jobId;
+  } catch (error) {
+    if (isAbortError(error)) return null;
+    if (await handleUnauthorizedError(error)) return null;
+    slide.isGenerating = false;
+    slide.error = `生成失败：${(error as Error).message}`;
+    return null;
+  }
+}
+
+/** 等待单页出图（可与其他页并发进行）。 */
+async function pollCarouselSlideJob(slideIndex: number, jobId: string): Promise<void> {
+  const pack = carousel.pack;
+  if (!pack) return;
+  const slide = pack.slides[slideIndex];
+  const signal = scope.signalFor(`xhs-slide-poll-${slideIndex}`);
+  try {
+    const concept = await pollImageJob(jobId, { signal, onUser: applyUser });
     pack.slides[slideIndex] = {
       ...pack.slides[slideIndex],
       imageUrl: concept.imageUrl || concept.previewUrl,
@@ -370,7 +441,6 @@ async function generateCarouselSlide(slideIndex: number) {
       isQueued: false,
       error: "",
     };
-    await maybeCompleteCarousel();
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
@@ -379,13 +449,70 @@ async function generateCarouselSlide(slideIndex: number) {
   }
 }
 
+/** 单页生成 / 失败重试：hasXhsCarouselSlideImage 的成功页不会被重新生成。 */
+async function generateCarouselSlide(slideIndex: number) {
+  const jobId = await submitCarouselSlideRequest(slideIndex);
+  if (!jobId) return;
+  await pollCarouselSlideJob(slideIndex, jobId);
+  await maybeCompleteCarousel();
+}
+
+/**
+ * 一键生成全部：提交按页序串行（旧版安全顺序语义），
+ * 但轮询并发进行——4 页不会串行等待（旧版 IMAGE_TASK 并发队列语义）。
+ */
 async function generateAllCarouselSlides() {
   const pack = carousel.pack;
   if (!pack) return;
+  const polls: Array<Promise<void>> = [];
   for (let index = 0; index < pack.slides.length; index += 1) {
-    if (!hasXhsCarouselSlideImage(pack.slides[index])) {
-      await generateCarouselSlide(index);
-    }
+    if (hasXhsCarouselSlideImage(pack.slides[index])) continue;
+    const jobId = await submitCarouselSlideRequest(index);
+    if (!jobId) continue;
+    polls.push(pollCarouselSlideJob(index, jobId));
+  }
+  await Promise.all(polls);
+  await maybeCompleteCarousel();
+}
+
+/** 生成后的单页改图：复用现有 POST /api/image-edits（旧版 runEditSlide 请求体）。 */
+async function editCarouselSlide(slideIndex: number) {
+  const pack = carousel.pack;
+  if (!pack) return;
+  const slide = pack.slides[slideIndex];
+  if (!slide || slide.isEditing) return;
+  const prompt = String(slide.editPrompt || "").trim();
+  const imageUrl = String(slide.imageUrl || slide.previewUrl || "");
+  if (!prompt || !imageUrl) return;
+  const signal = scope.signalFor(`xhs-slide-edit-${slideIndex}`);
+  slide.isEditing = true;
+  slide.error = "";
+  try {
+    const submitResult = await submitImageEdit(
+      {
+        imageUrl,
+        prompt,
+        title: String(slide.title || slide.pageLabel || ""),
+        aspectRatio: pack.aspectRatio,
+      },
+      signal,
+    );
+    applyUser(submitResult.user);
+    if (!submitResult.jobId) throw new Error("改图任务创建失败");
+    const concept = await pollImageJob(submitResult.jobId, { signal, onUser: applyUser });
+    pack.slides[slideIndex] = {
+      ...pack.slides[slideIndex],
+      imageUrl: concept.imageUrl || concept.previewUrl,
+      previewUrl: concept.imageUrl || concept.previewUrl,
+      isEditing: false,
+      editPrompt: "",
+      error: "",
+    };
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    slide.isEditing = false;
+    slide.error = `改图失败：${(error as Error).message}`;
   }
 }
 
@@ -416,7 +543,37 @@ async function maybeCompleteCarousel() {
   }
 }
 
-// —— d) 风格化图 ——
+// —— d) 风格化图（真实风格参考图，对齐旧版 app.js 2969-2996 上传语义） ——
+const styleReferenceError = ref("");
+
+async function handleStyleReferenceChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  if (file.size > MAX_SINGLE_UPLOAD_IMAGE_BYTES) {
+    styleReferenceError.value = "风格参考图最多上传 10MB，请压缩图片后重新上传。";
+    return;
+  }
+  // 读取走可中止工具：账号切换（notifyAuthReset）时 FileReader.abort()，不落库。
+  const signal = scope.signalFor("style-reference-read");
+  try {
+    const dataUrl = await fileToDataUrl(file, signal);
+    if (signal.aborted) return;
+    styleReference.value = { fileName: file.name, dataUrl, sizeBytes: file.size };
+    styleReferenceError.value = "";
+  } catch (error) {
+    if (isAbortError(error)) return;
+    styleReferenceError.value = `风格参考图读取失败：${(error as Error).message}`;
+  }
+}
+
+// data-clear-style-reference 语义：清除当前选题的风格参考图。
+function clearStyleReference(): void {
+  styleReference.value = null;
+  styleReferenceError.value = "";
+}
+
 async function generateStyleImage() {
   const context = currentContext();
   if (busy.value || !context) return;
@@ -441,7 +598,10 @@ async function generateStyleImage() {
         stylePrompt,
         useBrandLogo: resolvedUseBrandLogo.value,
         aspectRatio,
-        styleReferenceImages: [],
+        // 旧版语义：有参考图则以 {name, dataUrl} 提交，绝不固定为空数组。
+        styleReferenceImages: styleReference.value
+          ? [{ name: styleReference.value.fileName, dataUrl: styleReference.value.dataUrl }]
+          : [],
       },
       signal,
     );
@@ -582,6 +742,30 @@ async function submit() {
             />
             <span>{{ brandHasLogo ? `使用${logoLabel}作为视觉参考` : `未上传${logoLabel}` }}</span>
           </label>
+          <div class="style-reference-field" data-test="style-reference-field">
+            <label class="upload-button">
+              <input
+                type="file"
+                accept="image/*"
+                data-test="style-reference-input"
+                @change="handleStyleReferenceChange"
+              />
+              <span>{{ styleReference ? "更换风格参考图" : "上传风格参考图" }}</span>
+            </label>
+            <span v-if="styleReference" class="style-reference-name" data-test="style-reference-name">
+              {{ styleReference.fileName }}
+            </span>
+            <button
+              v-if="styleReference"
+              type="button"
+              class="secondary-btn"
+              data-test="style-reference-clear"
+              @click="clearStyleReference"
+            >
+              清除
+            </button>
+            <span v-if="styleReferenceError" class="job-error" data-test="style-reference-error">{{ styleReferenceError }}</span>
+          </div>
         </div>
 
         <ProductImagePanel
@@ -664,9 +848,38 @@ async function submit() {
                 </button>
               </div>
               <p class="slide-direction">{{ slide.visualDirection }}</p>
+              <label v-if="!hasXhsCarouselSlideImage(slide)" class="form-field">
+                <span>本页提示词（可编辑，随生成请求提交）</span>
+                <textarea
+                  v-model="slide.prompt"
+                  rows="2"
+                  :data-test="`xhs-slide-prompt-${index}`"
+                  placeholder="补充或修改本页画面提示词"
+                ></textarea>
+              </label>
               <figure v-if="safeImageSrc(slide.imageUrl || slide.previewUrl)">
                 <img :src="safeImageSrc(slide.imageUrl || slide.previewUrl)" :alt="slide.pageLabel || ''" loading="lazy" decoding="async" />
               </figure>
+              <div v-if="hasXhsCarouselSlideImage(slide)" class="slide-edit">
+                <label class="form-field">
+                  <span>继续改图提示词</span>
+                  <textarea
+                    v-model="slide.editPrompt"
+                    rows="2"
+                    :data-test="`xhs-slide-edit-prompt-${index}`"
+                    placeholder="描述希望修改的内容"
+                  ></textarea>
+                </label>
+                <button
+                  type="button"
+                  class="secondary-btn"
+                  :data-test="`edit-xhs-slide-${index}`"
+                  :disabled="slide.isEditing"
+                  @click="editCarouselSlide(index)"
+                >
+                  {{ slide.isEditing ? "改图中..." : "改这一页" }}
+                </button>
+              </div>
               <p v-if="slide.error" class="job-error">{{ slide.error }}</p>
             </li>
           </ul>
@@ -810,6 +1023,43 @@ async function submit() {
   align-items: center;
   gap: 6px;
   font-size: 13px;
+}
+
+.style-reference-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.style-reference-field .upload-button {
+  position: relative;
+  overflow: hidden;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.style-reference-field .upload-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.style-reference-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.slide-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .generation-actions {

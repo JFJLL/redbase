@@ -55,6 +55,14 @@ const personalFixture = {
   analysisCount: 1,
 };
 
+const secondPersonalFixture = {
+  ...personalFixture,
+  id: 9,
+  name: "静姐说职场",
+  industry: "职场",
+  audience: "职场新人",
+};
+
 const brandFixture = {
   ...personalFixture,
   id: 7,
@@ -64,15 +72,13 @@ const brandFixture = {
   personaStyle: "",
 };
 
-const materialFixture = {
-  id: 21,
-  brandId: 8,
-  kind: "experience",
-  title: "第一次融资失败",
-  content: "2023 年第一次融资被拒后复盘的三个教训。",
-  tags: ["创业", "复盘"],
-  sourceDate: "2023-06-01",
-};
+/** 断言从未请求过个人素材接口（本轮个人 IP 页不提供素材库）。 */
+function expectNoMaterialRequests(fetchMock: ReturnType<typeof vi.fn>): void {
+  const materialCalls = fetchMock.mock.calls.filter(([url]) =>
+    String(url).includes("/api/personal-materials"),
+  );
+  expect(materialCalls).toHaveLength(0);
+}
 
 describe("PersonalIpView", () => {
   let pinia: Pinia;
@@ -97,13 +103,13 @@ describe("PersonalIpView", () => {
     return { wrapper, router, fetchMock };
   }
 
-  it("renders personal profiles with pillars and loads their materials", async () => {
-    const { wrapper } = await mountView({
+  it("renders personal profiles with pillars and never auto-loads materials", async () => {
+    // 故意不提供 GET /api/personal-materials handler：一旦组件自动加载素材，
+    // stubFetch 会抛 unexpected fetch 使测试失败。
+    const { wrapper, fetchMock } = await mountView({
       "GET /api/brands?summary=1": () =>
         jsonResponse(200, { brands: [brandFixture, personalFixture] }),
       "GET /api/history": () => jsonResponse(200, { generations: [] }),
-      "GET /api/personal-materials?brandId=8": () =>
-        jsonResponse(200, { items: [materialFixture] }),
     });
 
     const cards = wrapper.findAll("[data-testid=personal-card]");
@@ -117,11 +123,10 @@ describe("PersonalIpView", () => {
     expect(text).toContain("趋势 5 条");
     expect(wrapper.text()).not.toContain("山茶护肤");
 
-    const material = wrapper.find("[data-testid=material-card]");
-    expect(material.exists()).toBe(true);
-    expect(material.text()).toContain("亲身经历");
-    expect(material.text()).toContain("第一次融资失败");
-    expect(material.text()).toContain("2023 年第一次融资被拒后复盘的三个教训。");
+    // 旧契约：个人 IP 页不渲染素材库。
+    expectNoMaterialRequests(fetchMock);
+    expect(wrapper.find("[data-testid=material-section]").exists()).toBe(false);
+    expect(wrapper.find("[data-testid=material-card]").exists()).toBe(false);
   });
 
   it("shows the legacy empty-state copy without personal profiles", async () => {
@@ -135,49 +140,35 @@ describe("PersonalIpView", () => {
     );
   });
 
-  it("creates a material with brandId, kind and comma-split tags", async () => {
+  it("does not render the material management UI even with a selected profile", async () => {
     const { wrapper, fetchMock } = await mountView({
       "GET /api/brands?summary=1": () => jsonResponse(200, { brands: [personalFixture] }),
       "GET /api/history": () => jsonResponse(200, { generations: [] }),
-      "GET /api/personal-materials?brandId=8": () => jsonResponse(200, { items: [] }),
-      "POST /api/personal-materials": () => jsonResponse(201, { item: materialFixture }),
     });
 
-    await wrapper.find("select[name=kind]").setValue("quote");
-    await wrapper.find("input[name=title]").setValue("常说的一句话");
-    await wrapper.find("textarea[name=content]").setValue("增长没有捷径，只有复利。");
-    await wrapper.find("input[name=tags]").setValue("增长, 金句");
-    await wrapper.find("form.material-form").trigger("submit");
-    await flushPromises();
-
-    const call = fetchMock.mock.calls.find(
-      ([url, init]) =>
-        String(url) === "/api/personal-materials" && (init as RequestInit)?.method === "POST",
-    );
-    expect(call).toBeTruthy();
-    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
-      brandId: 8,
-      kind: "quote",
-      title: "常说的一句话",
-      content: "增长没有捷径，只有复利。",
-      tags: ["增长", "金句"],
-      sourceDate: "",
-    });
-    expect(wrapper.text()).toContain("素材已添加");
+    // 第一个个人 IP 默认选中，但素材管理界面（表单/列表）必须不可达。
+    expect(wrapper.find("[data-testid=personal-card]").classes()).toContain("is-selected");
+    expect(wrapper.find("[data-testid=material-section]").exists()).toBe(false);
+    expect(wrapper.find("form.material-form").exists()).toBe(false);
+    expect(wrapper.find("select[name=kind]").exists()).toBe(false);
+    expect(wrapper.find("textarea[name=content]").exists()).toBe(false);
+    expectNoMaterialRequests(fetchMock);
   });
 
-  it("surfaces the backend material error text verbatim", async () => {
-    const { wrapper } = await mountView({
-      "GET /api/brands?summary=1": () => jsonResponse(200, { brands: [personalFixture] }),
+  it("switching the selected profile never fetches personal materials", async () => {
+    const { wrapper, fetchMock } = await mountView({
+      "GET /api/brands?summary=1": () =>
+        jsonResponse(200, { brands: [personalFixture, secondPersonalFixture] }),
       "GET /api/history": () => jsonResponse(200, { generations: [] }),
-      "GET /api/personal-materials?brandId=8": () => jsonResponse(200, { items: [] }),
-      "POST /api/personal-materials": () => jsonResponse(400, { error: "请填写素材内容" }),
     });
 
-    await wrapper.find("textarea[name=content]").setValue("   ");
-    await wrapper.find("form.material-form").trigger("submit");
+    const cards = wrapper.findAll("[data-testid=personal-card]");
+    expect(cards).toHaveLength(2);
+    await cards[1]!.trigger("click");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("素材保存失败：请填写素材内容");
+    expect(cards[1]!.classes()).toContain("is-selected");
+    expectNoMaterialRequests(fetchMock);
+    expect(wrapper.find("[data-testid=material-section]").exists()).toBe(false);
   });
 });

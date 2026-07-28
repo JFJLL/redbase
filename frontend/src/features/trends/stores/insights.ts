@@ -3,6 +3,7 @@
 // selectedTrendId / xhsCategory* / trendAnalysisLoadingKeys 等全局状态。
 import { defineStore } from "pinia";
 import { useAuthStore } from "@/shared/stores/auth";
+import { getBrandDataVersion } from "@/shared/stores/brandDataVersion";
 import {
   fetchBrandDetail,
   fetchBrandSummaries,
@@ -76,6 +77,10 @@ export const useInsightsStore = defineStore("insights", {
     trendAnalysisLoadingKeys: [] as string[],
     /** 每个「品牌:维度」的幂等 requestId，失败可复用以复取服务端结果。 */
     trendAnalysisRequestIds: {} as Record<string, string>,
+    /** 品牌摘要列表加载时的品牌数据版本快照（brandDataVersion）。 */
+    brandsListVersion: -1 as number,
+    /** 每个品牌详情加载时的版本快照；品牌 CUD 后版本前移即失效。 */
+    brandDetailVersions: {} as Record<number, number>,
   }),
 
   getters: {
@@ -119,20 +124,27 @@ export const useInsightsStore = defineStore("insights", {
      */
     async loadBrands(signal?: AbortSignal, options: { force?: boolean } = {}): Promise<void> {
       this.syncOwner();
-      if (this.brandsStatus === "ready" && !options.force) return;
+      const listFresh = this.brandsListVersion >= getBrandDataVersion();
+      if (this.brandsStatus === "ready" && !options.force && listFresh) return;
       const previousById = new Map(this.brands.map((brand) => [Number(brand.id), brand]));
       this.brandsStatus = "loading";
       this.brandsError = "";
+      const versionSnapshot = getBrandDataVersion();
       try {
         const result = await fetchBrandSummaries(signal);
         this.brands = (result.brands || []).map((summary) => {
           const previous = previousById.get(Number(summary.id));
-          if (previous?._detailLoaded) {
-            // 保留已加载的详情（trends/analyses/knowledgeBase），仅刷新摘要字段。
+          const detailFresh =
+            (this.brandDetailVersions[Number(summary.id)] ?? -1) >= getBrandDataVersion(summary.id);
+          if (previous?._detailLoaded && detailFresh) {
+            // 保留仍然新鲜的详情（trends/analyses/knowledgeBase），仅刷新摘要字段。
             return markBrandDetail(summary, previous);
           }
+          // 品牌被编辑过：丢弃旧详情，下次进入趋势页重新 GET /api/brands/:id。
+          delete this.brandDetailVersions[Number(summary.id)];
           return markBrandSummary(summary);
         });
+        this.brandsListVersion = versionSnapshot;
         if (this.brands.length) {
           if (!this.brands.some((brand) => brand.id === this.selectedBrandId)) {
             this.selectedBrandId = this.brands[0].id;
@@ -150,12 +162,13 @@ export const useInsightsStore = defineStore("insights", {
       }
     },
 
-    /** 详情懒加载（旧版 ensureBrandDetailLoaded）。 */
+    /** 详情懒加载（旧版 ensureBrandDetailLoaded）。品牌 CUD 后缓存失效，必须重新拉取。 */
     async ensureBrandDetail(brandId: number | null | undefined, signal?: AbortSignal): Promise<InsightsBrand | null> {
       const id = Number(brandId || 0);
       if (!id) return null;
       const current = this.brands.find((brand) => Number(brand.id) === id);
-      if (current?._detailLoaded) return current;
+      const detailFresh = (this.brandDetailVersions[id] ?? -1) >= getBrandDataVersion(id);
+      if (current?._detailLoaded && detailFresh) return current;
 
       if (Number(this.selectedBrandId) === id) {
         this.brandDetailLoadingId = id;
@@ -205,6 +218,8 @@ export const useInsightsStore = defineStore("insights", {
       this.brands = this.brands.some((brand) => Number(brand.id) === Number(nextBrand.id))
         ? this.brands.map((brand) => (Number(brand.id) === Number(nextBrand.id) ? normalized : brand))
         : [normalized, ...this.brands];
+      // 详情来自服务端最新响应：记录当前版本快照，直到下一次品牌 CUD 前有效。
+      this.brandDetailVersions[Number(nextBrand.id)] = getBrandDataVersion();
     },
 
     /** 单条趋势替换（选题重生成 / 选题编辑后，旧版 replaceTrend）。 */

@@ -573,6 +573,9 @@ async function submitRemix() {
       error: "",
     }));
     const slideJobIds: string[] = [];
+    // 旧版 excellent-remix-request.js 并发队列语义：提交按页序保序，
+    // 但轮询并发进行——不等上一页出图才开始下一页（4 页不得完全串行）。
+    const slidePolls: Array<Promise<void>> = [];
     for (let slideIndex = 0; slideIndex < (pack.slides || []).length; slideIndex += 1) {
       const slide = (pack.slides || [])[slideIndex];
       const row = submitSlides.value[slideIndex];
@@ -596,16 +599,20 @@ async function submitRemix() {
       );
       if (result.user) auth.user = result.user;
       if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
-      const imageConcept = await pollImageJob(result.slideJob.jobId, {
-        signal,
-        onUser: (user) => {
-          auth.user = user;
-        },
-      });
       slideJobIds.push(result.slideJob.jobId);
-      row.status = "completed";
-      row.imageUrl = String(imageConcept.imageUrl || imageConcept.previewUrl || "");
+      slidePolls.push(
+        pollImageJob(result.slideJob.jobId, {
+          signal,
+          onUser: (user) => {
+            auth.user = user;
+          },
+        }).then((imageConcept) => {
+          row.status = "completed";
+          row.imageUrl = String(imageConcept.imageUrl || imageConcept.previewUrl || "");
+        }),
+      );
     }
+    await Promise.all(slidePolls);
     await runComplete(brandId, carouselGroupId, slideJobIds);
   } catch (error) {
     if (isAbortError(error)) return;
