@@ -1,5 +1,5 @@
 const { getDbProxy } = require("../connection");
-const { TREND_ANALYSIS_RESERVATION_TTL_MS, runTransaction } = require("./core-repository");
+const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS, runTransaction } = require("./core-repository");
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
 const { findBrandByOwner, upsertBrandFull } = require("./brand-repository");
@@ -70,9 +70,16 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
       FROM trend_analysis_requests
       WHERE user_id = ? AND status = 'reserved'
     `).get(Number(userId))?.total || 0);
+    // Excellent remix billing reservations also freeze balance; both sides must see each other.
+    const excellentCutoff = new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
+    const excellentReserved = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM excellent_remix_billing_requests
+      WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+    `).get(Number(userId), excellentCutoff)?.total || 0);
     const cost = Math.max(0, Number(creditCost || 0));
-    if (!user || Number(user.credits || 0) - reserved < cost) {
-      return { status: "insufficient", user, reservedCredits: reserved };
+    if (!user || Number(user.credits || 0) - reserved - excellentReserved < cost) {
+      return { status: "insufficient", user, reservedCredits: reserved + excellentReserved };
     }
     const timestamp = now.toISOString();
     db.prepare(`
@@ -109,6 +116,7 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
     if (!currentBrand) throw new Error("品牌不存在或已被删除。");
     const nextBrand = buildBrand(currentBrand);
     const savedBrand = upsertBrandFull(nextBrand);
+    const excellentSettleCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
     const spend = db.prepare(`
       UPDATE users SET credits = credits - ?
       WHERE id = ?
@@ -118,6 +126,10 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
           WHERE user_id = users.id
             AND status = 'reserved'
             AND NOT (request_id = ? AND brand_id = ? AND bucket_key = ?)
+        ), 0) - COALESCE((
+          SELECT SUM(credit_cost)
+          FROM excellent_remix_billing_requests
+          WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
         ), 0) >= ?
     `).run(
       Number(request.credit_cost),
@@ -125,6 +137,7 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
       String(requestId),
       Number(brandId),
       String(bucketKey),
+      excellentSettleCutoff,
       Number(request.credit_cost),
     );
     if (spend.changes !== 1) throw new Error("积分余额已发生变化，本次趋势未保存，请重新生成。");

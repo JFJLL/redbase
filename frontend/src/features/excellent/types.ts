@@ -128,6 +128,21 @@ export interface FusionPlan {
   [key: string]: unknown;
 }
 
+/** 服务端返回的计费摘要：前端只展示，不参与免费次数判定。 */
+export interface RemixBillingInfo {
+  requestId?: string;
+  cacheHit?: boolean;
+  replayed?: boolean;
+  charged?: boolean;
+  creditCost?: number;
+  credits?: number;
+  windowCount?: number;
+  freeLimit?: number;
+  windowMs?: number;
+  nextChargeable?: boolean;
+  [key: string]: unknown;
+}
+
 export interface BrandSummary {
   id: number | string;
   name?: string;

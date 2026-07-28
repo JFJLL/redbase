@@ -8,6 +8,8 @@ const CREDIT_COSTS = {
   xhsCarouselSlide: 1,
   imageEdit: 1,
   styleImage: 1,
+  excellentContentDirection: 1,
+  excellentFusionPlan: 1,
 };
 
 

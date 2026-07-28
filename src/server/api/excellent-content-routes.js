@@ -14,18 +14,85 @@ const {
   normalizePgyCategoryPath,
   normalizePgyIndustryPath,
 } = require("../integrations/pgy-content-square");
-const { analyzeExcellentNoteForRemix } = require("../services/excellent-remix-analysis-service");
+const { analyzeExcellentNoteForRemix, ANALYSIS_VERSION } = require("../services/excellent-remix-analysis-service");
 const {
   generateContentDirections,
   recommendTrendsForRemix,
   buildExcellentRemixFusionPlan,
   flattenBrandIdeas,
+  normalizeLearningFocus,
+  normalizeContentMode,
 } = require("../services/excellent-remix-fusion-service");
 const brandRepository = require("../db/repositories/brand-repository");
+const {
+  EXCELLENT_BILLING_KIND_DIRECTION,
+  EXCELLENT_BILLING_KIND_FUSION,
+  normalizeExcellentBillingRequestId,
+  buildExcellentBillingSignature,
+  reserveExcellentBillingRequest,
+  settleExcellentBillingRequest,
+  failExcellentBillingRequest,
+  getDirectionBillingSnapshot,
+} = require("../db/repositories/excellent-remix-billing-repository");
+const {
+  claimExcellentRefreshSlot,
+  releaseExcellentRefreshSlot,
+} = require("../services/excellent-refresh-cooldown");
+
+const XHS_FUSION_SLIDE_COUNT = 4;
+
+function hasPublishReadyFusionFields(plan) {
+  const pack = plan?.carouselPack;
+  const slides = Array.isArray(pack?.slides) ? pack.slides : [];
+  if (slides.length !== XHS_FUSION_SLIDE_COUNT) return false;
+  if (!String(pack?.publishTitle || "").trim() || !String(pack?.publishCaption || "").trim()) return false;
+  return slides.every(
+    (slide) =>
+      String(slide?.title || "").trim() &&
+      String(slide?.copy || "").trim() &&
+      String(slide?.visualDirection || "").trim(),
+  );
+}
+
+/** Server-authoritative billing summary sent with every charged endpoint response. */
+function buildDirectionBilling({ requestId, cacheHit, replayed, charged, creditCost, user, snapshot }) {
+  return {
+    requestId,
+    cacheHit: Boolean(cacheHit),
+    replayed: Boolean(replayed),
+    charged: Boolean(charged),
+    creditCost: charged ? Number(creditCost || 0) : 0,
+    credits: Number(user?.credits || 0),
+    windowCount: Number(snapshot?.windowCount || 0),
+    freeLimit: Number(snapshot?.freeLimit || 0),
+    windowMs: Number(snapshot?.windowMs || 0),
+    nextChargeable: Boolean(snapshot?.nextChargeable),
+  };
+}
+
+function buildFusionBilling({ requestId, cacheHit, replayed, charged, creditCost, user }) {
+  return {
+    requestId,
+    cacheHit: Boolean(cacheHit),
+    replayed: Boolean(replayed),
+    charged: Boolean(charged),
+    creditCost: charged ? Number(creditCost || 0) : 0,
+    credits: Number(user?.credits || 0),
+  };
+}
 
 async function handleExcellentContentRoutes(context, req, res, pathname) {
-  const { getSessionToken, buildApiUserLog, json, unauthorized, badRequest, collectBody } =
-    bindRouteScope(context);
+  const {
+    getSessionToken,
+    buildApiUserLog,
+    json,
+    unauthorized,
+    badRequest,
+    collectBody,
+    CREDIT_COSTS,
+    isAdminUser,
+    sanitizeUser,
+  } = bindRouteScope(context);
 
   function requireUser() {
     const token = getSessionToken(req);
@@ -70,6 +137,15 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     }
   }
 
+  function writeInsufficientCredits(user, cost) {
+    json(res, 402, {
+      error: `积分不足，本次操作需要 ${cost} 积分，当前剩余 ${Number(user?.credits || 0)} 积分。`,
+      code: "INSUFFICIENT_CREDITS",
+      requiredCredits: Number(cost || 0),
+      credits: Number(user?.credits || 0),
+    });
+  }
+
   if (req.method === "GET" && pathname === "/api/excellent-contents/content-sources") {
     if (!requireUser()) return true;
     json(res, 200, getExcellentContentSourcesList());
@@ -94,18 +170,33 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
   }
 
   // Explicit manual refresh — only path that may call Pgy note search for this feature.
+  // Free for everyone, but ordinary users get a 60s per-user cooldown; admins bypass it.
   if (req.method === "POST" && pathname === "/api/excellent-contents/refresh") {
-    if (!requireUser()) return true;
+    const user = requireUser();
+    if (!user) return true;
+    const refreshSlot = claimExcellentRefreshSlot(user.id, {
+      isAdmin: isAdminUser(user, context.appConfig),
+    });
+    if (!refreshSlot.allowed) {
+      json(res, 429, {
+        error: `更新太频繁，请 ${refreshSlot.retryAfterSeconds} 秒后再试。`,
+        code: "REFRESH_COOLDOWN",
+        retryAfterSeconds: refreshSlot.retryAfterSeconds,
+      });
+      return true;
+    }
     try {
       const payload = (await collectBody(req)) || {};
       const boardRaw =
         String(payload.board || payload.source || EXCELLENT_BOARD_DEFAULT).trim() || EXCELLENT_BOARD_DEFAULT;
       if (!getExcellentContentBoard(boardRaw)) {
+        releaseExcellentRefreshSlot(user.id);
         badRequest(res, "暂不支持该内容板块。");
         return true;
       }
       const contentSourceRaw = String(payload.contentSource || "all").trim() || "all";
       if (!getExcellentContentSource(contentSourceRaw)) {
+        releaseExcellentRefreshSlot(user.id);
         badRequest(res, "暂不支持该内容来源。");
         return true;
       }
@@ -119,6 +210,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       });
       json(res, 200, result);
     } catch (error) {
+      // Upstream failure must not lock the user out for a minute.
+      releaseExcellentRefreshSlot(user.id);
       sendExcellentError(error, "优秀内容暂时无法更新，请稍后重试。");
     }
     return true;
@@ -204,26 +297,134 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       badRequest(res, "缺少笔记 ID");
       return true;
     }
-    try {
-      const payload = (await collectBody(req)) || {};
-      const brandId = Number(payload.brandId);
-      if (!Number.isFinite(brandId) || brandId <= 0) {
-        badRequest(res, "请选择品牌");
+    const payload = (await collectBody(req)) || {};
+    const brandId = Number(payload.brandId);
+    if (!Number.isFinite(brandId) || brandId <= 0) {
+      badRequest(res, "请选择品牌");
+      return true;
+    }
+    const requestId = normalizeExcellentBillingRequestId(payload.requestId);
+    if (!requestId) {
+      badRequest(res, "缺少有效的请求标识（requestId），请刷新页面后重试。");
+      return true;
+    }
+    const forceRegenerate = payload.forceRegenerate === true;
+    const board = String(payload.board || EXCELLENT_BOARD_DEFAULT).trim() || EXCELLENT_BOARD_DEFAULT;
+    const learningFocus = normalizeLearningFocus(payload.learningFocus);
+    const contentSource = String(payload.contentSource || "all").trim() || "all";
+    const categoryPath = normalizePgyCategoryPath(payload.categoryPath || "");
+    const industryPath = normalizePgyIndustryPath(payload.industryPath || "");
+    // Server-side input signature: same inputs replay from the 24h cache for free.
+    const inputSignature = buildExcellentBillingSignature({
+      v: 1,
+      kind: EXCELLENT_BILLING_KIND_DIRECTION,
+      userId: user.id,
+      noteId,
+      board,
+      brandId,
+      learningFocus,
+      contentSource,
+      categoryPath,
+      industryPath,
+      analysisVersion: ANALYSIS_VERSION,
+    });
+    const directionCost = Number(CREDIT_COSTS?.excellentContentDirection || 1);
+    const reservation = reserveExcellentBillingRequest({
+      requestId,
+      userId: user.id,
+      kind: EXCELLENT_BILLING_KIND_DIRECTION,
+      inputSignature,
+      creditCost: directionCost,
+      forceRegenerate,
+    });
+    if (reservation.status === "invalid") {
+      badRequest(res, "请求标识无效，请刷新页面后重试。");
+      return true;
+    }
+    if (reservation.status === "pending") {
+      json(res, 409, { error: "相同请求正在处理中，请稍候。", code: "REQUEST_IN_PROGRESS" });
+      return true;
+    }
+    if (reservation.status === "insufficient") {
+      writeInsufficientCredits(reservation.user, reservation.requiredCredits || directionCost);
+      return true;
+    }
+    if (reservation.status === "replay" || reservation.status === "cache") {
+      if (!reservation.result) {
+        json(res, 502, { error: "历史结果已失效，请重新生成。", code: "REPLAY_RESULT_MISSING" });
         return true;
       }
+      json(res, 200, {
+        ...reservation.result,
+        user: sanitizeUser(reservation.user),
+        billing: buildDirectionBilling({
+          requestId,
+          cacheHit: reservation.status === "cache",
+          replayed: reservation.status === "replay",
+          charged: false,
+          creditCost: 0,
+          user: reservation.user,
+          snapshot: getDirectionBillingSnapshot(user.id),
+        }),
+      });
+      return true;
+    }
+    try {
       const result = await generateContentDirections(context.appConfig, {
         userId: user.id,
         noteId,
-        board: String(payload.board || EXCELLENT_BOARD_DEFAULT),
+        board,
         brandId,
         sourceAnalysisId: payload.sourceAnalysisId || payload.analysisId || "",
-        learningFocus: payload.learningFocus,
-        contentSource: payload.contentSource || "all",
-        categoryPath: normalizePgyCategoryPath(payload.categoryPath || ""),
-        industryPath: normalizePgyIndustryPath(payload.industryPath || ""),
+        learningFocus,
+        contentSource,
+        categoryPath,
+        industryPath,
+        textModelImpl: context.excellentTextModelImpl,
+        visionModelImpl: context.excellentVisionModelImpl,
       });
-      json(res, 200, result);
+      const isModelResult = result.source === "model";
+      const brand = brandRepository.findBrandByOwner(brandId, user.id);
+      const settle = settleExcellentBillingRequest({
+        requestId,
+        userId: user.id,
+        kind: EXCELLENT_BILLING_KIND_DIRECTION,
+        resultSource: isModelResult ? "model" : "fallback",
+        resultJson: JSON.stringify(result),
+        event: {
+          actionType: "excellentContentDirection",
+          actionLabel: "优秀内容内容方向生成",
+          brandId,
+          brandName: brand?.name || "",
+          channelLabel: "优秀内容",
+          summary: `内容方向 · ${noteId}`,
+          payload: { noteId, board },
+        },
+      });
+      json(res, 200, {
+        ...result,
+        user: sanitizeUser(settle.user),
+        billing: buildDirectionBilling({
+          requestId,
+          cacheHit: false,
+          replayed: Boolean(settle.replayed),
+          charged: settle.charged,
+          creditCost: settle.creditCost,
+          user: settle.user,
+          snapshot: getDirectionBillingSnapshot(user.id),
+        }),
+      });
     } catch (error) {
+      failExcellentBillingRequest({
+        requestId,
+        userId: user.id,
+        kind: EXCELLENT_BILLING_KIND_DIRECTION,
+        error: error?.message,
+      });
+      if (error?.code === "INSUFFICIENT_CREDITS") {
+        json(res, 402, { error: error.message, code: error.code });
+        return true;
+      }
       sendExcellentError(error, "内容方向生成失败");
     }
     return true;
@@ -268,32 +469,165 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       badRequest(res, "缺少笔记 ID");
       return true;
     }
-    try {
-      const payload = (await collectBody(req)) || {};
-      const brandId = Number(payload.brandId);
-      if (!Number.isFinite(brandId) || brandId <= 0) {
-        badRequest(res, "请选择品牌");
+    const payload = (await collectBody(req)) || {};
+    const brandId = Number(payload.brandId);
+    if (!Number.isFinite(brandId) || brandId <= 0) {
+      badRequest(res, "请选择品牌");
+      return true;
+    }
+    const requestId = normalizeExcellentBillingRequestId(payload.requestId);
+    if (!requestId) {
+      badRequest(res, "缺少有效的请求标识（requestId），请刷新页面后重试。");
+      return true;
+    }
+    const forceRegenerate = payload.forceRegenerate === true;
+    const board = String(payload.board || EXCELLENT_BOARD_DEFAULT).trim() || EXCELLENT_BOARD_DEFAULT;
+    const learningFocus = normalizeLearningFocus(payload.learningFocus);
+    const contentMode = normalizeContentMode(payload.contentMode);
+    const smartDirection = payload.smartDirection || payload.direction || null;
+    const existingIdeaRef = payload.existingIdeaRef || null;
+    const customDirection = String(payload.customDirection || "").trim();
+    const useTrendContext = Boolean(payload.useTrendContext);
+    const contentSource = String(payload.contentSource || "all").trim() || "all";
+    const categoryPath = normalizePgyCategoryPath(payload.categoryPath || "");
+    const industryPath = normalizePgyIndustryPath(payload.industryPath || "");
+    // Signature covers user/brand/note/analysis version/learning focus/content direction/trend context.
+    const inputSignature = buildExcellentBillingSignature({
+      v: 1,
+      kind: EXCELLENT_BILLING_KIND_FUSION,
+      userId: user.id,
+      brandId,
+      noteId,
+      board,
+      analysisVersion: ANALYSIS_VERSION,
+      learningFocus,
+      contentMode,
+      smartDirection: smartDirection
+        ? {
+            id: String(smartDirection.id || ""),
+            transferMode: String(smartDirection.transferMode || ""),
+            title: String(smartDirection.title || ""),
+            contentThesis: String(smartDirection.contentThesis || ""),
+          }
+        : null,
+      existingIdeaRef: existingIdeaRef
+        ? {
+            scope: String(existingIdeaRef.scope || ""),
+            analysisId: existingIdeaRef.analysisId ?? null,
+            trendId: existingIdeaRef.trendId ?? null,
+            ideaIndex: existingIdeaRef.ideaIndex ?? null,
+          }
+        : null,
+      customDirection,
+      useTrendContext,
+      trendId: payload.trendId ?? null,
+      contentSource,
+      categoryPath,
+      industryPath,
+    });
+    const fusionCost = Number(CREDIT_COSTS?.excellentFusionPlan || 1);
+    // New generations pre-reserve 1 credit; only a valid AI plan settles the charge.
+    const reservation = reserveExcellentBillingRequest({
+      requestId,
+      userId: user.id,
+      kind: EXCELLENT_BILLING_KIND_FUSION,
+      inputSignature,
+      creditCost: fusionCost,
+      forceRegenerate,
+    });
+    if (reservation.status === "invalid") {
+      badRequest(res, "请求标识无效，请刷新页面后重试。");
+      return true;
+    }
+    if (reservation.status === "pending") {
+      json(res, 409, { error: "相同请求正在处理中，请稍候。", code: "REQUEST_IN_PROGRESS" });
+      return true;
+    }
+    if (reservation.status === "insufficient") {
+      writeInsufficientCredits(reservation.user, reservation.requiredCredits || fusionCost);
+      return true;
+    }
+    if (reservation.status === "replay" || reservation.status === "cache") {
+      if (!reservation.result) {
+        json(res, 502, { error: "历史方案已失效，请重新生成。", code: "REPLAY_RESULT_MISSING" });
         return true;
       }
+      json(res, 200, {
+        fusionPlan: reservation.result,
+        user: sanitizeUser(reservation.user),
+        billing: buildFusionBilling({
+          requestId,
+          cacheHit: reservation.status === "cache",
+          replayed: reservation.status === "replay",
+          charged: false,
+          creditCost: 0,
+          user: reservation.user,
+        }),
+      });
+      return true;
+    }
+    try {
       const plan = await buildExcellentRemixFusionPlan(context.appConfig, {
         userId: user.id,
         noteId,
-        board: payload.board || EXCELLENT_BOARD_DEFAULT,
-        contentSource: payload.contentSource || "all",
-        categoryPath: normalizePgyCategoryPath(payload.categoryPath || ""),
-        industryPath: normalizePgyIndustryPath(payload.industryPath || ""),
+        board,
+        contentSource,
+        categoryPath,
+        industryPath,
         brandId,
-        learningFocus: payload.learningFocus,
+        learningFocus,
         contentMode: payload.contentMode,
-        smartDirection: payload.smartDirection || payload.direction || null,
-        existingIdeaRef: payload.existingIdeaRef || null,
-        customDirection: payload.customDirection || "",
-        useTrendContext: Boolean(payload.useTrendContext),
+        smartDirection,
+        existingIdeaRef,
+        customDirection,
+        useTrendContext,
         trendId: payload.trendId,
         sourceAnalysisId: payload.sourceAnalysisId || payload.analysisId || "",
+        textModelImpl: context.excellentTextModelImpl,
+        visionModelImpl: context.excellentVisionModelImpl,
       });
-      json(res, 200, { fusionPlan: plan });
+      // Only a complete AI plan is billable; deterministic fallback releases the reservation.
+      const isValidAiPlan = plan.contentGenerationMode === "ai" && hasPublishReadyFusionFields(plan);
+      const brand = brandRepository.findBrandByOwner(brandId, user.id);
+      const settle = settleExcellentBillingRequest({
+        requestId,
+        userId: user.id,
+        kind: EXCELLENT_BILLING_KIND_FUSION,
+        resultSource: isValidAiPlan ? "model" : "fallback",
+        resultJson: JSON.stringify(plan),
+        event: {
+          actionType: "excellentFusionPlan",
+          actionLabel: "优秀内容融合方案生成",
+          brandId,
+          brandName: brand?.name || "",
+          channelLabel: "优秀内容",
+          summary: `融合方案 · ${noteId}`,
+          payload: { noteId, board, contentMode },
+        },
+      });
+      json(res, 200, {
+        fusionPlan: plan,
+        user: sanitizeUser(settle.user),
+        billing: buildFusionBilling({
+          requestId,
+          cacheHit: false,
+          replayed: Boolean(settle.replayed),
+          charged: settle.charged,
+          creditCost: settle.creditCost,
+          user: settle.user,
+        }),
+      });
     } catch (error) {
+      failExcellentBillingRequest({
+        requestId,
+        userId: user.id,
+        kind: EXCELLENT_BILLING_KIND_FUSION,
+        error: error?.message,
+      });
+      if (error?.code === "INSUFFICIENT_CREDITS") {
+        json(res, 402, { error: error.message, code: error.code });
+        return true;
+      }
       sendExcellentError(error, "融合方案生成失败");
     }
     return true;

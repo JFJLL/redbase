@@ -245,6 +245,27 @@ function initializeDatabaseSchema() {
       last_error TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (source_key, category_path)
     );
+
+    CREATE TABLE IF NOT EXISTS excellent_remix_billing_requests (
+      request_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      input_signature TEXT NOT NULL,
+      status TEXT NOT NULL,
+      credit_cost INTEGER NOT NULL DEFAULT 0,
+      counted INTEGER NOT NULL DEFAULT 0,
+      cache_hit INTEGER NOT NULL DEFAULT 0,
+      result_source TEXT NOT NULL DEFAULT '',
+      result_json TEXT NOT NULL DEFAULT '',
+      credit_event_id INTEGER,
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (request_id, user_id, kind),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
+    );
   `);
 }
 
@@ -288,6 +309,10 @@ function ensureDatabaseIndexes() {
       ON excellent_content_cache(expires_at);
     CREATE INDEX IF NOT EXISTS idx_creator_materials_owner_brand
       ON creator_materials(owner_user_id, brand_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_excellent_remix_billing_window
+      ON excellent_remix_billing_requests(user_id, kind, status, counted, completed_at);
+    CREATE INDEX IF NOT EXISTS idx_excellent_remix_billing_signature
+      ON excellent_remix_billing_requests(user_id, kind, input_signature, status, completed_at);
   `);
 }
 
@@ -514,6 +539,27 @@ function ensureSchemaUpgrades() {
       expires_at TEXT NOT NULL,
       last_error TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (source_key, category_path)
+    );
+
+    CREATE TABLE IF NOT EXISTS excellent_remix_billing_requests (
+      request_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      input_signature TEXT NOT NULL,
+      status TEXT NOT NULL,
+      credit_cost INTEGER NOT NULL DEFAULT 0,
+      counted INTEGER NOT NULL DEFAULT 0,
+      cache_hit INTEGER NOT NULL DEFAULT 0,
+      result_source TEXT NOT NULL DEFAULT '',
+      result_json TEXT NOT NULL DEFAULT '',
+      credit_event_id INTEGER,
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (request_id, user_id, kind),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
     );
   `);
 }

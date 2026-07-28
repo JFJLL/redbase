@@ -1,6 +1,6 @@
 const { getDbProxy } = require("../connection");
 const { safeParseArray, safeParseObject } = require("../snapshot-utils");
-const { TREND_ANALYSIS_RESERVATION_TTL_MS, allocateCounter, runTransaction } = require("./core-repository");
+const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS, allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
 const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
 
@@ -56,6 +56,7 @@ function trySpendCreditsWithEvent({ userId, amount, event }) {
     }
 
     const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
+    const excellentReservationCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
     const result = db.prepare(`
       UPDATE users
       SET credits = credits - ?
@@ -64,8 +65,12 @@ function trySpendCreditsWithEvent({ userId, amount, event }) {
           SELECT SUM(credit_cost)
           FROM trend_analysis_requests
           WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
+        ), 0) - COALESCE((
+          SELECT SUM(credit_cost)
+          FROM excellent_remix_billing_requests
+          WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
         ), 0) >= ?
-    `).run(cost, Number(userId), reservationCutoff, cost);
+    `).run(cost, Number(userId), reservationCutoff, excellentReservationCutoff, cost);
     if (result.changes !== 1) {
       return { spent: false, user: findUserById(userId), creditEvent: null };
     }

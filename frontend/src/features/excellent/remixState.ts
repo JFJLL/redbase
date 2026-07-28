@@ -2,7 +2,7 @@
  * Pure state helpers for the excellent remix flow (content-direction v3).
  * TS port of public/js/excellent-remix-state.js with identical semantics.
  */
-import type { ExcellentBoard, ExistingIdea, FusionPlan, RemixAnalysis, SmartDirection } from "./types";
+import type { ExcellentBoard, ExistingIdea, FusionPlan, RemixAnalysis, RemixBillingInfo, SmartDirection } from "./types";
 
 export const REMIX_CONTENT_MODES = Object.freeze({
   SMART: "smart",
@@ -52,9 +52,11 @@ export interface ExcellentRemixState {
   analysisId: string;
   directionsStatus: RemixStageStatus;
   directionsError: string;
+  directionsBilling: RemixBillingInfo | null;
   fusionPlan: FusionPlan | null;
   fusionStatus: RemixStageStatus;
   fusionError: string;
+  fusionBilling: RemixBillingInfo | null;
   assetMode: RemixAssetMode;
   useBrandLogo: boolean;
   productImageIds: number[];
@@ -93,9 +95,11 @@ export function createExcellentRemixState(seed: RemixStateSeed = {}): ExcellentR
     analysisId: "",
     directionsStatus: "idle",
     directionsError: "",
+    directionsBilling: null,
     fusionPlan: null,
     fusionStatus: "idle",
     fusionError: "",
+    fusionBilling: null,
     assetMode: REMIX_ASSET_MODES.NONE,
     useBrandLogo: false,
     productImageIds: [],
@@ -295,6 +299,36 @@ export function defaultLearningFocusForAnalysis(analysis: RemixAnalysis | null):
     return ["structure", "visual", "hook"];
   }
   return [...DEFAULT_LEARNING_FOCUS];
+}
+
+/** 服务端认可的 requestId：[a-zA-Z0-9_-]{8,100}。每次点击生成新值，重试复用同一个。 */
+export function makeRemixBillingRequestId(): string {
+  const cryptoApi = globalThis.crypto as Crypto | undefined;
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+  return `rq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** 收费状态下按钮直接标明价格，不额外弹确认窗。 */
+export function directionsButtonLabel(state: ExcellentRemixState | null): string {
+  if (!state) return "生成内容方向";
+  if (state.directionsStatus === "loading") return "生成中…";
+  if (state.directionsBilling?.nextChargeable) return "重新生成内容方向（1积分）";
+  if (state.smartDirections.length > 0) return "重新生成内容方向";
+  return "生成内容方向";
+}
+
+export function fusionButtonLabel(state: ExcellentRemixState | null): string {
+  if (state?.fusionStatus === "loading") return "生成中…";
+  return "生成融合方案（1积分）";
+}
+
+/** 第 3 次免费方向成功后提醒：短时间内继续生成将收费。缓存/重放/已收费不提醒。 */
+export function shouldWarnNextDirectionCharge(billing: RemixBillingInfo | null | undefined): boolean {
+  return Boolean(
+    billing && billing.nextChargeable === true && !billing.charged && !billing.cacheHit && !billing.replayed,
+  );
 }
 
 export function isPlatformDefaultVisual(analysis: RemixAnalysis | null): boolean {

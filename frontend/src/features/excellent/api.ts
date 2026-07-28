@@ -15,6 +15,7 @@ import type {
   FusionPlan,
   ProductImage,
   RemixAnalysis,
+  RemixBillingInfo,
   SmartDirection,
   TaxonomyResult,
 } from "./types";
@@ -96,7 +97,12 @@ export function fetchContentDirections(
   noteId: string,
   body: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<{ directions?: SmartDirection[]; [key: string]: unknown }> {
+): Promise<{
+  directions?: SmartDirection[];
+  billing?: RemixBillingInfo;
+  user?: SessionUser;
+  [key: string]: unknown;
+}> {
   return apiFetch(`/api/excellent-contents/${encodeURIComponent(noteId)}/content-directions`, {
     method: "POST",
     body,
@@ -108,7 +114,7 @@ export function fetchFusionPlan(
   noteId: string,
   body: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<{ fusionPlan: FusionPlan }> {
+): Promise<{ fusionPlan: FusionPlan; billing?: RemixBillingInfo; user?: SessionUser }> {
   return apiFetch(`/api/excellent-contents/${encodeURIComponent(noteId)}/fusion-plan`, {
     method: "POST",
     body,

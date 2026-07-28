@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { createMemoryHistory, createRouter, type Router } from "vue-router";
+import { useAuthStore } from "@/shared/stores/auth";
 import ExcellentView from "../views/ExcellentView.vue";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -292,5 +293,176 @@ describe("ExcellentView", () => {
       "未成功读取参考图片，本次基于标题和内容结构分析",
     );
     expect(wrapper.findAll('[data-test="learning-point"]')).toHaveLength(1);
+  });
+
+  async function mountViewWithAuth(
+    handlers: (url: string, init?: RequestInit) => Response | undefined,
+    user: Record<string, unknown> | null,
+  ) {
+    installFetchMock(handlers, calls);
+    const pinia = createPinia();
+    const router = makeRouter();
+    await router.push("/");
+    await router.isReady();
+    const wrapper = mount(ExcellentView, {
+      global: { plugins: [pinia, router] },
+    });
+    const auth = useAuthStore(pinia);
+    auth.user = user as never;
+    await flushPromises();
+    return { wrapper, auth };
+  }
+
+  function refreshSuccessHandlers(url: string, init?: RequestInit): Response | undefined {
+    if (url === "/api/excellent-contents/refresh") {
+      const body = JSON.parse(String(init?.body));
+      return jsonResponse(200, {
+        board: body.board,
+        contentSource: body.contentSource,
+        categoryPath: body.categoryPath,
+        industryPath: body.industryPath,
+        items: LIST_ITEMS,
+        updatedAt: "2026-07-02T09:00:00.000Z",
+      });
+    }
+    return defaultHandlers(url);
+  }
+
+  it("puts normal users into a 60s 更新中 countdown after refresh and blocks duplicate requests", async () => {
+    const { wrapper } = await mountViewWithAuth(refreshSuccessHandlers, { id: "u1", credits: 5 });
+
+    await wrapper.find('[data-test="refresh-button"]').trigger("click");
+    await flushPromises();
+
+    const button = wrapper.find('[data-test="refresh-button"]');
+    expect(button.text()).toContain("更新中（");
+    expect(button.attributes("disabled")).toBeDefined();
+
+    // 冷却期内再点不产生第二次请求。
+    const refreshCallsBefore = calls.filter((call) => call.url === "/api/excellent-contents/refresh").length;
+    await button.trigger("click");
+    await flushPromises();
+    const refreshCallsAfter = calls.filter((call) => call.url === "/api/excellent-contents/refresh").length;
+    expect(refreshCallsAfter).toBe(refreshCallsBefore);
+  });
+
+  it("starts the countdown from the server retryAfterSeconds on 429", async () => {
+    const { wrapper } = await mountViewWithAuth((url) => {
+      if (url === "/api/excellent-contents/refresh") {
+        return jsonResponse(429, { error: "更新太频繁，请 42 秒后再试。", code: "REFRESH_COOLDOWN", retryAfterSeconds: 42 });
+      }
+      return defaultHandlers(url);
+    }, { id: "u1", credits: 5 });
+
+    await wrapper.find('[data-test="refresh-button"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="refresh-button"]').text()).toContain("更新中（42s）");
+    expect(wrapper.find('[data-test="toast"]').text()).toContain("更新太频繁");
+  });
+
+  it("lets admins refresh repeatedly without a countdown", async () => {
+    const { wrapper } = await mountViewWithAuth(refreshSuccessHandlers, { id: "a1", isAdmin: true, credits: 99 });
+
+    await wrapper.find('[data-test="refresh-button"]').trigger("click");
+    await flushPromises();
+
+    const button = wrapper.find('[data-test="refresh-button"]');
+    expect(button.text()).toBe("更新内容");
+    expect(button.attributes("disabled")).toBeUndefined();
+
+    await button.trigger("click");
+    await flushPromises();
+    expect(calls.filter((call) => call.url === "/api/excellent-contents/refresh").length).toBe(2);
+  });
+
+  it("shows the charge warning after the 3rd free direction success and the latest credits", async () => {
+    const { wrapper, auth } = await mountViewWithAuth((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-9", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, {
+          directions: [{ id: "d1", title: "方向一" }],
+          analysisId: "an-9",
+          brandId: 7,
+          user: { id: "u1", credits: 7 },
+          billing: {
+            requestId: "req-3",
+            cacheHit: false,
+            replayed: false,
+            charged: false,
+            creditCost: 0,
+            credits: 7,
+            windowCount: 3,
+            nextChargeable: true,
+          },
+        });
+      }
+      if (url.includes("/excellent-remix-ideas")) {
+        return jsonResponse(200, { brandId: 7, ideas: [] });
+      }
+      if (url.startsWith("/api/brands")) {
+        return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      }
+      void init;
+      return defaultHandlers(url);
+    }, { id: "u1", credits: 8 });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+
+    // 第 3 次免费成功后的轻提示 + 收费态按钮文案 + 最新余额。
+    expect(wrapper.find('[data-test="toast"]').text()).toBe("短时间内继续生成将消耗 1 积分。");
+    expect(wrapper.find('[data-test="generate-directions"]').text()).toBe("重新生成内容方向（1积分）");
+    expect(wrapper.find('[data-test="remix-credits"]').text()).toContain("当前积分：7");
+    expect(auth.user?.credits).toBe(7);
+    // 融合按钮常驻标价。
+    expect(wrapper.find('[data-test="generate-fusion"]').text()).toBe("生成融合方案（1积分）");
+  });
+
+  it("keeps cache-hit direction responses free of any charge toast", async () => {
+    const { wrapper } = await mountViewWithAuth((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-9", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, {
+          directions: [{ id: "d1", title: "方向一" }],
+          analysisId: "an-9",
+          brandId: 7,
+          user: { id: "u1", credits: 8 },
+          billing: {
+            requestId: "req-cache",
+            cacheHit: true,
+            replayed: false,
+            charged: false,
+            creditCost: 0,
+            credits: 8,
+            windowCount: 3,
+            nextChargeable: true,
+          },
+        });
+      }
+      if (url.includes("/excellent-remix-ideas")) {
+        return jsonResponse(200, { brandId: 7, ideas: [] });
+      }
+      if (url.startsWith("/api/brands")) {
+        return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      }
+      void init;
+      return defaultHandlers(url);
+    }, { id: "u1", credits: 8 });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+
+    // 缓存返回：不得出现任何扣费/将扣费提示。
+    expect(wrapper.find('[data-test="toast"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("方向一");
   });
 });

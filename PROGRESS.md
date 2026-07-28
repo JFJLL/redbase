@@ -1,5 +1,55 @@
 # PROGRESS
 
+# PROGRESS — 优秀内容第二阶段 积分闭环（2026-07-29，codex/excellent-remix-billing-v1）
+
+目标：内容方向、融合方案、逐页生图形成准确、可重放、并发安全的积分闭环。基线 origin/master = 4c4a968bc9934bd18d976b88371cdf556da470a0（与任务书一致）。worktree `.worktrees/excellent-remix-billing-v1`。
+
+## 任务0 核实回执（开工）
+- origin/master SHA = 4c4a968，与任务书预期一致；worktree 已基于最新 origin/master 创建，无冲突，无 BLOCKED。
+- 已阅读并核实：
+  - `src/server/api/credits.js`：CREDIT_COSTS（analysis/regenerateIdeas/momentsImage/wechatImage/xhsCarousel:4/xhsCarouselSlide:1/imageEdit/styleImage 均整数），hasEnoughCredits 输出 402 文案「积分不足，本次操作需要 X 积分，当前剩余 Y 积分。」。
+  - 扣分/退款 helper：`admin-repository.js` 的 `trySpendCreditsWithEvent`（事务内原子 UPDATE 余额 + 插入 credit_events，扣减守卫扣除 trend 预占）、`refundCreditEventIfNeeded`（幂等退款，payload.refundForCreditEventId 防重复）、`insertCreditEvent`。事务入口 `core-repository.runTransaction`。
+  - 幂等先例：`trend_analysis_requests` 表 + `trend-analysis-repository.js`（reserved/completed/failed 状态机、20 分钟 TTL、requestId 格式 `[a-zA-Z0-9_-]{8,100}`、结算时余额守卫排除自身预占）。本阶段将按同一模式为优秀内容新增最小表，不改通用积分系统。
+  - 逐页生图：`image-generation-routes.js` `/api/brands/:id/excellent-remix/slides/:n`，每页经 `runChargedAiWork` 成功扣 1（xhsCarouselSlide），失败经 `refundFailedImageJobCredits`→`refundCreditEventIfNeeded` 单页退款；不改。
+  - 内容方向 `generateContentDirections`：模型失败/不合格时静默回落 deterministic 方向，现有返回不含来源标记（本阶段补 `source` 标记用于计费判定）。融合 `buildExcellentRemixFusionPlan`：返回含 `contentGenerationMode: "ai" | "deterministic_fallback"`，无缓存、无收费。
+  - 角色字段：管理员由 `domain-utils.isAdminUser`（ADMIN_PHONES 配置按 phone 匹配）判定；`users.account_type` 只区分 customer/yimei，不用于 admin。前端 `auth.isAdmin` 来自 /api/session 的 isAdmin。
+  - 刷新 `refreshExcellentContents`：现状无任何冷却/节流（仅同 cache key 单飞 Promise）。
+  - 前端 `frontend/src/features/excellent/`：api.ts / remixState.ts / ExcellentView.vue（generateDirections L476、generateFusion L512、更新按钮 L722/L745），无 402 专门处理、无余额展示、无收费文案。
+  - 测试基线：`npm test`（node --test tests/**）、集成 tests/api/**、前端 vitest；tests/api/excellent-remix-routes.test.js 提供 req/res + routeContext 模式可复用。
+- 结论：事实与任务书无冲突，开工。
+
+## 本阶段设计要点
+- 新增最小表 `excellent_remix_billing_requests`（request_id+user_id+kind 主键；status reserved/completed/failed；input_signature；counted（计入 5 分钟窗口）；result_source model/fallback/cache；result_json 供缓存与重放；credit_event_id）。既做幂等重放，又做 24h 输入签名缓存与 5 分钟成功记录，不重写通用积分系统。
+- 价格项新增：excellentContentDirection: 1、excellentFusionPlan: 1。
+- 方向：预占（判定免费名额/余额）→ 模型 → 结算（原子扣费+事件+完成态同事务）；fallback/失败 不计次不扣分不入缓存。
+- 融合：预占 1 → 模型 → 仅 contentGenerationMode=ai 且四页齐全才结算扣 1；fallback/异常释放预占。forceRegenerate 跳缓存。
+- 刷新：服务端 60 秒每用户冷却（内存），管理员豁免；429 返回 retryAfterSeconds。
+
+## 状态账本
+- [x] 任务0 核实仓库与开工回执
+- [x] 任务1 统一计费与幂等：CREDIT_COSTS 新增 excellentContentDirection/excellentFusionPlan（各 1）；新表 excellent_remix_billing_requests（唯一 migration，CREATE TABLE IF NOT EXISTS + 索引，不改写历史数据）；reserve/settle/fail 状态机，余额变更+credit_events+完成态同事务，同 requestId 并发只生成/扣费一次（在途 409，完成后免费重放）。
+- [x] 任务2 内容方向轻频控：服务端唯一判定；滚动 5 分钟窗口按用户全局统计成功且非缓存的模型结果；前 3 次免费、第 4 次起先验余额后调模型成功扣 1；缓存/重放/重试/失败/fallback 不计次不扣分；预占行占免费名额防并发抢位；响应带 billing（cacheHit/replayed/charged/creditCost/credits/windowCount/nextChargeable）。
+- [x] 任务3 融合方案：签名覆盖用户/品牌/笔记/ANALYSIS_VERSION/学习重点/内容方向/趋势上下文；24h 同输入命中免费；新请求预占 1，仅 contentGenerationMode=ai 且四页标题/正文/视觉方向/发布文案齐全才结算；fallback/异常释放；forceRegenerate 跳缓存收 1。
+- [x] 任务4 前端：第 3 次免费成功后 toast「短时间内继续生成将消耗 1 积分。」；收费态按钮「重新生成内容方向（1积分）」（无确认弹窗）；融合按钮「生成融合方案（1积分）」；弹窗展示「当前积分」并随 billing/user 更新；402 原文展示所需/当前积分；缓存返回无任何扣费提示；普通用户刷新 60 秒倒计时「更新中（Ns）」防重复（429 按服务端 retryAfterSeconds），管理员不受限；legacy public/js/excellent-remix-api.js 同步自动补 requestId。
+- [x] 任务5 防作弊测试：新增 tests/credits/excellent-remix-billing.test.js（8 用例，含窗口/并发/幂等/余额守卫/预占互见）、tests/api/excellent-remix-billing-routes.test.js（7 用例，含路由级矩阵/并发 409/402 零模型调用/冷却/管理员绕过）、excellent-remix-routes.test.js 逐页退款用例（成功页各扣 1、失败页退一次、双轮询不双退、只重试失败页）、前端 remixBilling + excellentView 5 用例。无 .skip/.todo，未放松旧断言，计费核心全部真实 DB。
+  - 反向验证：临时改 DIRECTION_FREE_LIMIT 3→4 → 5 个测试红；临时禁用同 requestId pending 分支 → 并发幂等断言红（repo 级 not ok，路由级死锁超时）；均已还原并复读确认。
+- [x] 独立评审：第一轮 Request Changes（2 Major 2 Minor）→ 全部修复（legacy requestId、预占双向可见、TTL 口径对齐、nextChargeable 含在途）→ 第二轮 APPROVE。详见 .verification/agent-review-excellent-billing.md。
+- [x] 门禁（修复后最终一轮）：check ✅；npm test 450/450；test:integration 184/184；eval:ai 126/126；typecheck:frontend ✅；test:frontend 165/165（28 文件）；build ✅；git diff --check ✅；skipped/todo 全部 0。
+- [x] verify-change（R3：static/unit/integration/smoke/kimi-browser/agent-review/data）全部 pass，receipt 见 .verification/receipt.json；smoke 基于一次性本地服务（.verification/smoke-billing.sqlite）；浏览器验收用真实浏览器完成并留存截图证据。
+
+## 计费矩阵（实现即测试断言）
+| 场景 | 扣分 |
+| --- | --- |
+| 内容方向 5 分钟内第 1–3 次成功（跨品牌/笔记） | 0 |
+| 内容方向第 4 次起成功 | 1/次 |
+| 方向/融合 24h 同输入缓存命中、同 requestId 重放、页面刷新 | 0 |
+| 方向/融合 模型失败、无效输出、deterministic fallback、网络重试 | 0（不计次） |
+| 融合有效 AI 方案（新生成或 forceRegenerate） | 1 |
+| 余额不足（方向收费态/融合） | 402，模型调用 0 次 |
+| 逐页生图成功页 | 1/页（现状保持） |
+| 逐页生图失败页 | 自动退 1，仅重试失败页 |
+| 普通用户手动更新 | 免费，60s 冷却；管理员无冷却 |
+
 # PROGRESS — 优秀内容 V1 多模态学习（2026-07-28，codex/excellent-multimodal-v1）
 
 任务：优秀内容“一键仿图文”升级为多模态参考学习：真实图片理解 + 30 天分析缓存 + 学习摘要展示 + 惰性触发（首次“生成内容方向”）。不碰积分/收费/OSS/运营后台/数据库 schema。

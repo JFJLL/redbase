@@ -10,7 +10,7 @@ process.env.REDBASE_DB_FILE = path.join(tempDir, "api.sqlite");
 
 const { openDatabase } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes, ensureSchemaUpgrades } = require("../../src/server/db/schema");
-const { insertUser, insertSession } = require("../../src/server/db/repositories/auth-repository");
+const { insertUser, insertSession, findUserById } = require("../../src/server/db/repositories/auth-repository");
 const { upsertExcellentContentCache } = require("../../src/server/db/repositories/excellent-content-cache-repository");
 const { handleExcellentContentRoutes } = require("../../src/server/api/excellent-content-routes");
 const { handleImageGenerationRoutes } = require("../../src/server/api/image-generation-routes");
@@ -25,6 +25,7 @@ const {
   findCreditEventById,
   insertCreditEvent,
   updateCreditEventGeneration,
+  findRefundForCreditEvent,
 } = require("../../src/server/db/repositories/admin-repository");
 const {
   findXhsCarouselGenerationByGroup,
@@ -193,6 +194,13 @@ function createRes() {
 let imageJobSeq = 0;
 const persistCalls = [];
 
+// Billing endpoints now require a server-recognized requestId per attempt.
+let billingRequestSeq = 0;
+function nextBillingRequestId() {
+  billingRequestSeq += 1;
+  return `legacy-test-req-${billingRequestSeq.toString().padStart(4, "0")}`;
+}
+
 function routeContext(overrides = {}) {
   const imageJobs = overrides.imageJobs || new Map();
   const appConfig = overrides.appConfig || { pgy: { enabled: false }, assetSigningSecret: "test-secret", imageProvider: { enabled: false } };
@@ -326,13 +334,18 @@ async function getFusionPack(contentMode = "smart", extra = {}) {
     brandId: 7,
     contentMode,
     useTrendContext: false,
+    requestId: nextBillingRequestId(),
     ...extra,
   };
   if (contentMode === "smart" && !body.smartDirection) {
     const directionsRes = createRes();
     await handleExcellentContentRoutes(
       routeContext(),
-      createPostReq("/api/excellent-contents/api-note-1/content-directions", { board: "xhs_hot", brandId: 7 }),
+      createPostReq("/api/excellent-contents/api-note-1/content-directions", {
+        board: "xhs_hot",
+        brandId: 7,
+        requestId: nextBillingRequestId(),
+      }),
       directionsRes,
       "/api/excellent-contents/api-note-1/content-directions",
     );
@@ -468,6 +481,7 @@ test("content-directions returns 3 modes without trend", async () => {
       board: "xhs_hot",
       brandId: 7,
       learningFocus: ["structure", "visual"],
+      requestId: nextBillingRequestId(),
     }),
     res,
     "/api/excellent-contents/api-note-1/content-directions",
@@ -495,7 +509,11 @@ test("fusion-plan smart mode does not require trendId", async () => {
   const directionsRes = createRes();
   await handleExcellentContentRoutes(
     routeContext(),
-    createPostReq("/api/excellent-contents/api-note-1/content-directions", { board: "xhs_hot", brandId: 7 }),
+    createPostReq("/api/excellent-contents/api-note-1/content-directions", {
+      board: "xhs_hot",
+      brandId: 7,
+      requestId: nextBillingRequestId(),
+    }),
     directionsRes,
     "/api/excellent-contents/api-note-1/content-directions",
   );
@@ -510,6 +528,7 @@ test("fusion-plan smart mode does not require trendId", async () => {
       smartDirection: direction,
       learningFocus: ["structure", "visual"],
       useTrendContext: false,
+      requestId: nextBillingRequestId(),
     }),
     res,
     "/api/excellent-contents/api-note-1/fusion-plan",
@@ -529,6 +548,7 @@ test("excellent-remix-preview does not require trendId and keeps structured pack
       contentMode: "custom",
       customDirection: "想讲宝宝转奶期间的便便变化与观察方法",
       useTrendContext: false,
+      requestId: nextBillingRequestId(),
     }),
     fusionRes,
     "/api/excellent-contents/api-note-1/fusion-plan",
@@ -708,6 +728,7 @@ test("fusion-plan reads correct snapshot idea and rejects invalid analysisId", a
       contentMode: "existing_idea",
       existingIdeaRef: { scope: "snapshot", analysisId: 55, trendId: 11, ideaIndex: 0 },
       useTrendContext: false,
+      requestId: nextBillingRequestId(),
     }),
     ok,
     "/api/excellent-contents/api-note-1/fusion-plan",
@@ -724,6 +745,7 @@ test("fusion-plan reads correct snapshot idea and rejects invalid analysisId", a
       contentMode: "existing_idea",
       existingIdeaRef: { scope: "snapshot", analysisId: 9999, trendId: 11, ideaIndex: 0 },
       useTrendContext: false,
+      requestId: nextBillingRequestId(),
     }),
     bad,
     "/api/excellent-contents/api-note-1/fusion-plan",
@@ -1656,4 +1678,77 @@ test("credit event ownership and actionType guards prevent tampering", async () 
   }), null);
   assert.equal(findCreditEventById(foreignEvent.id).generationId, null);
   assert.equal(findCreditEventById(wrongTypeEvent.id).generationId, null);
+});
+
+test("per-slide billing: success pages charge 1 each, failed page refunds once, only failed page reruns", async () => {
+  const customDirection = "转奶期间夜醍观察与安抚记录方法完整拆解";
+  const pack = await getFusionPack("custom", { customDirection });
+  const preview = await previewRemix(pack, { contentMode: "custom", customDirection });
+  const groupId = preview.carouselGroupId;
+  const before = findUserById(91).credits;
+  const imageJobs = new Map();
+
+  async function postSlide(index) {
+    const res = createRes();
+    await handleImageGenerationRoutes(
+      routeContext({ imageJobs }),
+      createPostReq(`/api/brands/7/excellent-remix/slides/${index}`, {
+        aspectRatio: "3:4",
+        carouselPack: { ...pack, carouselGroupId: groupId },
+        carouselGroupId: groupId,
+        contentMode: "custom",
+        customDirection,
+        slide: pack.slides[index],
+      }),
+      res,
+      `/api/brands/7/excellent-remix/slides/${index}`,
+    );
+    assert.equal(res.statusCode, 202, res.body?.error || "");
+    return { jobId: res.body.slideJob.jobId, creditEventId: res.body.creditEventId };
+  }
+
+  const slides = [];
+  for (let index = 0; index < 4; index += 1) {
+    slides.push(await postSlide(index));
+  }
+  assert.equal(findUserById(91).credits, before - 4, "each page must charge exactly 1 credit");
+
+  // 成功页：0、1、3 正常完成入历史。
+  for (const index of [0, 1, 3]) {
+    const poll = await pollJob(slides[index].jobId, imageJobs);
+    assert.equal(poll.statusCode, 200);
+    assert.equal(poll.body.status, "completed");
+  }
+  assert.equal(findUserById(91).credits, before - 4, "successful pages keep their charges");
+  const generationAfterSuccess = findXhsCarouselGenerationByGroup(91, groupId);
+  const slide0ImageUrl = generationAfterSuccess.payload.slides[0].imageUrl;
+  assert.ok(slide0ImageUrl);
+
+  // 失败页：第 3 页 provider 失败 → 自动退回该页 1 积分。
+  const failCtx = routeContext({
+    imageJobs,
+    resolveImageJob: async (job) => ({ ...job, status: "failed", error: "provider down" }),
+  });
+  const failPoll = await pollJobWithContext(slides[2].jobId, failCtx);
+  assert.equal(failPoll.statusCode, 200);
+  assert.equal(failPoll.body.status, "failed");
+  assert.equal(findUserById(91).credits, before - 3, "failed page must refund its single credit");
+  const refund = findRefundForCreditEvent(slides[2].creditEventId, 91);
+  assert.ok(refund, "refund event must reference the original slide charge");
+
+  // 重复轮询失败任务不得二次退款。
+  await pollJobWithContext(slides[2].jobId, failCtx);
+  assert.equal(findUserById(91).credits, before - 3, "double poll must not double refund");
+
+  // 只重试失败页：重新提交第 3 页再扣 1；成功页不重跑。
+  const retry = await postSlide(2);
+  assert.equal(findUserById(91).credits, before - 4, "retrying the failed page charges 1 again");
+  const retryPoll = await pollJob(retry.jobId, imageJobs);
+  assert.equal(retryPoll.statusCode, 200);
+  assert.equal(retryPoll.body.status, "completed");
+  assert.equal(findUserById(91).credits, before - 4, "net cost stays at 4 after retrying only the failed page");
+
+  const generationAfterRetry = findXhsCarouselGenerationByGroup(91, groupId);
+  assert.equal(generationAfterRetry.payload.slides[0].imageUrl, slide0ImageUrl, "successful pages must not re-run");
+  assert.ok(generationAfterRetry.payload.slides[2].imageUrl, "retried page lands in the same generation");
 });

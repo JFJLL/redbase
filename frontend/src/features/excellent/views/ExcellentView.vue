@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { isAbortError, isUnauthorized } from "@/shared/api/client";
+import { ApiError, isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import {
@@ -37,11 +37,15 @@ import {
   canGenerateFusionPlan,
   canSubmitExcellentRemix,
   createExcellentRemixState,
+  directionsButtonLabel,
   filterExistingIdeas,
+  fusionButtonLabel,
+  makeRemixBillingRequestId,
   markFusionStale,
   MAX_CUSTOM_DIRECTION_CHARS,
   MIN_CUSTOM_DIRECTION_CHARS,
   REMIX_CONTENT_MODES,
+  shouldWarnNextDirectionCharge,
   toggleLearningFocus,
   type ExcellentRemixState,
 } from "../remixState";
@@ -52,6 +56,7 @@ import type {
   ContentSourceOption,
   ExcellentBoard,
   ExcellentNote,
+  RemixBillingInfo,
   TaxonomyNode,
 } from "../types";
 
@@ -78,6 +83,36 @@ const taxonomyOptions = reactive<Record<ExcellentBoard, Array<{ label: string; v
 });
 const toastMessage = ref("");
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 普通用户手动更新 60 秒冷却（服务端为准，这里只做倒计时展示与防重复）；管理员不受限。
+const refreshCooldownSeconds = ref(0);
+let refreshCooldownTimer: ReturnType<typeof setInterval> | null = null;
+
+function startRefreshCooldown(seconds: number) {
+  if (auth.isAdmin) return;
+  if (refreshCooldownTimer) {
+    clearInterval(refreshCooldownTimer);
+    refreshCooldownTimer = null;
+  }
+  refreshCooldownSeconds.value = Math.max(0, Math.round(seconds));
+  if (refreshCooldownSeconds.value <= 0) return;
+  refreshCooldownTimer = setInterval(() => {
+    refreshCooldownSeconds.value -= 1;
+    if (refreshCooldownSeconds.value <= 0 && refreshCooldownTimer) {
+      clearInterval(refreshCooldownTimer);
+      refreshCooldownTimer = null;
+    }
+  }, 1000);
+}
+
+function applyBillingToSession(billing: RemixBillingInfo | null | undefined, user?: Record<string, unknown> | null) {
+  // 保留 isAdmin 等会话字段，只合并服务端回传的最新信息（含余额）。
+  if (user && auth.user) {
+    auth.user = { ...auth.user, ...user };
+  } else if (billing && typeof billing.credits === "number" && auth.user) {
+    auth.user = { ...auth.user, credits: billing.credits };
+  }
+}
 
 const slice = computed(() => slices[activeBoard.value]);
 const filtersDirty = computed(() => excellentFiltersAreDirty(slices[activeBoard.value], activeBoard.value));
@@ -162,7 +197,7 @@ function formatExcellentUpdatedLabel(updatedAt: string): string {
 /** Explicit refresh with the draft filters snapshot (the only Pgy path). */
 async function refreshBoard(board: ExcellentBoard) {
   const boardSlice = slices[board];
-  if (boardSlice.refreshing) return;
+  if (boardSlice.refreshing || refreshCooldownSeconds.value > 0) return;
   const requestFilters = draftFilters(board);
   const requestId = boardSlice.requestId + 1;
   boardSlice.requestId = requestId;
@@ -183,12 +218,18 @@ async function refreshBoard(board: ExcellentBoard) {
     });
     const label = formatExcellentUpdatedLabel(result?.updatedAt || boardSlice.updatedAt);
     if (label) showToast(`已更新至 ${label}`);
+    // 普通用户进入 60 秒冷却；管理员在 startRefreshCooldown 内部豁免。
+    startRefreshCooldown(60);
   } catch (error) {
     if (isAbortError(error)) {
       boardSlice.refreshing = false;
       return;
     }
     if (await handleUnauthorizedError(error)) return;
+    if (error instanceof ApiError && error.status === 429) {
+      const retryAfter = Number((error.body as { retryAfterSeconds?: number } | null)?.retryAfterSeconds || 60);
+      startRefreshCooldown(retryAfter);
+    }
     rollbackExcellentDraftFilters(boardSlice, board);
     applyExcellentRefreshError({
       slice: boardSlice,
@@ -476,6 +517,9 @@ function onContentInputChanged() {
 async function generateDirections() {
   const state = remix.value;
   if (!state?.brandId) return;
+  // 用户再次点击即“重新生成一版”：跳过 24h 缓存，按服务端 5 分钟规则计费。
+  const forceRegenerate = state.directionsStatus === "ready" && state.smartDirections.length > 0;
+  const billingRequestId = makeRemixBillingRequestId();
   state.directionsStatus = "loading";
   state.directionsError = "";
   // 首次点击先触发参考学习分析（命中 30 天缓存则直接读取）。
@@ -492,6 +536,8 @@ async function generateDirections() {
         contentSource: state.contentSource,
         categoryPath: state.categoryPath,
         industryPath: state.industryPath,
+        requestId: billingRequestId,
+        forceRegenerate,
       },
       scope.signalFor("remix-directions"),
     );
@@ -499,6 +545,11 @@ async function generateDirections() {
     state.smartDirections = (result.directions as ExcellentRemixState["smartDirections"]) || [];
     state.selectedSmartDirectionId = state.smartDirections[0]?.id || "";
     state.directionsStatus = "ready";
+    state.directionsBilling = (result.billing as RemixBillingInfo) || null;
+    applyBillingToSession(state.directionsBilling, result.user as Record<string, unknown> | undefined);
+    if (shouldWarnNextDirectionCharge(state.directionsBilling)) {
+      showToast("短时间内继续生成将消耗 1 积分。");
+    }
     if (result.analysisId) state.analysisId = String(result.analysisId);
     markFusionStale(state);
   } catch (error) {
@@ -512,16 +563,25 @@ async function generateDirections() {
 async function generateFusion() {
   const state = remix.value;
   if (!state || !remixCanGenerateFusion.value) return;
+  // 已有可用方案时再次点击 = 重新生成新版本（跳缓存，有效 AI 结果收 1 积分）。
+  const forceRegenerate = state.fusionStatus === "ready" && Boolean(state.fusionPlan);
+  const billingRequestId = makeRemixBillingRequestId();
   state.fusionStatus = "loading";
   state.fusionError = "";
   // 自定义/已有选题模式可能未点过“生成内容方向”，融合前自动补参考学习分析。
   await ensureRemixAnalysis();
   if (remix.value !== state) return;
   try {
-    const result = await fetchFusionPlan(state.noteId, buildFusionRequestBody(state), scope.signalFor("remix-fusion"));
+    const result = await fetchFusionPlan(
+      state.noteId,
+      { ...buildFusionRequestBody(state), requestId: billingRequestId, forceRegenerate },
+      scope.signalFor("remix-fusion"),
+    );
     if (remix.value !== state) return;
     state.fusionPlan = result.fusionPlan || null;
     state.fusionStatus = "ready";
+    state.fusionBilling = (result.billing as RemixBillingInfo) || null;
+    applyBillingToSession(state.fusionBilling, result.user as Record<string, unknown> | undefined);
   } catch (error) {
     if (isAbortError(error) || remix.value !== state) return;
     if (await handleUnauthorizedError(error)) return;
@@ -663,6 +723,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("keydown", onDetailKeydown);
   if (toastTimer) clearTimeout(toastTimer);
+  if (refreshCooldownTimer) clearInterval(refreshCooldownTimer);
 });
 </script>
 
@@ -720,10 +781,16 @@ onUnmounted(() => {
         type="button"
         class="primary-btn"
         data-test="refresh-button"
-        :disabled="slice.refreshing"
+        :disabled="slice.refreshing || refreshCooldownSeconds > 0"
         @click="refreshBoard(activeBoard)"
       >
-        {{ slice.refreshing ? "正在更新…" : "更新内容" }}
+        {{
+          slice.refreshing
+            ? "正在更新…"
+            : refreshCooldownSeconds > 0
+              ? `更新中（${refreshCooldownSeconds}s）`
+              : "更新内容"
+        }}
       </button>
     </div>
 
@@ -742,8 +809,19 @@ onUnmounted(() => {
             : "该筛选条件暂无已保存内容，请点击“更新内容”获取最新数据。"
         }}
       </p>
-      <button type="button" class="primary-btn" :disabled="slice.refreshing" @click="refreshBoard(activeBoard)">
-        {{ slice.refreshing ? "正在更新…" : "更新内容" }}
+      <button
+        type="button"
+        class="primary-btn"
+        :disabled="slice.refreshing || refreshCooldownSeconds > 0"
+        @click="refreshBoard(activeBoard)"
+      >
+        {{
+          slice.refreshing
+            ? "正在更新…"
+            : refreshCooldownSeconds > 0
+              ? `更新中（${refreshCooldownSeconds}s）`
+              : "更新内容"
+        }}
       </button>
     </div>
 
@@ -827,6 +905,7 @@ onUnmounted(() => {
           <div>
             <h3>参考优秀内容生成品牌原创图文</h3>
             <p class="remix-subtitle">学习参考内容的表达方法，不复制原图、原排版与原品牌。</p>
+            <p class="remix-credits" data-test="remix-credits">当前积分：{{ auth.user?.credits ?? "—" }}</p>
           </div>
           <button type="button" class="secondary-btn" @click="closeRemix()">关闭</button>
         </header>
@@ -914,7 +993,7 @@ onUnmounted(() => {
               :disabled="remix.directionsStatus === 'loading' || !remix.brandId"
               @click="generateDirections"
             >
-              {{ remix.directionsStatus === "loading" ? "生成中…" : "生成内容方向" }}
+              {{ directionsButtonLabel(remix) }}
             </button>
             <p v-if="remix.directionsError" class="excellent-error" data-test="directions-error">{{ remix.directionsError }}</p>
             <label v-for="direction in remix.smartDirections" :key="direction.id" class="remix-direction">
@@ -976,7 +1055,7 @@ onUnmounted(() => {
             :disabled="!remixCanGenerateFusion"
             @click="generateFusion"
           >
-            {{ remix.fusionStatus === "loading" ? "生成中…" : "生成融合方案" }}
+            {{ fusionButtonLabel(remix) }}
           </button>
           <p v-if="remix.fusionStatus === 'stale'" class="excellent-loading">输入已变化，请重新生成融合方案。</p>
           <p v-if="remix.fusionError" class="excellent-error" data-test="fusion-error">{{ remix.fusionError }}</p>

@@ -720,15 +720,18 @@ async function generateContentDirections(
         .slice(0, 3);
       const byMode = new Map(directions.map((item) => [item.transferMode, item]));
       const merged = deterministic.map((fallback) => byMode.get(fallback.transferMode) || fallback);
-      if (directionsAreDistinct(merged)) {
-        return { directions: merged, analysisId: analysis.analysisId, brandId: brand.id };
+      // Billing needs an honest source flag: only a full set of valid model directions
+      // counts as a model result — partial/garbage output falls back for free.
+      const allFromModel = deterministic.every((fallback) => byMode.get(fallback.transferMode));
+      if (allFromModel && directionsAreDistinct(merged)) {
+        return { directions: merged, analysisId: analysis.analysisId, brandId: brand.id, source: "model" };
       }
     } catch (_error) {
       // fall through
     }
   }
 
-  return { directions: deterministic, analysisId: analysis.analysisId, brandId: brand.id };
+  return { directions: deterministic, analysisId: analysis.analysisId, brandId: brand.id, source: "deterministic" };
 }
 
 /**
