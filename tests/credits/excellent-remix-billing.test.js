@@ -450,13 +450,14 @@ test("fusion billing: AI settles 1, fallback/exception 0, cache replay 0, force 
 test("excellent reservations freeze balance for legacy spend paths and trend reservations", () => {
   const userId = makeUser(1);
   const requestId = rid();
+  const reservationNow = new Date();
   const reservation = reserveExcellentBillingRequest({
     requestId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
     inputSignature: signature({ userId, kind: "fusion", noteId: "freeze" }),
     creditCost: 1,
-    now: at(0),
+    now: reservationNow,
   });
   assert.equal(reservation.status, "reserved");
 

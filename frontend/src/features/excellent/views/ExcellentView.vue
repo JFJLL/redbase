@@ -32,6 +32,8 @@ import {
   rollbackExcellentDraftFilters,
 } from "../listState";
 import {
+  buildDirectionsBillingAttemptKey,
+  buildFusionBillingAttemptKey,
   buildFusionRequestBody,
   buildGenerationPayload,
   canGenerateFusionPlan,
@@ -40,11 +42,11 @@ import {
   directionsButtonLabel,
   filterExistingIdeas,
   fusionButtonLabel,
-  makeRemixBillingRequestId,
   markFusionStale,
   MAX_CUSTOM_DIRECTION_CHARS,
   MIN_CUSTOM_DIRECTION_CHARS,
   REMIX_CONTENT_MODES,
+  resolveRemixBillingAttempt,
   shouldWarnNextDirectionCharge,
   toggleLearningFocus,
   type ExcellentRemixState,
@@ -517,14 +519,19 @@ function onContentInputChanged() {
 async function generateDirections() {
   const state = remix.value;
   if (!state?.brandId) return;
-  // 用户再次点击即“重新生成一版”：跳过 24h 缓存，按服务端 5 分钟规则计费。
-  const forceRegenerate = state.directionsStatus === "ready" && state.smartDirections.length > 0;
-  const billingRequestId = makeRemixBillingRequestId();
+  // 已有成功方向时启动的新逻辑尝试属于“重新生成”；技术重试必须保留这个值。
+  const nextForceRegenerate = state.smartDirections.length > 0;
   state.directionsStatus = "loading";
   state.directionsError = "";
   // 首次点击先触发参考学习分析（命中 30 天缓存则直接读取）。
   await ensureRemixAnalysis();
   if (remix.value !== state) return;
+  const attempt = resolveRemixBillingAttempt(
+    state.directionsBillingAttempt,
+    buildDirectionsBillingAttemptKey(state),
+    nextForceRegenerate,
+  );
+  state.directionsBillingAttempt = attempt;
   try {
     const result = await fetchContentDirections(
       state.noteId,
@@ -536,8 +543,8 @@ async function generateDirections() {
         contentSource: state.contentSource,
         categoryPath: state.categoryPath,
         industryPath: state.industryPath,
-        requestId: billingRequestId,
-        forceRegenerate,
+        requestId: attempt.requestId,
+        forceRegenerate: attempt.forceRegenerate,
       },
       scope.signalFor("remix-directions"),
     );
@@ -546,6 +553,7 @@ async function generateDirections() {
     state.selectedSmartDirectionId = state.smartDirections[0]?.id || "";
     state.directionsStatus = "ready";
     state.directionsBilling = (result.billing as RemixBillingInfo) || null;
+    state.directionsBillingAttempt = null;
     applyBillingToSession(state.directionsBilling, result.user as Record<string, unknown> | undefined);
     if (shouldWarnNextDirectionCharge(state.directionsBilling)) {
       showToast("短时间内继续生成将消耗 1 积分。");
@@ -563,24 +571,30 @@ async function generateDirections() {
 async function generateFusion() {
   const state = remix.value;
   if (!state || !remixCanGenerateFusion.value) return;
-  // 已有可用方案时再次点击 = 重新生成新版本（跳缓存，有效 AI 结果收 1 积分）。
-  const forceRegenerate = state.fusionStatus === "ready" && Boolean(state.fusionPlan);
-  const billingRequestId = makeRemixBillingRequestId();
+  // 已有成功方案时启动的新逻辑尝试属于“重新生成”；技术重试必须保留这个值。
+  const nextForceRegenerate = Boolean(state.fusionPlan);
   state.fusionStatus = "loading";
   state.fusionError = "";
   // 自定义/已有选题模式可能未点过“生成内容方向”，融合前自动补参考学习分析。
   await ensureRemixAnalysis();
   if (remix.value !== state) return;
+  const attempt = resolveRemixBillingAttempt(
+    state.fusionBillingAttempt,
+    buildFusionBillingAttemptKey(state),
+    nextForceRegenerate,
+  );
+  state.fusionBillingAttempt = attempt;
   try {
     const result = await fetchFusionPlan(
       state.noteId,
-      { ...buildFusionRequestBody(state), requestId: billingRequestId, forceRegenerate },
+      { ...buildFusionRequestBody(state), requestId: attempt.requestId, forceRegenerate: attempt.forceRegenerate },
       scope.signalFor("remix-fusion"),
     );
     if (remix.value !== state) return;
     state.fusionPlan = result.fusionPlan || null;
     state.fusionStatus = "ready";
     state.fusionBilling = (result.billing as RemixBillingInfo) || null;
+    state.fusionBillingAttempt = null;
     applyBillingToSession(state.fusionBilling, result.user as Record<string, unknown> | undefined);
   } catch (error) {
     if (isAbortError(error) || remix.value !== state) return;

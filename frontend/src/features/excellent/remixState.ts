@@ -29,6 +29,12 @@ export const MAX_CUSTOM_DIRECTION_CHARS = 500;
 
 export type RemixStageStatus = "idle" | "loading" | "ready" | "degraded" | "error" | "stale";
 
+export type RemixBillingAttempt = {
+  requestId: string;
+  inputKey: string;
+  forceRegenerate: boolean;
+};
+
 export interface ExcellentRemixState {
   noteId: string;
   board: ExcellentBoard;
@@ -53,10 +59,12 @@ export interface ExcellentRemixState {
   directionsStatus: RemixStageStatus;
   directionsError: string;
   directionsBilling: RemixBillingInfo | null;
+  directionsBillingAttempt: RemixBillingAttempt | null;
   fusionPlan: FusionPlan | null;
   fusionStatus: RemixStageStatus;
   fusionError: string;
   fusionBilling: RemixBillingInfo | null;
+  fusionBillingAttempt: RemixBillingAttempt | null;
   assetMode: RemixAssetMode;
   useBrandLogo: boolean;
   productImageIds: number[];
@@ -96,10 +104,12 @@ export function createExcellentRemixState(seed: RemixStateSeed = {}): ExcellentR
     directionsStatus: "idle",
     directionsError: "",
     directionsBilling: null,
+    directionsBillingAttempt: null,
     fusionPlan: null,
     fusionStatus: "idle",
     fusionError: "",
     fusionBilling: null,
+    fusionBillingAttempt: null,
     assetMode: REMIX_ASSET_MODES.NONE,
     useBrandLogo: false,
     productImageIds: [],
@@ -308,6 +318,61 @@ export function makeRemixBillingRequestId(): string {
     return cryptoApi.randomUUID();
   }
   return `rq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function normalizeBillingKeyValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeBillingKeyValue);
+  if (!value || typeof value !== "object") return value ?? null;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, normalizeBillingKeyValue(child)]),
+  );
+}
+
+function stableBillingInputKey(value: Record<string, unknown>): string {
+  return JSON.stringify(normalizeBillingKeyValue(value));
+}
+
+function normalizedLearningFocus(state: ExcellentRemixState): string[] {
+  return [...new Set((state.learningFocus || []).map((item) => String(item)))].sort();
+}
+
+export function buildDirectionsBillingAttemptKey(state: ExcellentRemixState): string {
+  return stableBillingInputKey({
+    noteId: String(state.noteId || ""),
+    board: state.board,
+    brandId: Number(state.brandId || 0),
+    sourceAnalysisId: state.analysisId || String(state.analysis?.analysisId || ""),
+    learningFocus: normalizedLearningFocus(state),
+    contentSource: String(state.contentSource || ""),
+    categoryPath: String(state.categoryPath || ""),
+    industryPath: String(state.industryPath || ""),
+  });
+}
+
+export function buildFusionBillingAttemptKey(state: ExcellentRemixState): string {
+  return stableBillingInputKey({
+    noteId: String(state.noteId || ""),
+    ...buildFusionRequestBody(state),
+    learningFocus: normalizedLearningFocus(state),
+    useTrendContext: Boolean(state.useTrendContext),
+  });
+}
+
+export function resolveRemixBillingAttempt(
+  current: RemixBillingAttempt | null | undefined,
+  inputKey: string,
+  forceRegenerate: boolean,
+  requestIdFactory: () => string = makeRemixBillingRequestId,
+): RemixBillingAttempt {
+  if (current?.inputKey === inputKey) return current;
+  return {
+    requestId: requestIdFactory(),
+    inputKey,
+    forceRegenerate: Boolean(forceRegenerate),
+  };
 }
 
 /** 收费状态下按钮直接标明价格，不额外弹确认窗。 */

@@ -48,6 +48,8 @@ const USERS = [
   { id: 304, name: "Race Biller", phone: "13930000304", credits: 10, token: "bill-race" },
   { id: 305, name: "Cooldown User", phone: "13930000305", credits: 50, token: "bill-cool" },
   { id: 306, name: "Admin User", phone: "13800000006", credits: 50, token: "bill-admin" },
+  { id: 307, name: "Lost Direction Response", phone: "13930000307", credits: 10, token: "bill-lost-direction" },
+  { id: 308, name: "Lost Fusion Response", phone: "13930000308", credits: 5, token: "bill-lost-fusion" },
 ];
 for (const user of USERS) {
   insertUser({
@@ -546,6 +548,64 @@ test("directions: concurrent same requestId generates once and charges once", as
   assert.equal(replay.body.billing.charged, false);
   assert.equal(findUserById(304).credits, 9);
   assert.equal(chargeEventsFor(304, "excellentContentDirection").length, 1);
+});
+
+test("directions: a lost successful response retried with the same requestId replays without a second charge", async () => {
+  const counters = { directions: 0, fusion: 0 };
+  const ctx = billingContext({ excellentTextModelImpl: makeTextModel(counters) });
+  const cookie = "redbase_session=bill-lost-direction";
+  for (const combo of [
+    { noteId: "bill-note-1", brandId: 7 },
+    { noteId: "bill-note-2", brandId: 7 },
+    { noteId: "bill-note-3", brandId: 7 },
+  ]) {
+    const warm = await postDirections(ctx, { __noteId: combo.noteId, ...directionsBody(combo) }, cookie);
+    assert.equal(warm.statusCode, 200, warm.body?.error);
+  }
+  const requestId = "lost-direction-response-0001";
+  const body = {
+    __noteId: "bill-note-1",
+    ...directionsBody({ noteId: "bill-note-1", brandId: 8, requestId, forceRegenerate: true }),
+  };
+
+  const completedButLost = await postDirections(ctx, body, cookie);
+  assert.equal(completedButLost.statusCode, 200);
+  assert.equal(completedButLost.body.billing.charged, true);
+  assert.equal(counters.directions, 4);
+  assert.equal(findUserById(307).credits, 9);
+
+  const replay = await postDirections(ctx, body, cookie);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.body.billing.replayed, true);
+  assert.equal(replay.body.billing.charged, false);
+  assert.equal(counters.directions, 4, "lost-response retry must not invoke the direction model twice");
+  assert.equal(chargeEventsFor(307, "excellentContentDirection").length, 1);
+  assert.equal(findUserById(307).credits, 9);
+});
+
+test("fusion: a lost successful response retried with the same requestId replays without a second charge", async () => {
+  const counters = { directions: 0, fusion: 0 };
+  const ctx = billingContext({ excellentTextModelImpl: makeTextModel(counters) });
+  const cookie = "redbase_session=bill-lost-fusion";
+  const requestId = "lost-fusion-response-0001";
+  const body = {
+    __noteId: "bill-note-1",
+    ...fusionBody({ noteId: "bill-note-1", requestId, forceRegenerate: true }),
+  };
+
+  const completedButLost = await postFusion(ctx, body, cookie);
+  assert.equal(completedButLost.statusCode, 200);
+  assert.equal(completedButLost.body.billing.charged, true);
+  assert.equal(counters.fusion, 1);
+  assert.equal(findUserById(308).credits, 4);
+
+  const replay = await postFusion(ctx, body, cookie);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.body.billing.replayed, true);
+  assert.equal(replay.body.billing.charged, false);
+  assert.equal(counters.fusion, 1, "lost-response retry must not invoke the fusion model twice");
+  assert.equal(chargeEventsFor(308, "excellentFusionPlan").length, 1);
+  assert.equal(findUserById(308).credits, 4);
 });
 
 test("fusion: valid AI charges 1, cache replay 0, force regenerate charges again, fallback 0, error path releases", async () => {

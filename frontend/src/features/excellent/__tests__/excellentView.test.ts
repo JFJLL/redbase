@@ -465,4 +465,178 @@ describe("ExcellentView", () => {
     expect(wrapper.find('[data-test="toast"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("方向一");
   });
+
+  it("reuses the direction requestId after a lost response, then rotates it after success", async () => {
+    const directionBodies: Array<Record<string, unknown>> = [];
+    const wrapper = await mountView((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-retry", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        directionBodies.push(body);
+        if (directionBodies.length === 1) throw new TypeError("response lost");
+        return jsonResponse(200, {
+          directions: [{ id: "d1", title: "方向一" }],
+          analysisId: "an-retry",
+          brandId: 7,
+          billing: { requestId: body.requestId, charged: false, replayed: directionBodies.length === 2 },
+        });
+      }
+      if (url.includes("/excellent-remix-ideas")) return jsonResponse(200, { brandId: 7, ideas: [] });
+      if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+
+    expect(directionBodies).toHaveLength(2);
+    expect(directionBodies[1].requestId).toBe(directionBodies[0].requestId);
+    expect(directionBodies[0].forceRegenerate).toBe(false);
+    expect(directionBodies[1].forceRegenerate).toBe(false);
+
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    expect(directionBodies[2].requestId).not.toBe(directionBodies[1].requestId);
+    expect(directionBodies[2].forceRegenerate).toBe(true);
+  });
+
+  it("keeps a direction attempt through REQUEST_IN_PROGRESS but rotates it when inputs change", async () => {
+    const directionBodies: Array<Record<string, unknown>> = [];
+    const wrapper = await mountView((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-pending", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        directionBodies.push(body);
+        if (directionBodies.length <= 2) {
+          return jsonResponse(409, { error: "请求仍在处理中", code: "REQUEST_IN_PROGRESS" });
+        }
+        return jsonResponse(200, {
+          directions: [{ id: "d1", title: "方向一" }],
+          analysisId: "an-pending",
+          brandId: 7,
+          billing: { requestId: body.requestId, charged: false },
+        });
+      }
+      if (url.includes("/excellent-remix-ideas")) return jsonResponse(200, { brandId: 7, ideas: [] });
+      if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    expect(directionBodies[1].requestId).toBe(directionBodies[0].requestId);
+
+    await wrapper.findAll(".remix-focus-item input")[0].setValue(false);
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    expect(directionBodies[2].requestId).not.toBe(directionBodies[1].requestId);
+  });
+
+  it("preserves fusion forceRegenerate and requestId across a lost regeneration response", async () => {
+    const fusionBodies: Array<Record<string, unknown>> = [];
+    const fusionPlan = {
+      contentGenerationMode: "ai",
+      carouselPack: { slides: [1, 2, 3, 4].map((index) => ({ title: `第${index}页` })) },
+    };
+    const wrapper = await mountView((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-fusion", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, {
+          directions: [{ id: "d1", title: "方向一", summary: "摘要" }],
+          analysisId: "an-fusion",
+          brandId: 7,
+        });
+      }
+      if (url.includes("/fusion-plan")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        fusionBodies.push(body);
+        if (fusionBodies.length === 2) throw new TypeError("response lost after server success");
+        return jsonResponse(200, {
+          fusionPlan,
+          billing: { requestId: body.requestId, charged: true, replayed: fusionBodies.length === 3 },
+        });
+      }
+      if (url.includes("/excellent-remix-ideas")) return jsonResponse(200, { brandId: 7, ideas: [] });
+      if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+
+    expect(fusionBodies[0].forceRegenerate).toBe(false);
+    expect(fusionBodies[1].forceRegenerate).toBe(true);
+    expect(fusionBodies[2].forceRegenerate).toBe(true);
+    expect(fusionBodies[2].requestId).toBe(fusionBodies[1].requestId);
+
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+    expect(fusionBodies[3].requestId).not.toBe(fusionBodies[2].requestId);
+    expect(fusionBodies[3].forceRegenerate).toBe(true);
+  });
+
+  it("uses a new fusion requestId when the selected direction changes after failure", async () => {
+    const fusionBodies: Array<Record<string, unknown>> = [];
+    const wrapper = await mountView((url, init) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-fusion-input", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, {
+          directions: [
+            { id: "d1", title: "方向一", summary: "摘要一" },
+            { id: "d2", title: "方向二", summary: "摘要二" },
+          ],
+          analysisId: "an-fusion-input",
+          brandId: 7,
+        });
+      }
+      if (url.includes("/fusion-plan")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        fusionBodies.push(body);
+        if (fusionBodies.length === 1) throw new TypeError("response lost");
+        return jsonResponse(200, {
+          fusionPlan: { carouselPack: { slides: [1, 2, 3, 4].map((index) => ({ title: `第${index}页` })) } },
+          billing: { requestId: body.requestId, charged: true },
+        });
+      }
+      if (url.includes("/excellent-remix-ideas")) return jsonResponse(200, { brandId: 7, ideas: [] });
+      if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+    await wrapper.findAll(".remix-direction input")[1].setValue(true);
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+
+    expect(fusionBodies[1].requestId).not.toBe(fusionBodies[0].requestId);
+  });
 });
