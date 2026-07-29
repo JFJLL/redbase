@@ -163,9 +163,21 @@ function deleteGenerationRowsStatement(generationId, options = {}) {
   const creditEvents = db.prepare(`
       UPDATE credit_events
       SET generation_id = NULL,
-          payload_json = ?
+          payload_json = json_set(
+            CASE
+              WHEN json_valid(payload_json) THEN
+                CASE WHEN json_type(payload_json) = 'object' THEN payload_json ELSE '{}' END
+              ELSE '{}'
+            END,
+            '$.generationDeletion',
+            json_object(
+              'deletedGenerationId', ?,
+              'deletedAt', ?,
+              'deleteReason', ?
+            )
+          )
       WHERE generation_id = ?
-    `).run(JSON.stringify({ deletedGenerationId: id, deletedAt, deleteReason }), id);
+    `).run(id, deletedAt, deleteReason, id);
   const generation = db.prepare("DELETE FROM generations WHERE id = ?").run(id);
   return {
     generationId: id,

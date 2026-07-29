@@ -7,7 +7,12 @@ const { openDatabase, getDatabase } = require("../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/server/db/schema");
 const { insertUser } = require("../src/server/db/repositories/auth-repository");
 const { insertCreditEvent } = require("../src/server/db/repositories/admin-repository");
-const { upsertGeneration, findGenerationById, deleteGenerationRowsBatch } = require("../src/server/db/repositories/generation-repository");
+const {
+  upsertGeneration,
+  findGenerationById,
+  deleteGenerationRows,
+  deleteGenerationRowsBatch,
+} = require("../src/server/db/repositories/generation-repository");
 const {
   removeGenerationAssetsAndRows,
   removeGenerationsAssets,
@@ -98,10 +103,90 @@ test("successful asset deletion removes generation and image jobs but preserves 
   assert.ok(credit);
   assert.equal(credit.generation_id, null);
   assert.deepEqual(JSON.parse(credit.payload_json), {
-    deletedGenerationId: generationId,
-    deletedAt,
-    deleteReason: "history_retention_expired",
+    original: true,
+    generationDeletion: {
+      deletedGenerationId: generationId,
+      deletedAt,
+      deleteReason: "history_retention_expired",
+    },
   });
+});
+
+test("generation deletion preserves every credit payload and handles empty or invalid JSON atomically", () => {
+  const generationId = 7104;
+  const deletedAt = "2026-06-02T00:00:00.000Z";
+  const deleteReason = "history_retention_expired";
+  seedGeneration(generationId, "2026-05-01T00:00:00.000Z");
+
+  const events = [
+    {
+      id: 71041,
+      payloadJson: JSON.stringify({ requestId: "request-7104", billingKind: "excellentFusionPlan", brandId: 88 }),
+      actionType: "excellentFusionPlan",
+      creditDelta: -1,
+      creditCost: 1,
+    },
+    { id: 71042, payloadJson: "{}", actionType: "moments", creditDelta: -2, creditCost: 2 },
+    { id: 71043, payloadJson: "", actionType: "wechatImage", creditDelta: -3, creditCost: 3 },
+    { id: 71044, payloadJson: "{invalid", actionType: "xhsCarousel", creditDelta: -4, creditCost: 4 },
+  ];
+  const db = getDatabase();
+  const insert = db.prepare(`
+    INSERT INTO credit_events (
+      id, user_id, action_type, action_label, credit_delta, credit_cost, created_at,
+      generation_id, payload_json
+    ) VALUES (?, 501, ?, 'audit deletion', ?, ?, '2026-05-01T00:00:00.000Z', ?, ?)
+  `);
+  for (const event of events) {
+    insert.run(event.id, event.actionType, event.creditDelta, event.creditCost, generationId, event.payloadJson);
+  }
+  const rowsBeforeDelete = db.prepare("SELECT * FROM credit_events WHERE id BETWEEN 71041 AND 71044 ORDER BY id").all();
+
+  const first = deleteGenerationRows(generationId, { deletedAt, deleteReason });
+  assert.equal(first.creditEventsUpdated, events.length);
+  assert.equal(first.generationDeleted, true);
+
+  const rows = db.prepare("SELECT * FROM credit_events WHERE id BETWEEN 71041 AND 71044 ORDER BY id").all();
+  assert.equal(rows.length, events.length);
+  for (const [index, row] of rows.entries()) {
+    const { generation_id: _beforeGenerationId, payload_json: _beforePayloadJson, ...beforeAuditColumns } = rowsBeforeDelete[index];
+    const { generation_id: _afterGenerationId, payload_json: _afterPayloadJson, ...afterAuditColumns } = row;
+    assert.deepEqual(afterAuditColumns, beforeAuditColumns);
+    assert.equal(row.generation_id, null);
+    assert.equal(row.action_type, events[index].actionType);
+    assert.equal(row.credit_delta, events[index].creditDelta);
+    assert.equal(row.credit_cost, events[index].creditCost);
+    assert.deepEqual(JSON.parse(row.payload_json).generationDeletion, {
+      deletedGenerationId: generationId,
+      deletedAt,
+      deleteReason,
+    });
+  }
+  assert.deepEqual(JSON.parse(rows[0].payload_json), {
+    requestId: "request-7104",
+    billingKind: "excellentFusionPlan",
+    brandId: 88,
+    generationDeletion: {
+      deletedGenerationId: generationId,
+      deletedAt,
+      deleteReason,
+    },
+  });
+  assert.deepEqual(Object.keys(JSON.parse(rows[1].payload_json)), ["generationDeletion"]);
+  assert.deepEqual(Object.keys(JSON.parse(rows[2].payload_json)), ["generationDeletion"]);
+  assert.deepEqual(Object.keys(JSON.parse(rows[3].payload_json)), ["generationDeletion"]);
+
+  const payloadsAfterFirstDelete = rows.map((row) => row.payload_json);
+  const repeated = deleteGenerationRows(generationId, {
+    deletedAt: "2026-06-03T00:00:00.000Z",
+    deleteReason: "repeated_delete",
+  });
+  assert.equal(repeated.creditEventsUpdated, 0);
+  assert.equal(repeated.generationDeleted, false);
+  assert.deepEqual(
+    db.prepare("SELECT payload_json FROM credit_events WHERE id BETWEEN 71041 AND 71044 ORDER BY id").all().map((row) => row.payload_json),
+    payloadsAfterFirstDelete,
+  );
 });
 
 test("non-404 OSS deletion failure preserves generation, image jobs, and credit linkage until retry", async () => {
@@ -192,6 +277,8 @@ test("batch generation row deletion rolls back every generation on a later SQL f
   const secondId = 7312;
   seedGeneration(firstId, "2026-07-29T00:00:00.000Z");
   seedGeneration(secondId, "2026-07-29T00:00:00.000Z");
+  seedLinkedRows(firstId);
+  seedLinkedRows(secondId);
   const db = getDatabase();
   db.exec(`CREATE TRIGGER reject_second_generation_delete
     BEFORE DELETE ON generations WHEN OLD.id = ${secondId}
@@ -203,6 +290,9 @@ test("batch generation row deletion rolls back every generation on a later SQL f
     ]), /blocked batch deletion/);
     assert.ok(findGenerationById(firstId));
     assert.ok(findGenerationById(secondId));
+    const firstCredit = db.prepare("SELECT generation_id, payload_json FROM credit_events WHERE id = ?").get(firstId);
+    assert.equal(firstCredit.generation_id, firstId);
+    assert.deepEqual(JSON.parse(firstCredit.payload_json), { original: true });
   } finally {
     db.exec("DROP TRIGGER IF EXISTS reject_second_generation_delete");
   }
