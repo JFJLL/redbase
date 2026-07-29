@@ -34,6 +34,39 @@ function createGeneratedAssetStorage(appConfig = {}, dependencies = {}) {
       if (localAssets.length) results.push(...await local.deleteMany(localAssets));
       return results;
     },
+    async stageDeleteMany(assets = []) {
+      const ossAssets = assets.filter((asset) => inferGeneratedAssetProvider(asset) === "aliyun_oss");
+      const localAssets = assets.filter((asset) => inferGeneratedAssetProvider(asset) === "local");
+      const stages = [];
+      try {
+        if (ossAssets.length) {
+          if (!aliyunOss) throw new Error("Aliyun OSS generated asset storage is not configured");
+          stages.push(await aliyunOss.stageDeleteMany(ossAssets));
+        }
+        if (localAssets.length) stages.push(await local.stageDeleteMany(localAssets));
+      } catch (error) {
+        for (const stage of stages.slice().reverse()) await stage.rollback().catch(() => {});
+        throw error;
+      }
+      return {
+        deletedAssetCount: stages.reduce((sum, stage) => sum + Number(stage.deletedAssetCount || 0), 0),
+        async rollback() {
+          for (const stage of stages.slice().reverse()) await stage.rollback();
+        },
+        async commit() {
+          for (const stage of stages) await stage.commit();
+        },
+      };
+    },
+    async cleanupDeletionStaging(options = {}) {
+      const results = [];
+      if (aliyunOss) results.push(await aliyunOss.cleanupDeletionStaging(options));
+      results.push(await local.cleanupDeletionStaging(options));
+      return results.reduce((total, result) => ({
+        recovered: total.recovered + Number(result?.recovered || 0),
+        removed: total.removed + Number(result?.removed || 0),
+      }), { recovered: 0, removed: 0 });
+    },
     async createReadUrl(asset, options) {
       const backend = backendFor(asset);
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");

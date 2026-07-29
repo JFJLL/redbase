@@ -20,6 +20,7 @@ const {
   recommendTrendsForRemix,
   buildExcellentRemixFusionPlan,
   flattenBrandIdeas,
+  resolveExistingIdea,
   normalizeLearningFocus,
   normalizeContentMode,
 } = require("../services/excellent-remix-fusion-service");
@@ -314,6 +315,12 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     const contentSource = String(payload.contentSource || "all").trim() || "all";
     const categoryPath = normalizePgyCategoryPath(payload.categoryPath || "");
     const industryPath = normalizePgyIndustryPath(payload.industryPath || "");
+    const sourceAnalysisId = String(payload.sourceAnalysisId || payload.analysisId || "").trim();
+    const brand = brandRepository.findBrandByOwner(brandId, user.id);
+    if (!brand) {
+      badRequest(res, "当前品牌不存在或你没有访问权限。");
+      return true;
+    }
     // Server-side input signature: same inputs replay from the 24h cache for free.
     const inputSignature = buildExcellentBillingSignature({
       v: 1,
@@ -322,6 +329,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
       noteId,
       board,
       brandId,
+      brand,
+      sourceAnalysisId,
       learningFocus,
       contentSource,
       categoryPath,
@@ -339,6 +348,10 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     });
     if (reservation.status === "invalid") {
       badRequest(res, "请求标识无效，请刷新页面后重试。");
+      return true;
+    }
+    if (reservation.status === "conflict") {
+      json(res, 409, { error: "requestId 已绑定到其他生成输入，请使用新的请求标识。", code: "REQUEST_ID_CONFLICT" });
       return true;
     }
     if (reservation.status === "pending") {
@@ -375,7 +388,7 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         noteId,
         board,
         brandId,
-        sourceAnalysisId: payload.sourceAnalysisId || payload.analysisId || "",
+        sourceAnalysisId,
         learningFocus,
         contentSource,
         categoryPath,
@@ -389,6 +402,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         requestId,
         userId: user.id,
         kind: EXCELLENT_BILLING_KIND_DIRECTION,
+        inputSignature,
+        reservationToken: reservation.request.created_at,
         resultSource: isModelResult ? "model" : "fallback",
         resultJson: JSON.stringify(result),
         event: {
@@ -419,6 +434,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         requestId,
         userId: user.id,
         kind: EXCELLENT_BILLING_KIND_DIRECTION,
+        inputSignature,
+        reservationToken: reservation.request.created_at,
         error: error?.message,
       });
       if (error?.code === "INSUFFICIENT_CREDITS") {
@@ -491,25 +508,35 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     const contentSource = String(payload.contentSource || "all").trim() || "all";
     const categoryPath = normalizePgyCategoryPath(payload.categoryPath || "");
     const industryPath = normalizePgyIndustryPath(payload.industryPath || "");
+    const sourceAnalysisId = String(payload.sourceAnalysisId || payload.analysisId || "").trim();
+    const brand = brandRepository.findBrandByOwner(brandId, user.id);
+    if (!brand) {
+      badRequest(res, "当前品牌不存在或你没有访问权限。");
+      return true;
+    }
+    let resolvedExistingIdea = null;
+    if (contentMode === "existing_idea") {
+      try {
+        resolvedExistingIdea = resolveExistingIdea(brand, existingIdeaRef || {});
+      } catch (error) {
+        sendExcellentError(error, "所选内容方向已失效");
+        return true;
+      }
+    }
     // Signature covers user/brand/note/analysis version/learning focus/content direction/trend context.
     const inputSignature = buildExcellentBillingSignature({
       v: 1,
       kind: EXCELLENT_BILLING_KIND_FUSION,
       userId: user.id,
       brandId,
+      brand,
       noteId,
       board,
       analysisVersion: ANALYSIS_VERSION,
+      sourceAnalysisId,
       learningFocus,
       contentMode,
-      smartDirection: smartDirection
-        ? {
-            id: String(smartDirection.id || ""),
-            transferMode: String(smartDirection.transferMode || ""),
-            title: String(smartDirection.title || ""),
-            contentThesis: String(smartDirection.contentThesis || ""),
-          }
-        : null,
+      smartDirection,
       existingIdeaRef: existingIdeaRef
         ? {
             scope: String(existingIdeaRef.scope || ""),
@@ -518,6 +545,7 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
             ideaIndex: existingIdeaRef.ideaIndex ?? null,
           }
         : null,
+      resolvedExistingIdea,
       customDirection,
       useTrendContext,
       trendId: payload.trendId ?? null,
@@ -537,6 +565,10 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     });
     if (reservation.status === "invalid") {
       badRequest(res, "请求标识无效，请刷新页面后重试。");
+      return true;
+    }
+    if (reservation.status === "conflict") {
+      json(res, 409, { error: "requestId 已绑定到其他生成输入，请使用新的请求标识。", code: "REQUEST_ID_CONFLICT" });
       return true;
     }
     if (reservation.status === "pending") {
@@ -582,7 +614,7 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         customDirection,
         useTrendContext,
         trendId: payload.trendId,
-        sourceAnalysisId: payload.sourceAnalysisId || payload.analysisId || "",
+        sourceAnalysisId,
         textModelImpl: context.excellentTextModelImpl,
         visionModelImpl: context.excellentVisionModelImpl,
       });
@@ -593,6 +625,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         requestId,
         userId: user.id,
         kind: EXCELLENT_BILLING_KIND_FUSION,
+        inputSignature,
+        reservationToken: reservation.request.created_at,
         resultSource: isValidAiPlan ? "model" : "fallback",
         resultJson: JSON.stringify(plan),
         event: {
@@ -622,6 +656,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         requestId,
         userId: user.id,
         kind: EXCELLENT_BILLING_KIND_FUSION,
+        inputSignature,
+        reservationToken: reservation.request.created_at,
         error: error?.message,
       });
       if (error?.code === "INSUFFICIENT_CREDITS") {

@@ -75,10 +75,23 @@ function listExpiredGenerations(cutoffIso) {
   return db.prepare(`
     SELECT ${GENERATION_COLUMNS}
     FROM generations
-    WHERE julianday(created_at) IS NOT NULL
-      AND julianday(created_at) <= julianday(?)
+    WHERE julianday(created_at) IS NULL
+      OR julianday(created_at) <= julianday(?)
     ORDER BY julianday(created_at) ASC, id ASC
   `).all(String(cutoffIso || "")).map(mapGenerationRow);
+}
+
+function payloadContainsGeneratedAsset(value, asset) {
+  if (Array.isArray(value)) return value.some((item) => payloadContainsGeneratedAsset(item, asset));
+  if (!value || typeof value !== "object") return false;
+  if (asset?.objectKey && value.objectKey === asset.objectKey) return true;
+  if (asset?.storedPath && value.storedPath === asset.storedPath) return true;
+  return Object.values(value).some((item) => payloadContainsGeneratedAsset(item, asset));
+}
+
+function isGeneratedAssetReferenced(asset) {
+  if (!asset?.objectKey && !asset?.storedPath) return false;
+  return listAllGenerations().some((generation) => payloadContainsGeneratedAsset(generation.payload, asset));
 }
 
 function findGenerationByOwner(generationId, ownerUserId) {
@@ -203,6 +216,7 @@ module.exports = {
   listGenerationsByOwner,
   searchGenerations,
   listAllGenerations,
+  isGeneratedAssetReferenced,
   listExpiredGenerations,
   findGenerationByOwner,
   findGenerationById,

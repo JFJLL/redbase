@@ -6,16 +6,24 @@ const path = require("path");
 
 const { DEFAULT_APP_CONFIG, resolveAssetStorageConfig } = require("../src/server/config");
 const { createGeneratedAssetStorage } = require("../src/server/assets/generated-asset-storage");
-const { createAliyunOssGeneratedAssetStorage } = require("../src/server/assets/aliyun-oss-generated-asset-storage");
+const {
+  createAliyunOssGeneratedAssetStorage,
+  DELETION_STAGING_GRACE_MS: OSS_STAGING_GRACE_MS,
+} = require("../src/server/assets/aliyun-oss-generated-asset-storage");
+const {
+  createLocalGeneratedAssetStorage,
+  DELETION_STAGING_GRACE_MS: LOCAL_STAGING_GRACE_MS,
+} = require("../src/server/assets/local-generated-asset-storage");
 const { doesImageBufferMatchMimeType } = require("../src/server/assets/generated-asset-utils");
 const { assertGenerationAssetOwnership } = require("../src/server/assets/generation-deletion-service");
-const { stripClientGeneratedAssetMetadata } = require("../src/server/api/image-generation-routes");
+const { persistGenerationAndCommit, stripClientGeneratedAssetMetadata } = require("../src/server/api/image-generation-routes");
 const { sanitizeGeneration, sanitizeIdea, sanitizePayloadForClient, sanitizeTrend } = require("../src/server/utils");
 const {
   assertSafeRemoteImageUrl,
   createPinnedImageLookup,
   persistGeneratedImageReference,
   recoverStagedBrandLogoDeletions,
+  recoverStagedProductImageDeletions,
   readGeneratedImageResponseBuffer,
   resolveGeneratedImageInputForEdit,
   sanitizeGenerationPayloadUrls,
@@ -61,6 +69,11 @@ test("complete environment selects aliyun_oss and overrides local config", () =>
   assert.equal(config.aliyunOss.endpoint, "https://oss-cn-beijing.aliyuncs.com");
   assert.equal(config.aliyunOss.bucket, "redmagic");
   assert.equal(config.aliyunOss.prefix, "redbase");
+});
+
+test("explicit local provider wins over complete file-based OSS settings", () => {
+  const config = resolveAssetStorageConfig({ assetStorage: { provider: "local", aliyunOss: ossConfig() } }, {});
+  assert.equal(config.provider, "local");
 });
 
 test("OSS deployment defaults are externalized and the config example uses a placeholder bucket", async () => {
@@ -155,6 +168,136 @@ test("generation persistence failure keeps the upstream URL and records persistE
   assert.match(target.persistError, /asset persistence unavailable/);
   assert.equal(target.localImage, undefined);
   assert.equal(JSON.stringify(target).includes("objectKey"), false);
+});
+
+test("database failure after upload deletes only assets created by that persistence attempt", async () => {
+  const generation = {
+    id: 42,
+    ownerUserId: 7,
+    payload: {
+      previous: { objectKey: "redbase/generated-images/users/7/2026/07/42/gi_42_old.png", provider: "aliyun_oss" },
+    },
+  };
+  const deleted = [];
+  await assert.rejects(
+    persistGenerationAndCommit(generation, {
+      persistGenerationImages: async (target) => {
+        target.payload.created = {
+          objectKey: "redbase/generated-images/users/7/2026/07/42/gi_42_new.png",
+          provider: "aliyun_oss",
+        };
+      },
+      generatedAssetStorage: {
+        stageDeleteMany: async (assets) => ({
+          commit: async () => deleted.push(...assets),
+          rollback: async () => {},
+        }),
+      },
+      commit: async () => { throw new Error("database unavailable"); },
+    }),
+    /database unavailable/,
+  );
+  assert.deepEqual(deleted.map((asset) => asset.objectKey), ["redbase/generated-images/users/7/2026/07/42/gi_42_new.png"]);
+});
+
+test("successful database commit restores newly uploaded assets from reversible staging", async () => {
+  const generation = { id: 43, ownerUserId: 7, payload: {} };
+  const calls = [];
+  const result = await persistGenerationAndCommit(generation, {
+    persistGenerationImages: async (target) => {
+      target.payload.localImage = { provider: "local", storedPath: "uploads/generated-images/users/7/2026/07/43/gi_43_main_new.png" };
+    },
+    generatedAssetStorage: {
+      stageDeleteMany: async (assets) => {
+        calls.push(["stage", assets.length]);
+        return {
+          commit: async () => calls.push(["discard"]),
+          rollback: async () => calls.push(["restore"]),
+        };
+      },
+    },
+    commit: async () => ({ saved: true }),
+  });
+  assert.deepEqual(result, { saved: true });
+  assert.deepEqual(calls, [["stage", 1], ["restore"]]);
+});
+
+test("OSS ambiguous delete keeps its only staging backup when restore fails", async () => {
+  const originalKey = "redbase/generated-images/users/1/2026/07/2/main.png";
+  const objects = new Map([[originalKey, Buffer.from("asset")]]);
+  const client = {
+    async copy(target, source) {
+      if (target === originalKey && source.includes("/.deletion-staging/")) throw new Error("restore unavailable");
+      if (!objects.has(source)) throw Object.assign(new Error("missing"), { status: 404, code: "NoSuchKey" });
+      objects.set(target, objects.get(source));
+    },
+    async deleteMulti(keys) {
+      keys.forEach((key) => objects.delete(key));
+      throw new Error("delete response lost");
+    },
+    async delete(key) { objects.delete(key); },
+  };
+  const storage = createAliyunOssGeneratedAssetStorage(ossConfig(), { client });
+  await assert.rejects(storage.stageDeleteMany([{ provider: "aliyun_oss", objectKey: originalKey }]), /could not be restored/);
+  assert.equal(objects.has(originalKey), false);
+  assert.equal([...objects.keys()].some((key) => key.includes("/.deletion-staging/")), true);
+});
+
+test("daily OSS staging cleanup restores referenced objects and removes unreferenced backups", async () => {
+  const referencedKey = "redbase/generated-images/users/1/2026/07/2/referenced.png";
+  const orphanKey = "redbase/generated-images/users/1/2026/07/2/orphan.png";
+  const encode = (key) => Buffer.from(key, "utf8").toString("base64url");
+  const cleanupNowMs = OSS_STAGING_GRACE_MS + 10;
+  const staged = [referencedKey, orphanKey].map((key) => `redbase/.deletion-staging/v1-1-run/${encode(key)}`);
+  const activeKey = "redbase/generated-images/users/1/2026/07/2/active.png";
+  staged.push(`redbase/.deletion-staging/v1-${cleanupNowMs}-run/${encode(activeKey)}`);
+  const objects = new Map(staged.map((key) => [key, Buffer.from(key)]));
+  const client = {
+    async list() { return { objects: [...objects.keys()].filter((key) => key.includes("/.deletion-staging/")).map((name) => ({ name })), isTruncated: false }; },
+    async copy(target, source) { objects.set(target, objects.get(source)); },
+    async delete(key) { objects.delete(key); },
+  };
+  const storage = createAliyunOssGeneratedAssetStorage(ossConfig(), { client });
+  assert.deepEqual(await storage.cleanupDeletionStaging({
+    nowMs: cleanupNowMs,
+    isReferenced: (asset) => asset.objectKey === referencedKey,
+  }), { recovered: 1, removed: 1 });
+  assert.equal(objects.has(referencedKey), true);
+  assert.equal(objects.has(orphanKey), false);
+  assert.equal([...objects.keys()].some((key) => key.includes(`/${encode(activeKey)}`)), true, "active staging must survive cleanup");
+});
+
+test("local staging cleanup retries a failed commit and removes the hidden copy", async () => {
+  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "redbase-local-stage-cleanup-"));
+  const storedPath = path.join("uploads", "generated-images", "users", "1", "2026", "07", "2", "main.png");
+  const originalPath = path.join(dataDir, storedPath);
+  await fsp.mkdir(path.dirname(originalPath), { recursive: true });
+  await fsp.writeFile(originalPath, PNG_BUFFER);
+  let failStagedUnlink = true;
+  let nowMs = 1_000;
+  const storage = createLocalGeneratedAssetStorage({
+    dataDir,
+    now: () => new Date(nowMs),
+    fsp: {
+      ...fsp,
+      async unlink(filePath) {
+        if (failStagedUnlink && String(filePath).includes(".delete-stage-")) {
+          failStagedUnlink = false;
+          throw Object.assign(new Error("file busy"), { code: "EBUSY" });
+        }
+        return fsp.unlink(filePath);
+      },
+    },
+  });
+  try {
+    const stage = await storage.stageDeleteMany([{ provider: "local", storedPath }]);
+    await assert.rejects(stage.commit(), /file busy/);
+    assert.deepEqual(await storage.cleanupDeletionStaging({ nowMs, isReferenced: () => false }), { recovered: 0, removed: 0 });
+    nowMs += LOCAL_STAGING_GRACE_MS + 1;
+    assert.deepEqual(await storage.cleanupDeletionStaging({ nowMs, isReferenced: () => false }), { recovered: 0, removed: 1 });
+  } finally {
+    await fsp.rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("signed upstream query credentials are neither persisted nor returned to clients", async () => {
@@ -493,6 +636,24 @@ test("startup recovery restores referenced staged logos and removes unreferenced
     assert.deepEqual(result, { recovered: 1, removed: 1 });
     assert.equal((await fsp.stat(referencedOriginal)).isFile(), true);
     await assert.rejects(fsp.stat(`${orphanOriginal}.deleting-1-2`), { code: "ENOENT" });
+  } finally {
+    await fsp.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startup recovery restores referenced staged product images", async () => {
+  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "redbase-product-recovery-"));
+  const root = path.join(dataDir, "uploads", "product-images");
+  const original = path.join(root, "users", "7", "product.png");
+  const staged = `${original}.deleting-1-1`;
+  await fsp.mkdir(path.dirname(original), { recursive: true });
+  await fsp.writeFile(staged, PNG_BUFFER);
+  try {
+    assert.deepEqual(await recoverStagedProductImageDeletions({
+      dataDir,
+      isReferenced: (storedPath) => storedPath.replace(/\\/g, "/").endsWith("product.png"),
+    }), { recovered: 1, removed: 0 });
+    assert.equal((await fsp.stat(original)).isFile(), true);
   } finally {
     await fsp.rm(dataDir, { recursive: true, force: true });
   }

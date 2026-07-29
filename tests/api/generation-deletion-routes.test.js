@@ -8,6 +8,7 @@ const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/s
 const { insertUser, insertSession, findUserById } = require("../../src/server/db/repositories/auth-repository");
 const { insertBrand, updateBrand, findBrandById } = require("../../src/server/db/repositories/brand-repository");
 const { upsertGeneration, findGenerationById } = require("../../src/server/db/repositories/generation-repository");
+const { insertProductImage } = require("../../src/server/db/repositories/product-image-repository");
 const { handleAdminRoutes } = require("../../src/server/api/admin-routes");
 const { handleBrandRoutes } = require("../../src/server/api/brand-routes");
 
@@ -115,7 +116,7 @@ test("brand logo removal failure preserves brand and every generation row", asyn
       collectBody: async () => ({ deleteGenerations: true }),
       removeGenerationsAssets: async () => { assetsDeleted += 1; return { ok: true }; },
       resolveStoredAssetPath: (storedPath) => storedPath,
-      fsp: { rename: async () => { throw Object.assign(new Error("logo locked"), { code: "EACCES" }); } },
+      stageStoredFilesForDeletion: async () => { throw Object.assign(new Error("logo locked"), { code: "EACCES" }); },
     }, createReq("/api/brands/990", "DELETE", "owner-delete-token"), res, "/api/brands/990");
     assert.equal(res.statusCode, 503);
     assert.equal(assetsDeleted, 0);
@@ -130,7 +131,7 @@ test("brand database failure restores the staged logo and rolls back generation 
   const generationId = 9916;
   seedGeneration(generationId);
   updateBrand({ ...findBrandById(990), logo: { storedPath: "uploads/brand-logos/live.png" } });
-  const renames = [];
+  const stageCalls = [];
   const db = getDatabase();
   db.exec(`CREATE TRIGGER reject_brand_generation_delete
     BEFORE DELETE ON generations WHEN OLD.id = ${generationId}
@@ -141,11 +142,12 @@ test("brand database failure restores the staged logo and rolls back generation 
       collectBody: async () => ({ deleteGenerations: true }),
       removeGenerationsAssets: async () => ({ ok: true }),
       resolveStoredAssetPath: (storedPath) => storedPath,
-      fsp: { rename: async (from, to) => { renames.push([from, to]); } },
+      stageStoredFilesForDeletion: async () => ({
+        rollback: async () => stageCalls.push("rollback"),
+        commit: async () => stageCalls.push("commit"),
+      }),
     }, createReq("/api/brands/990", "DELETE", "owner-delete-token"), createRes(), "/api/brands/990"), /brand transaction blocked/);
-    assert.equal(renames.length, 2);
-    assert.equal(renames[1][0], renames[0][1]);
-    assert.equal(renames[1][1], renames[0][0]);
+    assert.deepEqual(stageCalls, ["rollback"]);
     assert.ok(findBrandById(990));
     assert.ok(findGenerationById(generationId));
   } finally {
@@ -164,4 +166,54 @@ test("admin user deletion keeps the user when generated asset deletion fails", a
   assert.equal(res.statusCode, 503);
   assert.ok(findUserById(902));
   assert.ok(findGenerationById(9913));
+});
+
+test("admin user database failure restores generated assets, logos, and product images", async () => {
+  seedGeneration(9917);
+  updateBrand({ ...findBrandById(990), logo: { storedPath: "uploads/brand-logos/admin-logo.png" } });
+  insertProductImage({
+    id: 998,
+    ownerUserId: 902,
+    brandId: 990,
+    originalName: "product.png",
+    storedPath: "uploads/product-images/users/902/product.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    sha256: "a".repeat(64),
+    createdAt: "2026-07-29T00:00:00.000Z",
+  });
+  const calls = [];
+  const db = getDatabase();
+  db.exec(`CREATE TRIGGER reject_admin_user_delete
+    BEFORE DELETE ON users WHEN OLD.id = 902
+    BEGIN SELECT RAISE(ABORT, 'user transaction blocked'); END`);
+  try {
+    await assert.rejects(handleAdminRoutes({
+      appConfig,
+      removeGenerationsAssets: async () => ({
+        rollback: async () => calls.push("generation-rollback"),
+        commit: async () => calls.push("generation-commit"),
+      }),
+      stageStoredFilesForDeletion: async (paths) => {
+        assert.deepEqual(paths.sort(), [
+          "uploads/brand-logos/admin-logo.png",
+          "uploads/product-images/users/902/product.png",
+        ]);
+        return {
+          rollback: async () => calls.push("local-rollback"),
+          commit: async () => calls.push("local-commit"),
+        };
+      },
+      resolveStoredAssetPath: (storedPath) => storedPath,
+      resolveStoredProductImagePath: (image) => image.storedPath,
+    }, createReq("/api/admin/users/902", "DELETE", "admin-delete-token"), createRes(), "/api/admin/users/902"), /user transaction blocked/);
+    assert.deepEqual(calls, ["local-rollback", "generation-rollback"]);
+    assert.ok(findUserById(902));
+    assert.ok(findBrandById(990));
+    assert.ok(findGenerationById(9917));
+  } finally {
+    db.exec("DROP TRIGGER IF EXISTS reject_admin_user_delete");
+    db.prepare("DELETE FROM product_images WHERE id = 998").run();
+    updateBrand({ ...findBrandById(990), logo: null });
+  }
 });

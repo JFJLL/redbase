@@ -279,6 +279,10 @@ function touchProductImageUsed(imageId, lastUsedAt) {
   return findProductImageById(imageId);
 }
 
+function isProductImageStoredPathReferenced(storedPath) {
+  return Boolean(db.prepare("SELECT 1 FROM product_images WHERE stored_path = ? LIMIT 1").get(String(storedPath || "")));
+}
+
 module.exports = {
   ASSET_TYPE_PRODUCT,
   ASSET_TYPE_OTHER,
@@ -296,4 +300,5 @@ module.exports = {
   insertProductImage,
   markProductImageDeleted,
   touchProductImageUsed,
+  isProductImageStoredPathReferenced,
 };

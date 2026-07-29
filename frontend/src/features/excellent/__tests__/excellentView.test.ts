@@ -505,6 +505,12 @@ describe("ExcellentView", () => {
     await flushPromises();
     expect(directionBodies[2].requestId).not.toBe(directionBodies[1].requestId);
     expect(directionBodies[2].forceRegenerate).toBe(true);
+
+    await wrapper.findAll(".remix-focus-item input")[0].setValue(false);
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    expect(directionBodies[3].requestId).not.toBe(directionBodies[2].requestId);
+    expect(directionBodies[3].forceRegenerate).toBe(false);
   });
 
   it("keeps a direction attempt through REQUEST_IN_PROGRESS but rotates it when inputs change", async () => {
@@ -596,6 +602,12 @@ describe("ExcellentView", () => {
     await flushPromises();
     expect(fusionBodies[3].requestId).not.toBe(fusionBodies[2].requestId);
     expect(fusionBodies[3].forceRegenerate).toBe(true);
+
+    await wrapper.findAll(".remix-focus-item input")[0].setValue(false);
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+    expect(fusionBodies[4].requestId).not.toBe(fusionBodies[3].requestId);
+    expect(fusionBodies[4].forceRegenerate).toBe(false);
   });
 
   it("uses a new fusion requestId when the selected direction changes after failure", async () => {

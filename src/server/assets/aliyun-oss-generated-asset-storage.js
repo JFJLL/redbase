@@ -1,4 +1,5 @@
 const path = require("path");
+const crypto = require("crypto");
 const {
   validateGeneratedAssetInput,
   buildGeneratedAssetFileName,
@@ -8,6 +9,18 @@ const {
 
 const OSS_DELETE_BATCH_LIMIT = 1000;
 const DEFAULT_READ_URL_EXPIRY_SECONDS = 300;
+const DELETION_STAGING_GRACE_MS = 60 * 60 * 1000;
+
+function encodeStagedObjectKey(objectKey) {
+  return Buffer.from(String(objectKey), "utf8").toString("base64url");
+}
+
+function decodeStagedObjectKey(stagedKey, stagingPrefix) {
+  const relative = String(stagedKey || "").slice(stagingPrefix.length);
+  const encoded = relative.split("/").filter(Boolean).at(-1);
+  if (!encoded) throw new Error("Invalid staged OSS object key");
+  return Buffer.from(encoded, "base64url").toString("utf8");
+}
 
 function createAliyunOssClient(config, dependencies = {}) {
   if (dependencies.client) return dependencies.client;
@@ -121,6 +134,97 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
       }
       return results;
     },
+    async stageDeleteMany(assets = []) {
+      if (typeof client.copy !== "function") throw new Error("OSS client does not support reversible deletion");
+      const entries = [];
+      const stageId = `v1-${now().getTime()}-${crypto.randomUUID()}`;
+      const stagingPrefix = `${path.posix.join(prefix, ".deletion-staging")}/`;
+      try {
+        for (const asset of assets) {
+          if (!asset?.objectKey) continue;
+          const objectKey = assertSafeObjectKey(asset.objectKey, prefix);
+          const stagedKey = assertSafeObjectKey(
+            path.posix.join(prefix, ".deletion-staging", stageId, encodeStagedObjectKey(objectKey)),
+            prefix,
+          );
+          try {
+            await client.copy(stagedKey, objectKey);
+            entries.push({ objectKey, stagedKey });
+          } catch (error) {
+            if (!isOssObjectNotFoundError(error)) throw error;
+          }
+        }
+        await this.deleteMany(entries.map((entry) => ({ objectKey: entry.objectKey })));
+      } catch (error) {
+        let restoreError = null;
+        for (const entry of entries) {
+          try {
+            await client.copy(entry.objectKey, entry.stagedKey);
+            await client.delete(entry.stagedKey);
+          } catch (entryError) {
+            restoreError ||= entryError;
+          }
+        }
+        if (restoreError) throw new AggregateError([error, restoreError], "OSS deletion failed and one or more staged assets could not be restored");
+        throw error;
+      }
+      return {
+        deletedAssetCount: entries.length,
+        async rollback() {
+          for (const entry of entries) {
+            await client.copy(entry.objectKey, entry.stagedKey);
+            try {
+              await client.delete(entry.stagedKey);
+            } catch (error) {
+              if (!isOssObjectNotFoundError(error)) throw error;
+            }
+          }
+        },
+        async commit() {
+          for (const entry of entries) {
+            try {
+              await client.delete(entry.stagedKey);
+            } catch (error) {
+              if (!isOssObjectNotFoundError(error)) throw error;
+            }
+          }
+        },
+      };
+    },
+    async cleanupDeletionStaging(options = {}) {
+      if (typeof client.list !== "function") throw new Error("OSS client does not support staged deletion cleanup");
+      const stagingPrefix = `${path.posix.join(prefix, ".deletion-staging")}/`;
+      const isReferenced = options.isReferenced || (() => false);
+      const cleanupNowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : now().getTime();
+      let marker;
+      let recovered = 0;
+      let removed = 0;
+      do {
+        const page = await client.list({ prefix: stagingPrefix, marker, "max-keys": OSS_DELETE_BATCH_LIMIT });
+        const objects = Array.isArray(page?.objects) ? page.objects : [];
+        for (const object of objects) {
+          const stagedKey = assertSafeObjectKey(object?.name || object?.key, prefix);
+          const relative = stagedKey.slice(stagingPrefix.length);
+          const stageId = relative.split("/")[0] || "";
+          const markerMatch = stageId.match(/^v1-(\d+)-/);
+          if (!markerMatch || cleanupNowMs - Number(markerMatch[1]) < DELETION_STAGING_GRACE_MS) continue;
+          const objectKey = assertSafeObjectKey(decodeStagedObjectKey(stagedKey, stagingPrefix), prefix);
+          const referenced = await isReferenced({ provider: "aliyun_oss", objectKey });
+          if (referenced) {
+            await client.copy(objectKey, stagedKey);
+            recovered += 1;
+          }
+          try {
+            await client.delete(stagedKey);
+          } catch (error) {
+            if (!isOssObjectNotFoundError(error)) throw error;
+          }
+          if (!referenced) removed += 1;
+        }
+        marker = page?.isTruncated ? page?.nextMarker : undefined;
+      } while (marker);
+      return { recovered, removed };
+    },
     async createReadUrl(asset, options = {}) {
       if (!asset?.objectKey) throw new Error("Generated asset not found");
       const expires = Math.max(1, Math.min(3600, Number(options.expiresSeconds || DEFAULT_READ_URL_EXPIRY_SECONDS)));
@@ -151,6 +255,7 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
 module.exports = {
   OSS_DELETE_BATCH_LIMIT,
   DEFAULT_READ_URL_EXPIRY_SECONDS,
+  DELETION_STAGING_GRACE_MS,
   createAliyunOssGeneratedAssetStorage,
   assertSafeObjectKey,
 };

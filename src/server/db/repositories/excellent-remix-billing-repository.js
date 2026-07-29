@@ -29,8 +29,19 @@ function normalizeExcellentBillingRequestId(value) {
   return requestId;
 }
 
+function normalizeSignatureValue(value) {
+  if (Array.isArray(value)) return value.map(normalizeSignatureValue);
+  if (!value || typeof value !== "object") return value ?? null;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, normalizeSignatureValue(child)]),
+  );
+}
+
 function buildExcellentBillingSignature(input) {
-  return crypto.createHash("sha256").update(JSON.stringify(input || {}), "utf8").digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify(normalizeSignatureValue(input || {})), "utf8").digest("hex");
 }
 
 function parseResultJson(row) {
@@ -147,6 +158,9 @@ function reserveExcellentBillingRequest({
     expireStaleExcellentBillingReservations(userId, nowMs);
 
     const existing = findExcellentBillingRequest({ requestId: normalizedRequestId, userId, kind });
+    if (existing && existing.input_signature !== String(inputSignature)) {
+      return { status: "conflict", request: existing, user: findUserById(userId) };
+    }
     if (existing && existing.status === "completed") {
       return {
         status: "replay",
@@ -246,10 +260,29 @@ function reserveExcellentBillingRequest({
  * resultSource 'model': counts (directions), charges the reserved cost atomically, records the credit event.
  * resultSource 'fallback': completes for free — no count, no charge, never cached for replay-by-input.
  */
-function settleExcellentBillingRequest({ requestId, userId, kind, resultSource, resultJson, event, now = new Date() }) {
+function settleExcellentBillingRequest({
+  requestId,
+  userId,
+  kind,
+  inputSignature,
+  reservationToken,
+  resultSource,
+  resultJson,
+  event,
+  now = new Date(),
+}) {
   const outcome = runTransaction(() => {
     const request = findExcellentBillingRequest({ requestId, userId, kind });
     if (!request) throw new Error("计费请求不存在或已过期，请重新生成。");
+    if (
+      request.input_signature !== String(inputSignature || "") ||
+      request.created_at !== String(reservationToken || "")
+    ) {
+      const error = new Error("计费请求已被新的生成尝试替代，请重试。");
+      error.code = "STALE_BILLING_ATTEMPT";
+      error.statusCode = 409;
+      throw error;
+    }
     if (request.status === "completed") {
       return {
         replayed: true,
@@ -336,18 +369,28 @@ function settleExcellentBillingRequest({ requestId, userId, kind, resultSource, 
 }
 
 /** Model errors / invalid output: release the reservation without charging or counting. */
-function failExcellentBillingRequest({ requestId, userId, kind, error, now = new Date() }) {
+function failExcellentBillingRequest({
+  requestId,
+  userId,
+  kind,
+  inputSignature,
+  reservationToken,
+  error,
+  now = new Date(),
+}) {
   return runTransaction(() => {
     db.prepare(`
       UPDATE excellent_remix_billing_requests
       SET status = 'failed', credit_cost = 0, counted = 0, error = ?, updated_at = ?
-      WHERE request_id = ? AND user_id = ? AND kind = ? AND status = 'reserved'
+      WHERE request_id = ? AND user_id = ? AND kind = ? AND input_signature = ? AND created_at = ? AND status = 'reserved'
     `).run(
       String(error || "excellent billing request failed").slice(0, 500),
       now.toISOString(),
       String(requestId),
       Number(userId),
       String(kind),
+      String(inputSignature || ""),
+      String(reservationToken || ""),
     );
   });
 }

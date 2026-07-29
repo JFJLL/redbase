@@ -50,6 +50,7 @@ const USERS = [
   { id: 306, name: "Admin User", phone: "13800000006", credits: 50, token: "bill-admin" },
   { id: 307, name: "Lost Direction Response", phone: "13930000307", credits: 10, token: "bill-lost-direction" },
   { id: 308, name: "Lost Fusion Response", phone: "13930000308", credits: 5, token: "bill-lost-fusion" },
+  { id: 309, name: "Signature Biller", phone: "13930000309", credits: 10, token: "bill-signature" },
 ];
 for (const user of USERS) {
   insertUser({
@@ -66,6 +67,8 @@ for (const user of USERS) {
 
 const brandRepo = require("../../src/server/db/repositories/brand-repository");
 const KNOWN_USER_IDS = new Set(USERS.map((user) => user.id));
+let brandProfileRevision = "关注宝宝喂养与消化舒适";
+let currentIdeaTitle = "转奶观察清单";
 brandRepo.findBrandByOwner = (brandId, ownerUserId) => {
   const id = Number(brandId);
   if (!KNOWN_USER_IDS.has(Number(ownerUserId)) || (id !== 7 && id !== 8)) return null;
@@ -75,12 +78,17 @@ brandRepo.findBrandByOwner = (brandId, ownerUserId) => {
     name: id === 7 ? "温和星球" : "第二品牌",
     industry: "母婴",
     audience: "新手妈妈",
-    description: "关注宝宝喂养与消化舒适",
+    description: brandProfileRevision,
     product: "有机奶粉，温和好吸收",
     goal: "帮助家长更安心完成转奶",
     knowledgeBase: "",
     logo: null,
-    trends: [],
+    trends: [{ items: [{
+      id: 501,
+      title: "转奶趋势",
+      summary: "观察宝宝适应状态",
+      ideas: [{ title: currentIdeaTitle, summary: "记录便便、睡眠与食欲", audience: "新手妈妈", angle: "观察清单", brandFit: "自然融入", hook: "三步看懂" }],
+    }] }],
     analyses: [],
   };
 };
@@ -548,6 +556,17 @@ test("directions: concurrent same requestId generates once and charges once", as
   assert.equal(replay.body.billing.charged, false);
   assert.equal(findUserById(304).credits, 9);
   assert.equal(chargeEventsFor(304, "excellentContentDirection").length, 1);
+
+  // 同一 requestId 永久绑定首次输入，避免客户端误复用时把其他输入当作重放。
+  const conflictingInput = await postDirections(
+    gatedCtx,
+    { __noteId: "bill-note-2", ...directionsBody({ noteId: "bill-note-2", brandId: 8, requestId: sharedRequestId }) },
+    cookie,
+  );
+  assert.equal(conflictingInput.statusCode, 409);
+  assert.equal(conflictingInput.body.code, "REQUEST_ID_CONFLICT");
+  assert.equal(gatedCalls, 1, "conflicting input must not call the model");
+  assert.equal(findUserById(304).credits, 9);
 });
 
 test("directions: a lost successful response retried with the same requestId replays without a second charge", async () => {
@@ -581,6 +600,40 @@ test("directions: a lost successful response retried with the same requestId rep
   assert.equal(counters.directions, 4, "lost-response retry must not invoke the direction model twice");
   assert.equal(chargeEventsFor(307, "excellentContentDirection").length, 1);
   assert.equal(findUserById(307).credits, 9);
+});
+
+test("brand profile and current idea edits invalidate the 24h billing cache", async () => {
+  const counters = { directions: 0, fusion: 0 };
+  const ctx = billingContext({ excellentTextModelImpl: makeTextModel(counters) });
+  const cookie = "redbase_session=bill-signature";
+  const originalProfile = brandProfileRevision;
+  const originalIdeaTitle = currentIdeaTitle;
+  try {
+    const firstDirection = await postDirections(ctx, directionsBody({ requestId: "signature-direction-0001" }), cookie);
+    assert.equal(firstDirection.statusCode, 200, firstDirection.body?.error);
+    brandProfileRevision = "更新后的品牌人群与产品定位";
+    const changedBrandDirection = await postDirections(ctx, directionsBody({ requestId: "signature-direction-0002" }), cookie);
+    assert.equal(changedBrandDirection.statusCode, 200, changedBrandDirection.body?.error);
+    assert.equal(changedBrandDirection.body.billing.cacheHit, false);
+    assert.equal(counters.directions, 2, "brand content change must call the model again");
+
+    const existingIdeaBody = (requestId) => ({
+      ...fusionBody({ requestId }),
+      contentMode: "existing_idea",
+      customDirection: "",
+      existingIdeaRef: { scope: "current", analysisId: null, trendId: 501, ideaIndex: 0 },
+    });
+    const firstFusion = await postFusion(ctx, existingIdeaBody("signature-fusion-0001"), cookie);
+    assert.equal(firstFusion.statusCode, 200, firstFusion.body?.error);
+    currentIdeaTitle = "更新后的转奶选题内容";
+    const changedIdeaFusion = await postFusion(ctx, existingIdeaBody("signature-fusion-0002"), cookie);
+    assert.equal(changedIdeaFusion.statusCode, 200, changedIdeaFusion.body?.error);
+    assert.equal(changedIdeaFusion.body.billing.cacheHit, false);
+    assert.equal(counters.fusion, 2, "current idea content change must call the model again");
+  } finally {
+    brandProfileRevision = originalProfile;
+    currentIdeaTitle = originalIdeaTitle;
+  }
 });
 
 test("fusion: a lost successful response retried with the same requestId replays without a second charge", async () => {

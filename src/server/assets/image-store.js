@@ -508,7 +508,37 @@ async function persistGeneratedImageReference({
   return asset;
 }
 
-async function recoverStagedBrandLogoDeletions(options = {}) {
+async function stageStoredFilesForDeletion(filePaths = [], options = {}) {
+  const fsPromises = options.fsp || fsp;
+  const staged = [];
+  try {
+    for (const originalPath of [...new Set(filePaths.filter(Boolean))]) {
+      const stagedPath = `${originalPath}.deleting-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+      try {
+        await fsPromises.rename(originalPath, stagedPath);
+        staged.push({ originalPath, stagedPath });
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+  } catch (error) {
+    for (const entry of staged.slice().reverse()) {
+      await fsPromises.rename(entry.stagedPath, entry.originalPath).catch(() => {});
+    }
+    throw error;
+  }
+  return {
+    stagedCount: staged.length,
+    async rollback() {
+      for (const entry of staged.slice().reverse()) await fsPromises.rename(entry.stagedPath, entry.originalPath);
+    },
+    async commit() {
+      for (const entry of staged) await removeStoredFileIfExists(entry.stagedPath);
+    },
+  };
+}
+
+async function recoverStagedStoredAssetDeletions(options = {}) {
   const dataDir = options.dataDir || DATA_DIR;
   const root = options.root || path.join(dataDir, "uploads", "brand-logos");
   const isReferenced = options.isReferenced || (() => false);
@@ -551,6 +581,20 @@ async function recoverStagedBrandLogoDeletions(options = {}) {
 
   await visit(root);
   return { recovered, removed };
+}
+
+async function recoverStagedBrandLogoDeletions(options = {}) {
+  return recoverStagedStoredAssetDeletions({
+    ...options,
+    root: options.root || path.join(options.dataDir || DATA_DIR, "uploads", "brand-logos"),
+  });
+}
+
+async function recoverStagedProductImageDeletions(options = {}) {
+  return recoverStagedStoredAssetDeletions({
+    ...options,
+    root: options.root || path.join(options.dataDir || DATA_DIR, "uploads", "product-images"),
+  });
 }
 
 function removeGeneratedTargetUpstreamUrls(value) {
@@ -864,7 +908,10 @@ module.exports = {
   resolveStoredProductImagePath,
   resolveStoredAssetPath,
   removeStoredFileIfExists,
+  stageStoredFilesForDeletion,
+  recoverStagedStoredAssetDeletions,
   recoverStagedBrandLogoDeletions,
+  recoverStagedProductImageDeletions,
   isRemoteImageUrl,
   assertSafeRemoteImageUrl,
   createPinnedImageLookup,

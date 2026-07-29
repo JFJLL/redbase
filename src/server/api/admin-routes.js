@@ -16,7 +16,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
     removeGenerationsAssets,
     resolveStoredProductImagePath,
     resolveStoredAssetPath,
-    removeStoredFileIfExists,
+    stageStoredFilesForDeletion,
     collectBody,
     getSessionToken,
     buildApiUserLog,
@@ -130,9 +130,17 @@ async function handleAdminRoutes(context, req, res, pathname) {
     }
 
     const deletionAssets = readUserDeletionAssets(targetUser.id);
+    let generationAssetStage;
+    let localAssetStage;
     try {
-      await deleteGenerationAssets(deletionAssets.generations, { deleteReason: "admin_user_delete" });
+      generationAssetStage = await deleteGenerationAssets(deletionAssets.generations, { deleteReason: "admin_user_delete" });
+      localAssetStage = await stageStoredFilesForDeletion([
+        ...deletionAssets.brandLogoStoredPaths.map((storedPath) => resolveStoredAssetPath(storedPath)),
+        ...deletionAssets.productImages.map((productImage) => resolveStoredProductImagePath(productImage)),
+      ]);
     } catch (error) {
+      if (localAssetStage?.rollback) await localAssetStage.rollback().catch(() => {});
+      if (generationAssetStage?.rollback) await generationAssetStage.rollback().catch(() => {});
       console.warn("[admin-delete] failed to delete generated assets", {
         userId: targetUser.id,
         errorCode: String(error?.code || "ASSET_DELETE_FAILED"),
@@ -141,13 +149,15 @@ async function handleAdminRoutes(context, req, res, pathname) {
       json(res, 503, { error: "用户生成资产删除暂时失败，请稍后重试" });
       return true;
     }
-    for (const storedPath of deletionAssets.brandLogoStoredPaths) {
-      await removeStoredFileIfExists(resolveStoredAssetPath(storedPath));
+    try {
+      deleteUserCascadeRows(targetUser.id);
+    } catch (error) {
+      if (localAssetStage?.rollback) await localAssetStage.rollback().catch(() => {});
+      if (generationAssetStage?.rollback) await generationAssetStage.rollback().catch(() => {});
+      throw error;
     }
-    for (const productImage of deletionAssets.productImages) {
-      await removeStoredFileIfExists(resolveStoredProductImagePath(productImage));
-    }
-    deleteUserCascadeRows(targetUser.id);
+    if (generationAssetStage?.commit) await generationAssetStage.commit();
+    if (localAssetStage?.commit) await localAssetStage.commit();
     json(res, 200, {
       ok: true,
       deletedUserId: targetUser.id,

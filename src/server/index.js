@@ -9,9 +9,15 @@ const {
   createGenerationHistoryCleanupRunner,
   startGenerationHistoryCleanupScheduler,
 } = require("./api/history-routes");
-const { cleanupEmptyGeneratedImageDirs, recoverStagedBrandLogoDeletions } = require("./assets/image-store");
+const {
+  cleanupEmptyGeneratedImageDirs,
+  recoverStagedBrandLogoDeletions,
+  recoverStagedProductImageDeletions,
+} = require("./assets/image-store");
 const { createGeneratedAssetStorage } = require("./assets/generated-asset-storage");
 const { isBrandLogoStoredPathReferenced } = require("./db/repositories/brand-repository");
+const { isGeneratedAssetReferenced } = require("./db/repositories/generation-repository");
+const { isProductImageStoredPathReferenced } = require("./db/repositories/product-image-repository");
 
 async function start() {
   const appConfig = loadAppConfig();
@@ -21,6 +27,7 @@ async function start() {
   const generatedAssetStorage = createGeneratedAssetStorage(appConfig);
   const historyCleanupRunner = createGenerationHistoryCleanupRunner({
     storage: generatedAssetStorage,
+    isAssetReferenced: isGeneratedAssetReferenced,
     cleanupEmptyGeneratedImageDirs,
   });
   const handleApi = createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner });
@@ -57,8 +64,9 @@ async function start() {
   await ensureStore();
   try {
     await recoverStagedBrandLogoDeletions({ isReferenced: isBrandLogoStoredPathReferenced });
+    await recoverStagedProductImageDeletions({ isReferenced: isProductImageStoredPathReferenced });
   } catch (error) {
-    console.warn("[brand-delete] failed to recover staged logo deletions", { error: error.message });
+    console.warn("[asset-delete] failed to recover staged local deletions", { error: error.message });
   }
   try {
     await historyCleanupRunner({ nowMs: Date.now() });

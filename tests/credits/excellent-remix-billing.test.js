@@ -17,6 +17,7 @@ const { insertUser, findUserById, updateUserCredits } = require("../../src/serve
 const {
   EXCELLENT_BILLING_KIND_DIRECTION,
   EXCELLENT_BILLING_KIND_FUSION,
+  EXCELLENT_BILLING_RESERVATION_TTL_MS,
   DIRECTION_FREE_LIMIT,
   DIRECTION_FREE_WINDOW_MS,
   normalizeExcellentBillingRequestId,
@@ -90,6 +91,8 @@ function runDirection(userId, { sig, requestId = rid(), now, resultSource = "mod
     requestId,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: sig,
+    reservationToken: reservation.request.created_at,
     resultSource,
     resultJson: JSON.stringify({ directions: [{ id: "d1" }], source: resultSource }),
     event: directionEvent(),
@@ -174,12 +177,19 @@ test("cache hit, fallback, failure and same-requestId replay never count or char
     now: at(3000),
   });
   assert.equal(fbCache.status, "reserved", "fallback result must not populate the 24h cache");
-  failExcellentBillingRequest({ requestId: fbCache.request.request_id, userId, kind: EXCELLENT_BILLING_KIND_DIRECTION, error: "cleanup" });
+  failExcellentBillingRequest({
+    requestId: fbCache.request.request_id,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: fallbackSig,
+    reservationToken: fbCache.request.created_at,
+    error: "cleanup",
+  });
 
   // 4) 失败：不计次不扣分，同 requestId 可重试。
   const failId = rid();
   const failSig = signature({ userId, noteId: "fail-note", brandId: 1 });
-  reserveExcellentBillingRequest({
+  const failedReservation = reserveExcellentBillingRequest({
     requestId: failId,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
@@ -187,7 +197,14 @@ test("cache hit, fallback, failure and same-requestId replay never count or char
     creditCost: 1,
     now: at(4000),
   });
-  failExcellentBillingRequest({ requestId: failId, userId, kind: EXCELLENT_BILLING_KIND_DIRECTION, error: "model down" });
+  failExcellentBillingRequest({
+    requestId: failId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: failSig,
+    reservationToken: failedReservation.request.created_at,
+    error: "model down",
+  });
   assert.equal(getDirectionBillingSnapshot(userId, at(4000)).windowCount, 1);
   const retry = reserveExcellentBillingRequest({
     requestId: failId,
@@ -202,6 +219,8 @@ test("cache hit, fallback, failure and same-requestId replay never count or char
     requestId: failId,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: failSig,
+    reservationToken: retry.request.created_at,
     resultSource: "model",
     resultJson: JSON.stringify({ directions: [{ id: "d2" }] }),
     event: directionEvent(),
@@ -232,11 +251,13 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
   // 并发第 3、4 次：两个都先 reserve、后 settle。
   const idA = rid();
   const idB = rid();
+  const sigA = sigOf(3);
+  const sigB = sigOf(4);
   const reserveA = reserveExcellentBillingRequest({
     requestId: idA,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
-    inputSignature: sigOf(3),
+    inputSignature: sigA,
     creditCost: 1,
     now: at(2000),
   });
@@ -244,7 +265,7 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
     requestId: idB,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
-    inputSignature: sigOf(4),
+    inputSignature: sigB,
     creditCost: 1,
     now: at(2001),
   });
@@ -255,6 +276,8 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
     requestId: idA,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: sigA,
+    reservationToken: reserveA.request.created_at,
     resultSource: "model",
     resultJson: "{}",
     event: directionEvent(),
@@ -264,6 +287,8 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
     requestId: idB,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: sigB,
+    reservationToken: reserveB.request.created_at,
     resultSource: "model",
     resultJson: "{}",
     event: directionEvent(),
@@ -275,11 +300,12 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
 
   // 收费请求并发同 requestId：第二次 reserve 得到 pending，settle 重放不再扣费。
   const idC = rid();
+  const sigC = sigOf(5);
   const reserveC = reserveExcellentBillingRequest({
     requestId: idC,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
-    inputSignature: sigOf(5),
+    inputSignature: sigC,
     creditCost: 1,
     now: at(3000),
   });
@@ -288,7 +314,7 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
     requestId: idC,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
-    inputSignature: sigOf(5),
+    inputSignature: sigC,
     creditCost: 1,
     now: at(3001),
   });
@@ -297,6 +323,8 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
     requestId: idC,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: sigC,
+    reservationToken: reserveC.request.created_at,
     resultSource: "model",
     resultJson: "{}",
     event: directionEvent(),
@@ -306,6 +334,8 @@ test("concurrent 3rd/4th requests share only the remaining free slot; charged re
     requestId: idC,
     userId,
     kind: EXCELLENT_BILLING_KIND_DIRECTION,
+    inputSignature: sigC,
+    reservationToken: reserveC.request.created_at,
     resultSource: "model",
     resultJson: "{}",
     event: directionEvent(),
@@ -364,6 +394,8 @@ test("fusion billing: AI settles 1, fallback/exception 0, cache replay 0, force 
     requestId: okId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sig,
+    reservationToken: reserveOk.request.created_at,
     resultSource: "model",
     resultJson: JSON.stringify({ contentGenerationMode: "ai", carouselPack: { slides: [1, 2, 3, 4] } }),
     event: fusionEvent(),
@@ -388,7 +420,7 @@ test("fusion billing: AI settles 1, fallback/exception 0, cache replay 0, force 
   // fallback：0。
   const fbId = rid();
   const fbSig = signature({ userId, kind: "fusion", noteId: "fusion-fb" });
-  reserveExcellentBillingRequest({
+  const reserveFb = reserveExcellentBillingRequest({
     requestId: fbId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
@@ -400,6 +432,8 @@ test("fusion billing: AI settles 1, fallback/exception 0, cache replay 0, force 
     requestId: fbId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: fbSig,
+    reservationToken: reserveFb.request.created_at,
     resultSource: "fallback",
     resultJson: JSON.stringify({ contentGenerationMode: "deterministic_fallback" }),
     event: fusionEvent(),
@@ -410,15 +444,23 @@ test("fusion billing: AI settles 1, fallback/exception 0, cache replay 0, force 
 
   // 异常：释放预占，0 扣费。
   const errId = rid();
-  reserveExcellentBillingRequest({
+  const errSig = signature({ userId, kind: "fusion", noteId: "fusion-err" });
+  const reserveErr = reserveExcellentBillingRequest({
     requestId: errId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
-    inputSignature: signature({ userId, kind: "fusion", noteId: "fusion-err" }),
+    inputSignature: errSig,
     creditCost: 1,
     now: at(3000),
   });
-  failExcellentBillingRequest({ requestId: errId, userId, kind: EXCELLENT_BILLING_KIND_FUSION, error: "timeout" });
+  failExcellentBillingRequest({
+    requestId: errId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: errSig,
+    reservationToken: reserveErr.request.created_at,
+    error: "timeout",
+  });
   assert.equal(findExcellentBillingRequest({ requestId: errId, userId, kind: EXCELLENT_BILLING_KIND_FUSION }).status, "failed");
   assert.equal(findUserById(userId).credits, 4);
 
@@ -438,6 +480,8 @@ test("fusion billing: AI settles 1, fallback/exception 0, cache replay 0, force 
     requestId: forceId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sig,
+    reservationToken: forceReserve.request.created_at,
     resultSource: "model",
     resultJson: JSON.stringify({ contentGenerationMode: "ai", version: 2 }),
     event: fusionEvent(),
@@ -451,11 +495,12 @@ test("excellent reservations freeze balance for legacy spend paths and trend res
   const userId = makeUser(1);
   const requestId = rid();
   const reservationNow = new Date();
+  const freezeSig = signature({ userId, kind: "fusion", noteId: "freeze" });
   const reservation = reserveExcellentBillingRequest({
     requestId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
-    inputSignature: signature({ userId, kind: "fusion", noteId: "freeze" }),
+    inputSignature: freezeSig,
     creditCost: 1,
     now: reservationNow,
   });
@@ -485,7 +530,14 @@ test("excellent reservations freeze balance for legacy spend paths and trend res
   assert.equal(trendReserve.status, "insufficient", "trend reservations must respect excellent reservations");
 
   // 释放 excellent 预占后，既有路径恢复可用。
-  failExcellentBillingRequest({ requestId, userId, kind: EXCELLENT_BILLING_KIND_FUSION, error: "released" });
+  failExcellentBillingRequest({
+    requestId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: freezeSig,
+    reservationToken: reservation.request.created_at,
+    error: "released",
+  });
   const spendAfterRelease = trySpendCreditsWithEvent({
     userId,
     amount: 1,
@@ -498,11 +550,12 @@ test("excellent reservations freeze balance for legacy spend paths and trend res
 test("settle guards against balance drained after reservation and never goes negative", () => {
   const userId = makeUser(1);
   const requestId = rid();
+  const drainSig = signature({ userId, kind: "fusion", noteId: "drain" });
   const reservation = reserveExcellentBillingRequest({
     requestId,
     userId,
     kind: EXCELLENT_BILLING_KIND_FUSION,
-    inputSignature: signature({ userId, kind: "fusion", noteId: "drain" }),
+    inputSignature: drainSig,
     creditCost: 1,
     now: at(0),
   });
@@ -515,6 +568,8 @@ test("settle guards against balance drained after reservation and never goes neg
         requestId,
         userId,
         kind: EXCELLENT_BILLING_KIND_FUSION,
+        inputSignature: drainSig,
+        reservationToken: reservation.request.created_at,
         resultSource: "model",
         resultJson: "{}",
         event: fusionEvent(),
@@ -527,4 +582,103 @@ test("settle guards against balance drained after reservation and never goes neg
     findExcellentBillingRequest({ requestId, userId, kind: EXCELLENT_BILLING_KIND_FUSION }).status,
     "failed",
   );
+});
+
+test("requestId stays bound to one canonical input signature", () => {
+  const userId = makeUser(5);
+  const requestId = rid();
+  const sigA = buildExcellentBillingSignature({ nested: { b: 2, a: 1 }, noteId: "A" });
+  const sameSigA = buildExcellentBillingSignature({ noteId: "A", nested: { a: 1, b: 2 } });
+  const sigB = buildExcellentBillingSignature({ noteId: "B", nested: { a: 1, b: 2 } });
+  assert.equal(sigA, sameSigA, "object property order must not change the billing signature");
+
+  const reserved = reserveExcellentBillingRequest({
+    requestId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sigA,
+    creditCost: 1,
+    now: at(0),
+  });
+  assert.equal(
+    reserveExcellentBillingRequest({
+      requestId,
+      userId,
+      kind: EXCELLENT_BILLING_KIND_FUSION,
+      inputSignature: sigB,
+      creditCost: 1,
+      now: at(1),
+    }).status,
+    "conflict",
+  );
+  settleExcellentBillingRequest({
+    requestId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sigA,
+    reservationToken: reserved.request.created_at,
+    resultSource: "model",
+    resultJson: JSON.stringify({ value: "A" }),
+    event: fusionEvent(),
+    now: at(2),
+  });
+  assert.equal(
+    reserveExcellentBillingRequest({
+      requestId,
+      userId,
+      kind: EXCELLENT_BILLING_KIND_FUSION,
+      inputSignature: sigB,
+      creditCost: 1,
+      now: at(3),
+    }).status,
+    "conflict",
+  );
+});
+
+test("an expired reservation token cannot settle or fail its replacement", () => {
+  const userId = makeUser(5);
+  const requestId = rid();
+  const sig = signature({ userId, kind: "fusion", noteId: "aba" });
+  const oldReservation = reserveExcellentBillingRequest({
+    requestId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sig,
+    creditCost: 1,
+    now: at(0),
+  });
+  const replacement = reserveExcellentBillingRequest({
+    requestId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sig,
+    creditCost: 1,
+    now: at(EXCELLENT_BILLING_RESERVATION_TTL_MS + 1),
+  });
+  assert.equal(replacement.status, "reserved");
+  assert.notEqual(replacement.request.created_at, oldReservation.request.created_at);
+  assert.throws(
+    () =>
+      settleExcellentBillingRequest({
+        requestId,
+        userId,
+        kind: EXCELLENT_BILLING_KIND_FUSION,
+        inputSignature: sig,
+        reservationToken: oldReservation.request.created_at,
+        resultSource: "model",
+        resultJson: JSON.stringify({ value: "old" }),
+        event: fusionEvent(),
+        now: at(EXCELLENT_BILLING_RESERVATION_TTL_MS + 2),
+      }),
+    /新的生成尝试替代/,
+  );
+  failExcellentBillingRequest({
+    requestId,
+    userId,
+    kind: EXCELLENT_BILLING_KIND_FUSION,
+    inputSignature: sig,
+    reservationToken: oldReservation.request.created_at,
+    error: "old failure",
+  });
+  assert.equal(findExcellentBillingRequest({ requestId, userId, kind: EXCELLENT_BILLING_KIND_FUSION }).status, "reserved");
 });

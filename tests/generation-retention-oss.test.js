@@ -298,19 +298,43 @@ test("batch generation row deletion rolls back every generation on a later SQL f
   }
 });
 
-test("30-day boundary is exact and invalid createdAt never expires", () => {
+test("database deletion failure restores reversibly staged generated assets", async () => {
+  const generationId = 7313;
+  seedGeneration(generationId, "2026-07-01T00:00:00.000Z");
+  let rolledBack = 0;
+  let committed = 0;
+  await assert.rejects(
+    removeGenerationAssetsAndRows(findGenerationById(generationId), {
+      storage: {
+        deleteMany: async () => [],
+        stageDeleteMany: async () => ({
+          deletedAssetCount: 1,
+          rollback: async () => { rolledBack += 1; },
+          commit: async () => { committed += 1; },
+        }),
+      },
+      deleteGenerationRows: () => { throw new Error("database unavailable"); },
+    }),
+    /database unavailable/,
+  );
+  assert.equal(rolledBack, 1);
+  assert.equal(committed, 0);
+  assert.ok(findGenerationById(generationId));
+});
+
+test("30-day boundary is exact and invalid createdAt expires safely", () => {
   const nowMs = Date.parse("2026-07-31T00:00:00.000Z");
   assert.equal(HISTORY_GENERATION_RETENTION_MS, 30 * 24 * 60 * 60 * 1000);
   assert.equal(isGenerationExpired({ createdAt: "2026-07-01T00:00:01.000Z" }, nowMs), false);
   assert.equal(isGenerationExpired({ createdAt: "2026-07-01T00:00:00.000Z" }, nowMs), true);
   assert.equal(isGenerationExpired({ createdAt: "2026-06-30T00:00:00.000Z" }, nowMs), true);
-  assert.equal(isGenerationExpired({ createdAt: "invalid" }, nowMs), false);
-  assert.equal(isGenerationExpired({ createdAt: "2026-02-30T00:00:00.000Z" }, nowMs), false);
-  assert.equal(isGenerationExpired({ createdAt: "2025-02-29T00:00:00.000Z" }, nowMs), false);
+  assert.equal(isGenerationExpired({ createdAt: "invalid" }, nowMs), true);
+  assert.equal(isGenerationExpired({ createdAt: "2026-02-30T00:00:00.000Z" }, nowMs), true);
+  assert.equal(isGenerationExpired({ createdAt: "2025-02-29T00:00:00.000Z" }, nowMs), true);
   assert.equal(Number.isFinite(parseGenerationCreatedAtMs("2024-02-29T00:00:00.000Z")), true);
 });
 
-test("cleanup deletes exactly-30-day and older rows while retaining fresh and invalid rows", async () => {
+test("cleanup deletes exactly-30-day, older, and invalid-timestamp rows while retaining fresh rows", async () => {
   const ids = { fresh: 7201, exact: 7202, old: 7203, invalid: 7204, offset: 7205 };
   seedGeneration(ids.fresh, "2026-07-01T00:00:01.000Z");
   seedGeneration(ids.exact, "2026-07-01T00:00:00.000Z");
@@ -324,9 +348,12 @@ test("cleanup deletes exactly-30-day and older rows while retaining fresh and in
   assert.ok(findGenerationById(ids.fresh));
   assert.equal(findGenerationById(ids.exact), null);
   assert.equal(findGenerationById(ids.old), null);
-  assert.ok(findGenerationById(ids.invalid));
+  assert.equal(findGenerationById(ids.invalid), null);
   assert.equal(findGenerationById(ids.offset), null);
-  assert.deepEqual(result.deletedGenerationIds.filter((id) => [ids.exact, ids.old, ids.offset].includes(id)), [ids.old, ids.exact, ids.offset]);
+  assert.deepEqual(
+    result.deletedGenerationIds.filter((id) => [ids.exact, ids.old, ids.invalid, ids.offset].includes(id)).sort((a, b) => a - b),
+    [ids.exact, ids.old, ids.invalid, ids.offset].sort((a, b) => a - b),
+  );
 });
 
 test("daily cleanup scheduler unrefs its timer, can be stopped, and concurrent callers share one cleanup", async () => {

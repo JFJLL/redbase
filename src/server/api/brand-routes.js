@@ -54,6 +54,7 @@ async function handleBrandRoutes(context, req, res, pathname) {
     saveBrandLogo,
     resolveStoredAssetPath,
     removeStoredFileIfExists,
+    stageStoredFilesForDeletion,
     removeGenerationsAssets,
     verifySignedAssetRequest,
     collectBody,
@@ -223,28 +224,19 @@ async function handleBrandRoutes(context, req, res, pathname) {
     const shouldDeleteGenerations = Boolean(payload.deleteGenerations);
     const deletedGenerationIds = [];
     let brandGenerations = [];
-    let stagedLogo = null;
+    let logoStage = null;
+    let generationAssetStage = null;
     try {
       if (brand.logo?.storedPath) {
-        const originalPath = resolveStoredAssetPath(brand.logo.storedPath);
-        const stagedPath = `${originalPath}.deleting-${process.pid}-${Date.now()}`;
-        try {
-          await fsp.rename(originalPath, stagedPath);
-          stagedLogo = { originalPath, stagedPath };
-        } catch (error) {
-          if (error?.code !== "ENOENT") throw error;
-        }
+        logoStage = await stageStoredFilesForDeletion([resolveStoredAssetPath(brand.logo.storedPath)]);
       }
       if (shouldDeleteGenerations) {
         brandGenerations = listGenerationsByOwner(user.id).filter((generation) => generation.brandId === brand.id);
-        await deleteGenerationAssets(brandGenerations, { deleteReason: "brand_history_delete" });
+        generationAssetStage = await deleteGenerationAssets(brandGenerations, { deleteReason: "brand_history_delete" });
       }
     } catch (error) {
-      if (stagedLogo) {
-        await fsp.rename(stagedLogo.stagedPath, stagedLogo.originalPath).catch((restoreError) => {
-          console.error("[brand-delete] failed to restore staged logo", { brandId: brand.id, errorCode: restoreError?.code || "LOGO_RESTORE_FAILED" });
-        });
-      }
+      if (generationAssetStage?.rollback) await generationAssetStage.rollback().catch(() => {});
+      if (logoStage?.rollback) await logoStage.rollback().catch(() => {});
       if (shouldDeleteGenerations) {
         console.warn("[brand-delete] failed to delete generation assets", {
           brandId: brand.id,
@@ -269,18 +261,18 @@ async function handleBrandRoutes(context, req, res, pathname) {
         deleteBrandById(brand.id);
       }
     } catch (error) {
-      if (stagedLogo) {
-        await fsp.rename(stagedLogo.stagedPath, stagedLogo.originalPath).catch((restoreError) => {
-          console.error("[brand-delete] failed to restore staged logo after database rollback", { brandId: brand.id, errorCode: restoreError?.code || "LOGO_RESTORE_FAILED" });
+      if (generationAssetStage?.rollback) {
+        await generationAssetStage.rollback().catch((restoreError) => {
+          console.error("[brand-delete] failed to restore staged generation assets", { brandId: brand.id, errorCode: restoreError?.code || "ASSET_RESTORE_FAILED" });
         });
       }
+      if (logoStage?.rollback) await logoStage.rollback().catch((restoreError) => {
+        console.error("[brand-delete] failed to restore staged logo after database rollback", { brandId: brand.id, errorCode: restoreError?.code || "LOGO_RESTORE_FAILED" });
+      });
       throw error;
     }
-    if (stagedLogo) {
-      await removeStoredFileIfExists(stagedLogo.stagedPath).catch((error) => {
-        console.warn("[brand-delete] failed to remove staged logo", { brandId: brand.id, errorCode: error?.code || "LOGO_DELETE_FAILED" });
-      });
-    }
+    if (generationAssetStage?.commit) await generationAssetStage.commit();
+    if (logoStage?.commit) await logoStage.commit();
     json(res, 200, { ok: true, deletedGenerationIds });
     return true;
   }

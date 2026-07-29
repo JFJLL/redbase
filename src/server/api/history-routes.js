@@ -82,7 +82,7 @@ function parseGenerationCreatedAtMs(value) {
 
 function isGenerationExpired(generation, nowMs = Date.now(), retentionMs = HISTORY_GENERATION_RETENTION_MS) {
   const createdAtMs = parseGenerationCreatedAtMs(generation?.createdAt);
-  if (!Number.isFinite(createdAtMs)) return false;
+  if (!Number.isFinite(createdAtMs)) return true;
   return createdAtMs + retentionMs <= nowMs;
 }
 
@@ -106,6 +106,9 @@ async function cleanupExpiredGenerationHistory(options = {}) {
     ? configuredRetentionMs
     : HISTORY_GENERATION_RETENTION_MS;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  if (typeof options.storage?.cleanupDeletionStaging === "function") {
+    await options.storage.cleanupDeletionStaging({ isReferenced: options.isAssetReferenced, nowMs });
+  }
   const cutoffIso = getHistoryCutoffIso(nowMs, retentionMs);
   const expiredGenerations = listExpiredGenerations(cutoffIso)
     .filter((generation) => isGenerationExpired(generation, nowMs, retentionMs));

@@ -60,11 +60,13 @@ export interface ExcellentRemixState {
   directionsError: string;
   directionsBilling: RemixBillingInfo | null;
   directionsBillingAttempt: RemixBillingAttempt | null;
+  directionsResultInputKey: string;
   fusionPlan: FusionPlan | null;
   fusionStatus: RemixStageStatus;
   fusionError: string;
   fusionBilling: RemixBillingInfo | null;
   fusionBillingAttempt: RemixBillingAttempt | null;
+  fusionResultInputKey: string;
   assetMode: RemixAssetMode;
   useBrandLogo: boolean;
   productImageIds: number[];
@@ -105,11 +107,13 @@ export function createExcellentRemixState(seed: RemixStateSeed = {}): ExcellentR
     directionsError: "",
     directionsBilling: null,
     directionsBillingAttempt: null,
+    directionsResultInputKey: "",
     fusionPlan: null,
     fusionStatus: "idle",
     fusionError: "",
     fusionBilling: null,
     fusionBillingAttempt: null,
+    fusionResultInputKey: "",
     assetMode: REMIX_ASSET_MODES.NONE,
     useBrandLogo: false,
     productImageIds: [],
@@ -125,6 +129,7 @@ export function toggleLearningFocus(focusList: string[], value: string, checked:
 /** A ready fusion plan becomes stale whenever any upstream input changes. */
 export function markFusionStale(state: ExcellentRemixState): void {
   if (!state) return;
+  state.fusionResultInputKey = "";
   if (state.fusionPlan || state.fusionStatus === "ready") {
     state.fusionStatus = "stale";
     state.fusionError = "";

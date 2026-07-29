@@ -68,15 +68,24 @@ async function removeGenerationAssetsAndRows(generation, options = {}) {
     throw new Error("Generated asset storage is required for generation deletion");
   }
   const assets = collectGenerationAssets(generation);
-  await options.storage.deleteMany(assets);
+  const staged = typeof options.storage.stageDeleteMany === "function"
+    ? await options.storage.stageDeleteMany(assets)
+    : (await options.storage.deleteMany(assets), { deletedAssetCount: assets.length, rollback: async () => {}, commit: async () => {} });
   const deletedAt = options.deletedAt || new Date().toISOString();
   const deleteReason = String(options.deleteReason || "user_history_delete");
-  const rows = (options.deleteGenerationRows || deleteGenerationRows)(generation.id, { deletedAt, deleteReason });
+  let rows;
+  try {
+    rows = (options.deleteGenerationRows || deleteGenerationRows)(generation.id, { deletedAt, deleteReason });
+  } catch (error) {
+    await staged.rollback();
+    throw error;
+  }
+  await staged.commit();
   return {
     ok: true,
     alreadyDeleted: rows?.generationDeleted === false,
     deletedGenerationId: Number(generation.id),
-    deletedAssetCount: assets.length,
+    deletedAssetCount: Number(staged.deletedAssetCount ?? assets.length),
     deletedImageJobCount: Number(rows?.imageJobsDeleted || 0),
     retainedCreditEventCount: Number(rows?.creditEventsUpdated || 0),
   };
@@ -92,8 +101,10 @@ async function removeGenerationsAssets(generations = [], options = {}) {
   }
   // Validate every asset scope before the first irreversible storage operation.
   const assets = collectGenerationsAssets(generations);
-  await options.storage.deleteMany(assets);
-  return { ok: true, deletedAssetCount: assets.length };
+  const staged = typeof options.storage.stageDeleteMany === "function"
+    ? await options.storage.stageDeleteMany(assets)
+    : (await options.storage.deleteMany(assets), { deletedAssetCount: assets.length, rollback: async () => {}, commit: async () => {} });
+  return { ok: true, deletedAssetCount: Number(staged.deletedAssetCount ?? assets.length), ...staged };
 }
 
 async function removeGenerationsAssetsAndRows(generations = [], options = {}) {
@@ -101,11 +112,18 @@ async function removeGenerationsAssetsAndRows(generations = [], options = {}) {
   const assetResult = await removeGenerationsAssets(source, options);
   const deletedAt = options.deletedAt || new Date().toISOString();
   const deleteReason = String(options.deleteReason || "user_history_delete");
-  const rows = (options.deleteGenerationRowsBatch || deleteGenerationRowsBatch)(source.map((generation) => ({
-    generationId: generation.id,
-    deletedAt,
-    deleteReason,
-  })));
+  let rows;
+  try {
+    rows = (options.deleteGenerationRowsBatch || deleteGenerationRowsBatch)(source.map((generation) => ({
+      generationId: generation.id,
+      deletedAt,
+      deleteReason,
+    })));
+  } catch (error) {
+    await assetResult.rollback();
+    throw error;
+  }
+  await assetResult.commit();
   return {
     ok: true,
     deletedGenerationIds: rows.filter((row) => row.generationDeleted).map((row) => row.generationId),

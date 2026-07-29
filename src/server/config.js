@@ -83,7 +83,7 @@ const DEFAULT_APP_CONFIG = {
     sendQuality: true,
   },
   assetStorage: {
-    provider: "local",
+    provider: "",
     aliyunOss: {
       endpoint: "",
       bucket: "",
@@ -201,6 +201,9 @@ function resolveAssetStorageConfig(localConfig = {}, env = process.env, options 
     "ALIYUN_OSS_ACCESS_KEY_ID",
     "ALIYUN_OSS_ACCESS_KEY_SECRET",
   ].some((name) => Object.prototype.hasOwnProperty.call(env || {}, name));
+  const explicitProvider = explicitEnvironment
+    ? "aliyun_oss"
+    : String(localConfig?.assetStorage?.provider || "").trim().toLowerCase();
   const explicitlyConfigured = explicitEnvironment || Boolean(localConfig?.assetStorage);
   const issues = [...new Set([...missing, ...invalid])];
   if (explicitlyConfigured && issues.length && options.warn !== false) {
@@ -209,7 +212,7 @@ function resolveAssetStorageConfig(localConfig = {}, env = process.env, options 
   }
 
   return {
-    provider: issues.length ? "local" : "aliyun_oss",
+    provider: explicitProvider === "local" || issues.length ? "local" : "aliyun_oss",
     aliyunOss,
     configurationIssues: issues,
   };

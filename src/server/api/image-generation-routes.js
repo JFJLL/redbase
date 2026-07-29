@@ -37,6 +37,8 @@ const {
 const { sanitizePayloadForClient } = require("../utils");
 const { resolveAspectRatio } = require("./aspect-ratios");
 const { withExcellentRemixGroupLock } = require("../services/excellent-remix-generation-lock");
+const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
+const { collectGenerationAssets } = require("../assets/generation-deletion-service");
 
 const EXCELLENT_REMIX_CREDIT_ACTION_TYPES = ["xhsCarousel"];
 const CAROUSEL_GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
@@ -57,6 +59,31 @@ const CLIENT_GENERATED_ASSET_KEYS = new Set([
   "providerResult",
   "persistError",
 ]);
+
+function generatedAssetIdentity(asset) {
+  return `${asset?.provider || ""}:${asset?.objectKey || asset?.storedPath || ""}`;
+}
+
+async function persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit }) {
+  const previousAssets = new Set(collectGenerationAssets(generation).map(generatedAssetIdentity));
+  await persistGenerationImages(generation);
+  const createdAssets = collectGenerationAssets(generation).filter((asset) => !previousAssets.has(generatedAssetIdentity(asset)));
+  const uploadStage = await generatedAssetStorage.stageDeleteMany(createdAssets);
+  let result;
+  try {
+    result = await commit(generation);
+  } catch (error) {
+    await uploadStage.commit().catch((cleanupError) => {
+      console.error("[generated-image] staged upload cleanup is pending after database failure", {
+        generationId: generation.id,
+        errorCode: cleanupError?.code || "ASSET_CLEANUP_PENDING",
+      });
+    });
+    throw error;
+  }
+  await uploadStage.rollback();
+  return result;
+}
 
 function stripClientGeneratedAssetMetadata(value, options = { allowPrimaryUrls: true, allowSlides: true }) {
   if (Array.isArray(value)) {
@@ -360,6 +387,7 @@ async function upsertSingleSlideCarouselGeneration({
   job,
   payload,
   persistGenerationImages,
+  generatedAssetStorage,
   channelLabel = "小红书组图",
 }) {
   // Caller must hold withExcellentRemixGroupLock for excellent-remix groups.
@@ -388,8 +416,11 @@ async function upsertSingleSlideCarouselGeneration({
         payload: mergedPayload,
       }
     : createSqlGenerationRecord(userId, brand, trend, idea, "xhsCarousel", channelLabel, mergedPayload);
-  await persistGenerationImages(generation);
-  return existingGeneration ? upsertGeneration(generation) : insertGeneration(generation);
+  return persistGenerationAndCommit(generation, {
+    persistGenerationImages,
+    generatedAssetStorage,
+    commit: existingGeneration ? upsertGeneration : insertGeneration,
+  });
 }
 
 function loadOwnedImageJob(imageJobs, jobId, userId) {
@@ -434,6 +465,7 @@ async function persistExcellentRemixSlideFromCompletedJob({
   userId,
   job,
   persistGenerationImages,
+  generatedAssetStorage,
   imageJobs = null,
 }) {
   const context = job?.generationContext || {};
@@ -505,6 +537,7 @@ async function persistExcellentRemixSlideFromCompletedJob({
       job: effectiveJob,
       payload,
       persistGenerationImages,
+      generatedAssetStorage,
       channelLabel: "一键仿图文",
     });
 
@@ -615,6 +648,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     formatImageServiceError,
     unauthorized,
   } = bindRouteScope(context);
+  const generatedAssetStorage = context.generatedAssetStorage || createGeneratedAssetStorage(appConfig);
 
   async function resolveProductImageInputSql(user, input, options = {}) {
     const imageId = Number(input?.id || input?.productImageId || 0);
@@ -698,16 +732,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       createdAt: new Date(Number(job.createdAt || Date.now())).toISOString(),
       completedAt: job.completedAt || new Date().toISOString(),
     };
-    await persistGeneratedImageReference({
-      ownerUserId: generation.ownerUserId,
-      generationId: generation.id,
-      target: editEntry,
-      remoteUrl: job.imageUrl || "",
-      variant: `edit_${job.id}`,
-      localUrl: buildGeneratedEditImageUrl(generation.id, job.id),
+    await persistGenerationAndCommit(generation, {
+      generatedAssetStorage,
+      persistGenerationImages: async () => {
+        await persistGeneratedImageReference({
+          ownerUserId: generation.ownerUserId,
+          generationId: generation.id,
+          target: editEntry,
+          remoteUrl: job.imageUrl || "",
+          variant: `edit_${job.id}`,
+          localUrl: buildGeneratedEditImageUrl(generation.id, job.id),
+          storage: generatedAssetStorage,
+        });
+        generation.payload.editHistory.unshift(editEntry);
+      },
+      commit: upsertGeneration,
     });
-    generation.payload.editHistory.unshift(editEntry);
-    upsertGeneration(generation);
     return editEntry;
   }
 
@@ -917,6 +957,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             userId: user.id,
             job: resolved,
             persistGenerationImages,
+            generatedAssetStorage,
             imageJobs,
           });
           if (generation?.id) {
@@ -956,11 +997,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               ? buildGeneratedAssetPayload(resolved)
               : buildMomentsGenerationPayload(resolved);
           const generation = isSingleCarouselSlide
-            ? await upsertSingleSlideCarouselGeneration({ userId: user.id, brand, trend, idea, job: resolved, payload, persistGenerationImages })
+            ? await upsertSingleSlideCarouselGeneration({ userId: user.id, brand, trend, idea, job: resolved, payload, persistGenerationImages, generatedAssetStorage })
             : createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
           if (!isSingleCarouselSlide) {
-            await persistGenerationImages(generation);
-            insertGeneration(generation);
+            await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
           }
           updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, generation.payload || payload);
           resolved.generationId = generation.id;
@@ -1572,8 +1612,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             trendTitle: historyRefs.trend?.title || existingGeneration.trendTitle,
             payload: nextPayload,
           };
-          await persistGenerationImages(nextGeneration);
-          savedGeneration = upsertGeneration(nextGeneration);
+          savedGeneration = await persistGenerationAndCommit(nextGeneration, { persistGenerationImages, generatedAssetStorage, commit: upsertGeneration });
         } else {
           const generation = createSqlGenerationRecord(
             user.id,
@@ -1590,8 +1629,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               existingIdeaRef: historyRefs.existingIdeaRef,
             },
           );
-          await persistGenerationImages(generation);
-          savedGeneration = insertGeneration(generation);
+          savedGeneration = await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
         }
 
         const linkedCreditEventIds = [];
@@ -2035,8 +2073,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
         payload: nextPayload,
       };
-      await persistGenerationImages(nextGeneration);
-      const savedGeneration = upsertGeneration(nextGeneration);
+      const savedGeneration = await persistGenerationAndCommit(nextGeneration, { persistGenerationImages, generatedAssetStorage, commit: upsertGeneration });
       updateCreditEventGeneration(Number(payload.creditEventId), savedGeneration, savedGeneration.payload);
       json(res, 200, {
         generation: sanitizeGeneration(savedGeneration, appConfig),
@@ -2047,8 +2084,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     }
 
     const generation = createSqlGenerationRecord(user.id, brand, trend, idea, "xhsCarousel", "小红书组图", carouselPack);
-    await persistGenerationImages(generation);
-    insertGeneration(generation);
+    await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
     const creditEvent =
       updateCreditEventGeneration(Number(payload.creditEventId), generation, carouselPack) ||
       attachGenerationToLatestCreditEvent({
@@ -2154,6 +2190,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
 }
 
 module.exports = {
+  persistGenerationAndCommit,
   isGeneratedCarouselSlide,
   mergeXhsCarouselSlidePayload,
   persistExcellentRemixSlideFromCompletedJob,

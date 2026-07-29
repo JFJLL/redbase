@@ -499,6 +499,7 @@ function onRemixBrandChange() {
   state.selectedExistingIdea = null;
   state.directionsStatus = "idle";
   state.directionsError = "";
+  state.directionsResultInputKey = "";
   if (state.fusionStatus === "loading") state.fusionStatus = "idle";
   state.productImageIds = [];
   markFusionStale(state);
@@ -509,6 +510,7 @@ function onToggleFocus(value: string, checked: boolean) {
   const state = remix.value;
   if (!state) return;
   state.learningFocus = toggleLearningFocus(state.learningFocus, value, checked);
+  state.directionsResultInputKey = "";
   if (state.directionsStatus === "loading") state.directionsStatus = "idle";
   if (state.fusionStatus === "loading") state.fusionStatus = "idle";
   markFusionStale(state);
@@ -537,20 +539,24 @@ function fusionAttemptIsCurrent(state: ExcellentRemixState, requestId: string, i
   );
 }
 
+function isRequestIdConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.body?.code === "REQUEST_ID_CONFLICT";
+}
+
 async function generateDirections() {
   const state = remix.value;
   if (!state?.brandId) return;
   // 已有成功方向时启动的新逻辑尝试属于“重新生成”；技术重试必须保留这个值。
-  const nextForceRegenerate = state.smartDirections.length > 0;
   state.directionsStatus = "loading";
   state.directionsError = "";
   // 首次点击先触发参考学习分析（命中 30 天缓存则直接读取）。
   await ensureRemixAnalysis();
   if (remix.value !== state) return;
+  const inputKey = buildDirectionsBillingAttemptKey(state);
   const attempt = resolveRemixBillingAttempt(
     state.directionsBillingAttempt,
-    buildDirectionsBillingAttemptKey(state),
-    nextForceRegenerate,
+    inputKey,
+    state.directionsResultInputKey === inputKey,
   );
   state.directionsBillingAttempt = attempt;
   try {
@@ -575,6 +581,7 @@ async function generateDirections() {
     state.directionsStatus = "ready";
     state.directionsBilling = (result.billing as RemixBillingInfo) || null;
     state.directionsBillingAttempt = null;
+    state.directionsResultInputKey = attempt.inputKey;
     applyBillingToSession(state.directionsBilling, result.user as Record<string, unknown> | undefined);
     if (shouldWarnNextDirectionCharge(state.directionsBilling)) {
       showToast("短时间内继续生成将消耗 1 积分。");
@@ -585,6 +592,7 @@ async function generateDirections() {
     if (isAbortError(error) || remix.value !== state) return;
     if (!directionsAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     if (await handleUnauthorizedError(error)) return;
+    if (isRequestIdConflict(error)) state.directionsBillingAttempt = null;
     state.directionsStatus = "error";
     state.directionsError = (error as Error).message;
   }
@@ -594,16 +602,16 @@ async function generateFusion() {
   const state = remix.value;
   if (!state || !remixCanGenerateFusion.value) return;
   // 已有成功方案时启动的新逻辑尝试属于“重新生成”；技术重试必须保留这个值。
-  const nextForceRegenerate = Boolean(state.fusionPlan);
   state.fusionStatus = "loading";
   state.fusionError = "";
   // 自定义/已有选题模式可能未点过“生成内容方向”，融合前自动补参考学习分析。
   await ensureRemixAnalysis();
   if (remix.value !== state) return;
+  const inputKey = buildFusionBillingAttemptKey(state);
   const attempt = resolveRemixBillingAttempt(
     state.fusionBillingAttempt,
-    buildFusionBillingAttemptKey(state),
-    nextForceRegenerate,
+    inputKey,
+    state.fusionResultInputKey === inputKey,
   );
   state.fusionBillingAttempt = attempt;
   try {
@@ -617,11 +625,13 @@ async function generateFusion() {
     state.fusionStatus = "ready";
     state.fusionBilling = (result.billing as RemixBillingInfo) || null;
     state.fusionBillingAttempt = null;
+    state.fusionResultInputKey = attempt.inputKey;
     applyBillingToSession(state.fusionBilling, result.user as Record<string, unknown> | undefined);
   } catch (error) {
     if (isAbortError(error) || remix.value !== state) return;
     if (!fusionAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     if (await handleUnauthorizedError(error)) return;
+    if (isRequestIdConflict(error)) state.fusionBillingAttempt = null;
     state.fusionStatus = "error";
     state.fusionError = (error as Error).message;
   }
