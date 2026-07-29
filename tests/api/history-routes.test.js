@@ -238,7 +238,7 @@ test("cleanupExpiredGenerationHistory removes expired rows and local files", asy
     createdAt: "2026-05-01T00:00:00.000Z",
     payload: {
       localImage: {
-        storedPath: "uploads/generated-images/users/1/2026/05/expired.png",
+        storedPath: "uploads/generated-images/users/1/2026/05/gi_4_expired.png",
       },
     },
   });
@@ -250,22 +250,136 @@ test("cleanupExpiredGenerationHistory removes expired rows and local files", asy
     createdAt: "2026-05-10T00:00:00.000Z",
     payload: {
       localImage: {
-        storedPath: "uploads/generated-images/users/1/2026/05/fresh.png",
+        storedPath: "uploads/generated-images/users/1/2026/05/gi_5_fresh.png",
       },
     },
   });
 
-  const removedGenerationIds = [];
+  const removedStoredPaths = [];
   const result = await cleanupExpiredGenerationHistory({
-    nowMs: Date.parse("2026-05-12T00:00:00.000Z"),
-    removeGenerationLocalFiles: async (generation) => {
-      removedGenerationIds.push(generation.id);
+    nowMs: Date.parse("2026-06-01T00:00:00.000Z"),
+    storage: {
+      deleteMany: async (assets) => {
+        removedStoredPaths.push(...assets.map((asset) => asset.storedPath));
+      },
     },
   });
 
   assert.equal(findGenerationById(4), null);
   assert.equal(findGenerationById(5).id, 5);
   assert.equal(result.deletedGenerationIds.includes(4), true);
-  assert.equal(removedGenerationIds.includes(4), true);
-  assert.equal(removedGenerationIds.includes(5), false);
+  assert.equal(removedStoredPaths.includes("uploads/generated-images/users/1/2026/05/gi_4_expired.png"), true);
+  assert.equal(removedStoredPaths.includes("uploads/generated-images/users/1/2026/05/gi_5_fresh.png"), false);
+});
+insertUser({
+  id: 2,
+  name: "Other Route Tester",
+  phone: "13910000005",
+  password: "hash",
+  accountType: "customer",
+  credits: 5,
+  createdAt: "2026-05-02T00:00:00.000Z",
+});
+
+test("manual history deletion uses the shared asset-and-row service and is idempotent", async () => {
+  seedGeneration({
+    id: 6,
+    type: "moments",
+    channelLabel: "朋友圈图",
+    cardTitle: "手动删除",
+    createdAt: "2026-05-03T00:00:00.000Z",
+    payload: { localImage: { storedPath: "uploads/generated-images/users/1/2026/05/gi_6_manual.png" } },
+  });
+  const deletedAssets = [];
+  const deleteContext = {
+    ...context,
+    generatedAssetStorage: { deleteMany: async (assets) => deletedAssets.push(...assets) },
+  };
+  const req = createReq("/api/history/6", "redbase_session=route-token");
+  req.method = "DELETE";
+  const firstRes = createRes();
+  await handleHistoryRoutes(deleteContext, req, firstRes, "/api/history/6");
+  assert.equal(firstRes.statusCode, 200);
+  assert.equal(firstRes.body.deletedGenerationId, 6);
+  assert.equal(deletedAssets[0].storedPath.endsWith("gi_6_manual.png"), true);
+  assert.equal(findGenerationById(6), null);
+
+  const secondRes = createRes();
+  await handleHistoryRoutes(deleteContext, req, secondRes, "/api/history/6");
+  assert.equal(secondRes.statusCode, 200);
+  assert.equal(secondRes.body.alreadyDeleted, true);
+});
+
+test("manual history deletion does not reveal whether an id belongs to another tenant", async () => {
+  upsertGeneration({
+    id: 66,
+    ownerUserId: 2,
+    type: "moments",
+    channelLabel: "朋友圈图",
+    brandId: 0,
+    brandName: "",
+    trendId: 0,
+    trendTitle: "",
+    ideaTitle: "",
+    cardTitle: "other tenant",
+    createdAt: "2026-05-03T00:00:00.000Z",
+    previewUrl: "",
+    summary: "",
+    payload: {},
+  });
+  const deleteId = async (id) => {
+    const req = createReq(`/api/history/${id}`, "redbase_session=route-token");
+    req.method = "DELETE";
+    const res = createRes();
+    await handleHistoryRoutes(context, req, res, `/api/history/${id}`);
+    return res;
+  };
+  const foreign = await deleteId(66);
+  const absent = await deleteId(999999);
+  assert.equal(foreign.statusCode, absent.statusCode);
+  assert.equal(foreign.body.alreadyDeleted, absent.body.alreadyDeleted);
+  assert.ok(findGenerationById(66));
+});
+
+test("reading an expired generated image deletes it through the shared service and returns not found", async () => {
+  seedGeneration({
+    id: 7,
+    type: "moments",
+    channelLabel: "朋友圈图",
+    cardTitle: "读取时过期",
+    createdAt: "2026-04-04T00:00:00.000Z",
+    payload: { localImage: { storedPath: "uploads/generated-images/users/1/2026/04/gi_7_expired-on-read.png" } },
+  });
+  const res = {
+    statusCode: 0,
+    writeHead(code) { this.statusCode = code; },
+    end() {},
+  };
+  const readContext = {
+    ...context,
+    historyRetentionNowMs: Date.parse("2026-05-04T00:00:00.000Z"),
+    verifySignedAssetRequest: () => true,
+    generatedAssetStorage: { deleteMany: async () => [] },
+  };
+  await handleHistoryRoutes(readContext, createReq("/api/generated-images/7/file"), res, "/api/generated-images/7/file");
+  assert.equal(res.statusCode, 404);
+  assert.equal(findGenerationById(7), null);
+});
+
+test("history list never returns expired rows even when a shared cleanup is already in flight", async () => {
+  seedGeneration({
+    id: 8,
+    type: "moments",
+    channelLabel: "朋友圈图",
+    cardTitle: "并发清理过期",
+    createdAt: "2026-04-04T00:00:00.000Z",
+  });
+  const res = createRes();
+  await handleHistoryRoutes({
+    ...context,
+    historyRetentionNowMs: Date.parse("2026-05-04T00:00:00.000Z"),
+    historyCleanupRunner: async () => ({ skipped: true, reason: "already_running" }),
+  }, createReq("/api/history", "redbase_session=route-token"), res, "/api/history");
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.generations.some((generation) => generation.id === 8), false);
 });
