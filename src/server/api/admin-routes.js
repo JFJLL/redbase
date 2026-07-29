@@ -1,13 +1,19 @@
 const { bindRouteScope } = require("./route-scope");
 const { findUserById, findUserBySessionToken } = require("../db/repositories/auth-repository");
 const { addCredits, deleteUserCascadeRows, readAdminOverviewStore, readUserDeletionAssets } = require("../db/repositories/admin-repository");
-const { findGenerationById, deleteGenerationRows } = require("../db/repositories/generation-repository");
+const { findGenerationById } = require("../db/repositories/generation-repository");
+const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
+const {
+  removeGenerationAssetsAndRows: removeGenerationAssetsAndRowsDefault,
+  removeGenerationsAssets: removeGenerationsAssetsDefault,
+} = require("../assets/generation-deletion-service");
 
 async function handleAdminRoutes(context, req, res, pathname) {
   const {
     appConfig,
     sanitizeUser,
-    removeGenerationLocalFiles,
+    removeGenerationAssetsAndRows,
+    removeGenerationsAssets,
     resolveStoredProductImagePath,
     resolveStoredAssetPath,
     removeStoredFileIfExists,
@@ -22,6 +28,16 @@ async function handleAdminRoutes(context, req, res, pathname) {
     unauthorized,
     forbidden,
   } = bindRouteScope(context);
+  const deleteGeneration = removeGenerationAssetsAndRows || ((generation, options = {}) =>
+    removeGenerationAssetsAndRowsDefault(generation, {
+      ...options,
+      storage: createGeneratedAssetStorage(appConfig),
+    }));
+  const deleteGenerationAssets = removeGenerationsAssets || ((generations, options = {}) =>
+    removeGenerationsAssetsDefault(generations, {
+      ...options,
+      storage: createGeneratedAssetStorage(appConfig),
+    }));
 
   function requireAdminFromSql() {
     const token = getSessionToken(req);
@@ -114,8 +130,16 @@ async function handleAdminRoutes(context, req, res, pathname) {
     }
 
     const deletionAssets = readUserDeletionAssets(targetUser.id);
-    for (const generation of deletionAssets.generations) {
-      await removeGenerationLocalFiles(generation);
+    try {
+      await deleteGenerationAssets(deletionAssets.generations, { deleteReason: "admin_user_delete" });
+    } catch (error) {
+      console.warn("[admin-delete] failed to delete generated assets", {
+        userId: targetUser.id,
+        errorCode: String(error?.code || "ASSET_DELETE_FAILED"),
+        status: Number(error?.status || error?.statusCode || 0) || undefined,
+      });
+      json(res, 503, { error: "用户生成资产删除暂时失败，请稍后重试" });
+      return true;
     }
     for (const storedPath of deletionAssets.brandLogoStoredPaths) {
       await removeStoredFileIfExists(resolveStoredAssetPath(storedPath));
@@ -142,8 +166,17 @@ async function handleAdminRoutes(context, req, res, pathname) {
       return true;
     }
 
-    await removeGenerationLocalFiles(generation);
-    deleteGenerationRows(generation.id);
+    try {
+      await deleteGeneration(generation, { deleteReason: "admin_history_delete" });
+    } catch (error) {
+      console.warn("[admin-delete] failed to delete generation", {
+        generationId: generation.id,
+        errorCode: String(error?.code || "ASSET_DELETE_FAILED"),
+        status: Number(error?.status || error?.statusCode || 0) || undefined,
+      });
+      json(res, 503, { error: "历史删除暂时失败，请稍后重试" });
+      return true;
+    }
     json(res, 200, {
       ok: true,
       deletedGenerationId: generation.id,

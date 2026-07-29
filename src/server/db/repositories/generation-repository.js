@@ -75,8 +75,9 @@ function listExpiredGenerations(cutoffIso) {
   return db.prepare(`
     SELECT ${GENERATION_COLUMNS}
     FROM generations
-    WHERE created_at <= ?
-    ORDER BY created_at ASC, id ASC
+    WHERE julianday(created_at) IS NOT NULL
+      AND julianday(created_at) <= julianday(?)
+    ORDER BY julianday(created_at) ASC, id ASC
   `).all(String(cutoffIso || "")).map(mapGenerationRow);
 }
 
@@ -152,18 +153,38 @@ function insertGeneration(generation) {
   });
 }
 
-function deleteGenerationRows(generationId) {
-  db.prepare("DELETE FROM image_jobs WHERE generation_id = ? OR json_extract(generation_context_json, '$.sourceGenerationId') = ?").run(
-    Number(generationId),
-    Number(generationId),
-  );
-  db.prepare(`
-    UPDATE credit_events
-    SET generation_id = NULL,
-        payload_json = ?
-    WHERE generation_id = ?
-  `).run(JSON.stringify({ deletedGenerationId: Number(generationId), deletedAt: new Date().toISOString() }), Number(generationId));
-  db.prepare("DELETE FROM generations WHERE id = ?").run(Number(generationId));
+function deleteGenerationRowsStatement(generationId, options = {}) {
+  const id = Number(generationId);
+  const deletedAt = String(options.deletedAt || new Date().toISOString());
+  const deleteReason = String(options.deleteReason || "user_history_delete");
+  const imageJobs = db.prepare(
+    "DELETE FROM image_jobs WHERE generation_id = ? OR json_extract(generation_context_json, '$.sourceGenerationId') = ?",
+  ).run(id, id);
+  const creditEvents = db.prepare(`
+      UPDATE credit_events
+      SET generation_id = NULL,
+          payload_json = ?
+      WHERE generation_id = ?
+    `).run(JSON.stringify({ deletedGenerationId: id, deletedAt, deleteReason }), id);
+  const generation = db.prepare("DELETE FROM generations WHERE id = ?").run(id);
+  return {
+    generationId: id,
+    imageJobsDeleted: imageJobs.changes,
+    creditEventsUpdated: creditEvents.changes,
+    generationDeleted: generation.changes > 0,
+  };
+}
+
+function deleteGenerationRows(generationId, options = {}) {
+  return runTransaction(() => deleteGenerationRowsStatement(generationId, options));
+}
+
+function deleteGenerationRowsBatch(entries = [], options = {}) {
+  return runTransaction(() => {
+    const rows = entries.map((entry) => deleteGenerationRowsStatement(entry.generationId, entry));
+    if (typeof options.afterDelete === "function") options.afterDelete(rows);
+    return rows;
+  });
 }
 
 module.exports = {
@@ -177,4 +198,5 @@ module.exports = {
   upsertGeneration,
   insertGeneration,
   deleteGenerationRows,
+  deleteGenerationRowsBatch,
 };

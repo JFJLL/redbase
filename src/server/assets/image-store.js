@@ -1,15 +1,20 @@
 const crypto = require("crypto");
 const dns = require("dns").promises;
 const fsp = require("fs/promises");
+const http = require("http");
+const https = require("https");
 const net = require("net");
 const path = require("path");
 const { DATA_DIR } = require("../config");
+const { createGeneratedAssetStorage } = require("./generated-asset-storage");
+const { assertGenerationAssetOwnership } = require("./generation-deletion-service");
 const { signAssetUrl, verifySignedAssetRequest, signLocalAssetUrls } = require("./signed-urls");
 const {
   randomId,
   sanitizeGeneration: baseSanitizeGeneration,
   sanitizeBrand: baseSanitizeBrand,
   sanitizeBrandSummary: baseSanitizeBrandSummary,
+  redactSensitiveUrlQuery,
 } = require("../utils");
 const { notFound } = require("../api/http-utils");
 
@@ -24,6 +29,15 @@ const PRODUCT_IMAGE_MIME_EXTENSIONS = {
   "image/webp": "webp",
   "image/gif": "gif",
 };
+
+let defaultGeneratedAssetStorage = null;
+
+function getDefaultGeneratedAssetStorage() {
+  if (!defaultGeneratedAssetStorage) {
+    defaultGeneratedAssetStorage = createGeneratedAssetStorage({ assetStorage: { provider: "local" } });
+  }
+  return defaultGeneratedAssetStorage;
+}
 
 function isBlockedImageHostname(hostname) {
   const host = String(hostname || "")
@@ -77,7 +91,7 @@ function isPrivateOrReservedIp(address) {
   return true;
 }
 
-async function assertSafeRemoteImageUrl(imageUrl) {
+async function assertSafeRemoteImageUrl(imageUrl, lookupImpl = dns.lookup) {
   let parsed;
   try {
     parsed = new URL(String(imageUrl || "").trim());
@@ -101,10 +115,12 @@ async function assertSafeRemoteImageUrl(imageUrl) {
   if (hostname === "169.254.169.254") {
     throw new Error("图片地址不可用");
   }
+  let addresses = net.isIP(hostname)
+    ? [{ address: hostname, family: net.isIP(hostname) }]
+    : [];
   if (!net.isIP(hostname)) {
-    let addresses = [];
     try {
-      addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+      addresses = await lookupImpl(hostname, { all: true, verbatim: true });
     } catch (error) {
       throw new Error("图片地址解析失败");
     }
@@ -112,7 +128,55 @@ async function assertSafeRemoteImageUrl(imageUrl) {
       throw new Error("图片地址不可用");
     }
   }
-  return parsed;
+  return { parsed, addresses };
+}
+
+function createPinnedImageLookup(addresses) {
+  const validated = (Array.isArray(addresses) ? addresses : []).map((item) => ({
+    address: String(item?.address || ""),
+    family: Number(item?.family || net.isIP(item?.address || "")),
+  })).filter((item) => item.address && item.family);
+  return (_hostname, options, callback) => {
+    const lookupOptions = typeof options === "object" && options ? options : {};
+    const done = typeof options === "function" ? options : callback;
+    const requestedFamily = Number(typeof options === "number" ? options : lookupOptions.family || 0);
+    const candidates = requestedFamily ? validated.filter((item) => item.family === requestedFamily) : validated;
+    if (!candidates.length) {
+      done(Object.assign(new Error("No validated image host address"), { code: "ENOTFOUND" }));
+      return;
+    }
+    if (lookupOptions.all) {
+      done(null, candidates);
+      return;
+    }
+    done(null, candidates[0].address, candidates[0].family);
+  };
+}
+
+function requestPinnedRemoteImage(target, options = {}) {
+  const transport = target.parsed.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request(target.parsed, {
+      method: "GET",
+      signal: options.signal,
+      lookup: createPinnedImageLookup(target.addresses),
+      headers: options.headers || {},
+    }, (response) => {
+      resolve({
+        status: Number(response.statusCode || 0),
+        ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
+        headers: {
+          get(name) {
+            const value = response.headers[String(name || "").toLowerCase()];
+            return Array.isArray(value) ? value[0] || "" : String(value || "");
+          },
+        },
+        body: response,
+      });
+    });
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 async function removeGenerationLocalFiles(generation) {
@@ -350,7 +414,7 @@ function buildGeneratedEditImageUrl(generationId, editId) {
   return `/api/generated-images/${generationId}/edits/${editId}/file`;
 }
 
-async function persistGenerationImages(generation) {
+async function persistGenerationImages(generation, storage = getDefaultGeneratedAssetStorage()) {
   if (!generation?.id) return generation;
   generation.payload = generation.payload && typeof generation.payload === "object" ? generation.payload : {};
   const slides = Array.isArray(generation.payload.slides) ? generation.payload.slides : [];
@@ -364,8 +428,10 @@ async function persistGenerationImages(generation) {
         remoteUrl: slide?.imageUrl || slide?.previewUrl || "",
         variant: `slide_${index + 1}`,
         localUrl: buildGeneratedSlideImageUrl(generation.id, index),
+        storage,
       });
     }
+    sanitizeGenerationPayloadUrls(generation.payload, generation.id);
     generation.previewUrl = slides.find((slide) => slide?.previewUrl)?.previewUrl || generation.previewUrl || "";
     return generation;
   }
@@ -377,74 +443,192 @@ async function persistGenerationImages(generation) {
     remoteUrl: generation.payload.imageUrl || generation.payload.previewUrl || generation.previewUrl || "",
     variant: "main",
     localUrl: buildGeneratedImageUrl(generation.id),
+    storage,
   });
+  sanitizeGenerationPayloadUrls(generation.payload, generation.id);
   generation.previewUrl = generation.payload.previewUrl || generation.payload.imageUrl || generation.previewUrl || "";
   return generation;
 }
 
-async function persistGeneratedImageReference({ ownerUserId, generationId, target, remoteUrl, variant, localUrl }) {
-  if (!target || target.localImage?.storedPath) {
-    if (target?.localImage?.storedPath && localUrl) {
+async function persistGeneratedImageReference({
+  ownerUserId,
+  generationId,
+  target,
+  remoteUrl,
+  variant,
+  localUrl,
+  storage = getDefaultGeneratedAssetStorage(),
+  downloadImage = downloadRemoteGeneratedImage,
+}) {
+  if (!target) return null;
+  if (target.localImage?.storedPath || target.localImage?.objectKey) {
+    try {
+      assertGenerationAssetOwnership(target.localImage, { id: generationId, ownerUserId });
+    } catch (error) {
+      delete target.localImage;
+    }
+  }
+  if (target.localImage?.storedPath || target.localImage?.objectKey) {
+    if (localUrl) {
       target.imageUrl = localUrl;
       target.previewUrl = localUrl;
     }
-    return target?.localImage || null;
+    return target.localImage;
   }
   const sourceUrl = String(remoteUrl || "").trim();
   if (!isRemoteImageUrl(sourceUrl)) return null;
 
   let asset = null;
   try {
-    asset = await saveGeneratedImageFromRemote(ownerUserId, generationId, sourceUrl, variant);
+    asset = await saveGeneratedImageFromRemote(ownerUserId, generationId, sourceUrl, variant, storage, downloadImage);
   } catch (error) {
+    const persistError = storage?.provider === "aliyun_oss"
+      ? "生成图片保存失败，请稍后重试"
+      : error.message || "图片保存失败";
     console.warn("[generated-image] failed to persist generated image", {
       ownerUserId,
       generationId,
       variant,
-      imageUrl: sourceUrl,
-      error: error.message,
+      provider: storage?.provider || "local",
+      errorCode: String(error?.code || "ASSET_PERSIST_FAILED"),
+      status: Number(error?.status || error?.statusCode || 0) || undefined,
     });
-    target.persistError = error.message || "图片本地保存失败";
+    const safeSourceUrl = redactSensitiveUrlQuery(sourceUrl);
+    removeGeneratedTargetUpstreamUrls(target);
+    target.imageUrl = safeSourceUrl;
+    target.previewUrl = safeSourceUrl;
+    target.persistError = persistError;
     return null;
   }
 
-  target.originalImageUrl = sourceUrl;
+  removeGeneratedTargetUpstreamUrls(target);
   target.localImage = asset;
   target.imageUrl = localUrl;
   target.previewUrl = localUrl;
   return asset;
 }
 
-async function saveGeneratedImageFromRemote(ownerUserId, generationId, imageUrl, variant) {
-  const downloaded = await downloadRemoteGeneratedImage(imageUrl);
-  const now = new Date();
-  const year = String(now.getFullYear());
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const ext = PRODUCT_IMAGE_MIME_EXTENSIONS[downloaded.mimeType] || "png";
-  const safeVariant = String(variant || "image").replace(/[^a-z0-9_-]/gi, "_").slice(0, 40);
-  const fileName = `gi_${generationId}_${safeVariant}_${randomId().slice(0, 12)}.${ext}`;
-  const storedPath = path.join("uploads", "generated-images", "users", String(ownerUserId), year, month, fileName);
-  const absolutePath = path.join(DATA_DIR, storedPath);
-  await fsp.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fsp.writeFile(absolutePath, downloaded.buffer);
-  return {
-    storedPath,
+async function recoverStagedBrandLogoDeletions(options = {}) {
+  const dataDir = options.dataDir || DATA_DIR;
+  const root = options.root || path.join(dataDir, "uploads", "brand-logos");
+  const isReferenced = options.isReferenced || (() => false);
+  let recovered = 0;
+  let removed = 0;
+
+  async function visit(directory) {
+    let entries;
+    try {
+      entries = await fsp.readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+        continue;
+      }
+      const markerIndex = entryPath.lastIndexOf(".deleting-");
+      if (markerIndex < 0) continue;
+      const originalPath = entryPath.slice(0, markerIndex);
+      const storedPath = path.relative(dataDir, originalPath);
+      if (isReferenced(storedPath)) {
+        try {
+          await fsp.rename(entryPath, originalPath);
+          recovered += 1;
+        } catch (error) {
+          if (error?.code !== "EEXIST") throw error;
+          await removeStoredFileIfExists(entryPath);
+          removed += 1;
+        }
+      } else {
+        await removeStoredFileIfExists(entryPath);
+        removed += 1;
+      }
+    }
+  }
+
+  await visit(root);
+  return { recovered, removed };
+}
+
+function removeGeneratedTargetUpstreamUrls(value) {
+  if (Array.isArray(value)) {
+    value.forEach(removeGeneratedTargetUpstreamUrls);
+    return value;
+  }
+  if (!value || typeof value !== "object") return value;
+  for (const key of Object.keys(value)) {
+    if (/url/i.test(key) || ["source", "original", "providerResult"].includes(key)) {
+      delete value[key];
+      continue;
+    }
+    removeGeneratedTargetUpstreamUrls(value[key]);
+  }
+  return value;
+}
+
+function sanitizeGenerationPayloadUrls(value, generationId) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => sanitizeGenerationPayloadUrls(item, generationId));
+    return value;
+  }
+  if (!value || typeof value !== "object") return value;
+  const ownRoutePrefix = `/api/generated-images/${Number(generationId)}/`;
+  const persistenceFailed = Boolean(value.persistError);
+  for (const key of Object.keys(value)) {
+    const child = value[key];
+    if (["source", "original", "providerResult"].includes(key)) {
+      delete value[key];
+      continue;
+    }
+    if (/url/i.test(key)) {
+      if (typeof child !== "string") {
+        delete value[key];
+        continue;
+      }
+      const safeUrl = redactSensitiveUrlQuery(child);
+      const isOwnGeneratedRoute = safeUrl.startsWith(ownRoutePrefix);
+      const isFailedPrimaryUrl = persistenceFailed && ["imageUrl", "previewUrl"].includes(key) && isRemoteImageUrl(safeUrl);
+      if (!isOwnGeneratedRoute && !isFailedPrimaryUrl) {
+        delete value[key];
+        continue;
+      }
+      value[key] = safeUrl;
+      continue;
+    }
+    sanitizeGenerationPayloadUrls(child, generationId);
+  }
+  return value;
+}
+
+async function saveGeneratedImageFromRemote(
+  ownerUserId,
+  generationId,
+  imageUrl,
+  variant,
+  storage = getDefaultGeneratedAssetStorage(),
+  downloadImage = downloadRemoteGeneratedImage,
+) {
+  const downloaded = await downloadImage(imageUrl);
+  return storage.save({
+    ownerUserId,
+    generationId,
+    variant,
+    buffer: downloaded.buffer,
     mimeType: downloaded.mimeType,
-    sizeBytes: downloaded.buffer.length,
-    originalUrl: imageUrl,
-    createdAt: now.toISOString(),
-  };
+  });
 }
 
 async function downloadRemoteGeneratedImage(imageUrl) {
   let currentUrl = String(imageUrl || "").trim();
   for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMAGE_REDIRECTS; redirectCount += 1) {
-    await assertSafeRemoteImageUrl(currentUrl);
+    const safeTarget = await assertSafeRemoteImageUrl(currentUrl);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     try {
-      const response = await fetch(currentUrl, {
-        redirect: "manual",
+      const response = await requestPinnedRemoteImage(safeTarget, {
         signal: controller.signal,
         headers: {
           "User-Agent": "RedBase/1.0 image-persist",
@@ -455,6 +639,7 @@ async function downloadRemoteGeneratedImage(imageUrl) {
         if (!location) {
           throw new Error("图片下载重定向无效");
         }
+        if (typeof response.body?.resume === "function") response.body.resume();
         currentUrl = new URL(location, currentUrl).toString();
         continue;
       }
@@ -470,10 +655,7 @@ async function downloadRemoteGeneratedImage(imageUrl) {
       if (contentLength > MAX_GENERATED_IMAGE_BYTES) {
         throw new Error(`生成图片超过本地保存上限：${formatBytes(contentLength)}`);
       }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length > MAX_GENERATED_IMAGE_BYTES) {
-        throw new Error(`生成图片超过本地保存上限：${formatBytes(buffer.length)}`);
-      }
+      const buffer = await readGeneratedImageResponseBuffer(response, MAX_GENERATED_IMAGE_BYTES);
       return { buffer, mimeType };
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -485,6 +667,47 @@ async function downloadRemoteGeneratedImage(imageUrl) {
     }
   }
   throw new Error("图片下载重定向次数过多");
+}
+
+async function readGeneratedImageResponseBuffer(response, maxBytes = MAX_GENERATED_IMAGE_BYTES) {
+  if (response?.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let totalBytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.from(value || []);
+        totalBytes += chunk.length;
+        if (totalBytes > maxBytes) {
+          await reader.cancel("generated image exceeds size limit").catch(() => {});
+          throw new Error(`生成图片超过保存上限：${formatBytes(totalBytes)}`);
+        }
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks, totalBytes);
+    } finally {
+      if (typeof reader.releaseLock === "function") reader.releaseLock();
+    }
+  }
+  if (response?.body && typeof response.body[Symbol.asyncIterator] === "function") {
+    const chunks = [];
+    let totalBytes = 0;
+    for await (const value of response.body) {
+      const chunk = Buffer.from(value || []);
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        if (typeof response.body.destroy === "function") response.body.destroy();
+        throw new Error(`生成图片超过保存上限：${formatBytes(totalBytes)}`);
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, totalBytes);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > maxBytes) throw new Error(`生成图片超过保存上限：${formatBytes(buffer.length)}`);
+  return buffer;
 }
 
 function inferImageMimeTypeFromUrl(imageUrl) {
@@ -499,13 +722,23 @@ function inferImageMimeTypeFromUrl(imageUrl) {
   return "image/png";
 }
 
-async function serveStoredGeneratedImage(res, asset) {
-  if (!asset?.storedPath) {
+async function serveStoredGeneratedImage(res, asset, storage = getDefaultGeneratedAssetStorage(), generation = null) {
+  if (!asset?.storedPath && !asset?.objectKey) {
     notFound(res);
     return;
   }
   try {
-    const data = await fsp.readFile(resolveStoredAssetPath(asset.storedPath));
+    if (generation) assertGenerationAssetOwnership(asset, generation);
+    if (asset.provider === "aliyun_oss" || asset.objectKey) {
+      const readUrl = await storage.createReadUrl(asset, { expiresSeconds: 300 });
+      res.writeHead(302, {
+        Location: readUrl,
+        "Cache-Control": "private, no-store",
+      });
+      res.end();
+      return;
+    }
+    const data = await storage.readBuffer(asset);
     res.writeHead(200, {
       "Content-Type": asset.mimeType || "application/octet-stream",
       "Cache-Control": "private, max-age=300",
@@ -516,21 +749,27 @@ async function serveStoredGeneratedImage(res, asset) {
   }
 }
 
-async function resolveGeneratedImageInputForEdit(generation, sourceImageUrl, parentEditId) {
+async function resolveGeneratedImageInputForEdit(generation, sourceImageUrl, parentEditId, storage = getDefaultGeneratedAssetStorage()) {
   const asset = selectGeneratedImageAsset(generation, sourceImageUrl, parentEditId);
-  if (!asset?.storedPath) return null;
+  if (!asset?.storedPath && !asset?.objectKey) return null;
   try {
-    const buffer = await fsp.readFile(resolveStoredAssetPath(asset.storedPath));
+    assertGenerationAssetOwnership(asset, generation);
+    const buffer = await storage.readBuffer(asset);
+    if (buffer.length > MAX_GENERATED_IMAGE_BYTES) throw new Error("生成图片超过编辑读取上限");
+    const assetName = asset.storedPath || asset.objectKey || "generated-image";
     return {
-      name: sanitizeFileName(path.basename(asset.storedPath)),
+      name: sanitizeFileName(path.basename(assetName)),
       dataUrl: `data:${asset.mimeType || "image/png"};base64,${buffer.toString("base64")}`,
-      storedPath: asset.storedPath,
+      storedPath: asset.storedPath || "",
+      objectKey: asset.objectKey || "",
+      provider: asset.provider || (asset.objectKey ? "aliyun_oss" : "local"),
     };
   } catch (error) {
-    console.warn("[generated-image] failed to read local image for edit", {
+    console.warn("[generated-image] failed to read image for edit", {
       generationId: generation?.id,
-      storedPath: asset.storedPath,
-      error: error.message,
+      provider: asset.provider || (asset.objectKey ? "aliyun_oss" : "local"),
+      errorCode: String(error?.code || "ASSET_READ_FAILED"),
+      status: Number(error?.status || error?.statusCode || 0) || undefined,
     });
     return null;
   }
@@ -539,6 +778,8 @@ async function resolveGeneratedImageInputForEdit(generation, sourceImageUrl, par
 function selectGeneratedImageAsset(generation, sourceImageUrl, parentEditId) {
   const payload = generation?.payload || {};
   const url = String(sourceImageUrl || "");
+  const generationIdFromUrl = url.match(/\/api\/generated-images\/(\d+)\//)?.[1];
+  if (generationIdFromUrl && Number(generationIdFromUrl) !== Number(generation?.id)) return null;
   const editHistory = Array.isArray(payload.editHistory) ? payload.editHistory : [];
   const editIdFromUrl = url.match(/\/api\/generated-images\/\d+\/edits\/([a-f0-9]+)\/file/)?.[1];
   const requestedEditId = String(parentEditId || editIdFromUrl || "");
@@ -623,16 +864,22 @@ module.exports = {
   resolveStoredProductImagePath,
   resolveStoredAssetPath,
   removeStoredFileIfExists,
+  recoverStagedBrandLogoDeletions,
   isRemoteImageUrl,
   assertSafeRemoteImageUrl,
+  createPinnedImageLookup,
+  requestPinnedRemoteImage,
   isPrivateOrReservedIp,
   buildGeneratedImageUrl,
   buildGeneratedSlideImageUrl,
   buildGeneratedEditImageUrl,
   persistGenerationImages,
   persistGeneratedImageReference,
+  removeGeneratedTargetUpstreamUrls,
+  sanitizeGenerationPayloadUrls,
   saveGeneratedImageFromRemote,
   downloadRemoteGeneratedImage,
+  readGeneratedImageResponseBuffer,
   inferImageMimeTypeFromUrl,
   serveStoredGeneratedImage,
   resolveGeneratedImageInputForEdit,

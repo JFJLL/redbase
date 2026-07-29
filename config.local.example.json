@@ -49,6 +49,16 @@
     "quality": "medium",
     "imageCount": 1
   },
+  "assetStorage": {
+    "provider": "aliyun_oss",
+    "aliyunOss": {
+      "endpoint": "https://oss-cn-beijing.aliyuncs.com",
+      "bucket": "redmagic",
+      "prefix": "redbase",
+      "accessKeyId": "",
+      "accessKeySecret": ""
+    }
+  },
   "admin": {
     "phones": []
   },

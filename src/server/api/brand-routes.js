@@ -7,8 +7,13 @@ const {
   insertBrand,
   updateBrand,
   deleteBrandById,
+  deleteBrandRows,
 } = require("../db/repositories/brand-repository");
-const { listGenerationsByOwner, deleteGenerationRows } = require("../db/repositories/generation-repository");
+const { listGenerationsByOwner, deleteGenerationRowsBatch } = require("../db/repositories/generation-repository");
+const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
+const {
+  removeGenerationsAssets: removeGenerationsAssetsDefault,
+} = require("../assets/generation-deletion-service");
 
 function normalizeProfileType(value, fallback = "brand") {
   if (value === "personal") return "personal";
@@ -46,10 +51,10 @@ async function handleBrandRoutes(context, req, res, pathname) {
     createBrandAssetTags,
     MAX_TREND_ANALYSIS_BRAND_PROFILE_CHARS,
     getTrendAnalysisBrandProfileSize,
-    removeGenerationLocalFiles,
     saveBrandLogo,
     resolveStoredAssetPath,
     removeStoredFileIfExists,
+    removeGenerationsAssets,
     verifySignedAssetRequest,
     collectBody,
     getSessionToken,
@@ -59,6 +64,11 @@ async function handleBrandRoutes(context, req, res, pathname) {
     badRequest,
     unauthorized,
   } = bindRouteScope(context);
+  const deleteGenerationAssets = removeGenerationsAssets || ((generations, options = {}) =>
+    removeGenerationsAssetsDefault(generations, {
+      ...options,
+      storage: createGeneratedAssetStorage(appConfig),
+    }));
 
   if (req.method === "POST" && pathname === "/api/brands") {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
@@ -210,20 +220,67 @@ async function handleBrandRoutes(context, req, res, pathname) {
       return true;
     }
     const payload = await collectBody(req);
-    const deleteGenerations = Boolean(payload.deleteGenerations);
+    const shouldDeleteGenerations = Boolean(payload.deleteGenerations);
     const deletedGenerationIds = [];
-    if (deleteGenerations) {
-      const brandGenerations = listGenerationsByOwner(user.id).filter((generation) => generation.brandId === brand.id);
-      for (const generation of brandGenerations) {
-        deletedGenerationIds.push(generation.id);
-        await removeGenerationLocalFiles(generation);
-        deleteGenerationRows(generation.id);
+    let brandGenerations = [];
+    let stagedLogo = null;
+    try {
+      if (brand.logo?.storedPath) {
+        const originalPath = resolveStoredAssetPath(brand.logo.storedPath);
+        const stagedPath = `${originalPath}.deleting-${process.pid}-${Date.now()}`;
+        try {
+          await fsp.rename(originalPath, stagedPath);
+          stagedLogo = { originalPath, stagedPath };
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
       }
+      if (shouldDeleteGenerations) {
+        brandGenerations = listGenerationsByOwner(user.id).filter((generation) => generation.brandId === brand.id);
+        await deleteGenerationAssets(brandGenerations, { deleteReason: "brand_history_delete" });
+      }
+    } catch (error) {
+      if (stagedLogo) {
+        await fsp.rename(stagedLogo.stagedPath, stagedLogo.originalPath).catch((restoreError) => {
+          console.error("[brand-delete] failed to restore staged logo", { brandId: brand.id, errorCode: restoreError?.code || "LOGO_RESTORE_FAILED" });
+        });
+      }
+      if (shouldDeleteGenerations) {
+        console.warn("[brand-delete] failed to delete generation assets", {
+          brandId: brand.id,
+          errorCode: String(error?.code || "ASSET_DELETE_FAILED"),
+          status: Number(error?.status || error?.statusCode || 0) || undefined,
+        });
+        json(res, 503, { error: "品牌生成资产删除暂时失败，请稍后重试" });
+        return true;
+      }
+      throw error;
     }
-    if (brand.logo?.storedPath) {
-      await removeStoredFileIfExists(resolveStoredAssetPath(brand.logo.storedPath));
+    try {
+      if (shouldDeleteGenerations) {
+        const deletedAt = new Date().toISOString();
+        const rows = deleteGenerationRowsBatch(brandGenerations.map((generation) => ({
+          generationId: generation.id,
+          deletedAt,
+          deleteReason: "brand_history_delete",
+        })), { afterDelete: () => deleteBrandRows(brand.id) });
+        deletedGenerationIds.push(...rows.filter((row) => row.generationDeleted).map((row) => row.generationId));
+      } else {
+        deleteBrandById(brand.id);
+      }
+    } catch (error) {
+      if (stagedLogo) {
+        await fsp.rename(stagedLogo.stagedPath, stagedLogo.originalPath).catch((restoreError) => {
+          console.error("[brand-delete] failed to restore staged logo after database rollback", { brandId: brand.id, errorCode: restoreError?.code || "LOGO_RESTORE_FAILED" });
+        });
+      }
+      throw error;
     }
-    deleteBrandById(brand.id);
+    if (stagedLogo) {
+      await removeStoredFileIfExists(stagedLogo.stagedPath).catch((error) => {
+        console.warn("[brand-delete] failed to remove staged logo", { brandId: brand.id, errorCode: error?.code || "LOGO_DELETE_FAILED" });
+      });
+    }
     json(res, 200, { ok: true, deletedGenerationIds });
     return true;
   }

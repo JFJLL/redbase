@@ -40,6 +40,44 @@ const { withExcellentRemixGroupLock } = require("../services/excellent-remix-gen
 
 const EXCELLENT_REMIX_CREDIT_ACTION_TYPES = ["xhsCarousel"];
 const CAROUSEL_GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
+const CLIENT_GENERATED_ASSET_KEYS = new Set([
+  "localImage",
+  "storedPath",
+  "objectKey",
+  "provider",
+  "bucket",
+  "endpoint",
+  "originalImageUrl",
+  "originalUrl",
+  "sourceImageUrl",
+  "sourceUrl",
+  "providerResultUrl",
+  "source",
+  "original",
+  "providerResult",
+  "persistError",
+]);
+
+function stripClientGeneratedAssetMetadata(value, options = { allowPrimaryUrls: true, allowSlides: true }) {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripClientGeneratedAssetMetadata(item, { allowPrimaryUrls: false, allowSlides: false }));
+  }
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => {
+        if (CLIENT_GENERATED_ASSET_KEYS.has(key)) return false;
+        if (!/url/i.test(key)) return true;
+        return options.allowPrimaryUrls && (key === "imageUrl" || key === "previewUrl");
+      })
+      .map(([key, child]) => {
+        if (options.allowSlides && key === "slides" && Array.isArray(child)) {
+          return [key, child.map((slide) => stripClientGeneratedAssetMetadata(slide, { allowPrimaryUrls: true, allowSlides: false }))];
+        }
+        return [key, stripClientGeneratedAssetMetadata(child, { allowPrimaryUrls: false, allowSlides: false })];
+      }),
+  );
+}
 
 function requireAspectRatio(payload, type, res, badRequest) {
   const aspectRatio = resolveAspectRatio(payload?.aspectRatio, type);
@@ -1971,7 +2009,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const { trend, idea } = selected;
 
     const payload = await collectBody(req);
-    let carouselPack = payload.carouselPack || {};
+    let carouselPack = stripClientGeneratedAssetMetadata(payload.carouselPack || {});
     const aspectRatio = requireAspectRatio(carouselPack, "xhsCarousel", res, badRequest);
     if (!aspectRatio) return true;
     carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
@@ -2120,5 +2158,6 @@ module.exports = {
   mergeXhsCarouselSlidePayload,
   persistExcellentRemixSlideFromCompletedJob,
   upsertSingleSlideCarouselGeneration,
+  stripClientGeneratedAssetMetadata,
   handleImageGenerationRoutes,
 };

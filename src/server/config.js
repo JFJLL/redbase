@@ -82,6 +82,16 @@ const DEFAULT_APP_CONFIG = {
     sendTextResolution: true,
     sendQuality: true,
   },
+  assetStorage: {
+    provider: "local",
+    aliyunOss: {
+      endpoint: "https://oss-cn-beijing.aliyuncs.com",
+      bucket: "redmagic",
+      prefix: "redbase",
+      accessKeyId: "",
+      accessKeySecret: "",
+    },
+  },
   admin: {
     phones: [],
   },
@@ -139,6 +149,70 @@ function parseBooleanConfig(value, fallback = false) {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
+}
+
+function readEnvOverride(env, name, fallback) {
+  return Object.prototype.hasOwnProperty.call(env || {}, name) ? String(env[name] ?? "").trim() : String(fallback || "").trim();
+}
+
+function normalizeOssPrefix(value) {
+  return String(value || "").trim().replace(/^\/+|\/+$/g, "");
+}
+
+function resolveAssetStorageConfig(localConfig = {}, env = process.env, options = {}) {
+  const defaults = DEFAULT_APP_CONFIG.assetStorage.aliyunOss;
+  const configured = localConfig?.assetStorage?.aliyunOss || {};
+  const aliyunOss = {
+    endpoint: readEnvOverride(env, "ALIYUN_OSS_ENDPOINT", configured.endpoint ?? defaults.endpoint),
+    bucket: readEnvOverride(env, "ALIYUN_OSS_BUCKET", configured.bucket ?? defaults.bucket),
+    prefix: normalizeOssPrefix(readEnvOverride(env, "ALIYUN_OSS_PREFIX", configured.prefix ?? defaults.prefix)),
+    accessKeyId: readEnvOverride(env, "ALIYUN_OSS_ACCESS_KEY_ID", configured.accessKeyId ?? defaults.accessKeyId),
+    accessKeySecret: readEnvOverride(env, "ALIYUN_OSS_ACCESS_KEY_SECRET", configured.accessKeySecret ?? defaults.accessKeySecret),
+  };
+  const invalid = [];
+  try {
+    const endpoint = new URL(aliyunOss.endpoint);
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.pathname !== "/") {
+      invalid.push("ALIYUN_OSS_ENDPOINT");
+    }
+  } catch (error) {
+    invalid.push("ALIYUN_OSS_ENDPOINT");
+  }
+  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(aliyunOss.bucket)) invalid.push("ALIYUN_OSS_BUCKET");
+  const prefixSegments = aliyunOss.prefix.split("/");
+  if (
+    !aliyunOss.prefix ||
+    aliyunOss.prefix.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(aliyunOss.prefix) ||
+    prefixSegments.some((segment) => !segment || segment === "." || segment === "..")
+  ) invalid.push("ALIYUN_OSS_PREFIX");
+
+  const missing = [];
+  if (!aliyunOss.endpoint) missing.push("ALIYUN_OSS_ENDPOINT");
+  if (!aliyunOss.bucket) missing.push("ALIYUN_OSS_BUCKET");
+  if (!aliyunOss.prefix) missing.push("ALIYUN_OSS_PREFIX");
+  if (!aliyunOss.accessKeyId) missing.push("ALIYUN_OSS_ACCESS_KEY_ID");
+  if (!aliyunOss.accessKeySecret) missing.push("ALIYUN_OSS_ACCESS_KEY_SECRET");
+
+  const explicitEnvironment = [
+    "ALIYUN_OSS_ENDPOINT",
+    "ALIYUN_OSS_BUCKET",
+    "ALIYUN_OSS_PREFIX",
+    "ALIYUN_OSS_ACCESS_KEY_ID",
+    "ALIYUN_OSS_ACCESS_KEY_SECRET",
+  ].some((name) => Object.prototype.hasOwnProperty.call(env || {}, name));
+  const explicitlyConfigured = explicitEnvironment || Boolean(localConfig?.assetStorage);
+  const issues = [...new Set([...missing, ...invalid])];
+  if (explicitlyConfigured && issues.length && options.warn !== false) {
+    const logger = options.logger || console;
+    logger.warn(`[asset-storage] aliyun_oss disabled; missing or invalid configuration: ${issues.join(", ")}`);
+  }
+
+  return {
+    provider: issues.length ? "local" : "aliyun_oss",
+    aliyunOss,
+    configurationIssues: issues,
+  };
 }
 
 function loadProjectEnvFile(filePath = PROJECT_ENV_FILE) {
@@ -229,6 +303,7 @@ function loadAppConfig() {
   const anySearchApiKey = anySearchApiKeys[0] || "";
 
   return {
+    assetStorage: resolveAssetStorageConfig(localConfig),
     textProvider: {
       apiStyle: String(process.env.TEXT_API_STYLE || merged.textProvider.apiStyle || "google").trim(),
       model: String(process.env.TEXT_MODEL || merged.textProvider.model || "").trim(),
@@ -438,5 +513,7 @@ module.exports = {
   DEFAULT_APP_CONFIG,
   loadProjectEnvFile,
   readEnvValueFile,
+  normalizeOssPrefix,
+  resolveAssetStorageConfig,
   loadAppConfig,
 };

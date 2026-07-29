@@ -120,17 +120,49 @@ const SENSITIVE_PAYLOAD_KEYS = new Set([
   "responseBody",
   "upstreamPayload",
   "sourceStoredPath",
+  "source",
+  "original",
+  "providerResult",
 ]);
 
-function sanitizePayloadForClient(value) {
+const SAFE_IMAGE_URL_QUERY_KEYS = new Set(["width", "height", "w", "h", "format", "quality", "q", "fit", "crop", "resize", "dpr"]);
+
+function redactSensitiveUrlQuery(value) {
+  const input = String(value || "");
+  const isRelative = input.startsWith("/");
+  let parsed;
+  try {
+    parsed = new URL(input, isRelative ? "http://redbase.local" : undefined);
+  } catch (error) {
+    return "";
+  }
+  if (!isRelative && parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+  parsed.username = "";
+  parsed.password = "";
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (!SAFE_IMAGE_URL_QUERY_KEYS.has(key.toLowerCase())) parsed.searchParams.delete(key);
+  }
+  parsed.hash = "";
+  return isRelative ? `${parsed.pathname}${parsed.search}` : parsed.toString();
+}
+
+function sanitizePayloadForClient(value, parentKey = "") {
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizePayloadForClient(item));
+    return value.map((item) => {
+      if (typeof item === "string" && /url/i.test(parentKey)) return redactSensitiveUrlQuery(item);
+      return sanitizePayloadForClient(item, parentKey);
+    });
   }
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value)
       .filter(([key]) => !SENSITIVE_PAYLOAD_KEYS.has(key))
-      .map(([key, child]) => [key, sanitizePayloadForClient(child)]),
+      .map(([key, child]) => {
+        if (typeof child === "string" && /url$/i.test(key)) {
+          return [key, redactSensitiveUrlQuery(child)];
+        }
+        return [key, sanitizePayloadForClient(child, key)];
+      }),
   );
 }
 
@@ -196,7 +228,7 @@ function sanitizeGeneration(item) {
     ideaTitle: item.ideaTitle,
     cardTitle: item.cardTitle,
     createdAt: item.createdAt,
-    previewUrl: item.previewUrl || "",
+    previewUrl: redactSensitiveUrlQuery(item.previewUrl || ""),
     summary: item.summary || "",
     payload: sanitizePayloadForClient(item.payload || {}),
   };
@@ -536,6 +568,7 @@ module.exports = {
   sanitizeIdea,
   sanitizeTrend,
   sanitizePayloadForClient,
+  redactSensitiveUrlQuery,
   normalizeTrendBuckets,
   flattenTrendBuckets,
   sanitizeGeneration,

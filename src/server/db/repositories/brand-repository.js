@@ -296,14 +296,27 @@ function updateCurrentTrendIdeaContentAssets(brandId, ownerUserId, trendId, idea
   return result.changes === 1;
 }
 
-function deleteBrandById(brandId) {
-  return runTransaction(() => {
-    db.prepare("DELETE FROM creator_materials WHERE brand_id = ?").run(Number(brandId));
-    db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
-    db.prepare("DELETE FROM trends WHERE brand_id = ?").run(Number(brandId));
-    db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(Number(brandId));
-    db.prepare("DELETE FROM brands WHERE id = ?").run(Number(brandId));
+function deleteBrandRows(brandId) {
+  db.prepare("DELETE FROM creator_materials WHERE brand_id = ?").run(Number(brandId));
+  db.prepare("DELETE FROM ideas WHERE trend_row_id IN (SELECT row_id FROM trends WHERE brand_id = ?)").run(Number(brandId));
+  db.prepare("DELETE FROM trends WHERE brand_id = ?").run(Number(brandId));
+  db.prepare("DELETE FROM analyses WHERE brand_id = ?").run(Number(brandId));
+  db.prepare("DELETE FROM brands WHERE id = ?").run(Number(brandId));
+}
+
+function isBrandLogoStoredPathReferenced(storedPath) {
+  const target = String(storedPath || "").replace(/\\/g, "/");
+  return db.prepare("SELECT logo_json FROM brands WHERE logo_json IS NOT NULL AND logo_json != ''").all().some((row) => {
+    try {
+      return String(JSON.parse(row.logo_json || "{}")?.storedPath || "").replace(/\\/g, "/") === target;
+    } catch (error) {
+      return false;
+    }
   });
+}
+
+function deleteBrandById(brandId) {
+  return runTransaction(() => deleteBrandRows(brandId));
 }
 
 function insertBrandContent(brand) {
@@ -395,5 +408,7 @@ module.exports = {
   upsertBrandFull,
   updateCurrentTrendIdeaContentAssets,
   deleteBrandById,
+  deleteBrandRows,
+  isBrandLogoStoredPathReferenced,
   allocateAnalysisAndTrendBase,
 };
