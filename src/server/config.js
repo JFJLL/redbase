@@ -85,9 +85,9 @@ const DEFAULT_APP_CONFIG = {
   assetStorage: {
     provider: "local",
     aliyunOss: {
-      endpoint: "https://oss-cn-beijing.aliyuncs.com",
-      bucket: "redmagic",
-      prefix: "redbase",
+      endpoint: "",
+      bucket: "",
+      prefix: "",
       accessKeyId: "",
       accessKeySecret: "",
     },

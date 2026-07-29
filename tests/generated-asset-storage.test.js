@@ -4,7 +4,7 @@ const fsp = require("fs/promises");
 const os = require("os");
 const path = require("path");
 
-const { resolveAssetStorageConfig } = require("../src/server/config");
+const { DEFAULT_APP_CONFIG, resolveAssetStorageConfig } = require("../src/server/config");
 const { createGeneratedAssetStorage } = require("../src/server/assets/generated-asset-storage");
 const { createAliyunOssGeneratedAssetStorage } = require("../src/server/assets/aliyun-oss-generated-asset-storage");
 const { doesImageBufferMatchMimeType } = require("../src/server/assets/generated-asset-utils");
@@ -61,6 +61,21 @@ test("complete environment selects aliyun_oss and overrides local config", () =>
   assert.equal(config.aliyunOss.endpoint, "https://oss-cn-beijing.aliyuncs.com");
   assert.equal(config.aliyunOss.bucket, "redmagic");
   assert.equal(config.aliyunOss.prefix, "redbase");
+});
+
+test("OSS deployment defaults are externalized and the config example uses a placeholder bucket", async () => {
+  assert.deepEqual(DEFAULT_APP_CONFIG.assetStorage.aliyunOss, {
+    endpoint: "",
+    bucket: "",
+    prefix: "",
+    accessKeyId: "",
+    accessKeySecret: "",
+  });
+  const example = JSON.parse(await fsp.readFile(path.join(__dirname, "..", "config.local.example.json"), "utf8"));
+  assert.equal(example.assetStorage.aliyunOss.endpoint, "https://oss-cn-beijing.aliyuncs.com");
+  assert.equal(example.assetStorage.aliyunOss.bucket, "your-bucket");
+  assert.equal(example.assetStorage.aliyunOss.prefix, "redbase");
+  assert.equal(JSON.stringify(example).includes("redmagic"), false);
 });
 
 test("incomplete or invalid OSS configuration falls back to local without logging credential values", () => {

@@ -53,7 +53,7 @@
     "provider": "aliyun_oss",
     "aliyunOss": {
       "endpoint": "https://oss-cn-beijing.aliyuncs.com",
-      "bucket": "redmagic",
+      "bucket": "your-bucket",
       "prefix": "redbase",
       "accessKeyId": "",
       "accessKeySecret": ""
