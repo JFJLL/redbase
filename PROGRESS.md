@@ -279,3 +279,28 @@
 - [x] 任务 3 API warnings + 前端提示 + 积分
 - [x] 任务 4 回归测试 + README + 反向验证（红→绿）
 - [x] 分三段提交（搜索重排 `7e2a87a` / 结果交付 `36496b2` / API与测试 `d3ca478`）+ verify-change.ps1 全绿（另以 `-RiskOverride R2` 跑过 static+unit+integration 全命令泳道）+ 分支已推送 `origin/codex/trend-delivery-guarantee-v1`，未合并 master
+
+# PROGRESS — 优秀内容生成资产 OSS 与 30 天保留
+
+## 任务 0 基线核实（已完成 2026-07-29）
+
+- 已执行 `git fetch origin --prune`。
+- `origin/codex/excellent-remix-billing-v1` = `4babeeaab6cd4e04531d7e1a09092227b5e594bb`，与预期 `4babeea` 一致。
+- 已从该远端基线创建独立 worktree `.worktrees/excellent-assets-oss-retention-v1` 和分支 `codex/excellent-assets-oss-retention-v1`。
+- 新 worktree 初始 `git status --short` 为空，HEAD 等于基线；其余 worktree 登记与分支未变。
+
+## OSS 资产与统一删除（已完成 2026-07-29）
+
+- 新增 `ali-oss@6.23.0` 和 generated asset storage facade；五项 OSS 配置完整且合法时启用 `aliyun_oss`，否则安全回退 `local`，环境变量优先于 `config.local.json`，日志不输出凭据值。
+- 新图先做 SSRF、流式 60 MB 上限、MIME/魔数校验，再直接以 Buffer 上传私有 OSS；对象键按 `redbase/generated-images/users/{user}/{yyyy}/{mm}/{generationId}/gi_{generationId}_{variant}_{random}.{ext}` 组织并禁止覆盖。
+- OSS 图片读取使用 300 秒签名 URL；编辑输入支持 OSS Buffer 与旧本地文件，所有读写删均校验 owner/generation/objectKey 范围，客户端响应递归移除存储元数据和非 RedBase URL。
+- 新增统一 generation deletion service：OSS 先删、旧本地后删，资产全部成功后才事务删除 generation/image_jobs；任一非 404 OSS 失败均保留数据库行并返回 503。`credit_events` 不删除，只解除 generation 关联并写审计原因，账务历史保持可追溯。
+- 历史保留期统一为精确 30 天：启动、每日定时、历史读取和过期图片访问均走同一清理服务；严格解析 ISO 日历日期，清理并发共享同一 Promise，列表不会泄露过期记录。
+
+## 最终回归与对抗验证（已完成 2026-07-29）
+
+- Node 24.11.1：`npm run check` 通过；`npm test` 491/491；`npm run test:integration` 191/191；`npm run test:data` 24/24；`npm run eval:ai` 126/126；全部 fail 0、skipped 0。
+- 前端：typecheck 通过；Vitest 28 files / 165 tests 全绿；Vite production build 通过。
+- Node 20.20.0：`npm run check`、OSS/保留期受影响测试、前端 production build、独立 SQLite API smoke 均通过；验证后已切回 Node 24.11.1 并重建原生依赖。
+- 反向验证 3 组：临时把 30 天改成 7 天时边界用例红；临时吞掉 OSS delete 错误时删除安全用例红；临时允许不完整配置启用 OSS 时配置回退用例红。每项恢复后均转绿，临时破坏未保留。
+- 独立审查发现并修复：admin/brand/user 删除绕过统一服务、租户/代际范围错误、SDK 删除响应大小写、超限流式下载、签名查询与嵌套 URL/轮播元数据泄漏；终审继续补齐顶层 preview/URL authority 脱敏、下载 DNS 地址绑定、批删 NoSuchBucket 误判、多 generation 两阶段批删/数据库事务回滚，以及品牌 Logo 的可恢复 staging/启动恢复。最终最新 diff 门禁：Critical 0 / High 0 / Medium 0 / Low 0。
