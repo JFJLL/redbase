@@ -207,7 +207,7 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
           const relative = stagedKey.slice(stagingPrefix.length);
           const stageId = relative.split("/")[0] || "";
           const markerMatch = stageId.match(/^v1-(\d+)-/);
-          if (!markerMatch || cleanupNowMs - Number(markerMatch[1]) < DELETION_STAGING_GRACE_MS) continue;
+          if (!options.ignoreGrace && (!markerMatch || cleanupNowMs - Number(markerMatch[1]) < DELETION_STAGING_GRACE_MS)) continue;
           const objectKey = assertSafeObjectKey(decodeStagedObjectKey(stagedKey, stagingPrefix), prefix);
           const referenced = await isReferenced({ provider: "aliyun_oss", objectKey });
           if (referenced) {
@@ -224,6 +224,32 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
         marker = page?.isTruncated ? page?.nextMarker : undefined;
       } while (marker);
       return { recovered, removed };
+    },
+    async cleanupUnreferencedAssets(options = {}) {
+      if (typeof client.list !== "function") throw new Error("OSS client does not support orphan cleanup");
+      const generatedPrefix = `${path.posix.join(prefix, "generated-images")}/`;
+      const isReferenced = options.isReferenced || (() => false);
+      const cleanupNowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : now().getTime();
+      let marker;
+      let removed = 0;
+      do {
+        const page = await client.list({ prefix: generatedPrefix, marker, "max-keys": OSS_DELETE_BATCH_LIMIT });
+        const objects = Array.isArray(page?.objects) ? page.objects : [];
+        for (const object of objects) {
+          const objectKey = assertSafeObjectKey(object?.name || object?.key, prefix);
+          const modifiedMs = Date.parse(object?.lastModified || object?.last_modified || "");
+          if (!Number.isFinite(modifiedMs) || cleanupNowMs - modifiedMs < DELETION_STAGING_GRACE_MS) continue;
+          if (await isReferenced({ provider: "aliyun_oss", objectKey })) continue;
+          try {
+            await client.delete(objectKey);
+          } catch (error) {
+            if (!isOssObjectNotFoundError(error)) throw error;
+          }
+          removed += 1;
+        }
+        marker = page?.isTruncated ? page?.nextMarker : undefined;
+      } while (marker);
+      return { removed };
     },
     async createReadUrl(asset, options = {}) {
       if (!asset?.objectKey) throw new Error("Generated asset not found");

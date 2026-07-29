@@ -10,10 +10,7 @@ const {
   createAliyunOssGeneratedAssetStorage,
   DELETION_STAGING_GRACE_MS: OSS_STAGING_GRACE_MS,
 } = require("../src/server/assets/aliyun-oss-generated-asset-storage");
-const {
-  createLocalGeneratedAssetStorage,
-  DELETION_STAGING_GRACE_MS: LOCAL_STAGING_GRACE_MS,
-} = require("../src/server/assets/local-generated-asset-storage");
+const { createLocalGeneratedAssetStorage } = require("../src/server/assets/local-generated-asset-storage");
 const { doesImageBufferMatchMimeType } = require("../src/server/assets/generated-asset-utils");
 const { assertGenerationAssetOwnership } = require("../src/server/assets/generation-deletion-service");
 const { persistGenerationAndCommit, stripClientGeneratedAssetMetadata } = require("../src/server/api/image-generation-routes");
@@ -265,6 +262,8 @@ test("daily OSS staging cleanup restores referenced objects and removes unrefere
   assert.equal(objects.has(referencedKey), true);
   assert.equal(objects.has(orphanKey), false);
   assert.equal([...objects.keys()].some((key) => key.includes(`/${encode(activeKey)}`)), true, "active staging must survive cleanup");
+  assert.deepEqual(await storage.cleanupDeletionStaging({ nowMs: cleanupNowMs, ignoreGrace: true, isReferenced: () => false }), { recovered: 0, removed: 1 });
+  assert.equal([...objects.keys()].some((key) => key.includes("/.deletion-staging/")), false, "startup recovery may process active markers before serving requests");
 });
 
 test("local staging cleanup retries a failed commit and removes the hidden copy", async () => {
@@ -293,11 +292,54 @@ test("local staging cleanup retries a failed commit and removes the hidden copy"
     const stage = await storage.stageDeleteMany([{ provider: "local", storedPath }]);
     await assert.rejects(stage.commit(), /file busy/);
     assert.deepEqual(await storage.cleanupDeletionStaging({ nowMs, isReferenced: () => false }), { recovered: 0, removed: 0 });
-    nowMs += LOCAL_STAGING_GRACE_MS + 1;
-    assert.deepEqual(await storage.cleanupDeletionStaging({ nowMs, isReferenced: () => false }), { recovered: 0, removed: 1 });
+    assert.deepEqual(await storage.cleanupDeletionStaging({ nowMs, ignoreGrace: true, isReferenced: () => false }), { recovered: 0, removed: 1 });
   } finally {
     await fsp.rm(dataDir, { recursive: true, force: true });
   }
+});
+
+test("local orphan cleanup removes only old unreferenced generated originals", async () => {
+  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "redbase-local-orphans-"));
+  const oldStoredPath = path.join("uploads", "generated-images", "users", "1", "2026", "07", "2", "old.png");
+  const freshStoredPath = path.join("uploads", "generated-images", "users", "1", "2026", "07", "3", "fresh.png");
+  for (const storedPath of [oldStoredPath, freshStoredPath]) {
+    const filePath = path.join(dataDir, storedPath);
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    await fsp.writeFile(filePath, PNG_BUFFER);
+  }
+  const nowMs = Date.now();
+  await fsp.utimes(path.join(dataDir, oldStoredPath), new Date(1), new Date(1));
+  const storage = createLocalGeneratedAssetStorage({ dataDir });
+  try {
+    assert.deepEqual(await storage.cleanupUnreferencedAssets({ nowMs, isReferenced: () => false }), { removed: 1 });
+    await assert.rejects(fsp.stat(path.join(dataDir, oldStoredPath)), { code: "ENOENT" });
+    assert.equal((await fsp.stat(path.join(dataDir, freshStoredPath))).isFile(), true);
+  } finally {
+    await fsp.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("OSS orphan cleanup removes only old unreferenced generated originals", async () => {
+  const nowMs = Date.now();
+  const oldKey = "redbase/generated-images/users/1/2026/07/2/old.png";
+  const freshKey = "redbase/generated-images/users/1/2026/07/3/fresh.png";
+  const deleted = [];
+  const storage = createAliyunOssGeneratedAssetStorage(ossConfig(), {
+    client: {
+      async list() {
+        return {
+          objects: [
+            { name: oldKey, lastModified: new Date(1).toISOString() },
+            { name: freshKey, lastModified: new Date(nowMs).toISOString() },
+          ],
+          isTruncated: false,
+        };
+      },
+      async delete(key) { deleted.push(key); },
+    },
+  });
+  assert.deepEqual(await storage.cleanupUnreferencedAssets({ nowMs, isReferenced: () => false }), { removed: 1 });
+  assert.deepEqual(deleted, [oldKey]);
 });
 
 test("signed upstream query credentials are neither persisted nor returned to clients", async () => {

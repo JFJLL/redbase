@@ -89,6 +89,23 @@ function payloadContainsGeneratedAsset(value, asset) {
   return Object.values(value).some((item) => payloadContainsGeneratedAsset(item, asset));
 }
 
+function collectGeneratedAssetReferenceIdentities(value, identities) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectGeneratedAssetReferenceIdentities(item, identities));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  if (value.objectKey) identities.add(`aliyun_oss:${value.objectKey}`);
+  if (value.storedPath) identities.add(`local:${value.storedPath}`);
+  Object.values(value).forEach((item) => collectGeneratedAssetReferenceIdentities(item, identities));
+}
+
+function createGeneratedAssetReferenceLookup() {
+  const identities = new Set();
+  listAllGenerations().forEach((generation) => collectGeneratedAssetReferenceIdentities(generation.payload, identities));
+  return (asset) => identities.has(`${asset?.objectKey ? "aliyun_oss" : "local"}:${asset?.objectKey || asset?.storedPath || ""}`);
+}
+
 function isGeneratedAssetReferenced(asset) {
   if (!asset?.objectKey && !asset?.storedPath) return false;
   return listAllGenerations().some((generation) => payloadContainsGeneratedAsset(generation.payload, asset));
@@ -217,6 +234,7 @@ module.exports = {
   searchGenerations,
   listAllGenerations,
   isGeneratedAssetReferenced,
+  createGeneratedAssetReferenceLookup,
   listExpiredGenerations,
   findGenerationByOwner,
   findGenerationById,

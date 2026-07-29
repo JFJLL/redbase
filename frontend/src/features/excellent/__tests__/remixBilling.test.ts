@@ -7,6 +7,7 @@ import {
   fusionButtonLabel,
   makeRemixBillingRequestId,
   resolveRemixBillingAttempt,
+  shouldResetRemixBillingAttempt,
   shouldWarnNextDirectionCharge,
 } from "../remixState";
 
@@ -166,5 +167,12 @@ describe("remix billing UI helpers", () => {
     const changed = resolveRemixBillingAttempt(first, "input-2", false, factory);
     expect(changed.requestId).toBe("request-B");
     expect(changed.forceRegenerate).toBe(false);
+  });
+
+  it("resets only terminal request-id states so a corrupt replay can self-heal", () => {
+    expect(shouldResetRemixBillingAttempt("REQUEST_ID_CONFLICT")).toBe(true);
+    expect(shouldResetRemixBillingAttempt("REPLAY_RESULT_MISSING")).toBe(true);
+    expect(shouldResetRemixBillingAttempt("REQUEST_IN_PROGRESS")).toBe(false);
+    expect(shouldResetRemixBillingAttempt("NETWORK_ERROR")).toBe(false);
   });
 });

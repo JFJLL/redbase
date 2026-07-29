@@ -47,6 +47,7 @@ import {
   MIN_CUSTOM_DIRECTION_CHARS,
   REMIX_CONTENT_MODES,
   resolveRemixBillingAttempt,
+  shouldResetRemixBillingAttempt,
   shouldWarnNextDirectionCharge,
   toggleLearningFocus,
   type ExcellentRemixState,
@@ -539,8 +540,8 @@ function fusionAttemptIsCurrent(state: ExcellentRemixState, requestId: string, i
   );
 }
 
-function isRequestIdConflict(error: unknown): boolean {
-  return error instanceof ApiError && error.body?.code === "REQUEST_ID_CONFLICT";
+function shouldResetBillingAttempt(error: unknown): boolean {
+  return error instanceof ApiError && shouldResetRemixBillingAttempt(error.body?.code);
 }
 
 async function generateDirections() {
@@ -592,7 +593,7 @@ async function generateDirections() {
     if (isAbortError(error) || remix.value !== state) return;
     if (!directionsAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     if (await handleUnauthorizedError(error)) return;
-    if (isRequestIdConflict(error)) state.directionsBillingAttempt = null;
+    if (shouldResetBillingAttempt(error)) state.directionsBillingAttempt = null;
     state.directionsStatus = "error";
     state.directionsError = (error as Error).message;
   }
@@ -631,7 +632,7 @@ async function generateFusion() {
     if (isAbortError(error) || remix.value !== state) return;
     if (!fusionAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     if (await handleUnauthorizedError(error)) return;
-    if (isRequestIdConflict(error)) state.fusionBillingAttempt = null;
+    if (shouldResetBillingAttempt(error)) state.fusionBillingAttempt = null;
     state.fusionStatus = "error";
     state.fusionError = (error as Error).message;
   }

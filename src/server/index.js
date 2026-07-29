@@ -16,7 +16,10 @@ const {
 } = require("./assets/image-store");
 const { createGeneratedAssetStorage } = require("./assets/generated-asset-storage");
 const { isBrandLogoStoredPathReferenced } = require("./db/repositories/brand-repository");
-const { isGeneratedAssetReferenced } = require("./db/repositories/generation-repository");
+const {
+  isGeneratedAssetReferenced,
+  createGeneratedAssetReferenceLookup,
+} = require("./db/repositories/generation-repository");
 const { isProductImageStoredPathReferenced } = require("./db/repositories/product-image-repository");
 
 async function start() {
@@ -25,9 +28,15 @@ async function start() {
   const store = { ensureStore, readStore, writeStore };
   const ai = createAiServices(appConfig);
   const generatedAssetStorage = createGeneratedAssetStorage(appConfig);
+  const cleanupStagedStoredAssets = ({ nowMs, ignoreGrace = false } = {}) => Promise.all([
+    recoverStagedBrandLogoDeletions({ isReferenced: isBrandLogoStoredPathReferenced, nowMs, ignoreGrace }),
+    recoverStagedProductImageDeletions({ isReferenced: isProductImageStoredPathReferenced, nowMs, ignoreGrace }),
+  ]);
   const historyCleanupRunner = createGenerationHistoryCleanupRunner({
     storage: generatedAssetStorage,
     isAssetReferenced: isGeneratedAssetReferenced,
+    createAssetReferenceLookup: createGeneratedAssetReferenceLookup,
+    cleanupStagedStoredAssets,
     cleanupEmptyGeneratedImageDirs,
   });
   const handleApi = createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner });
@@ -63,13 +72,16 @@ async function start() {
 
   await ensureStore();
   try {
-    await recoverStagedBrandLogoDeletions({ isReferenced: isBrandLogoStoredPathReferenced });
-    await recoverStagedProductImageDeletions({ isReferenced: isProductImageStoredPathReferenced });
+    await cleanupStagedStoredAssets({ nowMs: Date.now(), ignoreGrace: true });
   } catch (error) {
     console.warn("[asset-delete] failed to recover staged local deletions", { error: error.message });
   }
   try {
-    await historyCleanupRunner({ nowMs: Date.now() });
+    await historyCleanupRunner({
+      nowMs: Date.now(),
+      cleanupRecovery: true,
+      cleanupRecoveryIgnoreGrace: true,
+    });
   } catch (error) {
     console.warn("[history-expiry] failed to clean expired generation history", { error: error.message });
   }
@@ -81,7 +93,10 @@ async function start() {
 
   console.log(`Server running at http://${HOST}:${PORT}`);
 
-  const historyCleanupScheduler = startGenerationHistoryCleanupScheduler({ runCleanup: historyCleanupRunner });
+  const historyCleanupScheduler = startGenerationHistoryCleanupScheduler({
+    runCleanup: historyCleanupRunner,
+    cleanupRecovery: true,
+  });
   server.once("close", () => historyCleanupScheduler.stop());
 
   // Excellent content is cache-only on startup. Do not auto-call Pgy search_note_v2.

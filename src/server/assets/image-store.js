@@ -542,6 +542,8 @@ async function recoverStagedStoredAssetDeletions(options = {}) {
   const dataDir = options.dataDir || DATA_DIR;
   const root = options.root || path.join(dataDir, "uploads", "brand-logos");
   const isReferenced = options.isReferenced || (() => false);
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const graceMs = Number.isFinite(Number(options.graceMs)) ? Number(options.graceMs) : 60 * 60 * 1000;
   let recovered = 0;
   let removed = 0;
 
@@ -561,6 +563,9 @@ async function recoverStagedStoredAssetDeletions(options = {}) {
       }
       const markerIndex = entryPath.lastIndexOf(".deleting-");
       if (markerIndex < 0) continue;
+      const marker = entryPath.slice(markerIndex + ".deleting-".length);
+      const markerMatch = marker.match(/^\d+-(\d+)(?:-|$)/);
+      if (!options.ignoreGrace && (!markerMatch || nowMs - Number(markerMatch[1]) < graceMs)) continue;
       const originalPath = entryPath.slice(0, markerIndex);
       const storedPath = path.relative(dataDir, originalPath);
       if (isReferenced(storedPath)) {

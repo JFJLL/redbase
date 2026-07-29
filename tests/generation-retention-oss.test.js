@@ -12,6 +12,7 @@ const {
   findGenerationById,
   deleteGenerationRows,
   deleteGenerationRowsBatch,
+  createGeneratedAssetReferenceLookup,
 } = require("../src/server/db/repositories/generation-repository");
 const {
   removeGenerationAssetsAndRows,
@@ -78,6 +79,20 @@ function seedLinkedRows(generationId, suffix = "") {
     payload: { original: true },
   });
 }
+
+test("generated asset reference lookup snapshots all identities once for O(1) cleanup checks", () => {
+  const generationId = 7100;
+  const objectKey = `redbase/generated-images/users/501/2026/05/${generationId}/gi_${generationId}_main_x.png`;
+  const storedPath = `uploads/generated-images/users/501/2026/05/${generationId}/gi_${generationId}_slide_x.png`;
+  seedGeneration(generationId, "2026-05-01T00:00:00.000Z", {
+    localImage: { provider: "aliyun_oss", objectKey },
+    slides: [{ localImage: { provider: "local", storedPath } }],
+  });
+  const isReferenced = createGeneratedAssetReferenceLookup();
+  assert.equal(isReferenced({ provider: "aliyun_oss", objectKey }), true);
+  assert.equal(isReferenced({ provider: "local", storedPath }), true);
+  assert.equal(isReferenced({ provider: "local", storedPath: `${storedPath}.missing` }), false);
+});
 
 test("successful asset deletion removes generation and image jobs but preserves audited credit event", async () => {
   const generationId = 7101;
@@ -373,8 +388,10 @@ test("daily cleanup scheduler unrefs its timer, can be stopped, and concurrent c
   const timer = { unrefCalled: false, unref() { this.unrefCalled = true; } };
   let callback;
   let cleared = null;
+  let scheduledOptions = null;
   const scheduler = startGenerationHistoryCleanupScheduler({
-    runCleanup: async () => ({ deletedCount: 0 }),
+    runCleanup: async (options) => { scheduledOptions = options; return { deletedCount: 0 }; },
+    cleanupRecovery: true,
     setIntervalFn(fn, intervalMs) {
       callback = fn;
       assert.equal(intervalMs, 24 * 60 * 60 * 1000);
@@ -384,6 +401,7 @@ test("daily cleanup scheduler unrefs its timer, can be stopped, and concurrent c
   });
   assert.equal(timer.unrefCalled, true);
   await callback();
+  assert.equal(scheduledOptions.cleanupRecovery, true);
   scheduler.stop();
   assert.strictEqual(cleared, timer);
 });

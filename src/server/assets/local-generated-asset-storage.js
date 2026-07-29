@@ -141,7 +141,7 @@ function createLocalGeneratedAssetStorage(options = {}) {
         if (markerIndex < 0) return;
         const marker = stagedPath.slice(markerIndex + ".delete-stage-".length);
         const markerMatch = marker.match(/^v1-(\d+)-/);
-        if (!markerMatch || cleanupNowMs - Number(markerMatch[1]) < DELETION_STAGING_GRACE_MS) return;
+        if (!options.ignoreGrace && (!markerMatch || cleanupNowMs - Number(markerMatch[1]) < DELETION_STAGING_GRACE_MS)) return;
         const originalPath = stagedPath.slice(0, markerIndex);
         const storedPath = path.relative(dataDir, originalPath);
         if (await isReferenced({ provider: "local", storedPath })) {
@@ -159,6 +159,22 @@ function createLocalGeneratedAssetStorage(options = {}) {
         }
       });
       return { recovered, removed };
+    },
+    async cleanupUnreferencedAssets(options = {}) {
+      const root = path.join(dataDir, "uploads", "generated-images");
+      const isReferenced = options.isReferenced || (() => false);
+      const cleanupNowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : now().getTime();
+      let removed = 0;
+      await visitFiles(root, async (filePath) => {
+        if (filePath.includes(".delete-stage-")) return;
+        const stat = await fsPromises.stat(filePath);
+        if (cleanupNowMs - Number(stat.mtimeMs || 0) < DELETION_STAGING_GRACE_MS) return;
+        const storedPath = path.relative(dataDir, filePath);
+        if (await isReferenced({ provider: "local", storedPath })) return;
+        await fsPromises.unlink(filePath);
+        removed += 1;
+      });
+      return { removed };
     },
     async createReadUrl() {
       return "";

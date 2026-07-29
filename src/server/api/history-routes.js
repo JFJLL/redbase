@@ -106,8 +106,21 @@ async function cleanupExpiredGenerationHistory(options = {}) {
     ? configuredRetentionMs
     : HISTORY_GENERATION_RETENTION_MS;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-  if (typeof options.storage?.cleanupDeletionStaging === "function") {
-    await options.storage.cleanupDeletionStaging({ isReferenced: options.isAssetReferenced, nowMs });
+  const isAssetReferenced = options.cleanupRecovery === true && typeof options.createAssetReferenceLookup === "function"
+    ? options.createAssetReferenceLookup()
+    : options.isAssetReferenced;
+  if (options.cleanupRecovery === true && typeof options.storage?.cleanupDeletionStaging === "function") {
+    await options.storage.cleanupDeletionStaging({
+      isReferenced: isAssetReferenced,
+      nowMs,
+      ignoreGrace: options.cleanupRecoveryIgnoreGrace === true,
+    });
+  }
+  if (options.cleanupRecovery === true && typeof options.storage?.cleanupUnreferencedAssets === "function") {
+    await options.storage.cleanupUnreferencedAssets({ isReferenced: isAssetReferenced, nowMs });
+  }
+  if (options.cleanupRecovery === true && typeof options.cleanupStagedStoredAssets === "function") {
+    await options.cleanupStagedStoredAssets({ nowMs });
   }
   const cutoffIso = getHistoryCutoffIso(nowMs, retentionMs);
   const expiredGenerations = listExpiredGenerations(cutoffIso)
@@ -162,7 +175,10 @@ function startGenerationHistoryCleanupScheduler(options = {}) {
   const clearIntervalFn = options.clearIntervalFn || clearInterval;
   const logger = options.logger || console;
   const timer = setIntervalFn(() => {
-    Promise.resolve(runCleanup({ nowMs: typeof options.nowMs === "function" ? options.nowMs() : Date.now() }))
+    Promise.resolve(runCleanup({
+      nowMs: typeof options.nowMs === "function" ? options.nowMs() : Date.now(),
+      cleanupRecovery: options.cleanupRecovery === true,
+    }))
       .catch((error) => logger.warn("[history-expiry] scheduled cleanup failed", {
         errorCode: String(error?.code || "HISTORY_CLEANUP_FAILED"),
       }));

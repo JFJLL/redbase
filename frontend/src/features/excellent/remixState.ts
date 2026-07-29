@@ -380,6 +380,10 @@ export function resolveRemixBillingAttempt(
   };
 }
 
+export function shouldResetRemixBillingAttempt(errorCode: unknown): boolean {
+  return ["REQUEST_ID_CONFLICT", "REPLAY_RESULT_MISSING"].includes(String(errorCode || ""));
+}
+
 /** 收费状态下按钮直接标明价格，不额外弹确认窗。 */
 export function directionsButtonLabel(state: ExcellentRemixState | null): string {
   if (!state) return "生成内容方向";

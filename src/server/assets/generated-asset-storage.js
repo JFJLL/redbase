@@ -67,6 +67,12 @@ function createGeneratedAssetStorage(appConfig = {}, dependencies = {}) {
         removed: total.removed + Number(result?.removed || 0),
       }), { recovered: 0, removed: 0 });
     },
+    async cleanupUnreferencedAssets(options = {}) {
+      const results = [];
+      if (aliyunOss) results.push(await aliyunOss.cleanupUnreferencedAssets(options));
+      results.push(await local.cleanupUnreferencedAssets(options));
+      return { removed: results.reduce((sum, result) => sum + Number(result?.removed || 0), 0) };
+    },
     async createReadUrl(asset, options) {
       const backend = backendFor(asset);
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");
