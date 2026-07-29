@@ -499,6 +499,7 @@ function onRemixBrandChange() {
   state.selectedExistingIdea = null;
   state.directionsStatus = "idle";
   state.directionsError = "";
+  if (state.fusionStatus === "loading") state.fusionStatus = "idle";
   state.productImageIds = [];
   markFusionStale(state);
   loadRemixIdeas();
@@ -508,12 +509,32 @@ function onToggleFocus(value: string, checked: boolean) {
   const state = remix.value;
   if (!state) return;
   state.learningFocus = toggleLearningFocus(state.learningFocus, value, checked);
+  if (state.directionsStatus === "loading") state.directionsStatus = "idle";
+  if (state.fusionStatus === "loading") state.fusionStatus = "idle";
   markFusionStale(state);
 }
 
 function onContentInputChanged() {
   const state = remix.value;
-  if (state) markFusionStale(state);
+  if (!state) return;
+  if (state.fusionStatus === "loading") state.fusionStatus = "idle";
+  markFusionStale(state);
+}
+
+function directionsAttemptIsCurrent(state: ExcellentRemixState, requestId: string, inputKey: string): boolean {
+  const current = state.directionsBillingAttempt;
+  return (
+    current?.requestId === requestId &&
+    current.inputKey === inputKey &&
+    buildDirectionsBillingAttemptKey(state) === inputKey
+  );
+}
+
+function fusionAttemptIsCurrent(state: ExcellentRemixState, requestId: string, inputKey: string): boolean {
+  const current = state.fusionBillingAttempt;
+  return (
+    current?.requestId === requestId && current.inputKey === inputKey && buildFusionBillingAttemptKey(state) === inputKey
+  );
 }
 
 async function generateDirections() {
@@ -548,7 +569,7 @@ async function generateDirections() {
       },
       scope.signalFor("remix-directions"),
     );
-    if (remix.value !== state) return;
+    if (remix.value !== state || !directionsAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     state.smartDirections = (result.directions as ExcellentRemixState["smartDirections"]) || [];
     state.selectedSmartDirectionId = state.smartDirections[0]?.id || "";
     state.directionsStatus = "ready";
@@ -562,6 +583,7 @@ async function generateDirections() {
     markFusionStale(state);
   } catch (error) {
     if (isAbortError(error) || remix.value !== state) return;
+    if (!directionsAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     if (await handleUnauthorizedError(error)) return;
     state.directionsStatus = "error";
     state.directionsError = (error as Error).message;
@@ -590,7 +612,7 @@ async function generateFusion() {
       { ...buildFusionRequestBody(state), requestId: attempt.requestId, forceRegenerate: attempt.forceRegenerate },
       scope.signalFor("remix-fusion"),
     );
-    if (remix.value !== state) return;
+    if (remix.value !== state || !fusionAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     state.fusionPlan = result.fusionPlan || null;
     state.fusionStatus = "ready";
     state.fusionBilling = (result.billing as RemixBillingInfo) || null;
@@ -598,6 +620,7 @@ async function generateFusion() {
     applyBillingToSession(state.fusionBilling, result.user as Record<string, unknown> | undefined);
   } catch (error) {
     if (isAbortError(error) || remix.value !== state) return;
+    if (!fusionAttemptIsCurrent(state, attempt.requestId, attempt.inputKey)) return;
     if (await handleUnauthorizedError(error)) return;
     state.fusionStatus = "error";
     state.fusionError = (error as Error).message;

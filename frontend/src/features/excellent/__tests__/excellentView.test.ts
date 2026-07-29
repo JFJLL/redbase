@@ -28,8 +28,9 @@ const LIST_ITEMS = [
 ];
 
 type FetchCall = { url: string; init?: RequestInit };
+type FetchHandler = (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 
-function installFetchMock(handlers: (url: string, init?: RequestInit) => Response | undefined, calls: FetchCall[]) {
+function installFetchMock(handlers: FetchHandler, calls: FetchCall[]) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -74,7 +75,7 @@ describe("ExcellentView", () => {
     vi.unstubAllGlobals();
   });
 
-  async function mountView(handlers: (url: string, init?: RequestInit) => Response | undefined = defaultHandlers) {
+  async function mountView(handlers: FetchHandler = defaultHandlers) {
     installFetchMock(handlers, calls);
     const router = makeRouter();
     await router.push("/");
@@ -296,7 +297,7 @@ describe("ExcellentView", () => {
   });
 
   async function mountViewWithAuth(
-    handlers: (url: string, init?: RequestInit) => Response | undefined,
+    handlers: FetchHandler,
     user: Record<string, unknown> | null,
   ) {
     installFetchMock(handlers, calls);
@@ -638,5 +639,81 @@ describe("ExcellentView", () => {
     await flushPromises();
 
     expect(fusionBodies[1].requestId).not.toBe(fusionBodies[0].requestId);
+  });
+
+  it("ignores a stale directions response after the learning focus changes in flight", async () => {
+    let resolveDirections!: (response: Response) => void;
+    const pendingDirections = new Promise<Response>((resolve) => {
+      resolveDirections = resolve;
+    });
+    const wrapper = await mountView((url) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-stale-direction", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) return pendingDirections;
+      if (url.includes("/excellent-remix-ideas")) return jsonResponse(200, { brandId: 7, ideas: [] });
+      if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    await wrapper.findAll(".remix-focus-item input")[0].setValue(false);
+    resolveDirections(
+      jsonResponse(200, {
+        directions: [{ id: "stale-direction", title: "旧方向不应显示" }],
+        analysisId: "an-stale-direction",
+      }),
+    );
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("旧方向不应显示");
+    expect(wrapper.find('[data-test="generate-directions"]').attributes("disabled")).toBeUndefined();
+  });
+
+  it("ignores a stale fusion response after the selected direction changes in flight", async () => {
+    let resolveFusion!: (response: Response) => void;
+    const pendingFusion = new Promise<Response>((resolve) => {
+      resolveFusion = resolve;
+    });
+    const wrapper = await mountView((url) => {
+      if (url.includes("/remix-analysis")) {
+        return jsonResponse(200, { analysis: { analysisId: "an-stale-fusion", analysisMode: "metadata_only" } });
+      }
+      if (url.includes("/content-directions")) {
+        return jsonResponse(200, {
+          directions: [
+            { id: "d1", title: "方向一", summary: "摘要一" },
+            { id: "d2", title: "方向二", summary: "摘要二" },
+          ],
+          analysisId: "an-stale-fusion",
+        });
+      }
+      if (url.includes("/fusion-plan")) return pendingFusion;
+      if (url.includes("/excellent-remix-ideas")) return jsonResponse(200, { brandId: 7, ideas: [] });
+      if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
+      return defaultHandlers(url);
+    });
+
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-directions"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="generate-fusion"]').trigger("click");
+    await flushPromises();
+    await wrapper.findAll(".remix-direction input")[1].setValue(true);
+    resolveFusion(
+      jsonResponse(200, {
+        fusionPlan: {
+          contentThesis: "旧融合不应显示",
+          carouselPack: { slides: [1, 2, 3, 4].map((index) => ({ title: `旧第${index}页` })) },
+        },
+      }),
+    );
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("旧第1页");
   });
 });
