@@ -123,7 +123,64 @@ const SENSITIVE_PAYLOAD_KEYS = new Set([
   "source",
   "original",
   "providerResult",
-]);
+  "storedPath",
+  "objectKey",
+  "bucket",
+  "endpoint",
+  "accessKeyId",
+  "accessKeySecret",
+  "authorization",
+  "credential",
+  "credentials",
+  "signature",
+  "token",
+  "accessToken",
+  "refreshToken",
+  "password",
+  "cookie",
+  "localImage",
+  "generatedAsset",
+  "assetStorage",
+].map((key) => key.toLowerCase()));
+
+function isSensitivePayloadKey(key) {
+  const normalized = String(key || "").toLowerCase();
+  if (SENSITIVE_PAYLOAD_KEYS.has(normalized)) return true;
+  const compact = normalized.replace(/[-_]/g, "");
+  if (["localimage", "generatedasset", "assetstorage"].includes(compact)) return true;
+  if (["key", "stablekey", "bucketkey", "sourcekey", "pagerolekey"].includes(compact)) return false;
+  if ([
+    "secret", "apikey", "privatekey", "clientsecret", "securitytoken", "ststoken", "sessiontoken",
+    "auth", "basicauth", "authheader", "sessionid", "sid", "accesscode", "passphrase", "dsn", "clientassertion",
+    "idtoken", "oauthtoken", "bearertoken", "jwttoken", "accountkey", "subscriptionkey", "serviceaccountkey",
+  ].includes(compact)) return true;
+  return compact.endsWith("key") ||
+    compact.endsWith("token") ||
+    compact.includes("secret") ||
+    compact.includes("connectionstring") ||
+    compact.includes("accesskey") ||
+    compact.includes("authorization") ||
+    compact.includes("credential") ||
+    compact.includes("signature") ||
+    compact.includes("password") ||
+    compact.includes("cookie");
+}
+
+const SAFE_CLIENT_PAYLOAD_KEYS = new Set([
+  "id", "key", "stableKey", "bucketKey", "sourceKey", "type", "kind", "variant", "mode", "generatedMode", "status", "error", "persistError",
+  "index", "slideIndex", "position", "order", "page", "pageNumber", "pageLabel", "pageRole", "pageRoleKey", "pageTask", "pageTitle", "pageCopy",
+  "title", "subtitle", "heading", "eyebrow", "text", "content", "copy", "caption", "summary", "description", "intro", "outline", "positioning", "body", "footer", "cta", "hook",
+  "publishTitle", "publishCaption", "visualDirection", "visualStyle", "visualStylePreset", "style", "composition", "layout", "scene", "background", "palette", "tone", "theme",
+  "imageUrl", "previewUrl", "imageUrls", "aspectRatio", "width", "height", "mimeType", "sizeBytes", "createdAt", "updatedAt",
+  "moments", "xhsCarousel", "wechatLongImage", "slides", "sections", "items", "cards", "pages", "tags", "bullets", "editHistory", "editId", "parentEditId",
+  "carouselGroupId", "expectedSlideCount", "slideJobIds", "isGenerating", "isQueued", "isEditing",
+  "brandId", "brandName", "trendId", "trendTitle", "ideaTitle", "analysisId", "sourceAnalysisId",
+  "contentMode", "contentDirection", "contentThesis", "contentGoal", "targetAudience", "userScene", "trendUsed", "learningFocus",
+  "brandPlacement", "sourceLearningApplied", "platformVisualGuidance", "originalityGuard", "remixBrief",
+  "sourceNoteId", "sourceTitle", "sourceBoard", "sourceCategoryPath", "sourceIndustryPath", "sourceImageCount", "sourceReadCount", "sourceEngagementCount",
+  "readCount", "likeCount", "favoriteCount", "commentCount", "shareCount", "engagementCount",
+  "useBrandLogo", "productImageIds", "productImages", "name", "url", "dataUrl", "originalName", "assetType", "lastUsedAt", "duplicate",
+].map((key) => key.toLowerCase()));
 
 const SAFE_IMAGE_URL_QUERY_KEYS = new Set(["width", "height", "w", "h", "format", "quality", "q", "fit", "crop", "resize", "dpr"]);
 
@@ -156,7 +213,7 @@ function sanitizePayloadForClient(value, parentKey = "") {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !SENSITIVE_PAYLOAD_KEYS.has(key))
+      .filter(([key]) => !isSensitivePayloadKey(key) && SAFE_CLIENT_PAYLOAD_KEYS.has(String(key).toLowerCase()))
       .map(([key, child]) => {
         if (typeof child === "string" && /url$/i.test(key)) {
           return [key, redactSensitiveUrlQuery(child)];

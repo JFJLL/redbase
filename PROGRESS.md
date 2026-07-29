@@ -304,3 +304,6 @@
 - Node 20.20.0：`npm run check`、OSS/保留期受影响测试、前端 production build、独立 SQLite API smoke 均通过；验证后已切回 Node 24.11.1 并重建原生依赖。
 - 反向验证 3 组：临时把 30 天改成 7 天时边界用例红；临时吞掉 OSS delete 错误时删除安全用例红；临时允许不完整配置启用 OSS 时配置回退用例红。每项恢复后均转绿，临时破坏未保留。
 - 独立审查发现并修复：admin/brand/user 删除绕过统一服务、租户/代际范围错误、SDK 删除响应大小写、超限流式下载、签名查询与嵌套 URL/轮播元数据泄漏；终审继续补齐顶层 preview/URL authority 脱敏、下载 DNS 地址绑定、批删 NoSuchBucket 误判、多 generation 两阶段批删/数据库事务回滚，以及品牌 Logo 的可恢复 staging/启动恢复。最终最新 diff 门禁：Critical 0 / High 0 / Medium 0 / Low 0。
+- Kimi WebBridge 使用隔离 SQLite、合成用户/会话、本地资产与 OSS 元数据 mock 完成真实浏览器验收：历史页 30 天文案正确，本地/OSS 图片分别真实解码为 800×533 与 800×1067，UI 删除后 DOM/API/SQLite/本地文件四处一致。
+- 浏览器验收发现并修复三项缺口：过时的 7 天文案、lazy 图片零高度占位、`/api/history` 嵌套存储元数据与凭据别名泄漏。最终浏览器检查 22 个敏感标记全部零泄漏；脱敏回归同时覆盖 default-deny 与兼容未知业务字段路径。
+- 浏览器修复后的最终测试基线：后端 493/493、integration 193/193、data 24/24、AI eval 126/126、前端 165/165，typecheck/build/diff check 均通过，skipped/todo 0。

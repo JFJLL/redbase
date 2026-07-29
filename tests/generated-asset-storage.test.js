@@ -10,7 +10,7 @@ const { createAliyunOssGeneratedAssetStorage } = require("../src/server/assets/a
 const { doesImageBufferMatchMimeType } = require("../src/server/assets/generated-asset-utils");
 const { assertGenerationAssetOwnership } = require("../src/server/assets/generation-deletion-service");
 const { stripClientGeneratedAssetMetadata } = require("../src/server/api/image-generation-routes");
-const { sanitizeGeneration, sanitizePayloadForClient } = require("../src/server/utils");
+const { sanitizeGeneration, sanitizeIdea, sanitizePayloadForClient, sanitizeTrend } = require("../src/server/utils");
 const {
   assertSafeRemoteImageUrl,
   createPinnedImageLookup,
@@ -196,6 +196,105 @@ test("client URL sanitation removes authority credentials and top-level preview 
     sanitizePayloadForClient({ imageUrl: "https://alice:credential-placeholder@provider.invalid/x.png?height=20" }).imageUrl,
     "https://provider.invalid/x.png?height=20",
   );
+});
+
+test("client payload sanitation removes nested storage metadata and credential aliases", () => {
+  const payload = {
+    publishTitle: "safe title",
+    bucketKey: "xhs",
+    stableKey: "stable-1",
+    sourceKey: "source-1",
+    slides: [{ title: "safe slide", pageRoleKey: "cover", imageUrl: "/api/generated-images/1/file?sig=secret&width=10" }],
+    localImage: {
+      provider: "aliyun_oss",
+      objectKey: "redbase/generated-images/users/1/2026/07/2/gi_2_main_x.png",
+      storedPath: "uploads/generated-images/users/1/2026/07/2/gi_2_main_x.png",
+      bucket: "redmagic",
+      endpoint: "https://oss-cn-beijing.aliyuncs.com",
+      accessKeyId: "id-placeholder",
+      access_key_secret: "secret-placeholder",
+      authorization: "authorization-placeholder",
+      credential: "credential-placeholder",
+      signature: "signature-placeholder",
+      mimeType: "image/png",
+      sizeBytes: 123,
+    },
+    nested: {
+      ApiKey: "api-placeholder",
+      client_secret: "client-placeholder",
+      secretKey: "secret-key-placeholder",
+      securityToken: "security-placeholder",
+      sts_token: "sts-placeholder",
+      privateKey: "private-placeholder",
+      sessionToken: "session-placeholder",
+    },
+    moreNested: {
+      "x-api-key": "x-api-placeholder",
+      "x-goog-api-key": "goog-placeholder",
+      "x-auth-token": "auth-placeholder",
+      id_token: "id-token-placeholder",
+      oauth_token: "oauth-placeholder",
+      bearerToken: "bearer-placeholder",
+      jwtToken: "jwt-placeholder",
+      accountKey: "account-placeholder",
+      "subscription-key": "subscription-placeholder",
+      serviceAccountKey: "service-account-placeholder",
+      connectionString: "connection-placeholder",
+      customToken: "custom-token-placeholder",
+      signingKey: "signing-key-placeholder",
+    },
+    generated_asset: { mimeType: "image/png", createdAt: "2026-07-29T00:00:00.000Z" },
+  };
+  const expected = {
+    publishTitle: "safe title",
+    bucketKey: "xhs",
+    stableKey: "stable-1",
+    sourceKey: "source-1",
+    slides: [{ title: "safe slide", pageRoleKey: "cover", imageUrl: "/api/generated-images/1/file?width=10" }],
+  };
+  const defaultSanitized = sanitizePayloadForClient(payload);
+  assert.deepEqual(defaultSanitized, expected);
+  const legacyThirdArgumentSanitized = sanitizePayloadForClient(payload, "", { allowUnknownBusinessKeys: true });
+  assert.deepEqual(legacyThirdArgumentSanitized, expected);
+  for (const [mode, sanitized] of [["default", defaultSanitized], ["legacy-third-argument", legacyThirdArgumentSanitized]]) {
+    const text = JSON.stringify(sanitized).toLowerCase();
+    for (const marker of ["objectkey", "storedpath", "redmagic", "accesskey", "secret-placeholder", "authorization", "credential", "signature", "api-placeholder", "client-placeholder", "security-placeholder", "sts-placeholder", "private-placeholder", "session-placeholder", "x-api-placeholder", "goog-placeholder", "auth-placeholder", "id-token-placeholder", "oauth-placeholder", "bearer-placeholder", "jwt-placeholder", "account-placeholder", "subscription-placeholder", "service-account-placeholder", "connection-placeholder", "custom-token-placeholder", "signing-key-placeholder", "generated_asset"]) {
+      assert.equal(text.includes(marker), false, `${mode}:${marker}`);
+    }
+  }
+});
+
+test("client payload allowlist preserves known idea assets and evidence metrics", () => {
+  const contentAssets = {
+    moments: { title: "moments", caption: "caption", visualDirection: "visual" },
+    xhsCarousel: {
+      title: "carousel",
+      publishTitle: "publish",
+      publishCaption: "caption",
+      slides: [{ pageLabel: "第 1 张", title: "slide", copy: "copy", visualDirection: "visual" }],
+    },
+    wechatLongImage: {
+      title: "wechat",
+      publishTitle: "publish",
+      intro: "intro",
+      outline: ["one", "two", "three"],
+      positioning: "positioning",
+      cta: "cta",
+      visualDirection: "visual",
+    },
+  };
+  assert.deepEqual(sanitizeIdea({ title: "idea", contentAssets }).contentAssets, contentAssets);
+
+  const metrics = {
+    readCount: 10,
+    likeCount: 9,
+    favoriteCount: 8,
+    commentCount: 7,
+    shareCount: 6,
+    engagementCount: 5,
+  };
+  const sanitized = sanitizeTrend({ evidence: [{ metrics }], ideas: [] });
+  assert.deepEqual(sanitized.evidence[0].metrics, metrics);
 });
 
 test("successful persistence stores only the RedBase route and generated asset metadata", async () => {

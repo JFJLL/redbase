@@ -92,6 +92,8 @@ describe("HistoryView", () => {
     expect(cards).toHaveLength(2);
     expect(wrapper.text()).toContain("朋友圈图文");
     expect(wrapper.text()).toContain("小红书组图");
+    expect(wrapper.text()).toContain("30 天内的生成记录");
+    expect(wrapper.text()).not.toContain("7 天内的生成记录");
     // Signed URLs from the backend are used verbatim.
     expect(wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
     expect(wrapper.find('img[src="/api/generated-images/2/slides/0/file?sig=bbb"]').exists()).toBe(true);

@@ -133,7 +133,7 @@ onUnmounted(() => {
   <section class="history-view">
     <header class="view-header">
       <h1>历史生成</h1>
-      <p class="view-subtitle">7 天内的生成记录会保留在这里，可搜索、筛选、查看与删除。</p>
+      <p class="view-subtitle">30 天内的生成记录会保留在这里，可搜索、筛选、查看与删除。</p>
     </header>
 
     <div class="history-filters">
@@ -371,7 +371,10 @@ onUnmounted(() => {
 }
 
 .history-grid img {
+  display: block;
   width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   cursor: pointer;
@@ -386,7 +389,10 @@ onUnmounted(() => {
 }
 
 .history-preview img {
-  max-width: 240px;
+  display: block;
+  width: min(100%, 240px);
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
 }
