@@ -598,4 +598,236 @@ function goToGeneration(ideaIndex: number): void {
   padding: 0;
   font-size: 13px;
 }
+
+/* Legacy light-workspace parity: all Vue editing and generation routes remain intact. */
+.ideas-panel {
+  gap: 20px;
+  color: var(--workspace-text);
+}
+
+.panel-header {
+  margin-bottom: 8px;
+}
+
+.panel-icon-title {
+  gap: 14px;
+}
+
+.panel-icon {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: #4c9775;
+  font-size: 1.8rem;
+}
+
+.panel-title {
+  color: var(--workspace-text);
+  font-size: 2.1rem;
+  line-height: 1.2;
+}
+
+.panel-subtitle {
+  margin-top: 10px;
+  color: var(--workspace-text-muted);
+  font-size: 0.98rem;
+  line-height: 1.6;
+}
+
+.error-banner {
+  border-radius: var(--workspace-radius-sm);
+}
+
+.idea-context-card,
+.idea-prompt-card,
+.idea-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface);
+  box-shadow: none;
+}
+
+.idea-context-card,
+.idea-prompt-card,
+.idea-card {
+  padding: 20px;
+}
+
+.idea-context-card::before,
+.idea-prompt-card::before,
+.idea-card::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 42px;
+  height: 2px;
+  background: var(--workspace-brand);
+}
+
+.idea-context-top {
+  gap: 18px;
+}
+
+.idea-context-top h3,
+.idea-prompt-header h3,
+.idea-title-row h3 {
+  color: var(--workspace-text);
+  font-size: 1.2rem;
+  line-height: 1.4;
+}
+
+.idea-copy {
+  margin-bottom: 10px;
+  color: var(--workspace-text-muted);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+.idea-prompt-header {
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.idea-prompt-card textarea,
+.idea-edit-form input,
+.idea-edit-form textarea {
+  border-color: var(--workspace-border);
+  border-radius: var(--workspace-radius-sm);
+  background: #fff;
+  color: var(--workspace-text);
+  outline: none;
+}
+
+.idea-prompt-card textarea {
+  min-height: 132px;
+  margin-top: 0;
+  padding: 11px 12px;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.idea-prompt-card textarea:focus,
+.idea-edit-form input:focus,
+.idea-edit-form textarea:focus {
+  border-color: rgba(216, 68, 68, 0.5);
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.08);
+}
+
+.idea-prompt-meta {
+  margin-top: 12px;
+  color: var(--workspace-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.idea-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--workspace-grid-gap);
+}
+
+.idea-card {
+  display: grid;
+  gap: 14px;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.idea-card strong {
+  color: #bf3641;
+}
+
+.idea-title-row {
+  gap: 12px;
+}
+
+.idea-asset-preview {
+  gap: 8px;
+  padding: 12px;
+  border-color: var(--workspace-border);
+  border-radius: var(--workspace-radius-sm);
+  background: #faf7f5;
+  line-height: 1.65;
+}
+
+.idea-asset-preview.is-incomplete {
+  color: var(--workspace-text-muted);
+}
+
+.idea-actions {
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.idea-tag-list {
+  gap: 8px;
+}
+
+.idea-tag {
+  padding: 4px 10px;
+  border-radius: var(--workspace-radius-sm);
+  background: #f5f1ef;
+  color: var(--workspace-text-muted);
+}
+
+.idea-edit-form {
+  gap: 12px;
+}
+
+.idea-edit-form label {
+  gap: 6px;
+  color: #5f5357;
+  font-size: 0.86rem;
+}
+
+.idea-edit-form input,
+.idea-edit-form textarea {
+  padding: 10px 11px;
+  font-size: 0.92rem;
+}
+
+.idea-error {
+  color: #b72e3a;
+}
+
+.primary-btn,
+.secondary-btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: var(--workspace-radius-sm);
+  font-size: 0.92rem;
+}
+
+.primary-btn {
+  background: var(--workspace-brand);
+  color: #fff;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: var(--workspace-brand-hover);
+}
+
+.secondary-btn {
+  border-color: var(--workspace-border);
+  background: #fff;
+  color: var(--workspace-text);
+}
+
+.secondary-btn:hover {
+  border-color: rgba(216, 68, 68, 0.2);
+  background: #fff8f7;
+}
+
+.text-btn {
+  color: var(--workspace-brand-ink);
+}
+
+@media (max-width: 1180px) {
+  .idea-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 </style>
