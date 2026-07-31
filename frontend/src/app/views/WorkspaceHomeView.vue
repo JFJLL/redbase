@@ -52,12 +52,12 @@ const entries = [
   font-family: var(--workspace-font-heading);
   font-size: 2.1rem;
   font-weight: 800;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  letter-spacing: -0.04em;
+  line-height: 1.6;
 }
 
 .home-subtitle {
-  margin: 10px 0 28px;
+  margin: 10px 0 0;
   color: var(--workspace-text-muted);
   font-size: 0.93rem;
   line-height: 1.6;
@@ -72,7 +72,6 @@ const entries = [
 
 .home-card {
   position: relative;
-  min-height: 164px;
   padding: 20px;
   border: 1px solid var(--workspace-border);
   border-radius: var(--workspace-radius);
@@ -91,26 +90,26 @@ const entries = [
 }
 
 .home-card-title {
-  margin: 0 0 8px;
+  margin: 0 0 14px;
   color: var(--workspace-text);
   font-family: var(--workspace-font-heading);
   font-size: 1.2rem;
   font-weight: 800;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
 }
 
 .home-card-desc {
-  min-height: 48px;
   margin: 0 0 14px;
   color: var(--workspace-text-muted);
-  font-size: 0.93rem;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .inline-link {
   color: var(--workspace-brand-ink);
-  font-size: 0.93rem;
-  font-weight: 800;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   text-decoration: none;
 }
 

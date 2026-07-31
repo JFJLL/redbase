@@ -178,10 +178,10 @@ async function handleLogout() {
 
 .sidebar-item:hover,
 .sidebar-item.is-active {
-  border-color: transparent;
+  border-color: rgba(216, 68, 68, 0.1);
   background: #f3e7e2;
   color: var(--workspace-brand-ink);
-  box-shadow: none;
+  box-shadow: 0 10px 24px rgba(126, 55, 55, 0.07);
 }
 
 .sidebar-item-icon {
@@ -219,8 +219,8 @@ async function handleLogout() {
   background: #fff;
   color: #7f383d;
   box-shadow: 0 10px 24px rgba(126, 55, 55, 0.06);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 0.88rem;
+  font-weight: 900;
   cursor: pointer;
 }
 
@@ -284,7 +284,7 @@ a.workspace-user:focus-visible {
   flex: 1;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
+  gap: 0;
 }
 
 .user-name,
@@ -296,32 +296,33 @@ a.workspace-user:focus-visible {
 }
 
 .user-name {
-  color: #31292b;
-  font-size: 13px;
-  font-weight: 500;
+  color: var(--workspace-text);
+  font-size: 14px;
+  font-weight: 400;
 }
 
 .user-phone {
-  color: #7b7073;
-  font-size: 12px;
+  color: var(--workspace-text-muted);
+  font-size: 0.93rem;
 }
 
 .user-credits {
-  padding: 2px 7px;
+  margin-top: 4px;
+  padding: 3px 8px;
   border-radius: 999px;
-  background: #fff0ed;
-  color: #db4b4e;
-  font-size: 11px;
-  font-weight: 700;
+  background: rgba(229, 72, 77, 0.12);
+  color: #e5484d;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .workspace-logout {
   min-height: 42px;
-  border: 1px solid rgba(18, 16, 17, 0.08);
+  border: 1px solid rgba(229, 72, 77, 0.12);
   border-radius: 4px;
   background: #fff;
-  color: #4b4244;
-  font-size: 13px;
+  color: #151112;
+  font-size: 0.92rem;
   cursor: pointer;
 }
 
