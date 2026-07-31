@@ -187,33 +187,45 @@ async function handleDelete(image: ProductImageView) {
 
 <style scoped>
 .product-image-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 12px;
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-soft);
 }
 
 .panel-header h3 {
-  margin: 0;
-  font-size: 14px;
+  margin: 0 0 5px;
+  color: var(--workspace-text);
+  font-family: var(--workspace-font-heading);
+  font-size: 1rem;
+  font-weight: 800;
 }
 
 .panel-header p {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--color-text-secondary);
+  margin: 0;
+  color: var(--workspace-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
 }
 
 .upload-button {
-  align-self: flex-start;
   position: relative;
+  display: inline-flex;
+  width: fit-content;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
-  border: 1px dashed var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 0 14px;
+  border: 1px solid var(--workspace-brand-border);
+  border-radius: var(--workspace-radius-sm);
+  background: var(--workspace-surface);
+  color: var(--workspace-brand-ink);
+  font-size: 0.84rem;
+  font-weight: 800;
   cursor: pointer;
 }
 
@@ -224,62 +236,82 @@ async function handleDelete(image: ProductImageView) {
   cursor: pointer;
 }
 
-.panel-hint {
+.panel-hint,
+.panel-message {
   margin: 0;
-  font-size: 12px;
-  color: var(--color-text-secondary);
+  padding: 12px 14px;
+  border-radius: var(--workspace-radius);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--workspace-text-muted);
+  font-size: 0.82rem;
+}
+
+.panel-message {
+  border: 1px solid rgba(216, 68, 68, 0.14);
+  background: var(--workspace-surface-accent);
+  color: var(--workspace-brand-ink);
 }
 
 .image-list {
-  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
+  gap: 12px;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  list-style: none;
 }
 
 .image-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  min-width: 0;
   gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface);
 }
 
 .image-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  cursor: pointer;
+  position: relative;
+  display: grid;
   min-width: 0;
+  gap: 8px;
+  color: var(--workspace-text-body);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.image-check input {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
 }
 
 .image-check img {
-  width: 36px;
-  height: 36px;
+  width: 100%;
+  aspect-ratio: 1;
   object-fit: cover;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--workspace-border);
+  border-radius: 6px;
+  background: var(--workspace-surface-accent);
 }
 
 .image-name {
   overflow: hidden;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .image-delete {
-  border: none;
-  background: none;
-  color: var(--color-brand);
-  font-size: 12px;
+  min-height: 34px;
+  border: 1px solid rgba(183, 46, 58, 0.16);
+  border-radius: var(--workspace-radius-sm);
+  background: #fffafa;
+  color: #b72e3a;
+  font-size: 0.78rem;
+  font-weight: 800;
   cursor: pointer;
-}
-
-.panel-message {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-brand);
 }
 </style>

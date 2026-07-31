@@ -173,4 +173,134 @@ watch(
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Legacy light-workspace destructive modal parity. */
+.modal-mask {
+  padding: 28px;
+  background: rgba(42, 31, 34, 0.38);
+  backdrop-filter: blur(2px);
+}
+
+.modal-panel {
+  width: min(560px, 100%);
+  padding: 28px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: #fffdfc;
+  color: var(--workspace-text);
+  box-shadow: 0 20px 54px rgba(54, 38, 43, 0.16);
+}
+
+.modal-head {
+  gap: 22px;
+  margin-bottom: 22px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.modal-kicker {
+  margin-bottom: 8px;
+  color: #b72e3a;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.modal-head h2 {
+  margin: 0 0 10px;
+  color: var(--workspace-text);
+  font-size: 2.1rem;
+  line-height: 1.2;
+}
+
+.modal-head p {
+  color: var(--workspace-text-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.modal-close {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius-sm);
+  background: #fff;
+  color: var(--workspace-text-muted);
+  font-size: 1.25rem;
+}
+
+.modal-close:hover {
+  border-color: rgba(216, 68, 68, 0.2);
+  background: #fff8f7;
+  color: var(--workspace-brand-ink);
+}
+
+.brand-delete-body {
+  gap: 20px;
+}
+
+.brand-delete-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(183, 46, 58, 0.12);
+  border-radius: var(--workspace-radius);
+  background: rgba(255, 248, 248, 0.88);
+  color: #4c4244;
+}
+
+.brand-delete-option input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  accent-color: var(--workspace-brand);
+}
+
+.brand-delete-option span {
+  gap: 6px;
+}
+
+.brand-delete-option strong {
+  color: #2c2225;
+  font-size: 0.98rem;
+}
+
+.brand-delete-option small {
+  color: #887174;
+  line-height: 1.55;
+}
+
+.form-actions {
+  gap: 12px;
+}
+
+.primary-btn,
+.secondary-btn {
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: var(--workspace-radius-sm);
+  font-size: 0.95rem;
+}
+
+.danger-primary-btn {
+  background: #b72e3a;
+  color: #fff;
+}
+
+.danger-primary-btn:hover:not(:disabled) {
+  background: #a52632;
+}
+
+.secondary-btn {
+  border-color: var(--workspace-border);
+  background: #fff;
+  color: var(--workspace-text);
+}
+
+.secondary-btn:hover:not(:disabled) {
+  border-color: rgba(216, 68, 68, 0.2);
+  background: #fff8f7;
+}
 </style>

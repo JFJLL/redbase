@@ -1,24 +1,43 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
 
-// Workspace shell (orchestrator-owned shared layout): sidebar navigation and
-// session block. Mirrors the legacy sidebar tab order and labels.
+const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
+const LOGO_SRC = "/assets/redbase-logo.png";
 const router = useRouter();
 const auth = useAuthStore();
+const sidebarCollapsed = ref(false);
 
 const navItems = [
   { name: "home", icon: "首", label: "首页" },
   { name: "brands", icon: "品", label: "品牌档案" },
-  { name: "personal", icon: "我", label: "个人 IP" },
+  { name: "personal", icon: "人", label: "个人 IP" },
   { name: "trends", icon: "趋", label: "趋势分析" },
   { name: "ideas", icon: "选", label: "内容选题" },
   { name: "excellent", icon: "优", label: "优秀内容" },
-  { name: "history", icon: "史", label: "历史生成" },
+  { name: "history", icon: "历", label: "历史生成" },
 ] as const;
 
-const displayName = computed(() => String(auth.user?.nickname || auth.user?.name || auth.user?.phone || ""));
+const displayName = computed(() => String(auth.user?.nickname || auth.user?.name || auth.user?.phone || "RedBase User"));
+const displayPhone = computed(() => String(auth.user?.phone || ""));
+const displayCredits = computed(() => {
+  const credits = Number(auth.user?.credits);
+  return Number.isFinite(credits) ? credits : null;
+});
+const avatarText = computed(() => displayName.value.trim().charAt(0).toUpperCase() || "R");
+
+onMounted(() => {
+  sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+});
+
+watch(sidebarCollapsed, (collapsed) => {
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+});
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+}
 
 async function handleLogout() {
   try {
@@ -30,24 +49,57 @@ async function handleLogout() {
 </script>
 
 <template>
-  <div class="workspace-layout">
+  <div class="workspace-layout" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <aside class="workspace-sidebar">
-      <div class="workspace-logo">RedBase</div>
-      <nav class="workspace-nav">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.name"
-          :to="{ name: item.name }"
-          class="sidebar-item"
-          active-class="is-active"
-        >
-          <span class="sidebar-item-icon">{{ item.icon }}</span>
-          <span class="sidebar-item-label">{{ item.label }}</span>
+      <div class="workspace-sidebar-top">
+        <RouterLink class="workspace-logo" :to="{ name: 'home' }" aria-label="RedBase 首页">
+          <img :src="LOGO_SRC" alt="RedBase" />
         </RouterLink>
-      </nav>
+        <nav class="workspace-nav" aria-label="工作台导航">
+          <RouterLink
+            v-for="item in navItems"
+            :key="item.name"
+            :to="{ name: item.name }"
+            class="sidebar-item"
+            active-class="is-active"
+            :title="sidebarCollapsed ? item.label : undefined"
+          >
+            <span class="sidebar-item-icon">{{ item.icon }}</span>
+            <span class="sidebar-item-label">{{ item.label }}</span>
+          </RouterLink>
+        </nav>
+      </div>
+
       <div class="workspace-session">
-        <div class="workspace-user" :title="displayName">{{ displayName }}</div>
-        <a v-if="auth.isAdmin" class="workspace-admin-link" href="/admin/">管理后台</a>
+        <button
+          type="button"
+          class="sidebar-toggle"
+          :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+          :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+          :aria-expanded="!sidebarCollapsed"
+          @click="toggleSidebar"
+        >
+          <span class="sidebar-toggle-icon" aria-hidden="true">{{ sidebarCollapsed ? "›" : "‹" }}</span>
+          <span class="sidebar-toggle-label">{{ sidebarCollapsed ? "展开侧边栏" : "收起侧边栏" }}</span>
+        </button>
+
+        <a v-if="auth.isAdmin" class="workspace-user" href="/admin/" title="进入管理后台">
+          <span class="user-avatar">{{ avatarText }}</span>
+          <span class="user-details">
+            <strong class="user-name">{{ displayName }}</strong>
+            <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
+            <span v-if="displayCredits !== null" class="user-credits">{{ displayCredits }} 积分</span>
+          </span>
+        </a>
+        <div v-else class="workspace-user">
+          <span class="user-avatar">{{ avatarText }}</span>
+          <span class="user-details">
+            <strong class="user-name">{{ displayName }}</strong>
+            <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
+            <span v-if="displayCredits !== null" class="user-credits">{{ displayCredits }} 积分</span>
+          </span>
+        </div>
+
         <button type="button" class="workspace-logout" @click="handleLogout">退出登录</button>
       </div>
     </aside>
@@ -59,102 +111,324 @@ async function handleLogout() {
 
 <style scoped>
 .workspace-layout {
+  --workspace-sidebar-width: var(--workspace-sidebar-expanded);
   display: flex;
+  min-width: 1440px;
   min-height: 100vh;
+  background: linear-gradient(180deg, var(--workspace-bg-top), var(--workspace-bg-bottom));
 }
 
 .workspace-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 20;
   display: flex;
+  width: var(--workspace-sidebar-width);
   flex-direction: column;
-  width: 200px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
-  padding: 16px 12px;
-  gap: 16px;
+  justify-content: space-between;
+  padding: 28px 18px 18px;
+  overflow: hidden;
+  border-right: 1px solid var(--workspace-border);
+  background: var(--workspace-sidebar-bg);
+  box-shadow: var(--workspace-shadow-sidebar);
+  transition: width 0.18s ease, padding 0.18s ease;
+}
+
+.workspace-sidebar-top {
+  min-height: 0;
 }
 
 .workspace-logo {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--color-brand);
-  padding: 4px 8px;
+  display: block;
+  width: 224px;
+  height: 78px;
+  color: inherit;
+  text-decoration: none;
+  transition: width 0.18s ease;
+}
+
+.workspace-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .workspace-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
+  display: grid;
+  gap: 8px;
+  margin-top: 26px;
 }
 
 .sidebar-item {
   display: flex;
+  min-height: 50px;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  color: var(--color-text);
+  gap: 12px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--workspace-radius);
+  color: #564d50;
+  font-size: 0.98rem;
+  font-weight: 800;
   text-decoration: none;
-  font-size: 14px;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
-.sidebar-item:hover {
-  background: var(--color-bg);
-}
-
+.sidebar-item:hover,
 .sidebar-item.is-active {
-  background: rgba(255, 36, 66, 0.08);
-  color: var(--color-brand);
-  font-weight: 600;
+  border-color: transparent;
+  background: #f3e7e2;
+  color: var(--workspace-brand-ink);
+  box-shadow: none;
 }
 
 .sidebar-item-icon {
-  width: 20px;
-  text-align: center;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(216, 68, 68, 0.08);
+  color: var(--workspace-brand-ink);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.sidebar-item:hover .sidebar-item-icon,
+.sidebar-item.is-active .sidebar-item-icon {
+  background: var(--workspace-brand);
+  color: #fff;
 }
 
 .workspace-session {
+  display: grid;
+  gap: 16px;
+}
+
+.sidebar-toggle {
   display: flex;
-  flex-direction: column;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  border-top: 1px solid var(--color-border);
-  padding-top: 12px;
+  border: 1px solid rgba(229, 72, 77, 0.12);
+  border-radius: 999px;
+  background: #fff;
+  color: #7f383d;
+  box-shadow: 0 10px 24px rgba(126, 55, 55, 0.06);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  border-color: rgba(229, 72, 77, 0.3);
+  background: #fff7f5;
+}
+
+.sidebar-toggle-icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f3e7e2;
+  color: #b84043;
+  font-family: Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1;
 }
 
 .workspace-user {
-  font-size: 13px;
-  color: var(--color-text-secondary);
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: var(--workspace-radius);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  transition: background 180ms ease;
+}
+
+a.workspace-user:hover,
+a.workspace-user:focus-visible {
+  background: rgba(216, 68, 68, 0.06);
+  outline: none;
+}
+
+.user-avatar {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(216, 68, 68, 0.1);
+  border-radius: 50%;
+  background: #efe7e2;
+  color: #a13a3a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.user-details {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.user-name,
+.user-phone {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 8px;
 }
 
-.workspace-admin-link {
+.user-name {
+  color: #31292b;
   font-size: 13px;
-  color: var(--color-text-secondary);
-  text-decoration: none;
-  padding: 0 8px;
+  font-weight: 500;
+}
+
+.user-phone {
+  color: #7b7073;
+  font-size: 12px;
+}
+
+.user-credits {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #fff0ed;
+  color: #db4b4e;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .workspace-logout {
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  padding: 8px;
+  min-height: 42px;
+  border: 1px solid rgba(18, 16, 17, 0.08);
+  border-radius: 4px;
+  background: #fff;
+  color: #4b4244;
   font-size: 13px;
   cursor: pointer;
 }
 
 .workspace-logout:hover {
-  color: var(--color-brand);
-  border-color: var(--color-brand);
+  border-color: rgba(216, 68, 68, 0.24);
+  color: #b83a3d;
 }
 
 .workspace-main {
-  flex: 1;
+  width: calc(100% - var(--workspace-sidebar-width));
   min-width: 0;
-  padding: 24px;
+  min-height: 100vh;
+  margin-left: var(--workspace-sidebar-width);
+  padding: var(--workspace-page-top) var(--workspace-page-x) var(--workspace-page-bottom);
+  transition: width 0.18s ease, margin-left 0.18s ease;
+}
+
+.workspace-layout.sidebar-collapsed {
+  --workspace-sidebar-width: var(--workspace-sidebar-collapsed);
+}
+
+.sidebar-collapsed .workspace-sidebar {
+  padding: 24px 12px 18px;
+}
+
+.sidebar-collapsed .workspace-logo {
+  width: 54px;
+  height: 54px;
+  overflow: hidden;
+}
+
+.sidebar-collapsed .workspace-nav {
+  margin-top: 24px;
+}
+
+.sidebar-collapsed .sidebar-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-collapsed .sidebar-item-label,
+.sidebar-collapsed .sidebar-toggle-label,
+.sidebar-collapsed .user-details,
+.sidebar-collapsed .workspace-logout {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-toggle {
+  width: 30px;
+  min-height: 30px;
+  justify-self: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sidebar-collapsed .sidebar-toggle-icon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(216, 68, 68, 0.14);
+  background: #f7e8e4;
+  box-shadow: 0 8px 18px rgba(126, 55, 55, 0.08);
+}
+
+.sidebar-collapsed .workspace-user {
+  justify-content: center;
+  padding: 0;
+}
+
+@media (max-width: 760px) {
+  .workspace-layout {
+    min-width: 0;
+  }
+
+  .workspace-sidebar {
+    position: static;
+    width: 88px;
+    padding: 18px 10px;
+  }
+
+  .workspace-logo {
+    width: 58px;
+    height: 58px;
+    overflow: hidden;
+  }
+
+  .workspace-nav {
+    margin-top: 20px;
+  }
+
+  .sidebar-item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sidebar-item-label,
+  .sidebar-toggle-label,
+  .user-details,
+  .workspace-logout {
+    display: none;
+  }
+
+  .workspace-main {
+    width: calc(100% - 88px);
+    margin-left: 0;
+    padding: 24px 16px;
+  }
 }
 </style>

@@ -326,4 +326,145 @@ function goTrends(brandId: number): void {
   font-size: 13px;
   white-space: pre-wrap;
 }
+
+/* Legacy light-workspace parity: final effective values from 0edaf1b. */
+.tab-panel {
+  color: var(--workspace-text);
+}
+
+.panel-header {
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.panel-icon-title {
+  gap: 14px;
+}
+
+.panel-icon {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: var(--workspace-brand);
+  font-size: 1.8rem;
+}
+
+.panel-title {
+  color: var(--workspace-text);
+  font-size: 2.1rem;
+  line-height: 1.2;
+}
+
+.panel-subtitle {
+  margin-top: 10px;
+  color: var(--workspace-text-muted);
+  font-size: 0.98rem;
+  line-height: 1.6;
+}
+
+.brand-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--workspace-grid-gap);
+}
+
+.brand-list > .brand-card:only-child {
+  grid-column: 1 / -1;
+}
+
+.brand-card {
+  position: relative;
+  overflow: hidden;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface);
+  box-shadow: none;
+}
+
+.brand-card::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 42px;
+  height: 2px;
+  background: var(--workspace-brand);
+}
+
+.brand-meta {
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.brand-meta h3 {
+  color: var(--workspace-text);
+  font-size: 1.2rem;
+  line-height: 1.35;
+}
+
+.brand-tag {
+  padding: 4px 10px;
+  border-radius: var(--workspace-radius-sm);
+  background: #f3e7e2;
+  color: var(--workspace-brand-ink);
+  font-weight: 600;
+}
+
+.brand-description {
+  color: var(--workspace-text-muted);
+  line-height: 1.7;
+}
+
+.brand-actions {
+  gap: 14px;
+  align-items: center;
+  margin-top: auto;
+}
+
+.primary-btn,
+.secondary-btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: var(--workspace-radius-sm);
+  font-size: 0.92rem;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.primary-btn {
+  background: var(--workspace-brand);
+  color: #fff;
+}
+
+.primary-btn:hover {
+  background: var(--workspace-brand-hover);
+}
+
+.secondary-btn {
+  border-color: var(--workspace-border);
+  background: #fff;
+  color: var(--workspace-text);
+}
+
+.secondary-btn:hover {
+  border-color: rgba(216, 68, 68, 0.2);
+  background: #fff8f7;
+}
+
+.danger-btn {
+  border-color: rgba(198, 44, 54, 0.18);
+  background: rgba(255, 250, 250, 0.92);
+  color: #b72e3a;
+}
+
+.danger-btn:hover {
+  border-color: rgba(198, 44, 54, 0.34);
+  background: rgba(255, 242, 242, 0.98);
+}
+
+.form-error {
+  margin-bottom: 16px;
+  color: var(--workspace-danger, #b72e3a);
+}
 </style>
