@@ -1,5 +1,6 @@
 import "./landing.css";
-import { BUSINESS_MODAL_HTML, LANDING_HTML } from "./template";
+import "./auth-legacy.css";
+import { AUTH_MODAL_HTML, BUSINESS_MODAL_HTML, LANDING_HTML } from "./template";
 
 // Lightweight landing entry — MUST NOT import Vue, Pinia, or any workspace
 // module. The Core agent owns everything under src/landing/.
@@ -15,8 +16,14 @@ function renderLanding(root: HTMLElement): void {
   businessModal.id = "businessQuoteModal";
   businessModal.innerHTML = BUSINESS_MODAL_HTML;
 
-  root.replaceChildren(page, businessModal);
+  const authModal = document.createElement("div");
+  authModal.className = "modal-mask";
+  authModal.id = "authModal";
+  authModal.innerHTML = AUTH_MODAL_HTML;
+
+  root.replaceChildren(page, businessModal, authModal);
   bindLandingExperience(page);
+  bindAuthModal(authModal);
   bindBusinessQuoteModal(businessModal);
   showAuthRedirectError();
 }
@@ -102,6 +109,17 @@ function bindLandingExperience(landingPage: HTMLElement): void {
     });
   });
 
+  landingPage.querySelectorAll<HTMLElement>("[data-auth-open]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const modal = document.getElementById("authModal");
+      if (!modal) return;
+      setAuthModalTab(modal, link.dataset.authOpen === "login" ? "login" : "register");
+      modal.classList.add("is-open");
+      modal.querySelector<HTMLInputElement>(".auth-form.auth-form-active input")?.focus();
+    });
+  });
+
   const revealItems = landingPage.querySelectorAll<HTMLElement>(".landing-reveal");
   if ("IntersectionObserver" in window) {
     const revealObserver = new IntersectionObserver(
@@ -131,6 +149,148 @@ function bindLandingExperience(landingPage: HTMLElement): void {
   } else {
     revealItems.forEach((item) => item.classList.add("visible"));
   }
+}
+
+type LandingAuthMode = "login" | "register";
+
+function setAuthModalTab(modal: HTMLElement, mode: LandingAuthMode): void {
+  modal.querySelectorAll<HTMLElement>("[data-auth-tab]").forEach((tab) => {
+    tab.classList.toggle("is-active", tab.dataset.authTab === mode);
+  });
+  modal.querySelectorAll<HTMLFormElement>(".auth-form").forEach((form) => {
+    const active = form.id === `${mode}Form`;
+    form.classList.toggle("auth-form-active", active);
+    form.hidden = !active;
+  });
+  modal.querySelectorAll<HTMLElement>(".auth-form-error").forEach((error) => {
+    error.hidden = true;
+    error.textContent = "";
+  });
+}
+
+async function landingAuthRequest(path: string, body: Record<string, string>): Promise<{ user?: unknown }> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json().catch(() => null)) as { error?: string; user?: unknown } | null;
+  if (!response.ok) {
+    throw new Error(String(payload?.error || `请求失败（${response.status}）`));
+  }
+  return payload || {};
+}
+
+function showLandingAuthError(form: HTMLFormElement, error: unknown): void {
+  const node = form.querySelector<HTMLElement>(".auth-form-error");
+  if (!node) return;
+  node.textContent = error instanceof Error ? error.message : String(error);
+  node.hidden = false;
+}
+
+function bindAuthModal(modal: HTMLElement): void {
+  const closeButton = modal.querySelector<HTMLButtonElement>("#closeAuthModal");
+  const registerForm = modal.querySelector<HTMLFormElement>("#registerForm");
+  const loginForm = modal.querySelector<HTMLFormElement>("#loginForm");
+  const feishuActions = modal.querySelector<HTMLElement>("#feishuLoginActions");
+  const feishuButton = modal.querySelector<HTMLButtonElement>("#feishuLoginButton");
+  const feishuMenu = modal.querySelector<HTMLElement>("#feishuAppMenu");
+  const feishuDivider = modal.querySelector<HTMLElement>("#feishuAuthDivider");
+  let feishuApps: Array<{ key: string; name: string }> = [];
+
+  const close = () => modal.classList.remove("is-open");
+  const setBusy = (form: HTMLFormElement, busy: boolean, idleText: string, busyText: string) => {
+    const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+    if (!button) return;
+    button.disabled = busy;
+    button.textContent = busy ? busyText : idleText;
+  };
+
+  closeButton?.addEventListener("click", close);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+  modal.querySelectorAll<HTMLElement>("[data-auth-tab]").forEach((tab) => {
+    tab.addEventListener("click", () => setAuthModalTab(modal, tab.dataset.authTab === "login" ? "login" : "register"));
+  });
+
+  void fetch("/api/auth/feishu/apps", { credentials: "same-origin" })
+    .then(async (response) => {
+      if (!response.ok) return { apps: [] };
+      return (await response.json().catch(() => ({ apps: [] }))) as { apps?: Array<{ key: string; name: string }> };
+    })
+    .then((payload) => {
+      feishuApps = Array.isArray(payload.apps) ? payload.apps : [];
+      if (!feishuApps.length) return;
+      if (feishuActions) feishuActions.hidden = false;
+      if (feishuDivider) feishuDivider.hidden = false;
+      if (feishuApps.length > 1 && feishuMenu) {
+        feishuMenu.replaceChildren(
+          ...feishuApps.map((app) => {
+            const option = document.createElement("button");
+            option.className = "feishu-app-option";
+            option.type = "button";
+            option.dataset.feishuApp = app.key;
+            option.textContent = app.name;
+            return option;
+          }),
+        );
+      }
+    })
+    .catch(() => undefined);
+
+  feishuButton?.addEventListener("click", () => {
+    if (feishuApps.length === 1) {
+      window.location.href = `/api/auth/feishu/start?app=${encodeURIComponent(feishuApps[0].key)}`;
+      return;
+    }
+    if (feishuMenu) feishuMenu.hidden = !feishuMenu.hidden;
+  });
+  feishuActions?.addEventListener("click", (event) => {
+    const target = (event.target as HTMLElement).closest<HTMLElement>("[data-feishu-app]");
+    if (!target) return;
+    const appKey = target.dataset.feishuApp || "";
+    window.location.href = `/api/auth/feishu/start?app=${encodeURIComponent(appKey)}`;
+  });
+
+  registerForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = Object.fromEntries(new FormData(registerForm).entries());
+    setBusy(registerForm, true, "注册并进入工作台", "注册中...");
+    try {
+      await landingAuthRequest("/api/auth/register", {
+        phone: String(formData.phone || ""),
+        name: String(formData.name || ""),
+        password: String(formData.password || ""),
+      });
+      window.location.href = "/app/";
+    } catch (error) {
+      showLandingAuthError(registerForm, error);
+      setBusy(registerForm, false, "注册并进入工作台", "注册中...");
+    }
+  });
+
+  loginForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = Object.fromEntries(new FormData(loginForm).entries());
+    setBusy(loginForm, true, "登录 RedBase", "登录中...");
+    try {
+      await landingAuthRequest("/api/auth/login", {
+        phone: String(formData.phone || ""),
+        password: String(formData.password || ""),
+      });
+      window.location.href = "/app/";
+    } catch (error) {
+      showLandingAuthError(loginForm, error);
+      setBusy(loginForm, false, "登录 RedBase", "登录中...");
+    }
+  });
+
+  setAuthModalTab(modal, "register");
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("is-open")) close();
+  });
 }
 
 function bindBusinessQuoteModal(modal: HTMLElement): void {

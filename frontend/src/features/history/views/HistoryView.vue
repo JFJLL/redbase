@@ -131,31 +131,53 @@ onUnmounted(() => {
 
 <template>
   <section class="history-view">
-    <header class="view-header">
-      <h1>历史生成</h1>
-      <p class="view-subtitle">30 天内的生成记录会保留在这里，可搜索、筛选、查看与删除。</p>
+    <header class="panel-header">
+      <div>
+        <div class="panel-icon-title">
+          <span class="panel-icon">◍</span>
+          <h1 class="panel-title">历史生成</h1>
+        </div>
+        <p class="panel-subtitle">查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。</p>
+      </div>
     </header>
 
-    <div class="history-filters">
-      <input
-        v-model="filters.q"
-        type="search"
-        placeholder="搜索标题 / 摘要 / 品牌"
-        data-test="history-search"
-        @input="scheduleLoad(true)"
-      />
-      <select v-model="filters.brandId" data-test="history-brand" @change="scheduleLoad(false)">
-        <option value="">全部品牌</option>
-        <option v-for="brand in brands" :key="brand.id" :value="String(brand.id)">{{ brand.name }}</option>
-      </select>
-      <select v-model="filters.type" data-test="history-type" @change="scheduleLoad(false)">
-        <option value="">全部类型</option>
-        <option v-for="[value, label] in TYPE_OPTIONS" :key="value" :value="value">{{ label }}</option>
-      </select>
-      <input v-model="filters.from" type="date" @change="scheduleLoad(false)" />
-      <input v-model="filters.to" type="date" @change="scheduleLoad(false)" />
-      <button type="button" class="secondary-btn" @click="resetFilters">重置</button>
-    </div>
+    <div class="history-retention-note" role="note">历史生成图片会保存七天，请及时下载。</div>
+
+    <section class="history-filters" aria-label="历史生成筛选">
+      <label class="history-filter-search">
+        <span>搜索</span>
+        <input
+          v-model="filters.q"
+          type="search"
+          placeholder="搜索标题、摘要、品牌或趋势"
+          data-test="history-search"
+          @input="scheduleLoad(true)"
+        />
+      </label>
+      <label>
+        <span>品牌</span>
+        <select v-model="filters.brandId" data-test="history-brand" @change="scheduleLoad(false)">
+          <option value="">全部品牌</option>
+          <option v-for="brand in brands" :key="brand.id" :value="String(brand.id)">{{ brand.name }}</option>
+        </select>
+      </label>
+      <label>
+        <span>类型</span>
+        <select v-model="filters.type" data-test="history-type" @change="scheduleLoad(false)">
+          <option value="">全部类型</option>
+          <option v-for="[value, label] in TYPE_OPTIONS" :key="value" :value="value">{{ label }}</option>
+        </select>
+      </label>
+      <label>
+        <span>开始日期</span>
+        <input v-model="filters.from" type="date" @change="scheduleLoad(false)" />
+      </label>
+      <label>
+        <span>结束日期</span>
+        <input v-model="filters.to" type="date" @change="scheduleLoad(false)" />
+      </label>
+      <button type="button" class="secondary-btn small-btn" @click="resetFilters">重置</button>
+    </section>
 
     <p v-if="loadError" class="history-error" data-test="history-error">{{ loadError }}</p>
     <p v-else-if="loading && !generations.length" class="history-loading">正在加载历史生成…</p>
@@ -438,8 +460,47 @@ onUnmounted(() => {
 
 /* Legacy light-workspace history parity. */
 .history-view {
-  gap: var(--workspace-grid-gap);
+  gap: 0;
   color: var(--workspace-text);
+}
+
+.history-view .panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.history-view .panel-icon-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.history-view .panel-icon {
+  display: block;
+  width: 24.0625px;
+  color: var(--workspace-brand);
+  font-size: 1.8rem;
+  font-weight: 400;
+}
+
+.history-view .panel-title {
+  margin: 0;
+  color: var(--workspace-text);
+  font-family: var(--workspace-font-heading);
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.6;
+}
+
+.history-view .panel-subtitle {
+  margin: 10px 0 0;
+  color: var(--workspace-text-muted);
+  font-size: 0.93rem;
+  line-height: 1.6;
 }
 
 .view-header h1 {
@@ -459,11 +520,28 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(140px, 1fr)) auto;
   gap: 12px;
-  align-items: center;
-  padding: 16px;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
-  background: var(--workspace-surface);
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.history-retention-note {
+  margin: -10px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(216, 68, 68, 0.14);
+  border-radius: 8px;
+  background: #fff7f5;
+  color: #6d4d51;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.history-filters label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #6f687a;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .history-filters input,
@@ -472,12 +550,11 @@ onUnmounted(() => {
   min-width: 0;
   height: 42px;
   padding: 0 12px;
-  border-color: var(--workspace-border);
-  border-radius: var(--workspace-radius-sm);
-  background: #fff;
+  border: 1px solid rgba(18, 16, 17, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
   color: var(--workspace-text);
-  font-size: 0.9rem;
-  outline: none;
+  font: inherit;
 }
 
 .history-filters input:focus,
@@ -494,6 +571,10 @@ onUnmounted(() => {
   background: #fff;
   color: var(--workspace-text);
   font-size: 0.9rem;
+}
+
+.history-filters .small-btn {
+  min-height: 50px;
 }
 
 .secondary-btn:hover {

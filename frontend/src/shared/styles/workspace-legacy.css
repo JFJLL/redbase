@@ -29,8 +29,11 @@
   --workspace-page-top: 34px;
   --workspace-page-bottom: 44px;
   --workspace-grid-gap: 20px;
-  --workspace-font-heading: "Manrope", var(--font-family-base);
+  --workspace-font-heading: "Manrope", "Noto Sans SC", sans-serif;
   min-height: 100vh;
+  font-family: "Noto Sans SC", "PingFang SC", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
   color: var(--workspace-text);
   background: linear-gradient(180deg, var(--workspace-bg-top), var(--workspace-bg-bottom));
 }
@@ -77,7 +80,7 @@
   color: var(--workspace-text);
   font-family: var(--workspace-font-heading);
   font-size: 2.1rem;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -0.04em;
   line-height: 1.2;
 }
@@ -429,5 +432,143 @@
   .workspace-layout .legacy-modal,
   .workspace-layout .workspace-modal {
     padding: 22px 18px;
+  }
+}
+
+/* Account-center surface restored from the legacy dashboard. */
+.workspace-layout .account-modal-panel {
+  width: min(560px, 100%);
+}
+
+.workspace-layout .workspace-modal-copy {
+  margin: 0;
+  color: var(--workspace-text-muted);
+  font-size: 0.93rem;
+  line-height: 1.65;
+}
+
+.workspace-layout .account-summary-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.workspace-layout .account-summary-item {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-soft);
+}
+
+.workspace-layout .account-summary-item span {
+  color: var(--workspace-text-muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.workspace-layout .account-summary-item strong {
+  color: #1f222b;
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.workspace-layout .account-business-plan {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.workspace-layout .account-business-plan h3 {
+  margin: 0;
+  color: #1f222b;
+  font-size: 1.12rem;
+  line-height: 1.4;
+}
+
+.workspace-layout .business-price-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workspace-layout .business-price-item {
+  display: grid;
+  gap: 4px;
+  padding: 14px 12px;
+  border: 1px solid rgba(216, 68, 68, 0.1);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-soft);
+}
+
+.workspace-layout .business-price-item span {
+  color: #6b6265;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.workspace-layout .business-price-item strong {
+  color: var(--workspace-brand);
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+
+.workspace-layout .business-price-item small {
+  color: #7b7376;
+  font-size: 0.78rem;
+}
+
+.workspace-layout .business-credit-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-accent);
+  color: #6d4d51;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.workspace-layout .account-business-contact {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-accent);
+  color: #1f222b;
+  font-weight: 900;
+  text-align: center;
+}
+
+.workspace-layout .account-admin-link {
+  display: block;
+  color: var(--workspace-brand);
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-align: center;
+  text-decoration: none;
+}
+
+.workspace-layout .account-admin-link:hover {
+  color: var(--workspace-brand-ink);
+  text-decoration: underline;
+}
+
+.workspace-layout .credit-pill {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: var(--workspace-radius-pill);
+  background: rgba(229, 72, 77, 0.12);
+  color: #e5484d;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+@media (max-width: 520px) {
+  .workspace-layout .business-price-grid {
+    grid-template-columns: 1fr;
   }
 }

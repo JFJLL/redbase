@@ -5,8 +5,8 @@
 //   frontend/src/landing/landing.css  （landing-v3.css 的样式移植）
 //   frontend/index.html               （官网入口 html）
 // 映射变化：
-// - 旧 data-auth-open="register|login" 弹窗触发 → SPA 链接 /app/register、/app/login
-//   （template.ts 头部注释明确了这一契约）。
+// - 旧 data-auth-open="register|login" 弹窗触发在 Vue 落地页中保留为同名按钮契约，
+//   同时直接访问 /app/login、/app/register 仍由 SPA 路由提供。
 // - 旧 landing-v3.css?v=... 手工缓存戳 → Vite 构建时对 landing.css 做内容哈希，
 //   等价断言为 main.ts 顶部静态引入 ./landing.css 且不再出现旧的 landing-v3.css 链接。
 // - favicon-32.png / apple-touch-icon.png 资源仍随 public/assets 发布，但
@@ -37,8 +37,8 @@ test("commercial landing page preserves the required product story and sections"
 });
 
 test("landing calls to action stay connected to the real application flows", () => {
-  assert.match(templateTs, /href="\/app\/register"/);
-  assert.match(templateTs, /href="\/app\/login"/);
+  assert.match(templateTs, /data-auth-open="register"/);
+  assert.match(templateTs, /data-auth-open="login"/);
   assert.match(templateTs, /data-business-quote-open/);
   assert.match(mainTs, /function bindLandingExperience\(/);
   assert.match(mainTs, /bindLandingExperience\(page\);/);

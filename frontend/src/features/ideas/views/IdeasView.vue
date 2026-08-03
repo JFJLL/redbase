@@ -601,12 +601,16 @@ function goToGeneration(ideaIndex: number): void {
 
 /* Legacy light-workspace parity: all Vue editing and generation routes remain intact. */
 .ideas-panel {
-  gap: 20px;
+  gap: 0;
   color: var(--workspace-text);
 }
 
 .panel-header {
-  margin-bottom: 8px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 28px;
 }
 
 .panel-icon-title {
@@ -614,24 +618,29 @@ function goToGeneration(ideaIndex: number): void {
 }
 
 .panel-icon {
-  width: auto;
+  display: block;
+  width: 14.40625px;
   height: auto;
   border-radius: 0;
   background: transparent;
   color: #4c9775;
   font-size: 1.8rem;
+  font-weight: 400;
 }
 
 .panel-title {
   color: var(--workspace-text);
   font-size: 2.1rem;
-  line-height: 1.2;
+  font-family: var(--workspace-font-heading);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.6;
 }
 
 .panel-subtitle {
   margin-top: 10px;
   color: var(--workspace-text-muted);
-  font-size: 0.98rem;
+  font-size: 0.93rem;
   line-height: 1.6;
 }
 
@@ -656,16 +665,13 @@ function goToGeneration(ideaIndex: number): void {
   padding: 20px;
 }
 
-.idea-context-card::before,
-.idea-prompt-card::before,
-.idea-card::before {
-  content: "";
-  position: absolute;
-  top: -1px;
-  left: -1px;
-  width: 42px;
-  height: 2px;
-  background: var(--workspace-brand);
+.idea-context-card,
+.idea-prompt-card {
+  margin-bottom: 24px;
+}
+
+.idea-context-card > .idea-copy {
+  margin: 0;
 }
 
 .idea-context-top {
@@ -677,19 +683,23 @@ function goToGeneration(ideaIndex: number): void {
 .idea-title-row h3 {
   color: var(--workspace-text);
   font-size: 1.2rem;
-  line-height: 1.4;
+  line-height: 1.6;
 }
 
 .idea-copy {
-  margin-bottom: 10px;
+  margin: 1em 0;
   color: var(--workspace-text-muted);
-  font-size: 0.92rem;
-  line-height: 1.7;
+  font-size: 0.93rem;
+  line-height: 1.6;
 }
 
 .idea-prompt-header {
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.idea-prompt-header h3 {
+  margin: 0 0 8px;
 }
 
 .idea-prompt-card textarea,
@@ -705,8 +715,8 @@ function goToGeneration(ideaIndex: number): void {
 .idea-prompt-card textarea {
   min-height: 132px;
   margin-top: 0;
-  padding: 11px 12px;
-  font-size: 0.92rem;
+  padding: 14px;
+  font-size: 0.94rem;
   line-height: 1.6;
 }
 
@@ -718,9 +728,11 @@ function goToGeneration(ideaIndex: number): void {
 }
 
 .idea-prompt-meta {
+  display: flex;
+  align-items: center;
   margin-top: 12px;
-  color: var(--workspace-text-muted);
-  font-size: 0.9rem;
+  color: #b9b2cd;
+  font-size: 0.95rem;
   line-height: 1.6;
 }
 

@@ -1,6 +1,6 @@
 // Landing page markup, migrated 1:1 from public/index.html (logged-out page).
-// Auth modal triggers are replaced with links into the SPA:
-//   登录 -> /app/login, 注册 -> /app/register, 进入工作台 -> /app/
+// data-auth-open restores the legacy in-page modal while keeping the Vue
+// landing page markup aligned with the original public/index.html.
 // Above-the-fold images declare width/height + eager/high priority; everything
 // below the fold lazy-loads. No external font/script requests are allowed here.
 
@@ -22,9 +22,8 @@ export const LANDING_HTML = `
           <a href="#faq">常见问题</a>
         </nav>
         <div class="nav-actions">
-          <a class="landing-btn nav-login" href="/app/">进入工作台</a>
-          <a class="landing-btn nav-login" href="/app/login">登录</a>
-          <a class="landing-btn landing-btn-primary" href="/app/register">免费使用</a>
+          <button class="landing-btn nav-login" data-auth-open="login" type="button">登录</button>
+          <button class="landing-btn landing-btn-primary" data-auth-open="register" type="button">免费使用</button>
           <button class="menu-btn" id="landingMenuButton" type="button" aria-label="展开导航" aria-expanded="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M3 6h18M3 12h18M3 18h18" />
@@ -45,7 +44,7 @@ export const LANDING_HTML = `
               图文生产放进同一套工作流，帮助团队更顺畅地完成机会发现、方向判断和内容生成。
             </p>
             <div class="hero-cta">
-              <a class="landing-btn landing-btn-primary landing-btn-lg" href="/app/register">免费创建品牌档案</a>
+              <button class="landing-btn landing-btn-primary landing-btn-lg" data-auth-open="register" type="button">免费创建品牌档案</button>
               <a class="landing-btn landing-btn-outline landing-btn-lg" href="#workspace">查看产品演示 ↓</a>
             </div>
             <div class="hero-note"><i></i>外部用户使用手机号注册；飞书登录仅限公司内部账号</div>
@@ -271,7 +270,7 @@ export const LANDING_HTML = `
 
       <section class="commercial-cta">
         <div class="container">
-          <div class="commercial-cta-panel landing-reveal"><h2>从下一次内容决策开始，延续已经沉淀的品牌信息</h2><p>先建立品牌档案，让趋势、选题和内容生产都围绕同一套品牌上下文展开。</p><a class="landing-btn landing-btn-lg" href="/app/register">免费注册使用</a></div>
+          <div class="commercial-cta-panel landing-reveal"><h2>从下一次内容决策开始，延续已经沉淀的品牌信息</h2><p>先建立品牌档案，让趋势、选题和内容生产都围绕同一套品牌上下文展开。</p><button class="landing-btn landing-btn-lg" data-auth-open="register" type="button">免费注册使用</button></div>
         </div>
       </section>
     </main>
@@ -282,11 +281,84 @@ export const LANDING_HTML = `
           <div class="footer-intro"><a class="landing-logo" href="#top"><span class="landing-logo-image"><img src="/assets/redbase-logo.png" alt="" width="36" height="36" loading="lazy" /></span><span>RedBase</span></a><p>让品牌持续知道什么内容值得做，并把它真正生产出来。</p></div>
           <div><h4>产品</h4><a href="#workspace">品牌档案</a><a href="#workspace">趋势分析</a><a href="#workspace">优秀内容</a><a href="#outputs">图文生成</a></div>
           <div><h4>服务</h4><a href="#pricing">企业服务</a><a href="#pricing">定价方案</a><a href="#faq">常见问题</a></div>
-          <div><h4>账户</h4><a href="/app/login">手机号登录</a><a href="/app/register">免费注册</a><a href="/app/">进入工作台</a></div>
+          <div><h4>账户</h4><button data-auth-open="login" type="button">手机号登录</button><button data-auth-open="register" type="button">免费注册</button></div>
         </div>
         <div class="footer-bottom"><span>Copyright © 2026 RedBase</span><span>京ICP备2026045114号-1</span></div>
       </div>
     </footer>
+`;
+
+export const AUTH_MODAL_HTML = `
+  <div class="modal-panel auth-modal-panel" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+    <div class="modal-head auth-modal-head">
+      <div>
+        <div class="modal-kicker">账户访问</div>
+        <h2 id="authModalTitle">欢迎来到 RedBase</h2>
+        <p>先完成手机号注册或登录，再进入你的品牌增长工作台。</p>
+      </div>
+      <button class="modal-close" id="closeAuthModal" type="button" aria-label="返回官网">×</button>
+    </div>
+
+    <div class="auth-shell">
+      <div class="auth-brand-panel">
+        <div class="logo-wrap logo-wrap-vertical auth-brand-logo">
+          <div class="logo-icon logo-icon-large" aria-hidden="true">
+            <img class="logo-image" src="/assets/redbase-logo.png" alt="RedBase logo" />
+          </div>
+          <div><div class="sidebar-subtitle">内容趋势与品牌运营系统</div></div>
+        </div>
+        <h3>让热点服务于品牌，而不是让品牌被热点牵着走。</h3>
+        <p>注册后你就可以创建品牌档案、生成热点分析、产出内容选题，并一键获取视觉方案。</p>
+      </div>
+
+      <div class="auth-form-panel">
+        <div class="feishu-login-actions" id="feishuLoginActions" hidden>
+          <button class="feishu-login-btn" id="feishuLoginButton" type="button">
+            <span class="feishu-login-mark">飞</span>
+            <span>飞书企业登录</span>
+          </button>
+          <div class="feishu-app-menu" id="feishuAppMenu" hidden></div>
+        </div>
+        <div class="auth-divider" id="feishuAuthDivider" hidden><span>或使用手机号</span></div>
+
+        <div class="auth-tab-row">
+          <button class="auth-tab is-active" data-auth-tab="register" type="button">手机号注册</button>
+          <button class="auth-tab" data-auth-tab="login" type="button">手机号登录</button>
+        </div>
+
+        <form class="auth-form auth-form-active" id="registerForm">
+          <label>
+            <span>手机号</span>
+            <input name="phone" type="tel" placeholder="请输入手机号" autocomplete="tel" required />
+          </label>
+          <label>
+            <span>昵称</span>
+            <input name="name" placeholder="请输入你的昵称" required />
+          </label>
+          <label>
+            <span>登录密码</span>
+            <input name="password" type="password" placeholder="至少 6 位密码" autocomplete="new-password" required />
+          </label>
+          <p class="form-error auth-form-error" id="registerFormError" role="alert" hidden></p>
+          <button class="primary-btn auth-submit-btn" type="submit">注册并进入工作台</button>
+        </form>
+
+        <form class="auth-form" id="loginForm">
+          <label>
+            <span>手机号</span>
+            <input name="phone" type="tel" placeholder="请输入手机号" autocomplete="tel" required />
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" placeholder="请输入登录密码" autocomplete="current-password" required />
+          </label>
+          <div class="auth-helper">已注册账号可直接登录。</div>
+          <p class="form-error auth-form-error" id="loginFormError" role="alert" hidden></p>
+          <button class="primary-btn auth-submit-btn" type="submit">登录 RedBase</button>
+        </form>
+      </div>
+    </div>
+  </div>
 `;
 
 export const BUSINESS_MODAL_HTML = `

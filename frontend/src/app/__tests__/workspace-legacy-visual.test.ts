@@ -38,7 +38,7 @@ describe("legacy workspace visual shell", () => {
     vi.restoreAllMocks();
   });
 
-  async function mountWorkspace() {
+  async function mountWorkspace(isAdmin = true) {
     const router = makeRouter();
     router.push("/home");
     await router.isReady();
@@ -50,7 +50,7 @@ describe("legacy workspace visual shell", () => {
       name: "Test User",
       phone: "13800000000",
       credits: 6,
-      isAdmin: true,
+      isAdmin,
     };
     const wrapper = mount(WorkspaceShell, { global: { plugins: [pinia, router] } });
     await flushPromises();
@@ -108,6 +108,21 @@ describe("legacy workspace visual shell", () => {
     expect(wrapper.classes()).not.toContain("sidebar-collapsed");
     expect(localStorage.getItem("redbase.sidebarCollapsed")).toBe("false");
     expect(toggle.attributes("aria-label")).toBe("收起侧边栏");
+  });
+
+  it("opens account center and keeps the administrator entry available", async () => {
+    const { wrapper } = await mountWorkspace();
+
+    await wrapper.find(".workspace-user").trigger("click");
+    expect(wrapper.find(".account-modal-panel").exists()).toBe(true);
+    expect(wrapper.find(".account-admin-link").attributes("href")).toBe("/admin/");
+  });
+
+  it("opens the account center with Space for keyboard users", async () => {
+    const { wrapper } = await mountWorkspace(false);
+
+    await wrapper.find(".workspace-user").trigger("keydown", { key: " ", code: "Space" });
+    expect(wrapper.find(".account-modal-panel").exists()).toBe(true);
   });
 
   it("logs out through the auth store and returns to login", async () => {

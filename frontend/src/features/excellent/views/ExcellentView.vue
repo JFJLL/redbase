@@ -777,9 +777,14 @@ onUnmounted(() => {
 
 <template>
   <section class="excellent-view">
-    <header class="view-header">
-      <h1>优秀内容</h1>
-      <p class="view-subtitle">学习平台优秀图文，支持按来源与类目筛选，可一键仿图文生成品牌组图。</p>
+    <header class="panel-header excellent-panel-header">
+      <div>
+        <div class="panel-icon-title">
+          <span class="panel-icon excellent-panel-icon">优</span>
+          <h1 class="panel-title">优秀内容</h1>
+        </div>
+        <p class="panel-subtitle">近7日高阅读图文榜单，支持小红书热门与电商热门，可一键仿图文。</p>
+      </div>
     </header>
 
     <div class="board-tabs" role="tablist">
@@ -1519,6 +1524,50 @@ onUnmounted(() => {
 .excellent-view {
   gap: var(--workspace-grid-gap);
   color: var(--workspace-text);
+}
+
+.excellent-view .panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+
+.excellent-view .panel-icon-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.excellent-view .panel-icon {
+  display: block;
+  width: 28.8125px;
+  color: var(--workspace-brand);
+  font-size: 1.8rem;
+  font-weight: 400;
+}
+
+.excellent-view .excellent-panel-icon {
+  background: linear-gradient(135deg, #ff3f59, #ff7a4c);
+  color: #fff;
+}
+
+.excellent-view .panel-title {
+  margin: 0;
+  color: var(--workspace-text);
+  font-family: var(--workspace-font-heading);
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.6;
+}
+
+.excellent-view .panel-subtitle {
+  margin: 10px 0 0;
+  color: var(--workspace-text-muted);
+  font-size: 0.93rem;
+  line-height: 1.6;
 }
 
 .view-header h1 {

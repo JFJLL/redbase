@@ -280,7 +280,9 @@ function avatarInitial(name: string): string {
     <header class="panel-header personal-panel-header">
       <div>
         <div class="panel-icon-title">
-          <span class="panel-icon">☺</span>
+          <span class="panel-icon panel-icon-personal" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/><path d="M18 8.5l1 1 2-2"/></svg>
+          </span>
           <h1 class="panel-title">个人 IP</h1>
         </div>
         <p class="panel-subtitle">管理人设定位、内容支柱和表达风格，为 AI 建立稳定的个人表达。</p>
@@ -729,24 +731,29 @@ function avatarInitial(name: string): string {
 }
 
 .panel-icon {
-  width: auto;
+  display: block;
+  width: 0;
   height: auto;
   border-radius: 0;
   background: transparent;
   color: var(--workspace-brand);
   font-size: 1.8rem;
+  font-weight: 400;
 }
 
 .panel-title {
   color: var(--workspace-text);
   font-size: 2.1rem;
-  line-height: 1.2;
+  font-family: var(--workspace-font-heading);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.6;
 }
 
 .panel-subtitle {
   margin-top: 10px;
   color: var(--workspace-text-muted);
-  font-size: 0.98rem;
+  font-size: 0.93rem;
   line-height: 1.6;
 }
 

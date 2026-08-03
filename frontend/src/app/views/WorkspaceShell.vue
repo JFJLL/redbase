@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
 
@@ -8,6 +8,7 @@ const LOGO_SRC = "/assets/redbase-logo.png";
 const router = useRouter();
 const auth = useAuthStore();
 const sidebarCollapsed = ref(false);
+const accountCenterOpen = ref(false);
 
 const navItems = [
   { name: "home", icon: "首", label: "首页" },
@@ -26,9 +27,18 @@ const displayCredits = computed(() => {
   return Number.isFinite(credits) ? credits : null;
 });
 const avatarText = computed(() => displayName.value.trim().charAt(0).toUpperCase() || "R");
+const accountUser = computed(() => (auth.user ? (auth.user as Record<string, unknown>) : null));
+const accountIdentifier = computed(() => firstTextValue(accountUser.value?.phone, accountUser.value?.name) || "-");
+const accountPackage = computed(() => getAccountPackageName(accountUser.value));
+const accountExpiry = computed(() => getAccountPackageExpiry(accountUser.value));
 
 onMounted(() => {
   sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  document.addEventListener("keydown", handleDocumentKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", handleDocumentKeydown);
 });
 
 watch(sidebarCollapsed, (collapsed) => {
@@ -37,6 +47,18 @@ watch(sidebarCollapsed, (collapsed) => {
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
+}
+
+function openAccountCenter(): void {
+  accountCenterOpen.value = true;
+}
+
+function closeAccountCenter(): void {
+  accountCenterOpen.value = false;
+}
+
+function handleDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && accountCenterOpen.value) closeAccountCenter();
 }
 
 async function handleLogout() {
@@ -83,20 +105,35 @@ async function handleLogout() {
           <span class="sidebar-toggle-label">{{ sidebarCollapsed ? "展开侧边栏" : "收起侧边栏" }}</span>
         </button>
 
-        <a v-if="auth.isAdmin" class="workspace-user" href="/admin/" title="进入管理后台">
+        <a
+          v-if="auth.isAdmin"
+          class="workspace-user"
+          href="/admin/"
+          title="进入管理后台"
+          @click.prevent="openAccountCenter"
+        >
           <span class="user-avatar">{{ avatarText }}</span>
           <span class="user-details">
             <strong class="user-name">{{ displayName }}</strong>
             <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
-            <span v-if="displayCredits !== null" class="user-credits">{{ displayCredits }} 积分</span>
+            <span v-if="displayCredits !== null" class="user-credits credit-pill">{{ displayCredits }} 积分</span>
           </span>
         </a>
-        <div v-else class="workspace-user">
+        <div
+          v-else
+          class="workspace-user"
+          role="button"
+          tabindex="0"
+          aria-haspopup="dialog"
+          @click="openAccountCenter"
+          @keydown.enter="openAccountCenter"
+          @keydown.space.prevent="openAccountCenter"
+        >
           <span class="user-avatar">{{ avatarText }}</span>
           <span class="user-details">
             <strong class="user-name">{{ displayName }}</strong>
             <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
-            <span v-if="displayCredits !== null" class="user-credits">{{ displayCredits }} 积分</span>
+            <span v-if="displayCredits !== null" class="user-credits credit-pill">{{ displayCredits }} 积分</span>
           </span>
         </div>
 
@@ -106,8 +143,124 @@ async function handleLogout() {
     <main class="workspace-main">
       <RouterView />
     </main>
+
+    <div v-if="accountCenterOpen" class="workspace-modal-backdrop" @click.self="closeAccountCenter">
+      <section class="workspace-modal account-modal-panel" role="dialog" aria-modal="true" aria-labelledby="accountCenterTitle">
+        <div class="workspace-modal-head">
+          <div>
+            <div class="workspace-modal-kicker">个人中心</div>
+            <h2 id="accountCenterTitle" class="workspace-modal-title">账号信息</h2>
+            <p class="workspace-modal-copy">查看当前账号、套餐和到期状态。</p>
+          </div>
+          <button class="workspace-modal-close" type="button" aria-label="关闭账号信息" @click="closeAccountCenter">×</button>
+        </div>
+
+        <div class="account-summary-grid">
+          <div class="account-summary-item">
+            <span>账号</span>
+            <strong>{{ accountIdentifier }}</strong>
+          </div>
+          <div class="account-summary-item">
+            <span>套餐到期时间</span>
+            <strong>{{ accountExpiry }}</strong>
+          </div>
+          <div class="account-summary-item">
+            <span>当前套餐</span>
+            <strong>{{ accountPackage }}</strong>
+          </div>
+        </div>
+
+        <section class="account-business-plan" aria-label="定制专属增长方案">
+          <h3>定制专属增长方案</h3>
+          <div class="business-price-grid account-business-price-grid" aria-label="RedBase 企业报价">
+            <div class="business-price-item">
+              <span>单月版</span>
+              <strong>¥3,500</strong>
+              <small>按月灵活接入</small>
+              <small>每月 1000 积分</small>
+            </div>
+            <div class="business-price-item">
+              <span>包年版</span>
+              <strong>¥35,000</strong>
+              <small>年付更优惠</small>
+              <small>每月 1000 积分</small>
+            </div>
+          </div>
+          <p class="business-credit-note account-business-credit-note">两个版本均为每月 1000 积分；积分到期自动刷新，不会结转至下个月。</p>
+          <p class="account-business-contact">联系专属客服获取优惠价格</p>
+          <a v-if="auth.isAdmin" class="account-admin-link" href="/admin/">进入管理后台</a>
+        </section>
+      </section>
+    </div>
   </div>
 </template>
+
+<script lang="ts">
+function firstTextValue(...values: unknown[]): string {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function getAccountPackageName(user: Record<string, unknown> | null): string {
+  const subscription = asRecord(user?.subscription);
+  const packageInfo = asRecord(user?.package);
+  const planInfo = asRecord(user?.plan);
+  const directPlan = typeof user?.plan === "string" ? user.plan : "";
+  const directPackage = typeof user?.package === "string" ? user.package : "";
+  return (
+    firstTextValue(
+      user?.packageName,
+      user?.planName,
+      user?.currentPackage,
+      directPackage,
+      directPlan,
+      subscription.packageName,
+      subscription.planName,
+      packageInfo.name,
+      packageInfo.title,
+      planInfo.name,
+      planInfo.title,
+    ) || "未开通"
+  );
+}
+
+function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
+  const subscription = asRecord(user?.subscription);
+  const packageInfo = asRecord(user?.package);
+  const planInfo = asRecord(user?.plan);
+  const rawExpiry = firstTextValue(
+    user?.packageExpiry,
+    user?.packageExpiresAt,
+    user?.planExpiry,
+    user?.planExpiresAt,
+    user?.subscriptionExpiry,
+    user?.subscriptionExpiresAt,
+    subscription.expiresAt,
+    subscription.expiry,
+    subscription.endDate,
+    packageInfo.expiresAt,
+    packageInfo.expiry,
+    planInfo.expiresAt,
+    planInfo.expiry,
+  );
+  if (!rawExpiry) return "-";
+  const timestamp = /^\d+$/.test(rawExpiry) ? Number(rawExpiry) : Number.NaN;
+  const date = Number.isFinite(timestamp)
+    ? new Date(timestamp > 100000000000 ? timestamp : timestamp * 1000)
+    : new Date(rawExpiry);
+  return Number.isNaN(date.getTime())
+    ? rawExpiry
+    : date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+</script>
 
 <style scoped>
 .workspace-layout {
@@ -255,11 +408,12 @@ async function handleLogout() {
   color: inherit;
   text-align: left;
   text-decoration: none;
+  cursor: pointer;
   transition: background 180ms ease;
 }
 
-a.workspace-user:hover,
-a.workspace-user:focus-visible {
+.workspace-user:hover,
+.workspace-user:focus-visible {
   background: rgba(216, 68, 68, 0.06);
   outline: none;
 }

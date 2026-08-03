@@ -902,7 +902,11 @@ function goToIdeas(trend: TrendItem): void {
 }
 
 .panel-header {
-  margin-bottom: 8px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 28px;
 }
 
 .panel-icon-title {
@@ -910,24 +914,29 @@ function goToIdeas(trend: TrendItem): void {
 }
 
 .panel-icon {
-  width: auto;
+  display: block;
+  width: 28.8125px;
   height: auto;
   border-radius: 0;
   background: transparent;
   color: #d46b35;
   font-size: 1.8rem;
+  font-weight: 400;
 }
 
 .panel-title {
   color: var(--workspace-text);
   font-size: 2.1rem;
-  line-height: 1.2;
+  font-family: var(--workspace-font-heading);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.6;
 }
 
 .panel-subtitle {
   margin-top: 10px;
   color: var(--workspace-text-muted);
-  font-size: 0.98rem;
+  font-size: 0.93rem;
   line-height: 1.6;
 }
 
