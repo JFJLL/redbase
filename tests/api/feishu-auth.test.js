@@ -31,13 +31,22 @@ function jsonResponse(payload, status = 200) {
   };
 }
 
-function createReq(url) {
+function createReq(url, cookie = "") {
   return {
     method: "GET",
     url,
     headers: {
       host: "localhost:3013",
+      ...(cookie ? { cookie } : {}),
     },
+  };
+}
+
+function createFeishuState({ app = "default", next = "/app/brands", nonce = "test-feishu-state" } = {}) {
+  const state = Buffer.from(JSON.stringify({ app, next, nonce }), "utf8").toString("base64url");
+  return {
+    query: encodeURIComponent(state),
+    cookie: `redbase_feishu_state=${nonce}`,
   };
 }
 
@@ -312,7 +321,40 @@ test("Feishu start selects the requested configured app", async () => {
   assert.equal(res.statusCode, 302);
   const location = new URL(res.getHeader("location"));
   assert.equal(location.searchParams.get("client_id"), "cli_hongmo");
-  assert.equal(JSON.parse(Buffer.from(location.searchParams.get("state"), "base64url").toString("utf8")).app, "hongmo");
+  const state = JSON.parse(Buffer.from(location.searchParams.get("state"), "base64url").toString("utf8"));
+  assert.equal(state.app, "hongmo");
+  assert.equal(state.next, "/app/brands");
+  assert.match(String(res.getHeader("set-cookie")), /redbase_feishu_state=/);
+});
+
+test("Feishu callback rejects a state that is not bound to the browser", async () => {
+  const state = Buffer.from(
+    JSON.stringify({ app: "default", next: "/app/brands", nonce: "not-in-cookie" }),
+    "utf8",
+  ).toString("base64url");
+  const res = createRes();
+  const handled = await handleAuthRoutes(
+    {
+      appConfig: {
+        security: { cookieSecure: false },
+        feishu: {
+          enabled: true,
+          appId: "cli_a",
+          appSecret: "secret",
+          tenantKey: "tenant_a",
+          baseUrl: "https://redbase.example",
+        },
+      },
+    },
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    res,
+    "/api/auth/feishu/callback",
+  );
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.getHeader("location"), "/?authError=feishu_state");
+  assert.match(String(res.getHeader("set-cookie")), /Max-Age=0/);
 });
 
 test("Feishu callback creates a RedBase session for enterprise users", async () => {
@@ -330,6 +372,7 @@ test("Feishu callback creates a RedBase session for enterprise users", async () 
     });
   };
 
+  const state = createFeishuState();
   const res = createRes();
   const handled = await handleAuthRoutes(
     {
@@ -345,14 +388,14 @@ test("Feishu callback creates a RedBase session for enterprise users", async () 
       },
       fetch: fakeFetch,
     },
-    createReq("/api/auth/feishu/callback?code=oauth-code"),
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
     res,
     "/api/auth/feishu/callback",
   );
 
   assert.equal(handled, true);
   assert.equal(res.statusCode, 302);
-  assert.equal(res.getHeader("location"), "/");
+  assert.equal(res.getHeader("location"), "/app/brands");
   assert.match(String(res.getHeader("set-cookie")), /redbase_session=/);
 
   const user = findUserByPhone(buildFeishuAccountPhone("ou_enterprise", {
@@ -379,6 +422,7 @@ test("Feishu callback rejects users from other tenants", async () => {
     });
   };
 
+  const state = createFeishuState();
   const res = createRes();
   const handled = await handleAuthRoutes(
     {
@@ -394,7 +438,7 @@ test("Feishu callback rejects users from other tenants", async () => {
       },
       fetch: fakeFetch,
     },
-    createReq("/api/auth/feishu/callback?code=oauth-code"),
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
     res,
     "/api/auth/feishu/callback",
   );
@@ -423,6 +467,7 @@ test("Feishu callback prefers tenantKeys over legacy tenantKey", async () => {
     });
   };
 
+  const state = createFeishuState();
   const res = createRes();
   const handled = await handleAuthRoutes(
     {
@@ -439,7 +484,7 @@ test("Feishu callback prefers tenantKeys over legacy tenantKey", async () => {
       },
       fetch: fakeFetch,
     },
-    createReq("/api/auth/feishu/callback?code=oauth-code"),
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
     res,
     "/api/auth/feishu/callback",
   );
@@ -469,7 +514,7 @@ test("Feishu callback uses the app selected in OAuth state", async () => {
       },
     });
   };
-  const state = Buffer.from(JSON.stringify({ app: "hongmo", next: "/" }), "utf8").toString("base64url");
+  const state = createFeishuState({ app: "hongmo", nonce: "hongmo-state" });
 
   const res = createRes();
   const handled = await handleAuthRoutes(
@@ -487,14 +532,14 @@ test("Feishu callback uses the app selected in OAuth state", async () => {
       },
       fetch: fakeFetch,
     },
-    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
     res,
     "/api/auth/feishu/callback",
   );
 
   assert.equal(handled, true);
   assert.equal(res.statusCode, 302);
-  assert.equal(res.getHeader("location"), "/");
+  assert.equal(res.getHeader("location"), "/app/brands");
   assert.deepEqual(tokenRequests[0], {
     grant_type: "authorization_code",
     client_id: "cli_hongmo",
@@ -549,16 +594,16 @@ test("Feishu callbacks namespace identical open IDs by app and tenant", async ()
   });
 
   for (const app of ["yimei-scope", "hongmo-scope"]) {
-    const state = Buffer.from(JSON.stringify({ app, next: "/" }), "utf8").toString("base64url");
+    const state = createFeishuState({ app, nonce: `${app}-state` });
     const res = createRes();
     await handleAuthRoutes(
       { appConfig, fetch: fakeFetch },
-      createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+      createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
       res,
       "/api/auth/feishu/callback",
     );
     assert.equal(res.statusCode, 302);
-    assert.equal(res.getHeader("location"), "/");
+    assert.equal(res.getHeader("location"), "/app/brands");
   }
 
   const yimeiUser = findUserByPhone(buildFeishuAccountPhone("ou_same_across_apps", {
@@ -615,12 +660,12 @@ test("Feishu callback migrates a legacy identity only for one app and one tenant
       ],
     },
   };
-  const state = Buffer.from(JSON.stringify({ app: "single", next: "/" }), "utf8").toString("base64url");
+  const state = createFeishuState({ app: "single", nonce: "single-state" });
   const res = createRes();
 
   await handleAuthRoutes(
     { appConfig, fetch: fakeFetch },
-    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
     res,
     "/api/auth/feishu/callback",
   );
@@ -648,7 +693,7 @@ test("Feishu callback logs tenant mismatch for apps awaiting tenant key discover
       },
     });
   };
-  const state = Buffer.from(JSON.stringify({ app: "pending", next: "/" }), "utf8").toString("base64url");
+  const state = createFeishuState({ app: "pending", nonce: "pending-state" });
 
   const res = createRes();
   const handled = await handleAuthRoutes(
@@ -665,7 +710,7 @@ test("Feishu callback logs tenant mismatch for apps awaiting tenant key discover
       },
       fetch: fakeFetch,
     },
-    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${encodeURIComponent(state)}`),
+    createReq(`/api/auth/feishu/callback?code=oauth-code&state=${state.query}`, state.cookie),
     res,
     "/api/auth/feishu/callback",
   );

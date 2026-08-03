@@ -17,6 +17,7 @@ const navItems = [
   { name: "trends", icon: "趋", label: "趋势分析" },
   { name: "ideas", icon: "选", label: "内容选题" },
   { name: "excellent", icon: "优", label: "优秀内容" },
+  { name: "generation", icon: "生", label: "生图任务" },
   { name: "history", icon: "历", label: "历史生成" },
 ] as const;
 
@@ -110,7 +111,6 @@ async function handleLogout() {
           class="workspace-user"
           href="/admin/"
           title="进入管理后台"
-          @click.prevent="openAccountCenter"
         >
           <span class="user-avatar">{{ avatarText }}</span>
           <span class="user-details">
@@ -266,7 +266,8 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 .workspace-layout {
   --workspace-sidebar-width: var(--workspace-sidebar-expanded);
   display: flex;
-  min-width: 1440px;
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
   background: linear-gradient(180deg, var(--workspace-bg-top), var(--workspace-bg-bottom));
 }
@@ -544,6 +545,68 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 .sidebar-collapsed .workspace-user {
   justify-content: center;
   padding: 0;
+}
+
+@media (max-width: 1100px) {
+  .workspace-layout {
+    min-width: 0;
+    --workspace-sidebar-width: var(--workspace-sidebar-collapsed);
+  }
+
+  .workspace-sidebar {
+    padding: 24px 12px 18px;
+  }
+
+  .workspace-logo {
+    width: 54px;
+    height: 54px;
+    overflow: hidden;
+  }
+
+  .workspace-nav {
+    margin-top: 24px;
+  }
+
+  .sidebar-item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sidebar-item-label,
+  .sidebar-toggle-label,
+  .user-details,
+  .workspace-logout {
+    display: none;
+  }
+
+  .sidebar-toggle {
+    width: 30px;
+    min-height: 30px;
+    justify-self: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .sidebar-toggle-icon {
+    width: 30px;
+    height: 30px;
+    border: 1px solid rgba(216, 68, 68, 0.14);
+    background: #f7e8e4;
+    box-shadow: 0 8px 18px rgba(126, 55, 55, 0.08);
+  }
+
+  .workspace-user {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .workspace-main {
+    width: calc(100% - var(--workspace-sidebar-width));
+    margin-left: var(--workspace-sidebar-width);
+    padding: 24px;
+  }
 }
 
 @media (max-width: 760px) {

@@ -1,4 +1,5 @@
 const { bindRouteScope } = require("./route-scope");
+const { parseCookies } = require("../auth/cookies");
 const { hashPassword, verifyAndMigratePassword } = require("../auth/passwords");
 const { setSessionCookie, clearSessionCookie } = require("../auth/cookies");
 const {
@@ -27,6 +28,8 @@ const INITIAL_CREDITS = {
   yimei: 50,
   customer: 5,
 };
+const FEISHU_STATE_COOKIE_NAME = "redbase_feishu_state";
+const FEISHU_STATE_MAX_AGE_SECONDS = 10 * 60;
 
 async function handleAuthRoutes(context, req, res, pathname) {
   const {
@@ -93,7 +96,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
     req.__redbaseApiUser = buildApiUserLog(savedUser);
     setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
     json(res, 201, {
-      user: sanitizeUser(savedUser),
+      user: { ...sanitizeUser(savedUser), isAdmin: isAdminUser(savedUser, appConfig) },
     });
     return true;
   }
@@ -116,7 +119,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
     req.__redbaseApiUser = buildApiUserLog(savedUser);
     setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
     json(res, 200, {
-      user: sanitizeUser(savedUser),
+      user: { ...sanitizeUser(savedUser), isAdmin: isAdminUser(savedUser, appConfig) },
     });
     return true;
   }
@@ -146,12 +149,15 @@ async function handleAuthRoutes(context, req, res, pathname) {
       requestBaseUrl: getRequestBaseUrl(req),
     });
 
+    const next = normalizeAuthRedirectPath(url.searchParams.get("next")) || "/app/brands";
+    const nonce = randomToken();
+    setFeishuStateCookie(res, nonce, { secure: appConfig.security.cookieSecure });
     redirect(
       res,
       buildFeishuAuthorizeUrl({
         appId: feishuConfig.appId,
         redirectUri: feishuConfig.redirectUri,
-        state: encodeFeishuState({ app: feishuConfig.appKey, next: "/" }),
+        state: encodeFeishuState({ app: feishuConfig.appKey, next, nonce }),
       }),
     );
     return true;
@@ -159,6 +165,14 @@ async function handleAuthRoutes(context, req, res, pathname) {
 
   if (req.method === "GET" && pathname === "/api/auth/feishu/callback") {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const state = decodeFeishuState(url.searchParams.get("state"));
+    const stateCookie = parseCookies(req)[FEISHU_STATE_COOKIE_NAME] || "";
+    if (!state.nonce || !stateCookie || state.nonce !== stateCookie) {
+      clearFeishuStateCookie(res, { secure: appConfig.security.cookieSecure });
+      redirect(res, "/?authError=feishu_state");
+      return true;
+    }
+    clearFeishuStateCookie(res, { secure: appConfig.security.cookieSecure });
     if (url.searchParams.get("error")) {
       redirect(res, "/?authError=feishu_denied");
       return true;
@@ -170,7 +184,6 @@ async function handleAuthRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const state = decodeFeishuState(url.searchParams.get("state"));
     const feishuConfig = normalizeFeishuConfig(appConfig, req, state.app);
     if (!isFeishuConfigReady(feishuConfig)) {
       redirect(res, "/?authError=feishu_config");
@@ -231,7 +244,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
 
       req.__redbaseApiUser = buildApiUserLog(savedUser);
       setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });
-      redirect(res, normalizeRedirectPath(state.next) || "/");
+      redirect(res, normalizeAuthRedirectPath(state.next) || "/app/brands");
     } catch (error) {
       console.error("[feishu-auth] callback failed", error);
       redirect(res, "/?authError=feishu_failed");
@@ -349,6 +362,43 @@ function decodeFeishuState(value) {
 function normalizeRedirectPath(value) {
   const path = String(value || "").trim();
   return path.startsWith("/") && !path.startsWith("//") ? path : "";
+}
+
+function normalizeAuthRedirectPath(value) {
+  const path = normalizeRedirectPath(value);
+  if (path.startsWith("/app/")) return path;
+  if (path.startsWith("/") && !path.startsWith("/api/")) return "/app" + path;
+  return "";
+}
+
+function setFeishuStateCookie(res, value, options = {}) {
+  appendSetCookie(res, buildFeishuStateCookie(value, FEISHU_STATE_MAX_AGE_SECONDS, options));
+}
+
+function clearFeishuStateCookie(res, options = {}) {
+  appendSetCookie(res, buildFeishuStateCookie("", 0, options));
+}
+
+function buildFeishuStateCookie(value, maxAge, options = {}) {
+  const attributes = [
+    FEISHU_STATE_COOKIE_NAME + "=" + encodeURIComponent(String(value || "")),
+    "HttpOnly",
+    "Path=/",
+    "SameSite=Lax",
+    "Max-Age=" + maxAge,
+  ];
+  if (options.secure) attributes.push("Secure");
+  return attributes.join("; ");
+}
+
+function appendSetCookie(res, value) {
+  const existing = res.getHeader("Set-Cookie");
+  if (!existing) {
+    res.setHeader("Set-Cookie", value);
+    return;
+  }
+  const values = Array.isArray(existing) ? existing : [existing];
+  res.setHeader("Set-Cookie", [...values, value]);
 }
 
 function getRequestBaseUrl(req) {

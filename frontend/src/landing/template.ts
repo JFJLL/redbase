@@ -20,8 +20,10 @@ export const LANDING_HTML = `
           <a href="#outputs">输出成果</a>
           <a href="#pricing">企业服务</a>
           <a href="#faq">常见问题</a>
+          <a class="nav-workspace-mobile" href="/app/">进入工作台</a>
         </nav>
         <div class="nav-actions">
+          <a class="landing-btn nav-login nav-workspace" href="/app/">进入工作台</a>
           <button class="landing-btn nav-login" data-auth-open="login" type="button">登录</button>
           <button class="landing-btn landing-btn-primary" data-auth-open="register" type="button">免费使用</button>
           <button class="menu-btn" id="landingMenuButton" type="button" aria-label="展开导航" aria-expanded="false">
@@ -281,7 +283,7 @@ export const LANDING_HTML = `
           <div class="footer-intro"><a class="landing-logo" href="#top"><span class="landing-logo-image"><img src="/assets/redbase-logo.png" alt="" width="36" height="36" loading="lazy" /></span><span>RedBase</span></a><p>让品牌持续知道什么内容值得做，并把它真正生产出来。</p></div>
           <div><h4>产品</h4><a href="#workspace">品牌档案</a><a href="#workspace">趋势分析</a><a href="#workspace">优秀内容</a><a href="#outputs">图文生成</a></div>
           <div><h4>服务</h4><a href="#pricing">企业服务</a><a href="#pricing">定价方案</a><a href="#faq">常见问题</a></div>
-          <div><h4>账户</h4><button data-auth-open="login" type="button">手机号登录</button><button data-auth-open="register" type="button">免费注册</button></div>
+          <div><h4>账户</h4><button data-auth-open="login" type="button">手机号登录</button><button data-auth-open="register" type="button">免费注册</button><a href="/app/">进入工作台</a></div>
         </div>
         <div class="footer-bottom"><span>Copyright © 2026 RedBase</span><span>京ICP备2026045114号-1</span></div>
       </div>

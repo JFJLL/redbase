@@ -703,4 +703,29 @@ onUnmounted(() => {
 .history-modal-image {
   border-radius: var(--workspace-radius-sm);
 }
+
+@media (max-width: 1100px) {
+  .history-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-filter-search {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .history-filters {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .history-filter-search {
+    grid-column: auto;
+  }
+
+  .history-filters .small-btn {
+    width: 100%;
+  }
+}
 </style>

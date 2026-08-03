@@ -28,7 +28,8 @@ function setMode(mode: AuthMode): void {
 }
 
 function afterAuthTarget(): string {
-  return typeof route.query.redirect === "string" ? route.query.redirect : "";
+  const redirect = typeof route.query.redirect === "string" ? route.query.redirect : "";
+  return redirect.startsWith("/") && !redirect.startsWith("//") && redirect !== "/" ? redirect : "";
 }
 
 async function goToWorkspace(): Promise<void> {
@@ -109,7 +110,7 @@ function close(): void {
       <div class="auth-shell">
         <div class="auth-brand-panel">
           <div class="logo-wrap logo-wrap-vertical auth-brand-logo">
-            <div class="logo-icon logo-icon-large" aria-hidden="true">
+            <div class="logo-icon logo-icon-large">
               <img class="logo-image" :src="LOGO_SRC" alt="RedBase logo" />
             </div>
             <div>
@@ -121,7 +122,7 @@ function close(): void {
         </div>
 
         <div class="auth-form-panel">
-          <FeishuLoginButtons />
+          <FeishuLoginButtons :next="afterAuthTarget() || '/app/brands'" />
 
           <div class="auth-tab-row">
             <button

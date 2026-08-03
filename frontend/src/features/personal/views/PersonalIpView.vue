@@ -931,4 +931,19 @@ function avatarInitial(name: string): string {
 .form-error {
   color: var(--workspace-danger, #b72e3a);
 }
+
+@media (max-width: 760px) {
+  .brand-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .personal-profile-stats {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .personal-profile-stats span {
+    padding-inline: 10px;
+  }
+}
 </style>

@@ -1831,4 +1831,25 @@ onUnmounted(() => {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+@media (max-width: 1100px) {
+  .excellent-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .excellent-filters .small-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .excellent-filters {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .excellent-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 </style>

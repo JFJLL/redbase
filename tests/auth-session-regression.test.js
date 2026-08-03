@@ -22,6 +22,9 @@ function createRes() {
     getHeader(key) {
       return headers.get(String(key).toLowerCase());
     },
+    setHeader(key, value) {
+      headers.set(String(key).toLowerCase(), value);
+    },
     end() {},
   };
 }

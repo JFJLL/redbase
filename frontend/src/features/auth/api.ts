@@ -25,6 +25,7 @@ export function fetchFeishuApps(signal?: AbortSignal): Promise<{ apps: FeishuApp
 }
 
 /** Browser navigation target starting the Feishu OAuth flow. */
-export function feishuStartUrl(appKey: string): string {
-  return `/api/auth/feishu/start?app=${encodeURIComponent(appKey)}`;
+export function feishuStartUrl(appKey: string, next = "/app/brands"): string {
+  const params = new URLSearchParams({ app: appKey, next });
+  return `/api/auth/feishu/start?${params.toString()}`;
 }

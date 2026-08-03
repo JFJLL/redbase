@@ -472,4 +472,10 @@ function goTrends(brandId: number): void {
   margin-bottom: 16px;
   color: var(--workspace-danger, #b72e3a);
 }
+
+@media (max-width: 760px) {
+  .brand-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 </style>

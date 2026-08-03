@@ -80,6 +80,7 @@ describe("legacy workspace visual shell", () => {
       "趋势分析",
       "内容选题",
       "优秀内容",
+      "生图任务",
       "历史生成",
     ]);
     expect(links.map((link) => link.attributes("href"))).toEqual([
@@ -89,6 +90,7 @@ describe("legacy workspace visual shell", () => {
       "/trends",
       "/ideas",
       "/excellent",
+      "/generation",
       "/history",
     ]);
     expect(wrapper.find("a.workspace-user").attributes("href")).toBe("/admin/");
@@ -110,12 +112,12 @@ describe("legacy workspace visual shell", () => {
     expect(toggle.attributes("aria-label")).toBe("收起侧边栏");
   });
 
-  it("opens account center and keeps the administrator entry available", async () => {
+  it("keeps the administrator entry as a direct navigation link", async () => {
     const { wrapper } = await mountWorkspace();
 
-    await wrapper.find(".workspace-user").trigger("click");
-    expect(wrapper.find(".account-modal-panel").exists()).toBe(true);
-    expect(wrapper.find(".account-admin-link").attributes("href")).toBe("/admin/");
+    const adminLink = wrapper.find("a.workspace-user");
+    expect(adminLink.attributes("href")).toBe("/admin/");
+    expect(adminLink.attributes("title")).toBe("进入管理后台");
   });
 
   it("opens the account center with Space for keyboard users", async () => {
