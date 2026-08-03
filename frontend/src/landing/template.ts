@@ -20,10 +20,9 @@ export const LANDING_HTML = `
           <a href="#outputs">输出成果</a>
           <a href="#pricing">企业服务</a>
           <a href="#faq">常见问题</a>
-          <a class="nav-workspace-mobile" href="/app/">进入工作台</a>
+          <a href="/app/">进入工作台</a>
         </nav>
         <div class="nav-actions">
-          <a class="landing-btn nav-login nav-workspace" href="/app/">进入工作台</a>
           <button class="landing-btn nav-login" data-auth-open="login" type="button">登录</button>
           <button class="landing-btn landing-btn-primary" data-auth-open="register" type="button">免费使用</button>
           <button class="menu-btn" id="landingMenuButton" type="button" aria-label="展开导航" aria-expanded="false">

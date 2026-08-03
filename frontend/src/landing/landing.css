@@ -358,10 +358,6 @@ body:has(.page-landing.is-active)::before {
   padding-inline: 12px;
 }
 
-.nav-workspace-mobile {
-  display: none;
-}
-
 .menu-btn {
   display: none;
   width: 42px;
@@ -1818,9 +1814,7 @@ body:has(.page-landing.is-active)::before {
   }
   .nav-inner.mobile-open .nav-links { display: flex; }
   .nav-links a { padding: 11px 12px; }
-  .nav-workspace-mobile { display: block; }
   .nav-login { display: none; }
-  .nav-workspace { display: none; }
   .menu-btn { display: inline-flex; }
   .commercial-hero { padding: 126px 0 84px; }
   .hero-copy h1 { font-size: clamp(39px, 11vw, 58px); }
