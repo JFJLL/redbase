@@ -41,11 +41,21 @@ async function goToWorkspace(): Promise<void> {
   await router.push({ name: "brands" });
 }
 
+async function refreshAuthUser(): Promise<void> {
+  try {
+    await auth.refreshUser();
+  } catch {
+    // Login/register already succeeded; keep the workspace usable if the
+    // supplementary session refresh is temporarily unavailable.
+  }
+}
+
 async function handleLogin(): Promise<void> {
   submitting.value = true;
   errorMessage.value = "";
   try {
     await auth.login(loginForm.phone, loginForm.password);
+    await refreshAuthUser();
     await goToWorkspace();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
@@ -63,6 +73,7 @@ async function handleRegister(): Promise<void> {
       name: registerForm.name,
       password: registerForm.password,
     });
+    await refreshAuthUser();
     await goToWorkspace();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
@@ -122,7 +133,7 @@ function close(): void {
         </div>
 
         <div class="auth-form-panel">
-          <FeishuLoginButtons :next="afterAuthTarget() || '/app/brands'" />
+          <FeishuLoginButtons />
 
           <div class="auth-tab-row">
             <button

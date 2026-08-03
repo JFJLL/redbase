@@ -42,6 +42,7 @@ test("landing calls to action stay connected to the real application flows", () 
   assert.match(templateTs, /data-business-quote-open/);
   assert.match(mainTs, /function bindLandingExperience\(/);
   assert.match(mainTs, /bindLandingExperience\(page\);/);
+  assert.match(mainTs, /redirectAuthenticatedUser/);
 });
 
 test("landing media is local and desktop layout prevents horizontal overflow", () => {

@@ -50,7 +50,6 @@ function clearSessionCookie(res, options = {}) {
 
 module.exports = {
   SESSION_COOKIE_NAME,
-  parseCookies,
   getCookieSessionToken,
   buildSessionCookie,
   setSessionCookie,

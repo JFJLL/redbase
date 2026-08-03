@@ -8,9 +8,6 @@ import { fetchFeishuApps, feishuStartUrl, type FeishuApp } from "../api";
 // public/app.js: a single tenant becomes one button, multiple tenants are
 // listed by name; load failures hide the section like the legacy UI.
 
-const props = withDefaults(defineProps<{ next?: string }>(), {
-  next: "/app/brands",
-});
 const { signalFor } = useAbortScope();
 const apps = ref<FeishuApp[]>([]);
 const menuOpen = ref(false);
@@ -26,7 +23,7 @@ onMounted(async () => {
 });
 
 function startLogin(app: FeishuApp): void {
-  window.location.href = feishuStartUrl(app.key, props.next);
+  window.location.href = feishuStartUrl(app.key);
 }
 
 function handlePrimaryClick(): void {

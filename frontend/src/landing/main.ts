@@ -26,6 +26,7 @@ function renderLanding(root: HTMLElement): void {
   bindAuthModal(authModal);
   bindBusinessQuoteModal(businessModal);
   showAuthRedirectError();
+  void redirectAuthenticatedUser();
 }
 
 // Interactions ported from public/app.js bindLandingExperience().
@@ -332,6 +333,17 @@ function showAuthRedirectError(): void {
   window.alert(messages[error] || "登录失败，请稍后重试。");
   url.searchParams.delete("authError");
   window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function redirectAuthenticatedUser(): Promise<void> {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("authError") || window.location.pathname !== "/") return;
+  try {
+    const response = await fetch("/api/session", { credentials: "same-origin" });
+    if (response.ok) window.location.replace("/app/");
+  } catch {
+    // The landing page remains usable when the session check is unavailable.
+  }
 }
 
 const root = document.getElementById("landing-root");
