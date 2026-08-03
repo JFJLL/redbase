@@ -731,14 +731,20 @@ function avatarInitial(name: string): string {
 }
 
 .panel-icon {
-  display: block;
-  width: 0;
-  height: auto;
-  border-radius: 0;
-  background: transparent;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(255, 36, 66, 0.1);
   color: var(--workspace-brand);
   font-size: 1.8rem;
   font-weight: 400;
+}
+
+.panel-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
 .panel-title {
