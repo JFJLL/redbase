@@ -1,12 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
+const { existsSync, readFileSync } = require("node:fs");
 const path = require("node:path");
 
 const { buildSessionCookie } = require("../src/server/auth/cookies");
 const { signAssetUrl, signLocalAssetUrls, verifySignedAssetRequest } = require("../src/server/assets/signed-urls");
 const { buildImageJobResponse } = require("../src/server/ai/image-jobs");
-const { DEFAULT_APP_CONFIG, loadAppConfig } = require("../src/server/config");
+const { CONFIG_FILE, DEFAULT_APP_CONFIG, loadAppConfig } = require("../src/server/config");
 const { applyCorsHeaders, validateCorsConfigForStartup } = require("../src/server/cors");
 const { handleHealthRoutes } = require("../src/server/api/health-routes");
 const { getTrendAnalysisPublicErrorMessage } = require("../src/server/api/trend-routes");
@@ -58,6 +58,18 @@ test("production enables secure cookies unless explicitly disabled", () => {
   try {
     process.env.NODE_ENV = "production";
     delete process.env.COOKIE_SECURE;
+    const localCookieSecure = existsSync(CONFIG_FILE)
+      ? JSON.parse(readFileSync(CONFIG_FILE, "utf8"))?.security?.cookieSecure
+      : undefined;
+    const expectedCookieSecure = localCookieSecure === undefined
+      ? true
+      : ["1", "true", "yes", "on"].includes(String(localCookieSecure).trim().toLowerCase());
+    assert.equal(
+      loadAppConfig().security.cookieSecure,
+      expectedCookieSecure,
+    );
+
+    process.env.COOKIE_SECURE = "true";
     assert.equal(loadAppConfig().security.cookieSecure, true);
 
     process.env.COOKIE_SECURE = "false";
