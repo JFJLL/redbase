@@ -7,6 +7,7 @@ config.local - *.json
 .env.production
 logs/
 data/
+.deployment/
 node_modules/
 dist/
 *.log
