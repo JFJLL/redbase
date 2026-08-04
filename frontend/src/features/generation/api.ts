@@ -43,7 +43,7 @@ export const XHS_CREATIVE_STYLE_OPTIONS: readonly CreativeOption[] = Object.free
 ]);
 
 export const WECHAT_TEMPLATE_OPTIONS: readonly CreativeOption[] = Object.freeze([
-  { value: "auto", label: "智能匹配", description: "根据文章主题自动选择长图结构" },
+  { value: "auto", label: "智能配色", description: "根据文章主题自动匹配长图配色与结构" },
   { value: "editorial", label: "深度观点", description: "行业洞察、品牌观点与趋势解读" },
   { value: "tutorial", label: "干货教程", description: "步骤方法、操作指南和科普内容" },
   { value: "report", label: "行业报告", description: "数据卡片、趋势拆解和专业结论" },

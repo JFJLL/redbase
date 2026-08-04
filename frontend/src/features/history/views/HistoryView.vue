@@ -12,6 +12,7 @@ import {
   fetchBrands,
   fetchGenerationHistory,
   getGenerationPrimaryImageUrl,
+  hasExpiredAssetSignature,
   matchesGenerationHistoryFilters,
   safeImageSrc,
   type GenerationHistoryItem,
@@ -29,8 +30,71 @@ const brands = ref<HistoryBrand[]>([]);
 const loading = ref(false);
 const loadError = ref("");
 const detailItem = ref<GenerationHistoryItem | null>(null);
-const detailImageUrl = ref("");
+const detailSlideIndex = ref<number | null>(null);
 let filterTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 图片加载失败：明确错误态 + 重试；签名过期只刷新一次列表拿新签名，不无限循环。
+const failedImageUrls = reactive(new Set<string>());
+const refreshedSignatureUrls = new Set<string>();
+let signatureRefreshInFlight = false;
+let signatureRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+const detailImageUrl = computed(() => {
+  const item = detailItem.value;
+  if (!item) return "";
+  if (detailSlideIndex.value != null && Array.isArray(item.payload?.slides)) {
+    const slide = item.payload.slides[detailSlideIndex.value];
+    const slideSrc = safeImageSrc(slide?.imageUrl || slide?.previewUrl);
+    if (slideSrc) return slideSrc;
+  }
+  return safeImageSrc(item.previewUrl);
+});
+
+function isImageFailed(url: string): boolean {
+  return Boolean(url) && failedImageUrls.has(url);
+}
+
+function retryImage(url: string) {
+  if (!url) return;
+  failedImageUrls.delete(url);
+}
+
+function onHistoryImageError(url: string) {
+  if (!url) return;
+  if (hasExpiredAssetSignature(url)) {
+    if (refreshedSignatureUrls.has(url)) {
+      failedImageUrls.add(url);
+      return;
+    }
+    refreshedSignatureUrls.add(url);
+    scheduleSignatureRefresh();
+    return;
+  }
+  failedImageUrls.add(url);
+}
+
+function scheduleSignatureRefresh() {
+  if (signatureRefreshInFlight) return;
+  if (signatureRefreshTimer) clearTimeout(signatureRefreshTimer);
+  signatureRefreshTimer = setTimeout(() => {
+    signatureRefreshTimer = null;
+    signatureRefreshInFlight = true;
+    loadHistory().finally(() => {
+      signatureRefreshInFlight = false;
+    });
+  }, 250);
+}
+
+function slideImages(item: GenerationHistoryItem): Array<{ src: string; title: string }> {
+  return (item.payload?.slides || [])
+    .slice(0, 4)
+    .map((slide) => ({ src: safeImageSrc(slide.imageUrl || slide.previewUrl), title: slide.title || "" }))
+    .filter((entry) => Boolean(entry.src));
+}
+
+function previewSrc(item: GenerationHistoryItem): string {
+  return safeImageSrc(item.previewUrl);
+}
 
 const visibleHistory = computed(() => generations.value.filter((item) => matchesGenerationHistoryFilters(item, filters)));
 const hasFilters = computed(() => Boolean(filters.q || filters.brandId || filters.type || filters.from || filters.to));
@@ -64,6 +128,16 @@ async function loadHistory() {
     const result = await fetchGenerationHistory(filters, scope.signalFor("history"));
     generations.value = result.generations || [];
     loadError.value = "";
+    // 签名过期刷新后，把已打开的详情同步到新签名，避免旧 URL 继续 401 破图。
+    if (detailItem.value) {
+      const currentId = detailItem.value.id;
+      const currentIndex = detailSlideIndex.value;
+      const refreshed = generations.value.find((generation) => Number(generation.id) === Number(currentId));
+      if (refreshed) {
+        detailItem.value = refreshed;
+        detailSlideIndex.value = currentIndex;
+      }
+    }
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
@@ -100,12 +174,14 @@ async function removeItem(generationId: number) {
 
 function openDetail(item: GenerationHistoryItem, slideUrl = "") {
   detailItem.value = item;
-  detailImageUrl.value = slideUrl || getGenerationPrimaryImageUrl(item);
+  const slides = Array.isArray(item.payload?.slides) ? item.payload.slides : [];
+  const matchIndex = slides.findIndex((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl) === slideUrl);
+  detailSlideIndex.value = matchIndex >= 0 ? matchIndex : null;
 }
 
 function closeDetail() {
   detailItem.value = null;
-  detailImageUrl.value = "";
+  detailSlideIndex.value = null;
 }
 
 async function loadBrands() {
@@ -126,6 +202,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (filterTimer) clearTimeout(filterTimer);
+  if (signatureRefreshTimer) clearTimeout(signatureRefreshTimer);
 });
 </script>
 
@@ -233,23 +310,54 @@ onUnmounted(() => {
       </div>
 
       <div v-if="item.type === 'xhsCarousel'" class="history-grid">
-        <img
-          v-for="(slide, index) in (item.payload?.slides || []).slice(0, 4).filter((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl))"
-          :key="index"
-          :src="safeImageSrc(slide.imageUrl || slide.previewUrl)"
-          :alt="slide.title || ''"
-          loading="lazy"
-          decoding="async"
-          @click="openDetail(item, safeImageSrc(slide.imageUrl || slide.previewUrl))"
-        />
+        <div v-for="(slide, index) in slideImages(item)" :key="index" class="history-slide-cell">
+          <div v-if="isImageFailed(slide.src)" class="history-image-error" data-test="history-image-error">
+            <span>图片加载失败</span>
+            <button
+              type="button"
+              class="secondary-btn"
+              data-test="history-image-retry"
+              @click="retryImage(slide.src)"
+            >
+              重试
+            </button>
+          </div>
+          <img
+            v-else
+            :src="slide.src"
+            :alt="slide.title"
+            loading="lazy"
+            decoding="async"
+            @click="openDetail(item, slide.src)"
+            @error="onHistoryImageError(slide.src)"
+          />
+        </div>
       </div>
       <button
-        v-else-if="item.previewUrl"
+        v-else-if="previewSrc(item)"
         type="button"
         class="history-preview"
         @click="openDetail(item)"
       >
-        <img :src="safeImageSrc(item.previewUrl)" :alt="item.cardTitle || ''" loading="lazy" decoding="async" />
+        <div v-if="isImageFailed(previewSrc(item))" class="history-image-error" data-test="history-image-error">
+          <span>图片加载失败</span>
+          <button
+            type="button"
+            class="secondary-btn"
+            data-test="history-image-retry"
+            @click.stop="retryImage(previewSrc(item))"
+          >
+            重试
+          </button>
+        </div>
+        <img
+          v-else
+          :src="previewSrc(item)"
+          :alt="item.cardTitle || ''"
+          loading="lazy"
+          decoding="async"
+          @error="onHistoryImageError(previewSrc(item))"
+        />
       </button>
     </article>
 
@@ -260,7 +368,26 @@ onUnmounted(() => {
           <button type="button" class="secondary-btn" @click="closeDetail()">关闭</button>
         </header>
         <p class="history-card-ref">{{ detailItem.channelLabel }} · {{ typeLabel(detailItem) }}</p>
-        <img v-if="detailImageUrl" :src="detailImageUrl" alt="历史生成图片" class="history-modal-image" />
+        <template v-if="detailImageUrl">
+          <div v-if="isImageFailed(detailImageUrl)" class="history-image-error" data-test="history-image-error">
+            <span>图片加载失败</span>
+            <button
+              type="button"
+              class="secondary-btn"
+              data-test="history-image-retry"
+              @click="retryImage(detailImageUrl)"
+            >
+              重试
+            </button>
+          </div>
+          <img
+            v-else
+            :src="detailImageUrl"
+            alt="历史生成图片"
+            class="history-modal-image"
+            @error="onHistoryImageError(detailImageUrl)"
+          />
+        </template>
       </div>
     </div>
   </section>
@@ -400,6 +527,26 @@ onUnmounted(() => {
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   cursor: pointer;
+}
+
+.history-slide-cell {
+  min-width: 0;
+}
+
+.history-image-error {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
 .history-preview {

@@ -47,10 +47,11 @@ import {
 } from "../api";
 import type { SessionUser } from "@/shared/types/api";
 
-// 生图任务：独立改图（第一轮） + 选题驱动的四类生图（本轮补齐）。
-// 有 route query（brandId/trendId/ideaIndex）时加载品牌详情并暴露四类生成动作，
-// 无上下文时保持第一轮的独立改图表单。所有请求走 @/shared/api/client，
-// signal 由 useAbortScope 提供，卸载/退出登录时轮询自动停止。
+// 生图任务：选题驱动的四类生图（朋友圈图/公众号长图/小红书组图/风格化图）。
+// 有 route query（brandId/trendId/ideaIndex/action）时加载品牌详情并暴露四类生成动作；
+// 无上下文时显示产品化任务概览，引导去内容选题页（图3 裸表单已下线）。
+// 所有请求走 @/shared/api/client，signal 由 useAbortScope 提供，
+// 卸载/退出登录时轮询自动停止。
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
@@ -74,6 +75,10 @@ function parseIndex(value: unknown): number | null {
 const queryBrandId = computed(() => parsePositiveInt(route.query.brandId));
 const queryTrendId = computed(() => parsePositiveInt(route.query.trendId));
 const queryIdeaIndex = computed(() => parseIndex(route.query.ideaIndex));
+const queryAction = computed<"moments" | "wechat" | "xhsCarousel" | "styleImage" | null>(() => {
+  const raw = Array.isArray(route.query.action) ? route.query.action[0] : route.query.action;
+  return raw === "moments" || raw === "wechat" || raw === "xhsCarousel" || raw === "styleImage" ? raw : null;
+});
 const hasIdeaContext = computed(
   () => queryBrandId.value !== null && queryTrendId.value !== null && queryIdeaIndex.value !== null,
 );
@@ -95,6 +100,7 @@ const trend = ref<TrendDetail | null>(null);
 const idea = ref<IdeaDetail | null>(null);
 const contextLoading = ref(false);
 const contextError = ref("");
+const startedActionKey = ref("");
 
 const brandHasLogo = computed(() => Boolean(brand.value?.logo));
 const logoLabel = computed(() => (brand.value?.profileType === "personal" ? "个人头像" : "品牌 Logo"));
@@ -116,6 +122,8 @@ async function loadBrandContext() {
     } else if (!idea.value) {
       contextError.value = "未找到对应的选题，请返回内容选题页重新选择。";
     }
+    // 从内容选题页的一键按钮进入：就绪门控 + 一次性票据，自动启动至多一次。
+    await maybeAutoStartGeneration();
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
@@ -127,11 +135,62 @@ async function loadBrandContext() {
 
 onMounted(loadBrandContext);
 
+// —— 一键生成：一次性票据 + 自动启动就绪门控 ——
+// 自动启动前必须等齐：品牌/趋势/选题就绪、该选题创作设置已恢复、产品图库已加载。
+const ideaSettingsRestored = ref(false);
+const productImagesLoaded = ref(false);
+const productImagesError = ref("");
+const productImagesReloadToken = ref(0);
+
+/**
+ * 消费一次性票据：任何生成 POST 之前，先把 URL 上的 action 移除（保留
+ * brandId/trendId/ideaIndex 及其余 query）。此后刷新、重挂载、后退再前进，
+ * URL 已无 action，不会再次自动提交。
+ */
+async function consumeActionTicket(): Promise<boolean> {
+  const query = { ...route.query };
+  delete query.action;
+  try {
+    await router.replace({ query });
+    return true;
+  } catch (error) {
+    // replace 未能原子完成：停止自动启动并显示可恢复错误，绝不带着 action 重复 POST。
+    contextError.value = `自动启动失败，请手动点击生成：${(error as Error).message}`;
+    return false;
+  }
+}
+
+/** 自动启动门控；不满足就绪条件时静默等待，就绪状态变化后由 watch 复查。 */
+async function maybeAutoStartGeneration(): Promise<void> {
+  const action = queryAction.value;
+  if (!action) return;
+  const actionKey = `${queryBrandId.value}:${queryTrendId.value}:${queryIdeaIndex.value}:${action}`;
+  if (actionKey === startedActionKey.value) return;
+  // 图库门控：用户开启产品图时必须图库已加载且无错误（失败时 product-images-error
+  // 区块展示可恢复错误，绝不静默以空数组自动生成）；明确关闭产品图时不等待图库，
+  // 空 productImages 是合法语义（手动/重试入口由共享防线统一约束）。
+  if (useProductImages.value) {
+    if (productImagesError.value) return;
+    if (!productImagesLoaded.value) return;
+  }
+  if (!brand.value || !trend.value || !idea.value || !ideaSettingsRestored.value) return;
+  // 纵深防御：先落 startedActionKey 再消费票据；即便 replace 抛错或本次生成失败，
+  // 也不会再次自动提交（失败由用户点「重试」手动恢复）。
+  startedActionKey.value = actionKey;
+  await startGenerationAction(action);
+}
+
+// 图库加载完成/失败、创作设置恢复等就绪状态变化时复查自动启动条件。
+watch([productImagesLoaded, productImagesError, ideaSettingsRestored], () => {
+  void maybeAutoStartGeneration();
+});
+
 // —— Shared generation controls（按 品牌ID:趋势ID:选题序号 键位独立记忆，旧版按选题记忆语义） ——
 const aspectRatioSelection = ref("smart");
 const wechatTemplate = ref("auto");
 const xhsStylePreset = ref("auto");
 const useBrandLogo = ref(false);
+const useProductImages = ref(true);
 
 const selectedProductIds = ref<number[]>([]);
 const loadedProductImages = ref<ProductImageView[]>([]);
@@ -148,8 +207,10 @@ function restoreIdeaSettings(): void {
   xhsStylePreset.value = settings.visualStylePreset;
   wechatTemplate.value = settings.wechatTemplate;
   useBrandLogo.value = settings.useBrandLogo;
+  useProductImages.value = settings.useProductImages;
   selectedProductIds.value = [...settings.selectedProductIds];
   styleReference.value = settings.styleReference;
+  ideaSettingsRestored.value = true;
 }
 
 restoreIdeaSettings();
@@ -162,13 +223,22 @@ watch(ideaSettingsKey, () => {
 
 // 设置变化即写回当前选题键位（会话内生效）。
 watch(
-  [aspectRatioSelection, xhsStylePreset, wechatTemplate, useBrandLogo, selectedProductIds, styleReference],
+  [
+    aspectRatioSelection,
+    xhsStylePreset,
+    wechatTemplate,
+    useBrandLogo,
+    useProductImages,
+    selectedProductIds,
+    styleReference,
+  ],
   () => {
     saveIdeaCreativeSettings(ideaSettingsKey.value, {
       aspectRatioSelection: aspectRatioSelection.value,
       visualStylePreset: xhsStylePreset.value,
       wechatTemplate: wechatTemplate.value,
       useBrandLogo: useBrandLogo.value,
+      useProductImages: useProductImages.value,
       selectedProductIds: selectedProductIds.value,
       styleReference: styleReference.value,
     });
@@ -178,14 +248,32 @@ watch(
 
 // getSelectedProductImages semantics: library images submit as { id, name }.
 const selectedProductImageInputs = computed<ProductImageInput[]>(() =>
-  loadedProductImages.value
-    .filter((image) => selectedProductIds.value.includes(image.id))
-    .map((image) => ({ id: image.id, name: image.originalName })),
+  useProductImages.value
+    ? loadedProductImages.value
+        .filter((image) => selectedProductIds.value.includes(image.id))
+        .map((image) => ({ id: image.id, name: image.originalName }))
+    : [],
 );
 
 function onProductImagesLoaded(images: ProductImageView[]) {
   loadedProductImages.value = images;
+  productImagesLoaded.value = true;
+  productImagesError.value = "";
 }
+
+function onProductImagesLoadError(message: string) {
+  productImagesLoaded.value = false;
+  productImagesError.value = message || "产品素材加载失败";
+}
+
+function retryProductImagesLoad(): void {
+  productImagesReloadToken.value += 1;
+}
+
+/** 产品图库防线：开启产品图且图库未加载完成/加载失败时，任何生成入口（自动/手动/重试）都不允许发 POST。 */
+const productLibraryBlocked = computed(
+  () => useProductImages.value && (!productImagesLoaded.value || !!productImagesError.value),
+);
 
 const resolvedUseBrandLogo = computed(() => useBrandLogo.value && brandHasLogo.value);
 
@@ -201,6 +289,36 @@ const wechatResult = ref<WechatPack | null>(null);
 const styleResult = ref<ImageConceptResult | null>(null);
 
 const busy = computed(() => genPhase.value === "running");
+
+async function startGenerationAction(action: "moments" | "wechat" | "xhsCarousel" | "styleImage"): Promise<void> {
+  // 产品图库防线：先于票据消费拦截。开启产品图但图库未就绪/失败时，不消费 action 票据、不发 POST。
+  // 图库失败时 product-images-error 区块已展示错误与「重新加载产品图」；仅加载中则补一条明确提示。
+  if (productLibraryBlocked.value) {
+    if (!productImagesError.value) {
+      productImagesError.value = "产品素材尚未加载完成，请等待加载或点击「重新加载产品图」后再生成。";
+    }
+    return;
+  }
+  // 一次性票据在共享入口消费：自动启动、手动点击、失败重试都不得带着 action 发 POST。
+  // replace 失败即停止本次生成并显示可恢复错误，绝不带着 action 重复提交。
+  const consumed = await consumeActionTicket();
+  if (!consumed) return;
+  if (action === "moments") {
+    await generateMomentsImage();
+  } else if (action === "wechat") {
+    await generateWechatLongImage();
+  } else if (action === "xhsCarousel") {
+    await generateXhsCarousel();
+  } else {
+    await generateStyleImage();
+  }
+}
+
+/** 失败后的错误恢复：重跑同一类生图任务。 */
+async function retryGeneration(): Promise<void> {
+  if (busy.value || !genKind.value) return;
+  await startGenerationAction(genKind.value as "moments" | "wechat" | "xhsCarousel" | "styleImage");
+}
 
 function startGeneration(kind: GenKind, status: string) {
   genKind.value = kind;
@@ -238,7 +356,7 @@ async function generateMomentsImage() {
   if (busy.value || !context) return;
   const aspectRatio = resolveAspectRatio(aspectRatioSelection.value, "moments");
   const signal = scope.signalFor("moments");
-  startGeneration("moments", "AI 正在生成朋友圈图...");
+  startGeneration("moments", "任务已进入队列，正在排队生成朋友圈图...");
   try {
     const submitResult = await submitMomentsImage(
       context.brandId,
@@ -304,7 +422,7 @@ async function generateWechatLongImage() {
   const aspectRatio = await confirmWechatAspectRatio(resolveAspectRatio(aspectRatioSelection.value, "wechat"));
   if (!aspectRatio) return;
   const signal = scope.signalFor("wechat");
-  startGeneration("wechat", "AI 正在生成公众号长图方案...");
+  startGeneration("wechat", "任务已进入队列，正在排队生成公众号长图...");
   try {
     const submitResult = await submitWechatLongImage(
       context.brandId,
@@ -345,7 +463,7 @@ async function generateXhsCarousel() {
   if (busy.value || !context) return;
   const aspectRatio = resolveAspectRatio(aspectRatioSelection.value, "xhsCarousel");
   const signal = scope.signalFor("xhs-carousel");
-  startGeneration("xhsCarousel", "正在准备小红书组图方案...");
+  startGeneration("xhsCarousel", "任务已进入队列，正在准备小红书组图方案...");
   carousel.pack = null;
   carousel.creditEventId = null;
   carouselCompleted.value = false;
@@ -587,7 +705,7 @@ async function generateStyleImage() {
   }
   const aspectRatio = resolveAspectRatio(aspectRatioSelection.value, "styleImage");
   const signal = scope.signalFor("style-image");
-  startGeneration("styleImage", "AI 正在生成风格化图...");
+  startGeneration("styleImage", "任务已进入队列，正在排队生成风格化图...");
   try {
     const submitResult = await submitStyleImage(
       context.brandId,
@@ -621,65 +739,9 @@ async function generateStyleImage() {
   }
 }
 
-// —— Standalone image edit (round 1, preserved for no-context sessions) ——
-const form = reactive({
-  imageUrl: "",
-  prompt: "",
-  title: "",
-  aspectRatio: "",
-});
-
-type JobPhase = "idle" | "submitting" | "polling" | "done" | "error";
-const phase = ref<JobPhase>("idle");
-const statusMessage = ref("");
-const errorMessage = ref("");
-const jobId = ref("");
-const result = ref<ImageConceptResult | null>(null);
-
-const editBusy = computed(() => phase.value === "submitting" || phase.value === "polling");
-
-async function submit() {
-  if (editBusy.value) return;
-  errorMessage.value = "";
-  const prompt = form.prompt.trim();
-  if (!prompt) {
-    errorMessage.value = "请先填写改图提示词。";
-    return;
-  }
-  const signal = scope.signalFor("image-edit");
-  phase.value = "submitting";
-  statusMessage.value = "改图任务已提交，正在等待结果...";
-  result.value = null;
-  try {
-    const submitResult = await submitImageEdit(
-      {
-        imageUrl: form.imageUrl.trim(),
-        prompt,
-        title: form.title.trim(),
-        aspectRatio: form.aspectRatio || undefined,
-      },
-      signal,
-    );
-    if (submitResult.user) auth.user = submitResult.user;
-    if (!submitResult.jobId) throw new Error("改图任务创建失败");
-    jobId.value = submitResult.jobId;
-    phase.value = "polling";
-    const concept = await pollImageJob(submitResult.jobId, {
-      signal,
-      onUser: (user) => {
-        auth.user = user;
-      },
-    });
-    result.value = concept;
-    phase.value = "done";
-    statusMessage.value = "改图完成，可继续追加提示词。";
-  } catch (error) {
-    if (isAbortError(error)) return;
-    if (await handleUnauthorizedError(error)) return;
-    phase.value = "error";
-    statusMessage.value = "";
-    errorMessage.value = `改图失败：${(error as Error).message}`;
-  }
+// —— 无选题上下文：产品化空状态，引导去内容选题页（图3 裸表单已下线） ——
+function goToIdeas(): void {
+  void router.push({ name: "ideas" });
 }
 </script>
 
@@ -696,6 +758,17 @@ async function submit() {
     <template v-if="hasIdeaContext">
       <p v-if="contextLoading" class="job-status" data-test="context-loading">正在加载品牌详情...</p>
       <p v-if="contextError" class="job-error" data-test="context-error">{{ contextError }}</p>
+      <div v-if="productImagesError" class="job-error" data-test="product-images-error">
+        <span>{{ productImagesError }}</span>
+        <button
+          type="button"
+          class="secondary-btn"
+          data-test="retry-product-images"
+          @click="retryProductImagesLoad"
+        >
+          重新加载产品图
+        </button>
+      </div>
 
       <div v-if="brand && trend && idea" class="idea-context" data-test="idea-context">
         <div class="context-summary">
@@ -705,7 +778,13 @@ async function submit() {
           <span class="context-sep">×</span>
           <span class="context-idea">{{ idea.title }}</span>
         </div>
-        <p v-if="idea.summary" class="context-idea-summary">{{ idea.summary }}</p>
+        <dl class="context-idea-fields" data-test="context-idea-fields">
+          <div v-if="idea.summary"><dt>内容摘要</dt><dd>{{ idea.summary }}</dd></div>
+          <div v-if="idea.angle"><dt>切入角度</dt><dd>{{ idea.angle }}</dd></div>
+          <div v-if="idea.brandFit"><dt>品牌结合方式</dt><dd>{{ idea.brandFit }}</dd></div>
+          <div v-if="idea.audience"><dt>面向人群</dt><dd>{{ idea.audience }}</dd></div>
+          <div v-if="idea.hook"><dt>开头钩子</dt><dd>{{ idea.hook }}</dd></div>
+        </dl>
 
         <div class="generation-controls">
           <label class="form-field">
@@ -770,26 +849,33 @@ async function submit() {
 
         <ProductImagePanel
           v-model:selected-ids="selectedProductIds"
+          :reload-token="productImagesReloadToken"
           @images-loaded="onProductImagesLoaded"
+          @images-load-error="onProductImagesLoadError"
         />
 
         <div class="generation-actions">
-          <button type="button" class="primary-btn" data-test="generate-moments" :disabled="busy" @click="generateMomentsImage">
+          <button type="button" class="primary-btn" data-test="generate-moments" :disabled="busy || productLibraryBlocked" @click="startGenerationAction('moments')">
             AI 朋友圈图
           </button>
-          <button type="button" class="primary-btn" data-test="generate-wechat" :disabled="busy" @click="generateWechatLongImage">
+          <button type="button" class="primary-btn" data-test="generate-wechat" :disabled="busy || productLibraryBlocked" @click="startGenerationAction('wechat')">
             AI 公众号长图
           </button>
-          <button type="button" class="primary-btn" data-test="generate-xhs" :disabled="busy" @click="generateXhsCarousel">
+          <button type="button" class="primary-btn" data-test="generate-xhs" :disabled="busy || productLibraryBlocked" @click="startGenerationAction('xhsCarousel')">
             小红书组图
           </button>
-          <button type="button" class="primary-btn" data-test="generate-style" :disabled="busy" @click="generateStyleImage">
+          <button type="button" class="primary-btn" data-test="generate-style" :disabled="busy || productLibraryBlocked" @click="startGenerationAction('styleImage')">
             风格化图
           </button>
         </div>
 
         <p v-if="genStatus" class="job-status" data-test="gen-status">{{ genStatus }}</p>
         <p v-if="genError" class="job-error" data-test="gen-error">{{ genError }}</p>
+        <div v-if="genError && genKind" class="generation-retry">
+          <button type="button" class="secondary-btn" data-test="gen-retry" :disabled="busy || productLibraryBlocked" @click="retryGeneration">
+            重试
+          </button>
+        </div>
 
         <!-- 朋友圈图结果 -->
         <div v-if="genKind === 'moments' && momentsResult" class="gen-result" data-test="moments-result">
@@ -887,44 +973,28 @@ async function submit() {
       </div>
     </template>
 
-    <!-- 无选题上下文：独立改图表单 -->
+    <!-- 无选题上下文：产品化任务概览，引导选择选题 -->
     <template v-else>
-      <p class="context-hint" data-test="no-context-hint">
-        从内容选题页选择选题后可生成朋友圈图/公众号长图/小红书组图/风格化图。
-      </p>
-
-      <form class="generation-form" @submit.prevent="submit">
-        <label class="form-field">
-          <span>原图地址</span>
-          <input v-model="form.imageUrl" type="text" name="imageUrl" placeholder="/api/generated-images/... 或历史图片地址" />
-        </label>
-        <label class="form-field">
-          <span>改图提示词</span>
-          <textarea v-model="form.prompt" name="prompt" rows="3" placeholder="描述希望修改的内容"></textarea>
-        </label>
-        <label class="form-field">
-          <span>标题（可选）</span>
-          <input v-model="form.title" type="text" name="title" />
-        </label>
-        <label class="form-field">
-          <span>宽高比（可选）</span>
-          <select v-model="form.aspectRatio" name="aspectRatio">
-            <option value="">默认</option>
-            <option v-for="ratio in IMAGE_ASPECT_RATIOS" :key="ratio" :value="ratio">{{ ratio }}</option>
-          </select>
-        </label>
-        <button type="submit" class="primary-btn" :disabled="editBusy">
-          {{ editBusy ? "任务进行中..." : "提交改图任务" }}
-        </button>
-      </form>
-
-      <p v-if="statusMessage" class="job-status" data-test="job-status">{{ statusMessage }}</p>
-      <p v-if="errorMessage" class="job-error" data-test="job-error">{{ errorMessage }}</p>
-
-      <figure v-if="result && (result.imageUrl || result.previewUrl)" class="job-result">
-        <img :src="String(result.imageUrl || result.previewUrl)" alt="改图结果" loading="lazy" decoding="async" />
-        <figcaption v-if="result.generationId || result.persisted">已保存至历史生成</figcaption>
-      </figure>
+      <section class="no-context-overview" data-test="no-context-overview">
+        <p class="context-hint" data-test="no-context-hint">
+          从内容选题页选择选题后可生成朋友圈图/公众号长图/小红书组图/风格化图。
+        </p>
+        <div class="no-context-card">
+          <h2>从内容选题开始</h2>
+          <p class="no-context-copy">
+            先在「内容选题」页为品牌或个人 IP 选择选题并配置产品图、Logo 与风格参考图，再回到这里一键生成。
+          </p>
+          <ul class="capability-list">
+            <li><strong>朋友圈图</strong><span>1 积分/次</span><small>朋友圈分享主图与配套文案</small></li>
+            <li><strong>公众号长图</strong><span>1 积分/次</span><small>发布标题、导语、结构与长图</small></li>
+            <li><strong>小红书组图</strong><span>4 积分/次</span><small>4 张组图方案与单页改图</small></li>
+            <li><strong>风格化图</strong><span>1 积分/次</span><small>以选题内容为提示的风格化图片</small></li>
+          </ul>
+          <button type="button" class="primary-btn" data-test="no-context-go-ideas" @click="goToIdeas">
+            去内容选题页选择选题
+          </button>
+        </div>
+      </section>
     </template>
 
     <!-- 公众号长图比例提醒 -->
@@ -992,12 +1062,6 @@ async function submit() {
 .generation-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-}
-
-.generation-form {
-  display: flex;
-  flex-direction: column;
   gap: 12px;
 }
 
@@ -1113,8 +1177,7 @@ async function submit() {
   padding: 12px;
 }
 
-.gen-result img,
-.job-result img {
+.gen-result img {
   max-width: 100%;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
@@ -1163,12 +1226,6 @@ async function submit() {
   margin: 0;
   font-size: 13px;
   color: var(--color-text-secondary);
-}
-
-.job-result figcaption {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  margin-top: 4px;
 }
 
 .wechat-warning-backdrop {
@@ -1235,9 +1292,7 @@ async function submit() {
 }
 
 .idea-context,
-.generation-form,
 .gen-result,
-.job-result,
 .context-hint {
   position: relative;
   border: 1px solid var(--workspace-border);
@@ -1247,13 +1302,11 @@ async function submit() {
 }
 
 .idea-context,
-.generation-form,
 .gen-result {
   padding: 20px;
 }
 
 .idea-context::before,
-.generation-form::before,
 .gen-result::before {
   content: "";
   position: absolute;
@@ -1297,6 +1350,41 @@ async function submit() {
   margin: -6px 0 0;
   color: var(--workspace-text-muted);
   font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.context-idea-fields {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-soft);
+  overflow: hidden;
+}
+
+.context-idea-fields > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--workspace-border);
+}
+
+.context-idea-fields > div:last-child {
+  border-bottom: 0;
+}
+
+.context-idea-fields dt {
+  color: var(--workspace-brand-ink);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.context-idea-fields dd {
+  margin: 0;
+  color: var(--workspace-text-body);
+  font-size: 0.86rem;
   line-height: 1.7;
 }
 
@@ -1452,6 +1540,92 @@ async function submit() {
   color: #b42318;
 }
 
+.generation-retry {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.no-context-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.no-context-card {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface);
+  box-shadow: var(--workspace-shadow-card);
+}
+
+.no-context-card::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 42px;
+  height: 2px;
+  background: var(--workspace-brand);
+}
+
+.no-context-card h2 {
+  margin: 0;
+  color: var(--workspace-text);
+  font-family: var(--workspace-font-heading);
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.no-context-copy {
+  margin: 0;
+  color: var(--workspace-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.capability-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capability-list li {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface-soft);
+}
+
+.capability-list strong {
+  color: var(--workspace-text);
+  font-size: 0.94rem;
+}
+
+.capability-list span {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: var(--workspace-radius-pill);
+  background: #f8eeeb;
+  color: var(--workspace-brand-ink);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.capability-list small {
+  color: var(--workspace-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
 .gen-result {
   display: grid;
   gap: 14px;
@@ -1472,14 +1646,12 @@ async function submit() {
   line-height: 1.7;
 }
 
-.gen-result figure,
-.job-result {
+.gen-result figure {
   margin: 0;
   padding: 12px;
 }
 
-.gen-result img,
-.job-result img {
+.gen-result img {
   display: block;
   max-width: min(100%, 760px);
   max-height: 720px;
@@ -1536,13 +1708,6 @@ async function submit() {
   gap: 8px;
 }
 
-.job-result figcaption {
-  margin-top: 8px;
-  color: var(--workspace-text-muted);
-  font-size: 0.78rem;
-  text-align: center;
-}
-
 .wechat-warning-backdrop {
   padding: 28px;
   background: rgba(34, 24, 24, 0.14);
@@ -1592,12 +1757,12 @@ async function submit() {
 @media (max-width: 760px) {
   .generation-controls,
   .generation-actions,
-  .carousel-slides {
+  .carousel-slides,
+  .capability-list {
     grid-template-columns: 1fr;
   }
 
   .idea-context,
-  .generation-form,
   .gen-result,
   .wechat-warning-dialog {
     padding: 18px;

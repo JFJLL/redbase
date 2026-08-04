@@ -3,7 +3,12 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { createMemoryHistory, createRouter, type Router } from "vue-router";
 import HistoryView from "../views/HistoryView.vue";
-import { matchesGenerationHistoryFilters, normalizeHistoryDateBoundary } from "../api";
+import {
+  hasExpiredAssetSignature,
+  matchesGenerationHistoryFilters,
+  normalizeHistoryDateBoundary,
+  parseAssetExpiryMs,
+} from "../api";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -159,5 +164,63 @@ describe("HistoryView", () => {
     ).toBe(false);
     expect(normalizeHistoryDateBoundary("2026-07-21", "to")).toBe("2026-07-21T23:59:59.999Z");
     expect(normalizeHistoryDateBoundary("2026-07-21", "from")).toBe("2026-07-21T00:00:00.000Z");
+  });
+
+  it("parses signed URL expiry and detects expired asset signatures", () => {
+    expect(parseAssetExpiryMs("/api/generated-images/1/file?assetExpires=1000&assetSignature=s")).toBe(1000);
+    expect(parseAssetExpiryMs("/api/generated-images/1/file?sig=aaa")).toBe(0);
+    expect(hasExpiredAssetSignature("/api/generated-images/1/file?assetExpires=1000&assetSignature=s", 2000)).toBe(true);
+    expect(hasExpiredAssetSignature("/api/generated-images/1/file?assetExpires=9999999999999&assetSignature=s", 2000)).toBe(false);
+    expect(hasExpiredAssetSignature("/api/generated-images/1/file?sig=aaa", 2000)).toBe(false);
+  });
+
+  it("refreshes history exactly once when an expired signed image fails, then replaces the src", async () => {
+    vi.useFakeTimers();
+    try {
+      const EXPIRED_URL = "/api/generated-images/1/file?assetExpires=1000&assetSignature=expired-sig";
+      const FRESH_URL = "/api/generated-images/1/file?assetExpires=9999999999999&assetSignature=fresh-sig";
+      let historyCalls = 0;
+      const { wrapper } = await mountView((url) => {
+        if (url.startsWith("/api/history")) {
+          historyCalls += 1;
+          const previewUrl = historyCalls === 1 ? EXPIRED_URL : FRESH_URL;
+          return jsonResponse(200, { generations: [{ ...GENERATIONS[0], previewUrl }] });
+        }
+        return undefined;
+      });
+
+      expect(historyCalls).toBe(1);
+      const expiredImg = wrapper.find(`img[src="${EXPIRED_URL}"]`);
+      expect(expiredImg.exists()).toBe(true);
+
+      await expiredImg.trigger("error");
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+
+      expect(historyCalls).toBe(2);
+      expect(wrapper.find(`img[src="${FRESH_URL}"]`).exists()).toBe(true);
+
+      // A fresh signed URL that still fails is a real error: no second refresh.
+      await wrapper.find(`img[src="${FRESH_URL}"]`).trigger("error");
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+      expect(historyCalls).toBe(2);
+      expect(wrapper.find('[data-test="history-image-error"]').exists()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows an explicit error state with retry when a non-expired image fails", async () => {
+    const { wrapper } = await mountView();
+    const img = wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]');
+    expect(img.exists()).toBe(true);
+
+    await img.trigger("error");
+    expect(wrapper.find('[data-test="history-image-error"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="history-image-retry"]').trigger("click");
+    expect(wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="history-image-error"]').exists()).toBe(false);
   });
 });

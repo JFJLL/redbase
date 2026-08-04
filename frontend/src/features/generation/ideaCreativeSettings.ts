@@ -28,6 +28,9 @@ export interface IdeaCreativeSettings {
   wechatTemplate: string;
   useBrandLogo: boolean;
   selectedProductIds: number[];
+  /** 内容选题页「使用这些产品图生成图片」开关（旧版 productImages[key].useImage）。
+   *  有已选产品图时默认启用，与旧版 getProductSelection 的 useImage 兜底一致。 */
+  useProductImages: boolean;
   styleReference: StyleReferenceImage | null;
 }
 
@@ -53,6 +56,7 @@ function defaultSettings(): IdeaCreativeSettings {
     wechatTemplate: "auto",
     useBrandLogo: false,
     selectedProductIds: [],
+    useProductImages: true,
     styleReference: null,
   };
 }
@@ -69,6 +73,7 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
     visualStylePreset: validStyle ? settings.visualStylePreset : "auto",
     wechatTemplate: validTemplate ? settings.wechatTemplate : "auto",
     selectedProductIds: Array.isArray(settings.selectedProductIds) ? [...settings.selectedProductIds] : [],
+    useProductImages: settings.useProductImages !== false,
   };
 }
 

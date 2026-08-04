@@ -100,7 +100,20 @@ async function expireGenerationIfNeeded(generation, options = {}) {
   return true;
 }
 
+async function runRecoveryStep(stepName, run, logger) {
+  if (typeof run !== "function") return;
+  try {
+    await run();
+  } catch (error) {
+    logger.warn(`[history-expiry] recovery step failed: ${stepName}`, {
+      errorCode: String(error?.code || "RECOVERY_STEP_FAILED"),
+      status: Number(error?.status || error?.statusCode || 0) || undefined,
+    });
+  }
+}
+
 async function cleanupExpiredGenerationHistory(options = {}) {
+  const logger = options.logger || console;
   const configuredRetentionMs = Number(options.retentionMs);
   const retentionMs = Number.isFinite(configuredRetentionMs) && configuredRetentionMs > 0
     ? configuredRetentionMs
@@ -109,19 +122,33 @@ async function cleanupExpiredGenerationHistory(options = {}) {
   const isAssetReferenced = options.cleanupRecovery === true && typeof options.createAssetReferenceLookup === "function"
     ? options.createAssetReferenceLookup()
     : options.isAssetReferenced;
-  if (options.cleanupRecovery === true && typeof options.storage?.cleanupDeletionStaging === "function") {
-    await options.storage.cleanupDeletionStaging({
-      isReferenced: isAssetReferenced,
-      nowMs,
-      ignoreGrace: options.cleanupRecoveryIgnoreGrace === true,
-    });
-  }
-  if (options.cleanupRecovery === true && typeof options.storage?.cleanupUnreferencedAssets === "function") {
-    await options.storage.cleanupUnreferencedAssets({ isReferenced: isAssetReferenced, nowMs });
-  }
-  if (options.cleanupRecovery === true && typeof options.cleanupStagedStoredAssets === "function") {
-    await options.cleanupStagedStoredAssets({ nowMs });
-  }
+  // Recovery steps are best-effort: a failure (e.g. OSS temporarily
+  // unreachable) must never block the expired-record scan and deletion below.
+  await runRecoveryStep(
+    "cleanupDeletionStaging",
+    options.cleanupRecovery === true && typeof options.storage?.cleanupDeletionStaging === "function"
+      ? () => options.storage.cleanupDeletionStaging({
+          isReferenced: isAssetReferenced,
+          nowMs,
+          ignoreGrace: options.cleanupRecoveryIgnoreGrace === true,
+        })
+      : null,
+    logger,
+  );
+  await runRecoveryStep(
+    "cleanupUnreferencedAssets",
+    options.cleanupRecovery === true && typeof options.storage?.cleanupUnreferencedAssets === "function"
+      ? () => options.storage.cleanupUnreferencedAssets({ isReferenced: isAssetReferenced, nowMs })
+      : null,
+    logger,
+  );
+  await runRecoveryStep(
+    "cleanupStagedStoredAssets",
+    options.cleanupRecovery === true && typeof options.cleanupStagedStoredAssets === "function"
+      ? () => options.cleanupStagedStoredAssets({ nowMs })
+      : null,
+    logger,
+  );
   const cutoffIso = getHistoryCutoffIso(nowMs, retentionMs);
   const expiredGenerations = listExpiredGenerations(cutoffIso)
     .filter((generation) => isGenerationExpired(generation, nowMs, retentionMs));
@@ -137,7 +164,6 @@ async function cleanupExpiredGenerationHistory(options = {}) {
       deletedGenerationIds.push(generation.id);
     } catch (error) {
       failedGenerationIds.push(generation.id);
-      const logger = options.logger || console;
       logger.warn("[history-expiry] failed to remove expired generation", {
         generationId: generation.id,
         errorCode: String(error?.code || "ASSET_DELETE_FAILED"),

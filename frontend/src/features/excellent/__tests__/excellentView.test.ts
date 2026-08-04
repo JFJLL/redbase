@@ -728,4 +728,41 @@ describe("ExcellentView", () => {
 
     expect(wrapper.text()).not.toContain("旧第1页");
   });
+
+  it("renders proxy paths for remote image URLs and keeps relative URLs unchanged", async () => {
+    const remoteItems = [
+      { noteId: "r1", title: "远程图", imageUrls: ["https://cdn.example/r1/a.jpg", "https://cdn.example/r1/b.jpg"], metrics: { readCount: 1 } },
+      { noteId: "r2", title: "相对图", imageUrls: ["/img/rel.jpg"], metrics: { readCount: 2 } },
+    ];
+    const wrapper = await mountView((url) => {
+      if (url.startsWith("/api/excellent-contents?")) {
+        return jsonResponse(200, {
+          board: "xhs_hot",
+          contentSource: "all",
+          items: remoteItems,
+          updatedAt: "2026-07-01T08:00:00.000Z",
+          hasCache: true,
+        });
+      }
+      return defaultHandlers(url);
+    });
+
+    expect(
+      wrapper.find('img[src="/api/excellent-contents/r1/images/0/file?board=xhs_hot&contentSource=all"]').exists(),
+    ).toBe(true);
+    expect(wrapper.find('img[src="/img/rel.jpg"]').exists()).toBe(true);
+  });
+
+  it("shows an explicit image error state with retry when a card image fails", async () => {
+    const wrapper = await mountView();
+    const img = wrapper.find('img[src="/img/a.jpg"]');
+    expect(img.exists()).toBe(true);
+
+    await img.trigger("error");
+    expect(wrapper.find('[data-test="excellent-image-error"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="excellent-image-retry"]').trigger("click");
+    expect(wrapper.find('img[src="/img/a.jpg"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="excellent-image-error"]').exists()).toBe(false);
+  });
 });

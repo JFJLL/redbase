@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
@@ -19,11 +19,14 @@ import {
 // （app.js loadProductImages / uploadProductImage / getSelectedProductImages）。
 const props = defineProps<{
   selectedIds: number[];
+  /** 父级递增该 token 可触发图库重新加载（图库加载失败后的可恢复重试）。 */
+  reloadToken?: number;
 }>();
 
 const emit = defineEmits<{
   (event: "update:selectedIds", value: number[]): void;
   (event: "images-loaded", images: ProductImageView[]): void;
+  (event: "images-load-error", message: string): void;
 }>();
 
 const router = useRouter();
@@ -53,6 +56,7 @@ async function handleUnauthorizedError(error: unknown): Promise<boolean> {
 
 async function loadImages() {
   loading.value = true;
+  message.value = "";
   try {
     const result = await fetchProductImages(scope.signalFor("product-images"));
     images.value = result.images || [];
@@ -61,10 +65,19 @@ async function loadImages() {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
     message.value = `产品素材加载失败：${(error as Error).message}`;
+    emit("images-load-error", message.value);
   } finally {
     loading.value = false;
   }
 }
+
+// 父级重试图库：reloadToken 变化即重新加载，加载成功会再次 emit images-loaded。
+watch(
+  () => props.reloadToken ?? 0,
+  (token, previous) => {
+    if (previous !== undefined && token !== previous) void loadImages();
+  },
+);
 
 onMounted(loadImages);
 

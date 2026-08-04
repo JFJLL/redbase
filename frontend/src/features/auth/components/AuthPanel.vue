@@ -168,7 +168,11 @@ function close(): void {
           <h1 id="authPanelTitle">欢迎来到 RedBase</h1>
           <p>先完成手机号注册或登录，再进入你的品牌增长工作台。</p>
         </div>
-        <button class="auth-modal-close" type="button" aria-label="返回官网" @click="close">×</button>
+        <button class="auth-modal-close" type="button" aria-label="返回官网" title="返回官网" @click="close">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+        </button>
       </div>
 
       <div class="auth-shell">

@@ -572,3 +572,538 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Ideas workspace parity (task 2): per-idea generation controls restored from
+   the legacy red/white redesign (public/styles.css 2903-3467). */
+.workspace-layout .idea-logo-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid rgba(229, 72, 77, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 248, 246, 0.68);
+}
+
+.workspace-layout .idea-logo-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #4b4244;
+  font-weight: 900;
+  font-size: 0.9rem;
+}
+
+.workspace-layout .idea-logo-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #d83b46;
+}
+
+.workspace-layout .idea-logo-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: #7c6c6e;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.workspace-layout .idea-logo-meta > span {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-layout .idea-inline-upload {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(229, 72, 77, 0.18);
+  border-radius: 999px;
+  background: #fff;
+  color: #c8343f;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.workspace-layout .idea-inline-upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.workspace-layout .idea-product-upload {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0 4px;
+  padding: 18px;
+  border: 1px solid rgba(229, 72, 77, 0.12);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(255, 122, 96, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(255, 250, 249, 0.96), rgba(255, 246, 242, 0.88));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 16px 34px rgba(126, 55, 55, 0.06);
+}
+
+.workspace-layout .idea-style-upload {
+  margin-top: 12px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(216, 68, 68, 0.08), transparent 30%),
+    linear-gradient(135deg, rgba(255, 250, 249, 0.96), rgba(255, 248, 245, 0.88));
+}
+
+.workspace-layout .idea-product-upload-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.workspace-layout .idea-product-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-layout .idea-product-upload-title {
+  color: #20191b;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.workspace-layout .idea-product-file {
+  margin-top: 4px;
+  color: #7f7474;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.workspace-layout .idea-product-file.has-file {
+  color: #bf3641;
+  font-weight: 800;
+}
+
+.workspace-layout .idea-product-button-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+}
+
+.workspace-layout .idea-upload-button,
+.workspace-layout .idea-library-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  width: 100%;
+  padding: 0 16px;
+  border: 1px solid rgba(229, 72, 77, 0.18);
+  border-radius: 999px;
+  background: #fff;
+  color: #c8343f;
+  box-shadow: 0 10px 24px rgba(126, 55, 55, 0.07);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.workspace-layout .idea-library-button {
+  border-color: rgba(229, 72, 77, 0.16);
+  background: rgba(255, 255, 255, 0.74);
+  color: #8f3038;
+}
+
+.workspace-layout .idea-upload-button:hover,
+.workspace-layout .idea-library-button:hover {
+  border-color: rgba(229, 72, 77, 0.38);
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.workspace-layout .idea-upload-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.workspace-layout .idea-product-selected-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 2px 2px 8px;
+}
+
+.workspace-layout .idea-product-selected-preview {
+  width: 62px;
+  flex: 0 0 62px;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(229, 72, 77, 0.12);
+  background: #fff;
+  box-shadow: 0 10px 22px rgba(126, 55, 55, 0.08);
+}
+
+.workspace-layout .idea-product-selected-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.workspace-layout .idea-style-reference-preview {
+  width: 84px;
+  flex-basis: 84px;
+}
+
+.workspace-layout .idea-style-reference-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7f7474;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.workspace-layout .idea-product-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workspace-layout .idea-product-actions-bottom {
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px;
+  border: 1px solid rgba(229, 72, 77, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.workspace-layout .idea-product-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: #6f6262;
+  border: 1px solid rgba(229, 72, 77, 0.12);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 10px 24px rgba(126, 55, 55, 0.05);
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.workspace-layout .idea-product-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #d83b46;
+}
+
+.workspace-layout .idea-product-clear {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(229, 72, 77, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #9f3038;
+  font-size: 0.82rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.workspace-layout .idea-style-clear {
+  width: fit-content;
+}
+
+.workspace-layout .idea-control-message {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(180, 35, 24, 0.16);
+  border-radius: var(--workspace-radius);
+  background: #fff1f1;
+  color: #b42318;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.workspace-layout .idea-creative-settings {
+  margin-top: 12px;
+  border: 1px solid rgba(229, 72, 77, 0.13);
+  border-radius: 18px;
+  background: rgba(255, 252, 250, 0.9);
+}
+
+.workspace-layout .idea-creative-settings.is-open {
+  border-color: rgba(216, 59, 70, 0.28);
+  box-shadow: 0 16px 36px rgba(126, 55, 55, 0.09);
+}
+
+.workspace-layout .idea-aspect-ratio-trigger {
+  width: 100%;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 14px 11px 16px;
+  border: 0;
+  background: transparent;
+  color: #30272a;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.workspace-layout .idea-aspect-ratio-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.workspace-layout .idea-aspect-ratio-copy strong {
+  color: #2c2427;
+  font-size: 0.94rem;
+}
+
+.workspace-layout .idea-aspect-ratio-copy small {
+  color: #8a7c80;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.workspace-layout .idea-aspect-ratio-value {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+  color: #6e5f64;
+}
+
+.workspace-layout .idea-aspect-ratio-value b {
+  color: #9f3038;
+  font-size: 0.86rem;
+}
+
+.workspace-layout .idea-aspect-ratio-chevron {
+  width: 8px;
+  height: 8px;
+  margin: 0 3px 4px 2px;
+  border-right: 1.5px solid #a3575d;
+  border-bottom: 1.5px solid #a3575d;
+  transform: rotate(45deg);
+}
+
+.workspace-layout .idea-aspect-ratio-panel {
+  display: grid;
+  gap: 12px;
+  padding: 4px 12px 16px;
+  border-top: 1px solid rgba(229, 72, 77, 0.09);
+}
+
+.workspace-layout .idea-creative-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 11px;
+}
+
+.workspace-layout .idea-creative-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(50, 37, 41, 0.09);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #46383d;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.workspace-layout .idea-creative-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 34px 0 11px;
+  border: 1px solid rgba(50, 37, 41, 0.13);
+  border-radius: 9px;
+  background: #fff;
+  color: #30272a;
+  font-weight: 800;
+  font-family: inherit;
+}
+
+.workspace-layout .idea-library-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(31, 23, 26, 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.workspace-layout .idea-library-panel {
+  width: min(640px, 100%);
+  max-height: calc(100vh - 56px);
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid rgba(229, 72, 77, 0.15);
+  border-radius: 24px;
+  background: #fffaf8;
+  box-shadow: 0 30px 80px rgba(69, 31, 38, 0.24);
+  color: #33282c;
+}
+
+.workspace-layout .idea-library-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-layout .idea-library-head h3 {
+  margin: 0;
+  font-family: var(--workspace-font-heading);
+  font-size: 1.2rem;
+}
+
+.workspace-layout .idea-library-close {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 50%;
+  background: #f4e9e7;
+  color: #806e73;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.workspace-layout .idea-library-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-layout .idea-library-item label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(229, 72, 77, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.workspace-layout .idea-library-item img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--workspace-surface-soft);
+}
+
+.workspace-layout .idea-library-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #4b4244;
+}
+
+.workspace-layout .idea-library-panel .panel-hint {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--workspace-radius);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--workspace-text-muted);
+  font-size: 0.82rem;
+}
+
+.workspace-layout .idea-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.workspace-layout .idea-actions .cost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-layout .idea-actions .cost-button small {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.workspace-layout .idea-actions .secondary-btn.cost-button {
+  border-color: rgba(229, 72, 77, 0.22);
+  color: #c8343f;
+}
+
+.workspace-layout .idea-actions .secondary-btn.cost-button small {
+  background: rgba(229, 72, 77, 0.1);
+  color: #c8343f;
+}
+
+@media (max-width: 760px) {
+  .workspace-layout .idea-logo-control {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-layout .idea-logo-meta {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .workspace-layout .idea-product-upload-top {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-layout .idea-product-actions-bottom {
+    width: 100%;
+    border-radius: 14px;
+  }
+
+  .workspace-layout .idea-creative-grid {
+    grid-template-columns: 1fr;
+  }
+}

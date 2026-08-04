@@ -2,16 +2,39 @@
 // 内容选题页。迁移自旧前端 public/index.html data-tab-panel="ideas" 与
 // public/app.js 的 renderIdeas / renderIdeaContent / renderIdeaContentAssets /
 // bindIdeaPromptActions / data-idea-edit-form 提交逻辑。
-// 旧版内嵌的四个生图按钮属于生图任务域，此处以「去生成内容」跳转 /app/generation 承接。
+// 对照图4：选题上下文卡（绿点 + 标签组）、自定义补充提示词卡、桌面双列选题卡，
+// 每卡带品牌 Logo 开关 / 产品图参考 / 风格图参考 / 折叠创作设置，底部三个生图按钮
+// （一键朋友圈图 1积分、一键公众号长图 1积分、一键小红书组图 4积分）跳转生图任务页。
+// 生图动作与按钮一律携带 brandId/trendId/ideaIndex（+action）上下文，刷新/返回不丢。
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRouter } from "vue-router";
-import { isAbortError } from "@/shared/api/client";
+import { useRoute, useRouter } from "vue-router";
+import { apiFetch, isAbortError } from "@/shared/api/client";
+import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { regenerateTrendIdeas, updateTrendIdea } from "@/features/trends/api/insightsApi";
 import { useInsightsStore } from "@/features/trends/stores/insights";
 import { useUnauthorizedHandler } from "@/features/trends/composables/useUnauthorizedHandler";
-import type { TrendIdea } from "@/features/trends/model/types";
+import type { InsightsBrand, TrendIdea } from "@/features/trends/model/types";
+import {
+  IMAGE_ASPECT_RATIOS,
+  MAX_SELECTED_PRODUCT_IMAGES,
+  MAX_SELECTED_PRODUCT_IMAGE_BYTES,
+  MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  WECHAT_TEMPLATE_OPTIONS,
+  XHS_CREATIVE_STYLE_OPTIONS,
+  fetchProductImages,
+  uploadProductImage,
+  type ProductImageView,
+} from "@/features/generation/api";
+import {
+  getIdeaCreativeSettings,
+  getIdeaSettingsKey,
+  saveIdeaCreativeSettings,
+  type IdeaCreativeSettings,
+} from "@/features/generation/ideaCreativeSettings";
+
+type GenerationAction = "moments" | "wechat" | "xhsCarousel";
 
 interface IdeaDraft {
   title: string;
@@ -25,6 +48,7 @@ interface IdeaDraft {
 const store = useInsightsStore();
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
 const scope = useAbortScope();
 const handleUnauthorized = useUnauthorizedHandler();
 
@@ -39,6 +63,246 @@ const regenerating = ref(false);
 const editingDrafts = reactive<Record<number, IdeaDraft>>({});
 const editErrors = reactive<Record<number, string>>({});
 
+// —— 每选题素材与创作设置（按键位 品牌ID:趋势ID:选题序号 记忆，与生图任务页共享） ——
+const libraryImages = ref<ProductImageView[]>([]);
+const libraryLoading = ref(false);
+const libraryError = ref("");
+const openLibraryFor = ref<number | null>(null);
+const uploadingProduct = ref<number | null>(null);
+const uploadingLogo = ref(false);
+const productMessages = reactive<Record<number, string>>({});
+const styleErrors = reactive<Record<number, string>>({});
+const logoErrors = reactive<Record<number, string>>({});
+const openCreativeSettings = reactive<Record<number, boolean>>({});
+
+const assetLabel = computed(() => (isPersonal.value ? "内容参考图" : "产品图"));
+const logoLabel = computed(() => (isPersonal.value ? "个人头像" : "品牌 Logo"));
+
+function ideaKey(index: number): string {
+  return getIdeaSettingsKey(brand.value?.id, trend.value?.id, index);
+}
+
+function settingsFor(index: number): IdeaCreativeSettings {
+  return getIdeaCreativeSettings(ideaKey(index));
+}
+
+function patchSettings(index: number, patch: Partial<IdeaCreativeSettings>): void {
+  const key = ideaKey(index);
+  saveIdeaCreativeSettings(key, { ...getIdeaCreativeSettings(key), ...patch });
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0KB";
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+
+function formatImageName(name: string, max: number): string {
+  return name.length > max ? `${name.slice(0, max)}…` : name;
+}
+
+async function loadProductLibrary(): Promise<void> {
+  libraryLoading.value = true;
+  libraryError.value = "";
+  try {
+    const result = await fetchProductImages(scope.signalFor("product-library"));
+    libraryImages.value = result.images || [];
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (handleUnauthorized(error)) return;
+    libraryError.value = `产品素材加载失败：${String((error as { message?: unknown })?.message || "")}`;
+  } finally {
+    libraryLoading.value = false;
+  }
+}
+
+function selectedProductImages(index: number): ProductImageView[] {
+  const ids = settingsFor(index).selectedProductIds;
+  return libraryImages.value.filter((image) => ids.includes(image.id));
+}
+
+function selectedProductNames(index: number): string {
+  const names = selectedProductImages(index).map((image) => image.originalName || "产品图");
+  return names.join("、");
+}
+
+function selectedProductBytes(index: number): number {
+  return selectedProductImages(index).reduce((total, image) => total + Number(image.sizeBytes || 0), 0);
+}
+
+function isProductSelected(index: number, imageId: number): boolean {
+  return settingsFor(index).selectedProductIds.includes(imageId);
+}
+
+function toggleLibraryImage(index: number, imageId: number, event: Event): void {
+  const checked = (event.target as HTMLInputElement).checked;
+  const current = settingsFor(index);
+  if (!checked) {
+    patchSettings(index, { selectedProductIds: current.selectedProductIds.filter((id) => id !== imageId) });
+    return;
+  }
+  if (current.selectedProductIds.includes(imageId)) return;
+  if (current.selectedProductIds.length >= MAX_SELECTED_PRODUCT_IMAGES) {
+    productMessages[index] = `产品参考图最多选择 ${MAX_SELECTED_PRODUCT_IMAGES} 张。`;
+    return;
+  }
+  patchSettings(index, { selectedProductIds: [...current.selectedProductIds, imageId] });
+}
+
+async function handleProductUpload(index: number, event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length || uploadingProduct.value !== null) return;
+  const oversized = files.find((file) => file.size > MAX_SINGLE_UPLOAD_IMAGE_BYTES);
+  if (oversized) {
+    productMessages[index] = `单张${assetLabel.value}最多上传 10MB。${oversized.name} 过大，请压缩图片后重新上传。`;
+    return;
+  }
+  uploadingProduct.value = index;
+  productMessages[index] = "";
+  try {
+    for (const file of files) {
+      const signal = scope.signalFor(`product-upload:${index}:${file.name}`);
+      const dataUrl = await fileToDataUrl(file, signal);
+      if (signal.aborted) return;
+      const result = await uploadProductImage({ name: file.name, dataUrl }, signal);
+      if (!result.image) continue;
+      libraryImages.value = [result.image, ...libraryImages.value.filter((item) => item.id !== result.image!.id)];
+      const current = settingsFor(index);
+      if (
+        !current.selectedProductIds.includes(result.image.id) &&
+        current.selectedProductIds.length < MAX_SELECTED_PRODUCT_IMAGES
+      ) {
+        patchSettings(index, { selectedProductIds: [...current.selectedProductIds, result.image.id] });
+      }
+      if (result.duplicate) productMessages[index] = "该图片已在素材库中";
+    }
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (handleUnauthorized(error)) return;
+    productMessages[index] = `产品图上传失败：${String((error as { message?: unknown })?.message || "")}`;
+  } finally {
+    uploadingProduct.value = null;
+  }
+}
+
+function clearProductSelection(index: number): void {
+  patchSettings(index, { selectedProductIds: [] });
+}
+
+function toggleUseProductImages(index: number, event: Event): void {
+  patchSettings(index, { useProductImages: (event.target as HTMLInputElement).checked });
+}
+
+function toggleLogo(index: number, event: Event): void {
+  patchSettings(index, { useBrandLogo: (event.target as HTMLInputElement).checked });
+}
+
+async function handleLogoUpload(index: number, event: Event): Promise<void> {
+  const currentBrand = brand.value;
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file || !currentBrand || uploadingLogo.value) return;
+  if (file.size > MAX_SINGLE_UPLOAD_IMAGE_BYTES) {
+    logoErrors[index] = `${logoLabel.value}最多上传 10MB，请压缩图片后重新上传。`;
+    return;
+  }
+  uploadingLogo.value = true;
+  logoErrors[index] = "";
+  try {
+    const signal = scope.signalFor("logo-upload");
+    const dataUrl = await fileToDataUrl(file, signal);
+    if (signal.aborted) return;
+    const result = await apiFetch<{ brand: InsightsBrand }>(`/api/brands/${currentBrand.id}/logo`, {
+      method: "POST",
+      body: { logoName: file.name, logoDataUrl: dataUrl },
+      signal,
+    });
+    store.replaceBrand(result.brand);
+    patchSettings(index, { useBrandLogo: Boolean(result.brand.logo) });
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (handleUnauthorized(error)) return;
+    logoErrors[index] = `${logoLabel.value}上传失败：${String((error as { message?: unknown })?.message || "")}`;
+  } finally {
+    uploadingLogo.value = false;
+  }
+}
+
+async function handleStyleUpload(index: number, event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  if (file.size > MAX_SINGLE_UPLOAD_IMAGE_BYTES) {
+    styleErrors[index] = "风格参考图最多上传 10MB，请压缩图片后重新上传。";
+    return;
+  }
+  try {
+    const signal = scope.signalFor(`style-upload:${index}`);
+    const dataUrl = await fileToDataUrl(file, signal);
+    if (signal.aborted) return;
+    patchSettings(index, { styleReference: { fileName: file.name, dataUrl, sizeBytes: file.size } });
+    styleErrors[index] = "";
+  } catch (error) {
+    if (isAbortError(error)) return;
+    styleErrors[index] = `风格参考图读取失败：${String((error as { message?: unknown })?.message || "")}`;
+  }
+}
+
+function clearStyleReference(index: number): void {
+  patchSettings(index, { styleReference: null });
+}
+
+function toggleCreativeSettings(index: number): void {
+  openCreativeSettings[index] = !openCreativeSettings[index];
+}
+
+function updateCreativeSetting(
+  index: number,
+  field: "visualStylePreset" | "wechatTemplate" | "aspectRatioSelection",
+  event: Event,
+): void {
+  const value = (event.target as HTMLSelectElement).value;
+  patchSettings(index, { [field]: value } as Partial<IdeaCreativeSettings>);
+}
+
+function creativeSummary(index: number): string {
+  const settings = settingsFor(index);
+  const style =
+    XHS_CREATIVE_STYLE_OPTIONS.find((option) => option.value === settings.visualStylePreset)?.label || "智能匹配";
+  const template =
+    WECHAT_TEMPLATE_OPTIONS.find((option) => option.value === settings.wechatTemplate)?.label || "智能配色";
+  const ratio = settings.aspectRatioSelection === "smart" ? "智能比例" : settings.aspectRatioSelection;
+  return `${style} · ${template} · ${ratio}`;
+}
+
+function openLibrary(index: number): void {
+  openLibraryFor.value = index;
+}
+
+function closeLibrary(): void {
+  openLibraryFor.value = null;
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const num = Number(raw);
+  return Number.isFinite(num) && num > 0 ? num : null;
+}
+
+// 刷新/返回不丢上下文：进入页面时按 router query 恢复选中的品牌与趋势。
+onMounted(() => {
+  const queryBrandId = parsePositiveInt(route.query.brandId);
+  const queryTrendId = parsePositiveInt(route.query.trendId);
+  if (queryBrandId && store.selectedBrandId !== queryBrandId) store.selectedBrandId = queryBrandId;
+  if (queryTrendId && store.selectedTrendId !== queryTrendId) store.selectedTrendId = queryTrendId;
+  void loadPage();
+  void loadProductLibrary();
+});
+
 // 切换品牌/趋势时重置提示词输入与草稿（旧版 renderIdeas 每次渲染同步）。
 watch(
   () => `${store.selectedBrandId ?? ""}:${trend.value?.id ?? ""}`,
@@ -49,6 +313,11 @@ watch(
       : "当前使用默认系统提示词生成。";
     for (const key of Object.keys(editingDrafts)) delete editingDrafts[Number(key)];
     for (const key of Object.keys(editErrors)) delete editErrors[Number(key)];
+    openLibraryFor.value = null;
+    for (const key of Object.keys(openCreativeSettings)) delete openCreativeSettings[Number(key)];
+    for (const key of Object.keys(productMessages)) delete productMessages[Number(key)];
+    for (const key of Object.keys(styleErrors)) delete styleErrors[Number(key)];
+    for (const key of Object.keys(logoErrors)) delete logoErrors[Number(key)];
   },
   { immediate: true },
 );
@@ -73,6 +342,12 @@ async function loadPage(): Promise<void> {
   try {
     // 不强制刷新：保留从趋势页「生成选题」带过来的选中品牌与趋势。
     await store.loadBrands(scope.signalFor("brands"));
+    // 深链/刷新场景：loadBrands 内的 syncOwner 会在首次挂载时重置整个 store，
+    // 品牌列表就绪后必须重新套用 router query 里的 brandId/trendId 上下文。
+    const queryBrandId = parsePositiveInt(route.query.brandId);
+    const queryTrendId = parsePositiveInt(route.query.trendId);
+    if (queryBrandId) store.selectedBrandId = queryBrandId;
+    if (queryTrendId) store.selectedTrendId = queryTrendId;
     if (store.selectedBrandId) {
       await store.ensureBrandDetail(store.selectedBrandId, scope.signalFor(`brand-detail:${store.selectedBrandId}`));
     }
@@ -168,8 +443,8 @@ function hasCompleteIdeaContentAssets(idea: TrendIdea): boolean {
   );
 }
 
-// 去生图任务页继续生成内容（旧版四个生图按钮的承接入口）。
-function goToGeneration(ideaIndex: number): void {
+// 去生图任务页继续生成内容（图4 三个生图按钮的承接入口，携带完整上下文）。
+function goToGeneration(ideaIndex: number, action: GenerationAction): void {
   const currentBrand = brand.value;
   const currentTrend = trend.value;
   if (!currentBrand || !currentTrend) return;
@@ -179,6 +454,7 @@ function goToGeneration(ideaIndex: number): void {
       brandId: String(currentBrand.id),
       trendId: String(currentTrend.id),
       ideaIndex: String(ideaIndex),
+      action,
     },
   });
 }
@@ -211,7 +487,10 @@ function goToGeneration(ideaIndex: number): void {
       </div>
       <div v-else class="idea-context-top">
         <div>
-          <h3>{{ brand.name }} × {{ trend.title }}</h3>
+          <div class="idea-context-heading">
+            <span class="idea-status-dot" data-test="idea-status-dot" aria-label="选题已就绪"></span>
+            <h3>{{ brand.name }} × {{ trend.title }}</h3>
+          </div>
           <p class="idea-copy">
             {{
               isPersonal
@@ -234,6 +513,7 @@ function goToGeneration(ideaIndex: number): void {
           </p>
         </div>
         <div class="idea-tag-list">
+          <span class="idea-status-label" data-test="idea-status-label">内容选题已就绪</span>
           <span v-for="tag in brand.assetTags" :key="tag" class="idea-tag">{{ tag }}</span>
         </div>
       </div>
@@ -334,14 +614,254 @@ function goToGeneration(ideaIndex: number): void {
               </div>
             </div>
 
+            <!-- 品牌 Logo 开关 -->
+            <div class="idea-logo-control" :data-test="`idea-logo-control-${index}`">
+              <label class="idea-logo-check">
+                <input
+                  type="checkbox"
+                  :data-test="`idea-use-brand-logo-${index}`"
+                  :checked="Boolean(brand.logo) && settingsFor(index).useBrandLogo"
+                  :disabled="!brand.logo"
+                  @change="toggleLogo(index, $event)"
+                />
+                <span>{{ isPersonal ? "使用个人头像作为视觉参考" : "使用品牌 Logo" }}</span>
+              </label>
+              <div class="idea-logo-meta">
+                <span :data-test="`idea-logo-id-${index}`">
+                  {{
+                    brand.logo
+                      ? formatImageName(brand.logo.originalName || logoLabel, 38)
+                      : `未上传${isPersonal ? "头像" : " Logo"}`
+                  }}
+                </span>
+                <label class="idea-inline-upload">
+                  <input type="file" accept="image/*" :data-test="`idea-logo-input-${index}`" @change="handleLogoUpload(index, $event)" />
+                  <span>{{ brand.logo ? `更换${isPersonal ? "头像" : " Logo"}` : `上传${isPersonal ? "头像" : " Logo"}` }}</span>
+                </label>
+              </div>
+              <p v-if="logoErrors[index]" class="idea-control-message" :data-test="`idea-logo-error-${index}`">
+                {{ logoErrors[index] }}
+              </p>
+            </div>
+
+            <!-- 产品图参考 -->
+            <div class="idea-product-upload" :data-test="`idea-product-upload-${index}`">
+              <div class="idea-product-upload-top">
+                <div class="idea-product-summary">
+                  <div>
+                    <div class="idea-product-upload-title">{{ assetLabel }}参考</div>
+                    <div class="idea-product-file" :class="{ 'has-file': selectedProductImages(index).length > 0 }">
+                      {{
+                        selectedProductImages(index).length > 0
+                          ? `已选择 ${selectedProductImages(index).length} 张：${formatImageName(selectedProductNames(index), 46)}`
+                          : `未选择${assetLabel}`
+                      }}
+                    </div>
+                    <div class="idea-product-file">
+                      最多 {{ MAX_SELECTED_PRODUCT_IMAGES }} 张，共 {{ formatFileSize(MAX_SELECTED_PRODUCT_IMAGE_BYTES) }}；当前
+                      {{ selectedProductImages(index).length }} 张，约 {{ formatFileSize(selectedProductBytes(index)) }}
+                    </div>
+                  </div>
+                </div>
+                <div class="idea-product-button-stack">
+                  <label class="idea-upload-button">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      :data-test="`idea-product-upload-input-${index}`"
+                      @change="handleProductUpload(index, $event)"
+                    />
+                    <span>{{ uploadingProduct === index ? "上传中..." : selectedProductImages(index).length > 0 ? "继续上传" : `上传${assetLabel}` }}</span>
+                  </label>
+                  <button class="idea-library-button" type="button" :data-test="`idea-open-library-${index}`" @click="openLibrary(index)">
+                    选择已上传图片
+                  </button>
+                </div>
+              </div>
+              <div v-if="selectedProductImages(index).length > 0" class="idea-product-selected-strip">
+                <div
+                  v-for="image in selectedProductImages(index)"
+                  :key="image.id"
+                  class="idea-product-selected-preview"
+                  :title="image.originalName"
+                >
+                  <img :src="image.url" :alt="image.originalName" loading="lazy" decoding="async" />
+                </div>
+              </div>
+              <div class="idea-product-actions idea-product-actions-bottom">
+                <label class="idea-product-check">
+                  <input
+                    type="checkbox"
+                    :data-test="`idea-use-product-images-${index}`"
+                    :checked="settingsFor(index).useProductImages"
+                    :disabled="selectedProductImages(index).length === 0"
+                    @change="toggleUseProductImages(index, $event)"
+                  />
+                  使用这些{{ assetLabel }}生成图片
+                </label>
+                <button
+                  v-if="selectedProductImages(index).length > 0"
+                  class="idea-product-clear"
+                  type="button"
+                  :data-test="`idea-clear-product-${index}`"
+                  @click="clearProductSelection(index)"
+                >
+                  清除当前选择
+                </button>
+              </div>
+              <p v-if="productMessages[index]" class="idea-control-message" :data-test="`idea-product-message-${index}`">
+                {{ productMessages[index] }}
+              </p>
+            </div>
+
+            <!-- 风格图参考 -->
+            <div class="idea-product-upload idea-style-upload" :data-test="`idea-style-upload-${index}`">
+              <div class="idea-product-upload-top">
+                <div class="idea-product-summary">
+                  <div>
+                    <div class="idea-product-upload-title">风格图参考</div>
+                    <div class="idea-product-file" :class="{ 'has-file': Boolean(settingsFor(index).styleReference) }">
+                      {{
+                        settingsFor(index).styleReference
+                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于一键风格化图的色调和版式参考`
+                          : "未选择参考图"
+                      }}
+                    </div>
+                    <div class="idea-product-file">只能上传 1 张，{{ formatFileSize(MAX_SINGLE_UPLOAD_IMAGE_BYTES) }} 内</div>
+                  </div>
+                </div>
+                <div class="idea-product-button-stack">
+                  <label class="idea-upload-button">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      :data-test="`idea-style-input-${index}`"
+                      @change="handleStyleUpload(index, $event)"
+                    />
+                    <span>{{ settingsFor(index).styleReference ? "更换参考图" : "上传参考图" }}</span>
+                  </label>
+                </div>
+              </div>
+              <div v-if="settingsFor(index).styleReference" class="idea-product-selected-strip">
+                <div class="idea-product-selected-preview idea-style-reference-preview">
+                  <img
+                    :src="settingsFor(index).styleReference!.dataUrl"
+                    :alt="settingsFor(index).styleReference!.fileName"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </div>
+                <span class="idea-style-reference-name" :data-test="`idea-style-name-${index}`">
+                  {{ settingsFor(index).styleReference!.fileName }}
+                </span>
+              </div>
+              <div class="idea-product-actions">
+                <button
+                  v-if="settingsFor(index).styleReference"
+                  class="idea-product-clear idea-style-clear"
+                  type="button"
+                  :data-test="`idea-style-clear-${index}`"
+                  @click="clearStyleReference(index)"
+                >
+                  清除参考图
+                </button>
+              </div>
+              <p v-if="styleErrors[index]" class="idea-control-message" :data-test="`idea-style-error-${index}`">
+                {{ styleErrors[index] }}
+              </p>
+            </div>
+
+            <!-- 创作设置（折叠） -->
+            <section
+              class="idea-creative-settings"
+              :class="{ 'is-open': Boolean(openCreativeSettings[index]) }"
+              :data-test="`idea-creative-settings-${index}`"
+            >
+              <button
+                class="idea-aspect-ratio-trigger"
+                type="button"
+                :data-test="`idea-creative-toggle-${index}`"
+                :aria-expanded="Boolean(openCreativeSettings[index])"
+                @click="toggleCreativeSettings(index)"
+              >
+                <span class="idea-aspect-ratio-copy">
+                  <strong>创作设置</strong>
+                  <small>{{ creativeSummary(index) }}</small>
+                </span>
+                <span class="idea-aspect-ratio-value">
+                  <b>{{ openCreativeSettings[index] ? "收起" : "调整" }}</b>
+                  <span class="idea-aspect-ratio-chevron" aria-hidden="true"></span>
+                </span>
+              </button>
+              <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
+                <div class="idea-creative-grid">
+                  <label class="idea-creative-field">
+                    <span>小红书视觉路线</span>
+                    <select
+                      :data-test="`idea-creative-style-${index}`"
+                      :value="settingsFor(index).visualStylePreset"
+                      @change="updateCreativeSetting(index, 'visualStylePreset', $event)"
+                    >
+                      <option v-for="option in XHS_CREATIVE_STYLE_OPTIONS" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="idea-creative-field">
+                    <span>公众号长图模板</span>
+                    <select
+                      :data-test="`idea-creative-template-${index}`"
+                      :value="settingsFor(index).wechatTemplate"
+                      @change="updateCreativeSetting(index, 'wechatTemplate', $event)"
+                    >
+                      <option v-for="option in WECHAT_TEMPLATE_OPTIONS" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <label class="idea-creative-field idea-creative-ratio-field">
+                  <span>图片比例</span>
+                  <select
+                    :data-test="`idea-creative-ratio-${index}`"
+                    :value="settingsFor(index).aspectRatioSelection"
+                    @change="updateCreativeSetting(index, 'aspectRatioSelection', $event)"
+                  >
+                    <option value="smart">智能比例</option>
+                    <option v-for="ratio in IMAGE_ASPECT_RATIOS" :key="ratio" :value="ratio">{{ ratio }}</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
             <div class="idea-actions">
               <button
-                class="primary-btn small-btn"
+                class="primary-btn small-btn cost-button"
                 type="button"
-                data-test="go-generation"
-                @click="goToGeneration(index)"
+                :data-test="`idea-generate-moments-${index}`"
+                @click="goToGeneration(index, 'moments')"
               >
-                去生成内容
+                <span>一键朋友圈图</span>
+                <small>1 积分</small>
+              </button>
+              <button
+                class="secondary-btn small-btn cost-button"
+                type="button"
+                :data-test="`idea-generate-wechat-${index}`"
+                @click="goToGeneration(index, 'wechat')"
+              >
+                <span>一键公众号长图</span>
+                <small>1 积分</small>
+              </button>
+              <button
+                class="secondary-btn small-btn cost-button"
+                type="button"
+                :data-test="`idea-generate-xhs-${index}`"
+                @click="goToGeneration(index, 'xhsCarousel')"
+              >
+                <span>一键小红书组图</span>
+                <small>4 积分</small>
               </button>
             </div>
             <div class="idea-tag-list">
@@ -350,6 +870,43 @@ function goToGeneration(ideaIndex: number): void {
           </template>
         </article>
       </template>
+    </div>
+
+    <!-- 已上传产品图选择弹层（旧版 openProductImageLibrary 语义） -->
+    <div
+      v-if="openLibraryFor !== null"
+      class="idea-library-backdrop"
+      :data-test="`product-library-dialog-${openLibraryFor}`"
+      @click.self="closeLibrary"
+    >
+      <section class="idea-library-panel" role="dialog" aria-modal="true">
+        <header class="idea-library-head">
+          <h3>选择已上传{{ assetLabel }}</h3>
+          <button class="idea-library-close" type="button" :data-test="`idea-library-close-${openLibraryFor}`" @click="closeLibrary">
+            ×
+          </button>
+        </header>
+        <p v-if="libraryLoading" class="panel-hint">正在加载产品素材...</p>
+        <p v-else-if="libraryError" class="idea-control-message">{{ libraryError }}</p>
+        <ul v-else-if="libraryImages.length" class="idea-library-list">
+          <li v-for="image in libraryImages" :key="image.id" class="idea-library-item">
+            <label>
+              <input
+                type="checkbox"
+                :data-test="`idea-library-check-${openLibraryFor}-${image.id}`"
+                :checked="isProductSelected(openLibraryFor, image.id)"
+                @change="toggleLibraryImage(openLibraryFor, image.id, $event)"
+              />
+              <img :src="image.url" :alt="image.originalName" loading="lazy" decoding="async" />
+              <span>{{ image.originalName }}</span>
+            </label>
+          </li>
+        </ul>
+        <p v-else class="panel-hint">还没有已上传的产品图，可先在选题卡内上传。</p>
+        <button class="primary-btn small-btn" type="button" :data-test="`idea-library-done-${openLibraryFor}`" @click="closeLibrary">
+          完成
+        </button>
+      </section>
     </div>
   </section>
 </template>
@@ -678,6 +1235,29 @@ function goToGeneration(ideaIndex: number): void {
   gap: 18px;
 }
 
+.idea-context-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.idea-status-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2d8b71;
+  box-shadow: 0 0 0 4px rgba(45, 139, 113, 0.14);
+}
+
+.idea-status-label {
+  display: inline-flex;
+  align-items: center;
+  color: #2d8b71;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
 .idea-context-top h3,
 .idea-prompt-header h3,
 .idea-title-row h3 {
@@ -737,7 +1317,7 @@ function goToGeneration(ideaIndex: number): void {
 }
 
 .idea-cards {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--workspace-grid-gap);
 }
 
@@ -766,7 +1346,9 @@ function goToGeneration(ideaIndex: number): void {
 }
 
 .idea-asset-preview.is-incomplete {
-  color: var(--workspace-text-muted);
+  border-color: rgba(202, 130, 21, 0.22);
+  background: #fff8eb;
+  color: #8a6d1d;
 }
 
 .idea-actions {
@@ -835,12 +1417,6 @@ function goToGeneration(ideaIndex: number): void {
 
 .text-btn {
   color: var(--workspace-brand-ink);
-}
-
-@media (max-width: 1180px) {
-  .idea-cards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 760px) {

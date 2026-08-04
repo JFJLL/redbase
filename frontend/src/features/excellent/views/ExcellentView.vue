@@ -53,6 +53,7 @@ import {
   type ExcellentRemixState,
 } from "../remixState";
 import { canGoNext, canGoPrevious, getNextImageIndex, getPreviousImageIndex } from "../imageNav";
+import { excellentImageSrc, type ExcellentImageProxyParams } from "../imageProxy";
 import { pollImageJob } from "@/features/generation/api";
 import type {
   BrandSummary,
@@ -86,6 +87,23 @@ const taxonomyOptions = reactive<Record<ExcellentBoard, Array<{ label: string; v
 });
 const toastMessage = ref("");
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 图片加载失败：明确错误态 + 重试，绝不伪装成破图占位。
+const failedImageUrls = reactive(new Set<string>());
+
+function isImageFailed(url: string): boolean {
+  return Boolean(url) && failedImageUrls.has(url);
+}
+
+function retryImage(url: string) {
+  if (!url) return;
+  failedImageUrls.delete(url);
+}
+
+function onExcellentImageError(url: string) {
+  if (!url) return;
+  failedImageUrls.add(url);
+}
 
 // 普通用户手动更新 60 秒冷却（服务端为准，这里只做倒计时展示与防重复）；管理员不受限。
 const refreshCooldownSeconds = ref(0);
@@ -297,6 +315,24 @@ const detailImages = computed(() => (Array.isArray(detail.item?.imageUrls) ? det
 
 function noteKey(item: ExcellentNote): string {
   return String(item.noteId || item.id || "");
+}
+
+function excellentProxyParams(item: ExcellentNote): ExcellentImageProxyParams {
+  return {
+    noteId: noteKey(item),
+    ...formalFilters(activeBoard.value),
+  };
+}
+
+function coverSrc(item: ExcellentNote): string {
+  const raw = String(item.coverUrl || (item.imageUrls || [])[0] || "");
+  return excellentImageSrc(raw, 0, excellentProxyParams(item));
+}
+
+function detailSrcAt(index: number): string {
+  const raw = detailImages.value[index] || "";
+  if (!detail.item) return raw;
+  return excellentImageSrc(raw, index, excellentProxyParams(detail.item));
 }
 
 async function openDetail(item: ExcellentNote) {
@@ -881,12 +917,28 @@ onUnmounted(() => {
     <div v-else class="excellent-grid">
       <article v-for="item in slice.items" :key="noteKey(item)" class="excellent-card" data-test="excellent-card">
         <button type="button" class="excellent-cover" @click="openDetail(item)">
+          <div
+            v-if="isImageFailed(coverSrc(item))"
+            class="excellent-image-error"
+            data-test="excellent-image-error"
+          >
+            <span>图片加载失败</span>
+            <button
+              type="button"
+              class="secondary-btn"
+              data-test="excellent-image-retry"
+              @click.stop="retryImage(coverSrc(item))"
+            >
+              重试
+            </button>
+          </div>
           <img
-            v-if="item.coverUrl || (item.imageUrls || [])[0]"
-            :src="String(item.coverUrl || (item.imageUrls || [])[0])"
+            v-else-if="coverSrc(item)"
+            :src="coverSrc(item)"
             :alt="item.title || ''"
             loading="lazy"
             decoding="async"
+            @error="onExcellentImageError(coverSrc(item))"
           />
         </button>
         <div class="excellent-card-body">
@@ -923,7 +975,27 @@ onUnmounted(() => {
           >
             ←
           </button>
-          <img :src="detailImages[detail.activeImageIndex]" alt="笔记图片" class="detail-image" />
+          <div
+            v-if="isImageFailed(detailSrcAt(detail.activeImageIndex))"
+            class="excellent-image-error detail-image-error"
+            data-test="detail-image-error"
+          >
+            <span>图片加载失败</span>
+            <button
+              type="button"
+              class="secondary-btn"
+              @click="retryImage(detailSrcAt(detail.activeImageIndex))"
+            >
+              重试
+            </button>
+          </div>
+          <img
+            v-else
+            :src="detailSrcAt(detail.activeImageIndex)"
+            alt="笔记图片"
+            class="detail-image"
+            @error="onExcellentImageError(detailSrcAt(detail.activeImageIndex))"
+          />
           <button
             type="button"
             class="secondary-btn"
@@ -935,14 +1007,22 @@ onUnmounted(() => {
         </div>
         <div v-if="detailImages.length > 1" class="detail-thumbs">
           <button
-            v-for="(url, index) in detailImages"
-            :key="index"
+            v-for="(imageUrl, index) in detailImages"
+            :key="imageUrl || index"
             type="button"
             class="detail-thumb"
             :class="{ 'is-active': index === detail.activeImageIndex }"
             @click="detail.activeImageIndex = index"
           >
-            <img :src="url" alt="" loading="lazy" decoding="async" />
+            <span v-if="isImageFailed(detailSrcAt(index))" class="detail-thumb-error">✕</span>
+            <img
+              v-else
+              :src="detailSrcAt(index)"
+              alt=""
+              loading="lazy"
+              decoding="async"
+              @error="onExcellentImageError(detailSrcAt(index))"
+            />
           </button>
         </div>
         <p v-if="detail.loading" class="excellent-loading">正在加载详情…</p>
@@ -1286,6 +1366,37 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.excellent-image-error {
+  width: 100%;
+  height: 100%;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  background: var(--color-surface);
+}
+
+.detail-image-error {
+  min-height: 220px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.detail-thumb-error {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  background: var(--color-bg);
 }
 
 .excellent-card-body {

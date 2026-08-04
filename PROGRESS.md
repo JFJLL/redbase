@@ -1,5 +1,110 @@
 # PROGRESS
 
+## 任务：独立复验 P0 阻塞修复（2026-08-04，继续 codex/fix-vue-ui-regressions，未提交工作区保留）
+
+### 任务0 取证
+
+- 独立复验发现两个发布阻塞项；当前 `.verification/receipt.json` status=fail（指纹 31f33a30），-CheckReceipt 失败。
+- P0-1 启动清理测试依赖真实 OSS：`tests/server-history-cleanup-startup.test.js` 只隔离了 DB/PORT，未隔离 config.local.json 的 aliyun_oss；`cleanupExpiredGenerationHistory`（history-routes.js）中 cleanupDeletionStaging/cleanupUnreferencedAssets/cleanupStagedStoredAssets 三个恢复步骤 await 无 try/catch，OSS 请求失败会提前终止整个函数，无资产过期记录 8801 不被删除 → 断言失败（本机网络可达时偶然通过 597/597，不可达时 596/597）。`start()`（index.js）已把整个 cleanup 包 try/catch 但只 warn，不补救扫描。
+- P0-2 图库失败仍可空素材生成：`startGenerationAction`（共享入口，自动/手动/重试共用）在检查图库状态前就 `consumeActionTicket()` 并执行生成；四个按钮只 `:disabled="busy"`；generationAutoStart.test.ts 现有用例明确允许图库失败后手动点击产生 1 次 POST（productImages: []）。auto 路径的 maybeAutoStartGeneration 也未考虑 useProductImages=false 时应放行。
+- 处理：子代理 A（后端 P0-1）、子代理 B（前端 P0-2）并行，先红后绿；主线程最后全量验证 + receipt。
+
+### 修复完成（2026-08-04）
+
+- P0-1（子代理 Parfit）：`cleanupExpiredGenerationHistory` 三个恢复步骤（cleanupDeletionStaging/cleanupUnreferencedAssets/cleanupStagedStoredAssets）各自 try/catch（runRecoveryStep，warn 仅 errorCode/status），失败不再阻断过期记录扫描；逐条删除安全顺序保留（资产删除失败 → failedGenerationIds、行保留）。红 3 失败 → 绿 3/3（tests/history-cleanup-recovery.test.js）。启动测试双层隔离：require 前置空 ALIYUN_OSS_* 环境变量（provider 回退 local）+ http/https request/get 四入口打桩，start() 期间任何出站请求直接 fail（证明不发网络请求）；启动/监听/close/8801 删除断言保留，4/4。既有 history-routes 10/10、generation-retention-oss 12/12。红绿记录 outputs/red-green-p0-cleanup.txt。
+- P0-2（子代理 Goodall）：`startGenerationAction` 在 consumeActionTicket 之前检查 `productLibraryBlocked = useProductImages && (!productImagesLoaded || !!productImagesError)`，命中即 return（不发 POST、不消费票据、显示错误+引导重新加载）；四个生成按钮与重试按钮 `:disabled="busy || productLibraryBlocked"`；maybeAutoStartGeneration 按 useProductImages 分流（关闭时不再等图库）。红 2 失败 → 绿 39/39（generationAutoStart 8→11 用例，覆盖：图库失败手动 0 POST+action 保留、重试成功 1 POST+素材完整+action 移除、关闭产品图时 1 POST 允许、刷新/后退前进/失败重试不重复）。红绿记录 outputs/red-green-p0-product-library.txt。
+- 全量验证：check / unit 600 / integration 253 / data 31 / typecheck / frontend 235 / build / eval:ai 126 / smoke:api ok（首次即过，seed 计数器修复保持），skip/todo 0，测试数全部不低于基线。npm test 从复验时的 596/597（环境相关）恢复为确定性 600/600。
+- 浏览器复验（Kimi）：一键进入 1 POST → 刷新 0 新增 → 手动点击恰 +1；图库就绪后按钮恢复可用；上下文与视觉无回退。证据 kimi-browser-round3-evidence.md。
+- verify-change R3 七通道全通过，receipt status=pass，fingerprint=`aa682d6fc9e14f3dd716fcd04b1ac2ecccafd10dc0d484c2613c03bf026b20b1` 与最终 diff 一致，-CheckReceipt 通过，git diff --check 干净。
+- 未提交/推送/部署；未改真实数据/配置；范围外候选（api.js appConfig 接线、代理 3xx、coverUrls 消费）按任务书要求本轮未扩大修改，仍记录在 BLOCKED.md。
+
+## 任务：独立复审 4 缺陷修复（2026-08-04，继续分支 codex/fix-vue-ui-regressions，未提交工作区保留）
+
+### 任务0 现状与取证
+
+- 上一轮工作区 26 个文件未提交，全部保留；R3 receipt 曾以指纹 09c95320279bd5edce9c10932b54ff8c19137265a37e3d1068a44bc8d0910768 通过。基线 unit 586 / integration 242 / data 31 / frontend 224 / ai-eval 126，skip/todo 0。
+- 复审确认的 4 个缺陷（逐一读码取证）：
+  1. image-store.js `buildPgyImageRequestHeaders(appConfig)` 无目标 URL 参数，配置 Pgy Cookie 后对任何域名（含 COS/RunningHub/evil）都附带 Cookie；`fetchRemoteImageBytes` 跨跳转复用同一 headers。
+  2. 历史远程回退响应 `Cache-Control: public, max-age=600`；优秀内容代理 `public, max-age=3600`，均可被共享缓存绕过登录。
+  3. 代理取图只从 `item.imageUrls` 取索引，而响应重写覆盖 coverUrl/primaryCoverUrl/coverUrls；cover-only 记录代理 404，多图时封面索引可能错位。
+  4. GenerationView 保留 action 查询参数，`startedActionKey` 仅防同挂载重复；刷新/重挂载会再次自动 POST；自动 POST 早于 ProductImagePanel images-loaded，useProductImages=true 且已选产品图时首包为空数组。
+- 处理：子代理 A（后端缺陷 1-3，先红后绿）、子代理 B（前端缺陷 4，先红后绿）并行；主线程最后全量验证 + Kimi 无回退验收 + 全新上下文独立审查子代理出 agent-review 证据。
+
+### 修复完成（2026-08-04）
+
+- 子代理 Copernicus（后端）：`isPgyCookieDomain(host)` + `buildPgyImageRequestHeaders(appConfig, targetUrl)` 按目标域名附加 Cookie；`fetchRemoteImageBytes` 每跳重建头、跨域跳不继承 Cookie；历史回退与优秀内容代理 Cache-Control 均改 `private, max-age=300`；新增 `normalizeExcellentImageSequence(item)`（imageUrls→coverUrls→coverUrl→primaryCoverUrl 合并去重），响应重写与代理取图共用，cover-only 记录代理 200、多图索引不错位。红：11 失败（public 缓存、Cookie 泄漏、cover-only 404、重定向继承）→ 绿：28/28。记录 outputs/red-green-review-fixes-backend.txt。
+- 子代理 Bacon（前端）：`consumeActionTicket()` 在任何生成 POST 前 router.replace 移除 query.action（失败则停止并显示可恢复错误，不重复 POST）；`maybeAutoStartGeneration()` 门控等待品牌上下文+创作设置恢复+产品图库 images-loaded，图库失败显示可恢复错误不静默空素材生成；首包产品图 {id,name} 完整。红：6 失败 → 绿：35/35（新 7 用例）。记录 outputs/red-green-review-fixes-frontend.txt。
+- 主线程：修复验收环境 seed 脚本计数器（nextBrandId 等未同步 max(id)+1 导致首次建品牌撞主键，属验收脚本问题非产品缺陷）；全量命令通过：check / unit 597 / integration 253 / data 31 / typecheck / frontend 231 / build / eval:ai 126 / smoke:api ok，skip/todo 0，测试数全部不低于基线。
+- Kimi 无回退验收（隔离 DB + fake SMS）：登录视觉、优秀内容 8/8（naturalWidth 1080）、历史 4/4（880/768）、图4 双列选题卡、生图空状态全部保持；一键朋友圈图：点击后 URL 即移除 action，恰好 1 个 POST，刷新/返回/前进 0 个新 POST；两处图片接口实测 `Cache-Control: private, max-age=300`。截图 kimi-round2-*.png。
+
+### 待办
+
+- 独立审查子代理出 agent-review 证据 → evidence.json → verify-change receipt → CheckReceipt。
+
+### 完成（2026-08-04）
+
+- 独立审查子代理（Dewey，全新上下文、只读、未参与实现）出具 PASS（有条件）证据：7 项要求主体契约全部通过并独立复跑一致；发现 2 个值得修复的问题 + 2 个观察项。
+- 问题 2（图库失败+手动点击未消费 action → 重试后二次自动 POST）已修复：`startGenerationAction` 成为共享入口并在任何 POST 前消费票据，四个手动按钮改走该入口；红（2 个 POST）→ 绿（generation 36/36、frontend 232/232、typecheck、build 通过）；修复记录已追加进独立审查证据。
+- 问题 1（api.js 生产接线未传 appConfig）与观察项超出本轮允许文件清单，已记入 BLOCKED.md 作为下轮候选，不影响本轮五个复现场景结论。
+- 最终验证：verify-change R3 七通道全通过，receipt status=pass，fingerprint=`fb58667cf2cd4cc5c0fc7b8c951fcbd90267962c0bee23d7d6753125c6e439a5` 与最终 diff 一致，-CheckReceipt 通过。未提交/推送/部署；未改真实数据；BLOCKED.md 当前记录为「无阻塞 + 3 个范围外候选」。
+
+## 任务：Vue 前端视觉与图片回归修复（2026-08-04，分支 codex/fix-vue-ui-regressions）
+
+### 任务0 基线核对证据
+
+- 当前仓库 D:\download\pic-vec\redbase-fullstack-latest：干净 master @ 73d54c4；旧版仓库 D:\download\redbase：HEAD b415280、工作区不干净（M package-lock.json、?? scripts/run-tests.cjs），与任务书一致，未清理/覆盖。四张截图均可读（登录/优秀内容破图/生图裸表单/内容选题规格）。
+- 从最新 origin/master（73d54c4，fetch 后无新增）建 `codex/fix-vue-ui-regressions`，原名不存在，未覆盖。
+- 基线全绿：check pass；unit 569/569；integration 225/225；data 31/31；typecheck:frontend pass；frontend 188/188；build pass；smoke:api `{"ok":true,...,"rechargePlans":0}`（临时 DB `outputs/baseline-smoke.sqlite`，端口 3013，未碰真实数据）；skip/todo 0。
+- 注意：smoke:api 需要服务先启动（脚本不自动起服务）；验证时用 `REDBASE_DB_FILE` 指向 outputs/ 一次性 DB。
+
+### 目标 / 顺序 / 最大风险（≤10 行）
+
+1. 目标：登录、内容选题、生图任务、优秀内容、历史生成恢复正式产品品质，图片真实加载。
+2. 顺序：任务1 图片链路（优秀内容/历史生成 src→契约测试红→绿）→ 任务2 IdeasView + GenerationView 重做 → 任务3 AuthPanel 视觉 → 任务4 全量验证与 Kimi 证据。
+3. 最大风险：签名 URL 过期/401 被当破图；选题上下文在刷新/返回后丢失；生图按钮参数链（brandId/trendId/ideaIndex）断裂；改动超范围（后端/认证逻辑/测试基线）。
+
+### 任务1：图片真实可用（进行中）
+
+- 复现取证（Kimi WebBridge + API，2026-08-04）：
+  - 优秀内容：缓存 imageUrls 全部为 https://ci.xiaohongshu.com/... 原始远程图，浏览器直连 8/8 返回 403（XHS CDN 防外链，text/plain，server: Lego Server）；服务端同 URL 请求 200 image/jpeg。根因=缺服务端图片代理。
+  - 历史生成：data/redbase.sqlite generation 43（xhsCarousel 4 slides）本地 storedPath 文件在 data/uploads/generated-images 下已不存在，签名 URL 请求返回 404 application/json（破图）；localImage.originalUrl（腾讯 COS）实测 200 image/png 仍可用。根因=本地文件缺失时无真实资源回退。
+  - 签名 URL：HMAC 10 分钟稳定桶（最长约 20 分钟），过期 401；前端无刷新机制。
+  - 截图/证据：outputs/kimi-repro-excellent-before.png、outputs/kimi-repro-history-before.png；Network 记录在主线程对话。
+- 处理：子代理 Sartre（任务1）并行实现服务端代理路由+历史回退+前端签名刷新与错误态，先红后绿。
+
+### 任务2：内容选题与生图流程（待开始）
+
+- 处理：子代理 Carson（任务2）并行实现；规格=图4 + D:\download\redbase 旧版 renderIdeas/styles.css（只读）。
+
+### 任务1/2/3 完成（2026-08-04，三个子代理并行）
+
+- 任务1（Sartre）：服务端图片代理路由 + 历史远程回退 + 前端签名刷新/错误态；红→绿证据 outputs/red-green-task1-image-fix.txt。
+- 任务2（Carson）：IdeasView 恢复图4全部控件 + GenerationView 空状态/承接选题；红→绿 outputs/red-green-ideas-generation.txt。
+- 任务3（Pasteur）：AuthPanel 验证码同行、SVG 关闭图标、忘记密码文本链接、尺寸统一；红→绿 outputs/red-green-auth-visual.txt。
+- 主线程集成发现并修复：IdeasView 深链上下文在首次 loadBrands 的 syncOwner 重置后丢失（浏览器实测选中错品牌）；修 loadPage 在列表就绪后重套 query，新增回归测试，红（AssertionError 选中“第一顺位品牌”）→绿（13/13）。
+- 全量验证：check pass；unit 586/586；integration 242/242；data 31/31；typecheck pass；frontend 224/224；build pass；smoke:api ok（临时 DB outputs/repro-final.sqlite，未碰真实数据）。skip/todo 0，测试数全部不低于基线。
+- 浏览器验收（Kimi WebBridge，隔离 DB + fake SMS）：优秀内容 8/8 代理 200 image/jpeg（修复前 403）；多图轮播 8/8 资源 200；历史生成 4/4 幻灯片经 COS 回退加载（naturalWidth>0，修复前 404）；注册（新用户进入工作台）/登录/重置（新密码登录成功）三态；图4 选题页双列卡片+全部控件+三按钮积分标签；生图任务侧栏直入=引导空态（裸表单消失）、选题进入=上下文+自动起任务；390 视口无横向溢出（用户已说明移动端暂不作为交付重点）。
+- 证据截图与 Network 记录见 artifacts/verification/kimi-browser-image-ui-evidence.md；对抗复核见 agent-review-evidence.md（本环境无第二位 reviewer，由执行 agent 完成并如实注明）。
+
+### 任务3：登录视觉（待开始）
+
+- 处理：子代理 Pasteur（任务3）并行实现；规格=图1。
+
+### 任务4：验证（进行中）
+
+- 确定性通道全部通过（见上）；Kimi 证据已出；待 verify-change 全通道 + receipt。
+
+### 任务4 完成（2026-08-04）
+
+- 全量确定性验证：check / unit 586 / integration 242 / data 31 / typecheck / frontend 224 / build / smoke:api / eval:ai 126 全部通过，skip/todo 0，测试数全部不低于基线。
+- verify-change R3 全通道通过（static/unit/integration/smoke/ai-eval/kimi-browser/agent-review），`.verification/receipt.json` status=pass，fingerprint=`931212f369730340239bfd431218eff47b55828b3851dc0249752d099da3bd94` 与最终 diff 一致，`-CheckReceipt` 通过。
+- 期间修复 smoke 失败一次（浏览器验收把测试号密码重置，一次性库已改回 123456，非代码问题）。
+- 未提交、未推送、未部署；未改真实数据库/上传数据；D:\download\redbase 与截图仅只读；BLOCKED.md 当前为「无」（agent-review 由执行 agent 完成，需独立 reviewer 复验，已在证据中注明）。
+
+### 任务4：验证（待开始）
+
+- 待办：组件/API 回归测试、Kimi WebBridge 截图与 Network 证据、全量命令 + verify-change receipt。
+
 ## 当前状态（2026-08-04）
 
 - 规范生产分支：`master`。

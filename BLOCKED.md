@@ -1,5 +1,20 @@
 # BLOCKED
 
+## 任务：独立复验 P0 阻塞修复（2026-08-04）
+
+- 无阻塞。两个 P0（启动清理测试 OSS 依赖/恢复语义、图库失败空素材生成）已修复并有红→绿证据与全量验证；receipt=pass。范围外候选（api.js 未向历史回退传 appConfig、excellent 代理不跟随 3xx、前端未消费 coverUrls/primaryCoverUrl）按本轮任务书要求未扩大修改，留待下轮且需新测试证明为真实用户链路阻塞后再处理。
+
+## 任务：独立复审 4 缺陷修复（2026-08-04）
+
+- 无阻塞；独立审查子代理发现 3 个范围外/低优先问题，已在证据中记录，不属于本轮任务书完成条件：
+  1. 【中，功能接线】api.js 绑定 serveStoredGeneratedImage 未传 appConfig → 生产历史远程回退即使配置 pgy.cookie 也不携带（安全上无泄漏，按凭证不跨域原则当前行为反而更保守）；修复需改 api.js/history-routes.js，超出本轮允许文件清单，写入下轮候选。
+  2. 【低】excellent 代理不跟随上游 3xx 重定向（当前缓存 URL 直连 200，非实际回归）。
+  3. 【低】前端 coverSrc/detailImages 未消费 coverUrls/primaryCoverUrl（真实缓存恒含 imageUrls）。
+
+## 任务：Vue 前端视觉与图片回归修复（2026-08-04，分支 codex/fix-vue-ui-regressions）
+
+- 无。任务书范围内未发现阻塞；唯一说明：本环境无第二位 reviewer，agent-review 证据由执行 agent 完成并如实标注，receipt 机械通过后仍需用户/独立 reviewer 复验（与仓库历史做法一致）。
+
 ## 当前状态（2026-08-04）
 
 - 本地开发基线当前无阻塞。

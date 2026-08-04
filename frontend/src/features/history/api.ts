@@ -154,6 +154,23 @@ export function safeImageSrc(value: unknown): string {
   return "";
 }
 
+/** Expiry timestamp carried by backend-signed asset URLs (0 when absent). */
+export function parseAssetExpiryMs(url: unknown): number {
+  try {
+    const parsed = new URL(String(url || ""), "http://redbase.local");
+    const raw = Number(parsed.searchParams.get("assetExpires") || 0);
+    return Number.isFinite(raw) ? raw : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** True only when the signed URL carries an expiry that has already passed. */
+export function hasExpiredAssetSignature(url: unknown, nowMs = Date.now()): boolean {
+  const expiresAt = parseAssetExpiryMs(url);
+  return expiresAt > 0 && expiresAt <= nowMs;
+}
+
 export function getGenerationPrimaryImageUrl(item: GenerationHistoryItem | null): string {
   if (item?.previewUrl) return item.previewUrl;
   const rawSlides = item?.payload?.slides;

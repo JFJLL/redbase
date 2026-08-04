@@ -9,6 +9,7 @@ const { DATA_DIR } = require("../config");
 const { createGeneratedAssetStorage } = require("./generated-asset-storage");
 const { assertGenerationAssetOwnership } = require("./generation-deletion-service");
 const { signAssetUrl, verifySignedAssetRequest, signLocalAssetUrls } = require("./signed-urls");
+const { normalizeCookieHeader } = require("../integrations/pgy-content-square");
 const {
   randomId,
   sanitizeGeneration: baseSanitizeGeneration,
@@ -23,6 +24,43 @@ const MAX_PRODUCT_IMAGE_SELECTION_COUNT = 10;
 const MAX_PRODUCT_IMAGE_SELECTION_BYTES = 30 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const MAX_REMOTE_IMAGE_REDIRECTS = 3;
+const PGY_IMAGE_REFERER = "https://pgy.xiaohongshu.com/microapp/creativity/inspire";
+const PGY_IMAGE_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+/**
+ * Strict allow-list of hosts that may receive the configured Pgy cookie.
+ * Only the exact xiaohongshu.com / xhscdn.com apex hosts and their subdomains
+ * (ci.xiaohongshu.com, pgy.xiaohongshu.com, edith.xiaohongshu.com,
+ * sns-img-qc.xhscdn.com, ...) qualify. Every other public host — Tencent COS
+ * (*.myqcloud.com), RunningHub, example.com, or arbitrary domains — never
+ * receives the cookie, including after a redirect to another domain.
+ */
+function isPgyCookieDomain(host) {
+  const normalized = String(host || "")
+    .toLowerCase()
+    .replace(/\.$/, "");
+  return (
+    normalized === "xiaohongshu.com" ||
+    normalized === "xhscdn.com" ||
+    normalized.endsWith(".xiaohongshu.com") ||
+    normalized.endsWith(".xhscdn.com")
+  );
+}
+
+function extractImageTargetHostname(targetUrl) {
+  if (!targetUrl) return "";
+  if (targetUrl instanceof URL) return targetUrl.hostname;
+  if (typeof targetUrl === "object" && targetUrl?.parsed instanceof URL) return targetUrl.parsed.hostname;
+  if (typeof targetUrl === "string") {
+    try {
+      return new URL(targetUrl).hostname;
+    } catch (error) {
+      return "";
+    }
+  }
+  return "";
+}
+
 const PRODUCT_IMAGE_MIME_EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -177,6 +215,92 @@ function requestPinnedRemoteImage(target, options = {}) {
     request.on("error", reject);
     request.end();
   });
+}
+
+/**
+ * Headers used when fetching Xiaohongshu/Pgy images through the SSRF-safe
+ * pinned fetch. The Pgy Referer is always sent; the optional configured pgy
+ * cookie is attached only when the target host passes isPgyCookieDomain so the
+ * credential never crosses to other public domains. Never logs or persists the
+ * cookie.
+ */
+function buildPgyImageRequestHeaders(appConfig = {}, targetUrl) {
+  const pgy = appConfig?.pgy || {};
+  const headers = {
+    "User-Agent": String(pgy.userAgent || PGY_IMAGE_USER_AGENT).trim() || PGY_IMAGE_USER_AGENT,
+    Referer: PGY_IMAGE_REFERER,
+  };
+  if (!isPgyCookieDomain(extractImageTargetHostname(targetUrl))) return headers;
+  const cookie = normalizeCookieHeader(String(pgy.cookie || "").trim());
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+}
+
+/**
+ * SSRF-safe remote image fetch used by the excellent-content proxy and by the
+ * history remote fallback. Follows a bounded number of redirects, validates the
+ * final host, rejects non-image bodies, and enforces the generated-image size cap.
+ * Returns { buffer, mimeType, status } for 2xx responses.
+ */
+async function fetchRemoteImageBytes(imageUrl, options = {}) {
+  const assertSafe = options.assertSafe || assertSafeRemoteImageUrl;
+  const requestImage = options.requestImage || requestPinnedRemoteImage;
+  const readBuffer = options.readBuffer || readGeneratedImageResponseBuffer;
+  const maxBytes = Number(options.maxBytes || MAX_GENERATED_IMAGE_BYTES);
+  const baseHeaders = options.headers || {};
+  let currentUrl = String(imageUrl || "").trim();
+  for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMAGE_REDIRECTS; redirectCount += 1) {
+    const target = await assertSafe(currentUrl);
+    // Credentials are rebuilt for every hop from the current URL so a redirect
+    // to another domain never inherits the Pgy cookie.
+    const headers = {
+      ...baseHeaders,
+      ...buildPgyImageRequestHeaders(options.appConfig, target.parsed),
+    };
+    if (!isPgyCookieDomain(extractImageTargetHostname(target.parsed))) {
+      delete headers.Cookie;
+    }
+    const response = await requestImage(target, { headers });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = String(response.headers.get("location") || "").trim();
+      if (!location) {
+        throw Object.assign(new Error("图片下载重定向无效"), { code: "REMOTE_IMAGE_REDIRECT_INVALID" });
+      }
+      if (typeof response.body?.resume === "function") response.body.resume();
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    if (!response.ok) {
+      if (typeof response.body?.resume === "function") response.body.resume();
+      throw Object.assign(new Error(`上游图片返回 HTTP ${response.status}`), {
+        code: "REMOTE_IMAGE_UPSTREAM_ERROR",
+        status: Number(response.status || 0),
+      });
+    }
+    const headerMimeType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    const mimeType = headerMimeType
+      ? PRODUCT_IMAGE_MIME_EXTENSIONS[headerMimeType]
+        ? headerMimeType
+        : ""
+      : inferImageMimeTypeFromUrl(currentUrl);
+    if (!PRODUCT_IMAGE_MIME_EXTENSIONS[mimeType]) {
+      if (typeof response.body?.resume === "function") response.body.resume();
+      throw Object.assign(new Error("上游返回的不是图片内容"), {
+        code: "REMOTE_IMAGE_NOT_IMAGE",
+        status: Number(response.status || 0),
+      });
+    }
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > maxBytes) {
+      if (typeof response.body?.resume === "function") response.body.resume();
+      throw Object.assign(new Error(`图片超过大小限制：${formatBytes(contentLength)}`), {
+        code: "REMOTE_IMAGE_TOO_LARGE",
+      });
+    }
+    const buffer = await readBuffer(response, maxBytes);
+    return { buffer, mimeType, status: Number(response.status || 0) };
+  }
+  throw Object.assign(new Error("图片下载重定向次数过多"), { code: "REMOTE_IMAGE_REDIRECT_LIMIT" });
 }
 
 async function removeGenerationLocalFiles(generation) {
@@ -771,30 +895,67 @@ function inferImageMimeTypeFromUrl(imageUrl) {
   return "image/png";
 }
 
-async function serveStoredGeneratedImage(res, asset, storage = getDefaultGeneratedAssetStorage(), generation = null) {
-  if (!asset?.storedPath && !asset?.objectKey) {
+async function serveStoredGeneratedImage(res, asset, storage = getDefaultGeneratedAssetStorage(), generation = null, options = {}) {
+  const remoteFallbackUrl = String(asset?.originalUrl || "").trim();
+  const hasRemoteFallback = isRemoteImageUrl(remoteFallbackUrl);
+  if (asset?.storedPath || asset?.objectKey) {
+    try {
+      if (generation) assertGenerationAssetOwnership(asset, generation);
+      if (asset.provider === "aliyun_oss" || asset.objectKey) {
+        const readUrl = await storage.createReadUrl(asset, { expiresSeconds: 300 });
+        res.writeHead(302, {
+          Location: readUrl,
+          "Cache-Control": "private, no-store",
+        });
+        res.end();
+        return;
+      }
+      const data = await storage.readBuffer(asset);
+      res.writeHead(200, {
+        "Content-Type": asset.mimeType || "application/octet-stream",
+        "Cache-Control": "private, max-age=300",
+      });
+      res.end(data);
+      return;
+    } catch (error) {
+      // Local/OSS read failed (e.g. the file was cleaned up): fall through to the
+      // real remote resource when the stored asset still carries an originalUrl.
+      if (!hasRemoteFallback) {
+        notFound(res);
+        return;
+      }
+    }
+  } else if (!hasRemoteFallback) {
     notFound(res);
     return;
   }
+
+  // Remote fallback: serve the original real resource (never a placeholder).
   try {
-    if (generation) assertGenerationAssetOwnership(asset, generation);
-    if (asset.provider === "aliyun_oss" || asset.objectKey) {
-      const readUrl = await storage.createReadUrl(asset, { expiresSeconds: 300 });
-      res.writeHead(302, {
-        Location: readUrl,
-        "Cache-Control": "private, no-store",
-      });
-      res.end();
-      return;
-    }
-    const data = await storage.readBuffer(asset);
+    const fetchRemoteImage = options.fetchRemoteImage || fetchRemoteImageBytes;
+    const headers = {
+      ...buildPgyImageRequestHeaders(options.appConfig, remoteFallbackUrl),
+      ...(options.headers || {}),
+    };
+    const fetched = await fetchRemoteImage(remoteFallbackUrl, {
+      appConfig: options.appConfig,
+      headers,
+    });
     res.writeHead(200, {
-      "Content-Type": asset.mimeType || "application/octet-stream",
+      "Content-Type": fetched.mimeType || asset?.mimeType || "image/png",
       "Cache-Control": "private, max-age=300",
     });
-    res.end(data);
+    res.end(fetched.buffer);
   } catch (error) {
-    notFound(res);
+    console.warn("[generated-image] remote fallback failed", {
+      generationId: generation?.id,
+      errorCode: String(error?.code || "REMOTE_IMAGE_UNAVAILABLE"),
+      status: Number(error?.status || error?.statusCode || 0) || undefined,
+    });
+    if (typeof res.writeHead === "function" && !res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
+    }
+    res.end(JSON.stringify({ error: "图片暂时无法获取，请刷新后重试", code: "REMOTE_IMAGE_UNAVAILABLE" }));
   }
 }
 
@@ -921,6 +1082,9 @@ module.exports = {
   assertSafeRemoteImageUrl,
   createPinnedImageLookup,
   requestPinnedRemoteImage,
+  buildPgyImageRequestHeaders,
+  isPgyCookieDomain,
+  fetchRemoteImageBytes,
   isPrivateOrReservedIp,
   buildGeneratedImageUrl,
   buildGeneratedSlideImageUrl,

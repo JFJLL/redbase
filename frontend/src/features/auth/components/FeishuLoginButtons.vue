@@ -72,7 +72,7 @@ function handlePrimaryClick(): void {
   justify-content: center;
   gap: 10px;
   border: 1px solid rgba(36, 143, 255, 0.48);
-  border-radius: 4px;
+  border-radius: 8px;
   background: #1f7cff;
   color: #fff;
   font: inherit;
@@ -96,7 +96,7 @@ function handlePrimaryClick(): void {
   gap: 6px;
   padding: 8px;
   border: 1px solid rgba(36, 143, 255, 0.24);
-  border-radius: 4px;
+  border-radius: 8px;
   background: #fff;
   box-shadow: 0 18px 36px rgba(39, 46, 69, 0.14);
 }
@@ -105,7 +105,7 @@ function handlePrimaryClick(): void {
   min-height: 42px;
   padding: 0 14px;
   border: 1px solid rgba(226, 232, 240, 0.92);
-  border-radius: 4px;
+  border-radius: 8px;
   background: #f8fafc;
   color: #1c2440;
   font: inherit;

@@ -9,6 +9,8 @@ const {
   getExcellentContentDetail,
   getExcellentContentTaxonomy,
   getExcellentContentSourcesList,
+  findNoteInCaches,
+  validateExcellentTaxonomyPath,
 } = require("../services/excellent-content-service");
 const {
   normalizePgyCategoryPath,
@@ -41,6 +43,96 @@ const {
 } = require("../services/excellent-refresh-cooldown");
 
 const XHS_FUSION_SLIDE_COUNT = 4;
+
+function buildExcellentImageProxyPath(
+  noteId,
+  imageIndex,
+  { board = "", contentSource = "", categoryPath = "", industryPath = "" } = {},
+) {
+  const query = new URLSearchParams();
+  if (board) query.set("board", board);
+  if (contentSource) query.set("contentSource", contentSource);
+  if (categoryPath) query.set("categoryPath", categoryPath);
+  if (industryPath) query.set("industryPath", industryPath);
+  const queryString = query.toString();
+  return `/api/excellent-contents/${encodeURIComponent(String(noteId || ""))}/images/${Number(imageIndex)}/file${
+    queryString ? `?${queryString}` : ""
+  }`;
+}
+
+function rewriteExcellentImageUrl(value, imageIndex, params) {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value.trim())) return value;
+  return buildExcellentImageProxyPath(params.noteId, imageIndex, params);
+}
+
+/**
+ * Single, stable image sequence for an excellent-content note: imageUrls (in
+ * order), then coverUrls (in order), then coverUrl, then primaryCoverUrl.
+ * Empty values are filtered, duplicates are dropped, and order is preserved so
+ * the response rewrite and the image proxy always agree on index i.
+ */
+function normalizeExcellentImageSequence(item) {
+  if (!item || typeof item !== "object") return [];
+  const seen = new Set();
+  const sequence = [];
+  const push = (value) => {
+    if (typeof value !== "string" || !String(value).trim()) return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    sequence.push(value);
+  };
+  if (Array.isArray(item.imageUrls)) {
+    for (const value of item.imageUrls) push(value);
+  }
+  if (Array.isArray(item.coverUrls)) {
+    for (const value of item.coverUrls) push(value);
+  }
+  push(item.coverUrl);
+  push(item.primaryCoverUrl);
+  return sequence;
+}
+
+/**
+ * Rewrite cached remote image URLs to the same-origin SSRF-safe proxy path so
+ * the browser never hits the XHS CDN hotlink wall directly. Relative URLs stay
+ * untouched; non-image remote links (noteUrl, videoUrl) are never rewritten.
+ * Every image field is rewritten against the unified sequence index so a
+ * cover-only record resolves to index 0 and duplicated covers never shift.
+ */
+function rewriteExcellentNoteImageUrls(note, params) {
+  if (!note || typeof note !== "object") return note;
+  const noteParams = {
+    ...params,
+    noteId: String(note.noteId || note.id || params.noteId || "").trim(),
+  };
+  const sequence = normalizeExcellentImageSequence(note);
+  const sequenceIndex = (value) => {
+    const index = sequence.indexOf(value);
+    return index >= 0 ? index : 0;
+  };
+  const rewritten = { ...note };
+  for (const [key, child] of Object.entries(note)) {
+    if ((key === "imageUrls" || key === "coverUrls") && Array.isArray(child)) {
+      rewritten[key] = child.map((value) => rewriteExcellentImageUrl(value, sequenceIndex(value), noteParams));
+    } else if ((key === "coverUrl" || key === "primaryCoverUrl") && typeof child === "string") {
+      rewritten[key] = rewriteExcellentImageUrl(child, sequenceIndex(child), noteParams);
+    } else if (child && typeof child === "object") {
+      rewritten[key] = rewriteExcellentNoteImageUrls(child, noteParams);
+    }
+  }
+  return rewritten;
+}
+
+function rewriteExcellentImageUrlsResponse(result, params) {
+  if (!result || typeof result !== "object") return result;
+  if (Array.isArray(result.items)) {
+    result.items = result.items.map((item) => rewriteExcellentNoteImageUrls(item, params));
+  }
+  if (result.item && typeof result.item === "object") {
+    result.item = rewriteExcellentNoteImageUrls(result.item, params);
+  }
+  return result;
+}
 
 function hasPublishReadyFusionFields(plan) {
   const pack = plan?.carouselPack;
@@ -84,6 +176,7 @@ function buildFusionBilling({ requestId, cacheHit, replayed, charged, creditCost
 
 async function handleExcellentContentRoutes(context, req, res, pathname) {
   const {
+    appConfig,
     getSessionToken,
     buildApiUserLog,
     json,
@@ -93,6 +186,14 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
     CREDIT_COSTS,
     isAdminUser,
     sanitizeUser,
+    isRemoteImageUrl,
+    assertSafeRemoteImageUrl,
+    requestPinnedRemoteImage,
+    readGeneratedImageResponseBuffer,
+    buildPgyImageRequestHeaders,
+    inferImageMimeTypeFromUrl,
+    MAX_GENERATED_IMAGE_BYTES,
+    PRODUCT_IMAGE_MIME_EXTENSIONS,
   } = bindRouteScope(context);
 
   function requireUser() {
@@ -209,6 +310,13 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         categoryPath,
         industryPath,
       });
+      const boardDef = getExcellentContentBoard(boardRaw);
+      rewriteExcellentImageUrlsResponse(result, {
+        board: boardDef?.value || boardRaw,
+        contentSource: contentSourceRaw,
+        categoryPath,
+        industryPath,
+      });
       json(res, 200, result);
     } catch (error) {
       // Upstream failure must not lock the user out for a minute.
@@ -247,9 +355,97 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         categoryPath,
         industryPath,
       });
+      const boardDef = getExcellentContentBoard(boardRaw);
+      rewriteExcellentImageUrlsResponse(result, {
+        board: boardDef?.value || boardRaw,
+        contentSource: contentSourceRaw,
+        categoryPath,
+        industryPath,
+      });
       json(res, 200, result);
     } catch (error) {
       sendExcellentError(error, "详情暂时不可用");
+    }
+    return true;
+  }
+
+  // Same-origin SSRF-safe image proxy: resolves the URL from the cache by
+  // noteId + image index only (never accepts an arbitrary URL parameter).
+  const excellentImageProxyMatch = pathname.match(/^\/api\/excellent-contents\/([^/]+)\/images\/(\d+)\/file$/);
+  if (req.method === "GET" && excellentImageProxyMatch) {
+    if (!requireUser()) return true;
+    const noteId = decodeURIComponent(excellentImageProxyMatch[1] || "").trim();
+    const imageIndex = Number(excellentImageProxyMatch[2]);
+    if (!noteId || !Number.isInteger(imageIndex) || imageIndex < 0) {
+      badRequest(res, "图片参数无效");
+      return true;
+    }
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const boardRaw =
+      String(url.searchParams.get("board") || EXCELLENT_BOARD_DEFAULT).trim() || EXCELLENT_BOARD_DEFAULT;
+    const contentSourceRaw = String(url.searchParams.get("contentSource") || "all").trim() || "all";
+    const categoryPath = normalizePgyCategoryPath(url.searchParams.get("categoryPath") || "");
+    const industryPath = normalizePgyIndustryPath(url.searchParams.get("industryPath") || "");
+    let hit;
+    try {
+      const taxonomy = await validateExcellentTaxonomyPath(appConfig, {
+        board: boardRaw,
+        categoryPath,
+        industryPath,
+      });
+      hit = findNoteInCaches(noteId, boardRaw, {
+        contentSource: contentSourceRaw,
+        taxonomyPath: taxonomy.taxonomyPath,
+      });
+    } catch (error) {
+      sendExcellentError(error, "图片暂时不可用");
+      return true;
+    }
+    const item = hit?.item || null;
+    const urls = normalizeExcellentImageSequence(item);
+    const imageUrl = urls[imageIndex];
+    if (!imageUrl) {
+      json(res, 404, { error: "该图片不存在或已失效", code: "IMAGE_NOT_FOUND" });
+      return true;
+    }
+    if (!isRemoteImageUrl(imageUrl)) {
+      json(res, 400, { error: "该图片无法通过代理加载", code: "IMAGE_URL_NOT_PROXYABLE" });
+      return true;
+    }
+    try {
+      const target = await assertSafeRemoteImageUrl(imageUrl);
+      const response = await requestPinnedRemoteImage(target, {
+        headers: buildPgyImageRequestHeaders(appConfig, target.parsed),
+      });
+      if (!response.ok) {
+        if (typeof response.body?.resume === "function") response.body.resume();
+        json(res, 502, {
+          error: "图片暂时无法获取，请稍后重试",
+          code: "REMOTE_IMAGE_UNAVAILABLE",
+          upstreamStatus: Number(response.status || 0) || undefined,
+        });
+        return true;
+      }
+      const headerMimeType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      const mimeType = headerMimeType
+        ? PRODUCT_IMAGE_MIME_EXTENSIONS[headerMimeType]
+          ? headerMimeType
+          : ""
+        : inferImageMimeTypeFromUrl(imageUrl);
+      if (!PRODUCT_IMAGE_MIME_EXTENSIONS[mimeType]) {
+        if (typeof response.body?.resume === "function") response.body.resume();
+        json(res, 502, { error: "上游返回的不是图片内容", code: "REMOTE_IMAGE_NOT_IMAGE" });
+        return true;
+      }
+      const buffer = await readGeneratedImageResponseBuffer(response, MAX_GENERATED_IMAGE_BYTES);
+      res.writeHead(200, {
+        "Content-Type": mimeType,
+        "Cache-Control": "private, max-age=300",
+        "Content-Length": String(buffer.length),
+      });
+      res.end(buffer);
+    } catch (error) {
+      json(res, 502, { error: "图片暂时无法获取，请稍后重试", code: "REMOTE_IMAGE_UNAVAILABLE" });
     }
     return true;
   }
@@ -709,6 +905,13 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         categoryPath,
         industryPath,
       });
+      const boardDef = getExcellentContentBoard(boardRaw);
+      rewriteExcellentImageUrlsResponse(result, {
+        board: boardDef?.value || boardRaw,
+        contentSource: contentSourceRaw,
+        categoryPath,
+        industryPath,
+      });
       json(res, 200, result);
     } catch (error) {
       sendExcellentError(error, "优秀内容暂时不可用，请稍后重试。");
@@ -721,4 +924,5 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
 
 module.exports = {
   handleExcellentContentRoutes,
+  normalizeExcellentImageSequence,
 };

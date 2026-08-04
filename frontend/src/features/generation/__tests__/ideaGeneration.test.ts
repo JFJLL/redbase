@@ -347,4 +347,93 @@ describe("GenerationView idea context", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows the full idea fields plus materials from the selected topic", async () => {
+    const fetchMock = makeFlowFetch();
+    const wrapper = await mountWithContext(fetchMock);
+
+    const context = wrapper.find('[data-test="idea-context"]');
+    expect(context.text()).toContain("内容摘要");
+    expect(context.text()).toContain("切入角度");
+    expect(context.text()).toContain("品牌结合方式");
+    expect(context.text()).toContain("面向人群");
+    expect(context.text()).toContain("开头钩子");
+    expect(wrapper.find('[data-test="use-brand-logo"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="style-reference-field"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="product-image-panel"]').exists()).toBe(true);
+  });
+
+  it("auto-starts the requested generation from the action query and completes it", async () => {
+    const fetchMock = makeFlowFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const router = makeRouter();
+    await router.push({ name: "generation", query: { brandId: "1", trendId: "5", ideaIndex: "0", action: "moments" } });
+    await router.isReady();
+    const wrapper = mount(GenerationView, { global: { plugins: [createPinia(), router] } });
+    await flushPromises();
+    await flushPromises();
+
+    const imageCalls = fetchMock.mock.calls.filter((entry) => {
+      const url = String(entry[0]);
+      const init = entry[1] as RequestInit | undefined;
+      return (init?.method || "GET").toUpperCase() === "POST" && url === "/api/brands/1/trends/5/ideas/0/image";
+    });
+    expect(imageCalls).toHaveLength(1);
+    expect(wrapper.find('[data-test="moments-result"]').text()).toContain("生成标题");
+  });
+
+  it("shows the queued status while running and recovers from failure with a retry button", async () => {
+    let attempts = 0;
+    let resolveSubmit!: (response: Response) => void;
+    const submitGate = new Promise<Response>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (method === "GET" && url === "/api/brands/1") return jsonResponse(200, BRAND_DETAIL);
+      if (method === "GET" && url.split("?")[0] === "/api/product-images") return jsonResponse(200, PRODUCT_IMAGES);
+      if (method === "POST" && url === "/api/brands/1/trends/5/ideas/0/image") {
+        attempts += 1;
+        if (attempts === 1) return submitGate;
+        return jsonResponse(202, { jobId: `m${attempts}`, user: { id: "u1" } });
+      }
+      if (url.startsWith("/api/image-jobs/")) {
+        if (attempts === 1) return jsonResponse(200, { status: "failed", error: "生成通道拥堵" });
+        return jsonResponse(200, {
+          status: "completed",
+          imageConcept: { title: "重试成功", imageUrl: "/api/generated-images/2/file?sig=x" },
+          generationId: 2,
+          persisted: true,
+        });
+      }
+      if (method === "GET" && url.split("?")[0] === "/api/history") return jsonResponse(200, { generations: [] });
+      if (method === "GET" && url.split("?")[0] === "/api/session") {
+        return jsonResponse(200, { user: { id: "u1", credits: 5 } });
+      }
+      throw new Error(`unhandled fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = makeRouter();
+    await router.push({ name: "generation", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
+    await router.isReady();
+    const wrapper = mount(GenerationView, { global: { plugins: [createPinia(), router] } });
+    await flushPromises();
+
+    await wrapper.find('[data-test="generate-moments"]').trigger("click");
+    // 票据消费（router.replace）为异步：冲刷后首个提交仍在途，队列状态可见。
+    await flushPromises();
+    expect(wrapper.find('[data-test="gen-status"]').text()).toContain("队列");
+    // 放行首个提交：任务失败并出现可恢复错误与重试按钮。
+    resolveSubmit(jsonResponse(202, { jobId: "m1", user: { id: "u1" } }));
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="gen-error"]').text()).toContain("生成通道拥堵");
+    expect(wrapper.find('[data-test="gen-retry"]').exists()).toBe(true);
+
+    await wrapper.find('[data-test="gen-retry"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-test="moments-result"]').text()).toContain("重试成功");
+  });
 });
