@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { onBeforeUnmount, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
-import { sendCode } from "../api";
+import { resetPassword, sendCode, sendResetPasswordCode } from "../api";
 import FeishuLoginButtons from "./FeishuLoginButtons.vue";
 
-type AuthMode = "login" | "register";
+type AuthMode = "login" | "register" | "reset";
 
 const props = defineProps<{ initialMode: AuthMode }>();
 const LOGO_SRC = "/assets/redbase-logo.png";
@@ -18,13 +18,37 @@ const submitting = ref(false);
 const sendingCode = ref(false);
 const errorMessage = ref("");
 const codeNotice = ref("");
+const resetSuccess = ref(false);
+const cooldownSeconds = ref(0);
+let cooldownTimer: ReturnType<typeof setInterval> | null = null;
 const loginForm = reactive({ phone: "", password: "" });
-const registerForm = reactive({ phone: "", name: "", password: "" });
+const registerForm = reactive({ phone: "", name: "", password: "", code: "" });
+const resetForm = reactive({ phone: "", code: "", password: "" });
+
+function startCooldown(seconds: number): void {
+  stopCooldown();
+  cooldownSeconds.value = Math.max(0, Math.floor(seconds));
+  if (cooldownSeconds.value <= 0) return;
+  cooldownTimer = setInterval(() => {
+    cooldownSeconds.value -= 1;
+    if (cooldownSeconds.value <= 0) stopCooldown();
+  }, 1000);
+}
+
+function stopCooldown(): void {
+  if (cooldownTimer !== null) {
+    clearInterval(cooldownTimer);
+    cooldownTimer = null;
+  }
+}
+
+onBeforeUnmount(stopCooldown);
 
 function setMode(mode: AuthMode): void {
   activeMode.value = mode;
   errorMessage.value = "";
   codeNotice.value = "";
+  resetSuccess.value = false;
 }
 
 function afterAuthTarget(): string {
@@ -64,6 +88,36 @@ async function handleLogin(): Promise<void> {
   }
 }
 
+async function handleSendCodeForRegister(): Promise<void> {
+  sendingCode.value = true;
+  errorMessage.value = "";
+  codeNotice.value = "";
+  try {
+    const data = await sendCode(registerForm.phone, "register");
+    codeNotice.value = data.demoCode ? `${data.message}（测试验证码：${data.demoCode}）` : data.message;
+    startCooldown(60);
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    sendingCode.value = false;
+  }
+}
+
+async function handleSendCodeForReset(): Promise<void> {
+  sendingCode.value = true;
+  errorMessage.value = "";
+  codeNotice.value = "";
+  try {
+    const data = await sendResetPasswordCode(resetForm.phone);
+    codeNotice.value = data.demoCode ? `${data.message}（测试验证码：${data.demoCode}）` : data.message;
+    startCooldown(60);
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    sendingCode.value = false;
+  }
+}
+
 async function handleRegister(): Promise<void> {
   submitting.value = true;
   errorMessage.value = "";
@@ -72,6 +126,7 @@ async function handleRegister(): Promise<void> {
       phone: registerForm.phone,
       name: registerForm.name,
       password: registerForm.password,
+      code: registerForm.code,
     });
     await refreshAuthUser();
     await goToWorkspace();
@@ -82,21 +137,19 @@ async function handleRegister(): Promise<void> {
   }
 }
 
-// The legacy register surface did not show a verification-code field because
-// the backend registration contract is phone + name + password. Keep the
-// existing dev-only send-code behavior available to automated callers without
-// changing that reference surface.
-async function handleSendCode(): Promise<void> {
-  sendingCode.value = true;
+async function handleResetPassword(): Promise<void> {
+  submitting.value = true;
   errorMessage.value = "";
   codeNotice.value = "";
   try {
-    const data = await sendCode(registerForm.phone);
-    codeNotice.value = data.demoCode ? `${data.message}（验证码：${data.demoCode}）` : data.message;
+    await resetPassword(resetForm.phone, resetForm.code, resetForm.password);
+    resetSuccess.value = true;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    setMode("login");
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
   } finally {
-    sendingCode.value = false;
+    submitting.value = false;
   }
 }
 
@@ -163,6 +216,29 @@ function close(): void {
               <span>昵称</span>
               <input v-model="registerForm.name" name="name" placeholder="请输入你的昵称" required />
             </label>
+            <div class="auth-code-row">
+              <label class="auth-code-field">
+                <span>验证码</span>
+                <input
+                  v-model="registerForm.code"
+                  name="code"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="6"
+                  placeholder="6 位验证码"
+                  autocomplete="one-time-code"
+                  required
+                />
+              </label>
+              <button
+                class="auth-code-btn"
+                type="button"
+                :disabled="sendingCode || cooldownSeconds > 0 || !/^1\d{10}$/.test(registerForm.phone)"
+                @click="handleSendCodeForRegister"
+              >
+                {{ cooldownSeconds > 0 ? `${cooldownSeconds}s` : sendingCode ? "发送中..." : "获取验证码" }}
+              </button>
+            </div>
             <label>
               <span>登录密码</span>
               <input
@@ -177,21 +253,10 @@ function close(): void {
             <button class="primary-btn auth-submit-btn" type="submit" :disabled="submitting">
               {{ submitting ? "注册中..." : "注册并进入工作台" }}
             </button>
-
-            <button
-              class="auth-code-compat"
-              type="button"
-              :disabled="sendingCode"
-              aria-hidden="true"
-              tabindex="-1"
-              @click="handleSendCode"
-            >
-              {{ sendingCode ? "发送中..." : "获取验证码" }}
-            </button>
-            <p v-if="codeNotice" class="code-notice auth-code-compat" role="status">{{ codeNotice }}</p>
+            <p v-if="codeNotice" class="code-notice" role="status">{{ codeNotice }}</p>
           </form>
 
-          <form v-else id="loginForm" class="auth-form" @submit.prevent="handleLogin">
+          <form v-else-if="activeMode === 'login'" id="loginForm" class="auth-form" @submit.prevent="handleLogin">
             <label>
               <span>手机号</span>
               <input v-model="loginForm.phone" name="phone" type="tel" placeholder="请输入手机号" autocomplete="tel" required />
@@ -207,11 +272,64 @@ function close(): void {
                 required
               />
             </label>
-            <div class="auth-helper">已注册账号可直接登录。</div>
+            <div class="auth-helper">
+              <span>已注册账号可直接登录。</span>
+              <button type="button" class="auth-forgot-link" @click="setMode('reset')">忘记密码？</button>
+            </div>
             <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
             <button class="primary-btn auth-submit-btn" type="submit" :disabled="submitting">
               {{ submitting ? "登录中..." : "登录 RedBase" }}
             </button>
+          </form>
+
+          <form v-else-if="activeMode === 'reset'" id="resetForm" class="auth-form" @submit.prevent="handleResetPassword">
+            <label>
+              <span>手机号</span>
+              <input v-model="resetForm.phone" name="phone" type="tel" placeholder="请输入注册手机号" autocomplete="tel" required />
+            </label>
+            <div class="auth-code-row">
+              <label class="auth-code-field">
+                <span>验证码</span>
+                <input
+                  v-model="resetForm.code"
+                  name="code"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="6"
+                  placeholder="6 位验证码"
+                  autocomplete="one-time-code"
+                  required
+                />
+              </label>
+              <button
+                class="auth-code-btn"
+                type="button"
+                :disabled="sendingCode || cooldownSeconds > 0 || !/^1\d{10}$/.test(resetForm.phone)"
+                @click="handleSendCodeForReset"
+              >
+                {{ cooldownSeconds > 0 ? `${cooldownSeconds}s` : sendingCode ? "发送中..." : "获取验证码" }}
+              </button>
+            </div>
+            <label>
+              <span>新密码</span>
+              <input
+                v-model="resetForm.password"
+                name="password"
+                type="password"
+                placeholder="至少 6 位新密码"
+                autocomplete="new-password"
+                required
+              />
+            </label>
+            <p v-if="codeNotice" class="code-notice" role="status">{{ codeNotice }}</p>
+            <p v-if="resetSuccess" class="form-success" role="status">密码已重置，请用新密码重新登录。</p>
+            <p v-if="errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>
+            <button class="primary-btn auth-submit-btn" type="submit" :disabled="submitting">
+              {{ submitting ? "重置中..." : "重置密码" }}
+            </button>
+            <div class="auth-helper">
+              <button type="button" class="auth-forgot-link" @click="setMode('login')">返回登录</button>
+            </div>
           </form>
 
           <p v-if="activeMode === 'register' && errorMessage" class="form-error" role="alert">{{ errorMessage }}</p>

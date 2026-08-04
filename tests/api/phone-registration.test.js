@@ -2,6 +2,7 @@ const { Readable } = require("node:stream");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+process.env.NODE_ENV = "test";
 process.env.REDBASE_DB_FILE = ":memory:";
 
 const { openDatabase } = require("../../src/server/db/connection");
@@ -46,18 +47,40 @@ function createRes() {
   };
 }
 
-test("phone registration always creates an external customer account", async () => {
+const appConfig = {
+  security: { cookieSecure: false },
+  sms: {
+    provider: "fake",
+    fakeAllowed: true,
+    pepper: "test-pepper",
+    codeTtlMs: 300000,
+    resendCooldownMs: 60000,
+    maxAttempts: 5,
+    limits: { phonePerHour: 5, phonePerDay: 10, ipPerHour: 20, ipPerDay: 100, globalPerDay: 1000 },
+  },
+};
+
+test("phone registration consumes a code and always creates an external customer account", async () => {
+  const codeRes = createRes();
+  await handleAuthRoutes(
+    { appConfig },
+    createJsonReq("/api/auth/send-code", { phone: "13912345678", purpose: "register" }),
+    codeRes,
+    "/api/auth/send-code",
+  );
+  assert.equal(codeRes.statusCode, 200);
+  assert.match(codeRes.body.demoCode, /^\d{6}$/);
+
   const res = createRes();
   const handled = await handleAuthRoutes(
-    {
-      appConfig: { security: { cookieSecure: false } },
-    },
+    { appConfig },
     createJsonReq("/api/auth/register", {
       phone: "13912345678",
       name: "外部客户",
       password: "secret123",
       accountType: "yimei",
       department: "客户一部",
+      code: codeRes.body.demoCode,
     }),
     res,
     "/api/auth/register",

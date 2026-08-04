@@ -22,6 +22,7 @@ function makeRouter() {
       { path: "/excellent", name: "excellent", component: RouteStub },
       { path: "/generation", name: "generation", component: RouteStub },
       { path: "/history", name: "history", component: RouteStub },
+      { path: "/billing", name: "billing", component: RouteStub },
       { path: "/login", name: "login", component: RouteStub },
     ],
   });
@@ -32,10 +33,20 @@ describe("legacy workspace visual shell", () => {
     localStorage.clear();
     const pinia = createPinia();
     setActivePinia(pinia);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ plans: [], fakeSettle: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   async function mountWorkspace(isAdmin = true) {
@@ -152,5 +163,29 @@ describe("legacy workspace visual shell", () => {
     expect(ExcellentViewSource).toContain('data-test="analysis-ready"');
     expect(ExcellentViewSource).toContain('data-test="generate-fusion"');
     expect(ExcellentViewSource).toContain('data-test="remix-submit"');
+  });
+
+  it("hides the recharge navigation when the backend returns no plans", async () => {
+    const { wrapper } = await mountWorkspace();
+    const labels = wrapper.findAll(".workspace-nav .sidebar-item-label").map((link) => link.text());
+    expect(labels).not.toContain("积分充值");
+  });
+
+  it("shows the recharge navigation when the backend returns plans", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            plans: [{ id: "p1", name: "测试套餐", credits: 10, amountYuan: "0.01" }],
+            fakeSettle: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const { wrapper } = await mountWorkspace();
+    const labels = wrapper.findAll(".workspace-nav .sidebar-item-label").map((link) => link.text());
+    expect(labels).toContain("积分充值");
   });
 });

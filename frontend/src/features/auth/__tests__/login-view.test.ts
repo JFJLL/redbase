@@ -127,4 +127,25 @@ describe("LoginView", () => {
     expect(feishu.exists()).toBe(true);
     expect(feishu.text()).toContain("使用飞书登录");
   });
+
+  it("switches to the reset-password form and sends a reset code", async () => {
+    const fetchMock = stubFetch({
+      "GET /api/auth/feishu/apps": () => jsonResponse(200, { apps: [] }),
+      "POST /api/auth/reset-password/send-code": () =>
+        jsonResponse(200, { message: "如果该手机号已注册，验证码已发送。", demoCode: "135790" }),
+    });
+    const { wrapper } = await mountAt("/login");
+
+    await wrapper.find(".auth-forgot-link").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("#resetForm").exists()).toBe(true);
+    await wrapper.find("#resetForm input[name=phone]").setValue("13800000000");
+    await wrapper.find("#resetForm .auth-code-btn").trigger("click");
+    await flushPromises();
+
+    const call = fetchMock.mock.calls.find(([url]) => String(url) === "/api/auth/reset-password/send-code");
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({ phone: "13800000000" });
+    expect(wrapper.find("#resetForm .code-notice").text()).toContain("测试验证码：135790");
+  });
 });

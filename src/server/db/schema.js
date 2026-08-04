@@ -1,4 +1,5 @@
 const { getDbProxy } = require("./connection");
+const { applyVersionedMigrations } = require("./migrations");
 
 const db = getDbProxy();
 
@@ -267,6 +268,7 @@ function initializeDatabaseSchema() {
       FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
     );
   `);
+  applyVersionedMigrations();
 }
 
 function ensureDatabaseIndexes() {

@@ -88,7 +88,52 @@
   },
   "security": {
     "assetSigningSecret": "",
-    "cookieSecure": false
+    "cookieSecure": false,
+    "trustedProxies": []
+  },
+  "sms": {
+    "provider": "disabled",
+    "accessKeyId": "",
+    "accessKeySecret": "",
+    "signName": "",
+    "templateCode": "",
+    "endpoint": "dysmsapi.aliyuncs.com",
+    "pepper": "",
+    "codeTtlMs": 300000,
+    "resendCooldownMs": 60000,
+    "maxAttempts": 5,
+    "limits": {
+      "phonePerHour": 5,
+      "phonePerDay": 10,
+      "ipPerHour": 20,
+      "ipPerDay": 100,
+      "globalPerDay": 1000
+    },
+    "fakeAllowed": false
+  },
+  "alipay": {
+    "enabled": false,
+    "provider": "disabled",
+    "appId": "",
+    "privateKey": "",
+    "alipayPublicKey": "",
+    "sellerId": "",
+    "gateway": "https://openapi.alipay.com",
+    "timeoutMs": 5000,
+    "returnUrl": "",
+    "notifyUrl": "",
+    "keyType": "PKCS8",
+    "fakeAllowed": false
+  },
+  "billing": {
+    "rechargePlans": [
+      {
+        "id": "test-10-credits",
+        "name": "测试套餐 10 积分",
+        "credits": 10,
+        "amountYuan": "0.01"
+      }
+    ]
   },
   "cors": {
     "origins": ["http://127.0.0.1:3013"],
