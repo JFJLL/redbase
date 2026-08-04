@@ -19,11 +19,11 @@ const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { rollbackToBackup } = require("./build-frontend.cjs");
+const { SMOKE_PATHS, waitForSmoke } = require("./deploy-smoke.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(ROOT, "dist");
 const TARGET_DIR = path.join(DIST_DIR, "public");
-const SMOKE_PATHS = ["/api/health", "/", "/app/", "/admin/"];
 
 function defaultExec(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -37,20 +37,7 @@ function defaultExec(command, args, options = {}) {
 }
 
 async function defaultSmoke(appUrl) {
-  let healthy = true;
-  for (const smokePath of SMOKE_PATHS) {
-    let code = 0;
-    try {
-      const response = await fetch(appUrl + smokePath);
-      await response.arrayBuffer();
-      code = response.status;
-    } catch (error) {
-      code = 0;
-    }
-    console.log(`[deploy-rollback] smoke ${smokePath} -> ${code}`);
-    if (code !== 200) healthy = false;
-  }
-  return healthy;
+  return waitForSmoke(appUrl, { label: "[deploy-rollback]" });
 }
 
 // Step 1 only: bring the served frontend back to the pre-deploy state.

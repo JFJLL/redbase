@@ -161,3 +161,12 @@ test("deploy pipeline never mutates source SHA on test/build/budget failures (ro
 test("smoke path list matches the four required routes", () => {
   assert.deepEqual(SMOKE_PATHS, ["/api/health", "/", "/app/", "/admin/"]);
 });
+
+test("deploy pipeline polls readiness and records the last healthy deployed SHA", () => {
+  const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "deploy-server.sh"), "utf8");
+  assert.match(script, /deploy-smoke\.cjs/);
+  assert.doesNotMatch(script, /sleep 2/);
+  assert.match(script, /\.deployment\/current-sha/);
+  assert.match(script, /OLD_SHA=.*DEPLOYED_SHA/);
+  assert.match(script, /git rev-parse HEAD.*DEPLOYED_SHA_FILE/s);
+});

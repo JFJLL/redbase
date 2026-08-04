@@ -15,6 +15,7 @@ set -euo pipefail
 APP_URL="${REDBASE_BASE_URL:-http://127.0.0.1:3013}"
 CANDIDATE_DIR="dist/.public-candidate-$$"
 BACKUP_DIR="dist/.public-previous"
+DEPLOYED_SHA_FILE="${REDBASE_DEPLOYED_SHA_FILE:-.deployment/current-sha}"
 PROMOTED=0
 
 cleanup() {
@@ -26,27 +27,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-smoke_all() {
-  local failed=0 path code
-  for path in /api/health / /app/ /admin/; do
-    code=$(curl -s -o /dev/null -w "%{http_code}" "${APP_URL}${path}")
-    echo "[deploy] smoke ${path} -> ${code}"
-    if [ "${code}" != "200" ]; then
-      failed=1
-    fi
-  done
-  return "${failed}"
-}
-
 echo "[deploy] 1/9 checking clean worktree, switching to master"
 if [ -n "$(git status --short)" ]; then
   echo "[deploy] worktree is not clean; aborting." >&2
   exit 1
 fi
 git switch master
-# OLD_SHA is captured BEFORE pulling: a failed smoke check rolls sources,
-# dependencies and frontend artifacts all back to this commit together.
-OLD_SHA="$(git rev-parse HEAD)"
+# Prefer the last version that completed post-restart smoke checks. The source
+# checkout may already be ahead after a previous pre-promotion failure, so HEAD
+# alone is not proof of what PM2 is actually serving.
+SOURCE_SHA="$(git rev-parse HEAD)"
+DEPLOYED_SHA=""
+if [ -f "${DEPLOYED_SHA_FILE}" ]; then
+  CANDIDATE_SHA="$(tr -d '[:space:]' < "${DEPLOYED_SHA_FILE}")"
+  if [[ "${CANDIDATE_SHA}" =~ ^[0-9a-fA-F]{7,40}$ ]] && git cat-file -e "${CANDIDATE_SHA}^{commit}" 2>/dev/null; then
+    DEPLOYED_SHA="${CANDIDATE_SHA}"
+  else
+    echo "[deploy] ignoring invalid deployed SHA marker: ${DEPLOYED_SHA_FILE}" >&2
+  fi
+fi
+OLD_SHA="${DEPLOYED_SHA:-${SOURCE_SHA}}"
 echo "[deploy] OLD_SHA=${OLD_SHA}"
 git pull --ff-only origin master
 
@@ -76,8 +76,10 @@ echo "[deploy] 7/9 restarting service"
 pm2 restart redbase
 
 echo "[deploy] 8/9 smoke checks"
-sleep 2
-if smoke_all; then
+if node scripts/deploy-smoke.cjs --app-url "${APP_URL}" --attempts 30 --delay-ms 1000 --label "[deploy]"; then
+  mkdir -p "$(dirname "${DEPLOYED_SHA_FILE}")"
+  git rev-parse HEAD > "${DEPLOYED_SHA_FILE}.tmp"
+  mv "${DEPLOYED_SHA_FILE}.tmp" "${DEPLOYED_SHA_FILE}"
   echo "[deploy] done"
   exit 0
 fi
@@ -89,6 +91,9 @@ echo "[deploy] 9/9 smoke checks failed — full rollback to OLD_SHA ${OLD_SHA}" 
 # while the new backend keeps running is forbidden.
 node scripts/deploy-rollback.cjs --old-sha "${OLD_SHA}" --backup "${BACKUP_DIR}" --app-url "${APP_URL}" && ROLLBACK_STATUS=0 || ROLLBACK_STATUS=$?
 if [ "${ROLLBACK_STATUS}" -eq 0 ]; then
+  mkdir -p "$(dirname "${DEPLOYED_SHA_FILE}")"
+  printf '%s\n' "${OLD_SHA}" > "${DEPLOYED_SHA_FILE}.tmp"
+  mv "${DEPLOYED_SHA_FILE}.tmp" "${DEPLOYED_SHA_FILE}"
   echo "[deploy] rollback verified healthy on the old version; the new build was rejected. Investigate before redeploying." >&2
 else
   echo "[deploy] rollback completed but the old version smoke checks are STILL failing; manual intervention required." >&2
