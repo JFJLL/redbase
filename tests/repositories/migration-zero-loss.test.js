@@ -1,0 +1,103 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "redbase-migration-zero-loss-"));
+const dbFile = path.join(tempDir, "redbase.sqlite");
+process.env.REDBASE_DB_FILE = dbFile;
+
+const { openDatabase, getDbProxy } = require("../../src/server/db/connection");
+const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
+const { ensureStore } = require("../../src/server/db/snapshot-store");
+
+openDatabase();
+const db = getDbProxy();
+
+// Simulate a pre-feature database: full current base schema, but without the
+// versioned feature tables (schema_migrations / sms / payment).
+initializeDatabaseSchema();
+ensureDatabaseIndexes();
+db.exec("DROP TABLE IF EXISTS payment_orders");
+db.exec("DROP TABLE IF EXISTS sms_send_rate_limits");
+db.exec("DROP TABLE IF EXISTS sms_verification_challenges");
+db.exec("DROP TABLE IF EXISTS schema_migrations");
+
+const seededUsers = [
+  [1, "存量用户甲", "13900000001", "hash-1", "yimei", "其他", 50, "2026-01-01T00:00:00.000Z"],
+  [2, "存量用户乙", "13900000002", "hash-2", "customer", "", 5, "2026-02-01T00:00:00.000Z"],
+  [3, "存量用户丙", "13900000003", "hash-3", "customer", "", 12, "2026-03-01T00:00:00.000Z"],
+];
+const seededSessions = [
+  ["session-1", 1, "2026-01-01T00:00:00.000Z"],
+  ["session-2", 1, "2026-01-02T00:00:00.000Z"],
+  ["session-3", 2, "2026-02-01T00:00:00.000Z"],
+];
+const seededEvents = [
+  [101, 1, "generation", "内容生成", -1, 1, "2026-01-01T01:00:00.000Z", null, "", 0, "", 0, "", "", 0, "", "摘要", "{}"],
+  [102, 2, "manual", "手动调整", 10, 0, "2026-02-01T01:00:00.000Z", 1, "管理员", 0, "", 0, "", "", 0, "", "充值", "{\"note\":\"old\"}"],
+];
+
+for (const row of seededUsers) {
+  db.prepare("INSERT INTO users (id, name, phone, password, account_type, department, credits, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(...row);
+}
+for (const row of seededSessions) {
+  db.prepare("INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)").run(...row);
+}
+for (const row of seededEvents) {
+  db.prepare(`
+    INSERT INTO credit_events (
+      id, user_id, action_type, action_label, credit_delta, credit_cost, created_at,
+      admin_user_id, admin_user_name, brand_id, brand_name, trend_id, trend_title,
+      idea_title, generation_id, channel_label, summary, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(...row);
+}
+db.prepare("INSERT INTO verification_codes (phone, code, expires_at) VALUES ('13900000001', '123456', 9999999999999)").run();
+db.prepare("INSERT INTO counters (name, value) VALUES ('nextUserId', 4)").run();
+db.prepare("INSERT INTO counters (name, value) VALUES ('nextCreditEventId', 103)").run();
+
+function snapshot(table, columns, orderBy) {
+  return db.prepare(`SELECT ${columns} FROM ${table} ORDER BY ${orderBy}`).all();
+}
+
+const usersBefore = snapshot("users", "id, name, phone, password, account_type, department, credits, created_at", "id");
+const sessionsBefore = snapshot("sessions", "token, user_id, created_at", "token");
+const eventsBefore = snapshot("credit_events", "id, user_id, action_type, action_label, credit_delta, credit_cost, created_at, admin_user_id, admin_user_name, brand_id, brand_name, trend_id, trend_title, idea_title, generation_id, channel_label, summary, payload_json", "id");
+
+test("versioned migrations preserve users/sessions/credit_events exactly and clear legacy plaintext codes", async () => {
+  await ensureStore();
+  await ensureStore(); // idempotent second run
+
+  assert.deepEqual(
+    snapshot("users", "id, name, phone, password, account_type, department, credits, created_at", "id"),
+    usersBefore,
+  );
+  assert.deepEqual(
+    snapshot("sessions", "token, user_id, created_at", "token"),
+    sessionsBefore,
+  );
+  assert.deepEqual(
+    snapshot("credit_events", "id, user_id, action_type, action_label, credit_delta, credit_cost, created_at, admin_user_id, admin_user_name, brand_id, brand_name, trend_id, trend_title, idea_title, generation_id, channel_label, summary, payload_json", "id"),
+    eventsBefore,
+  );
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM verification_codes").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='verification_codes'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='sms_verification_challenges'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='payment_orders'").get().count, 1);
+  assert.deepEqual(
+    db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
+    [1, 2, 3],
+  );
+});
+
+test("the backup copy stays byte-identical and untouched", () => {
+  const backupPath = path.join(tempDir, "redbase-backup.sqlite");
+  fs.copyFileSync(dbFile, backupPath);
+  const originalStat = fs.statSync(dbFile);
+  const backupStat = fs.statSync(backupPath);
+  assert.equal(backupStat.size, originalStat.size);
+  assert.ok(fs.readFileSync(backupPath).length > 0);
+});

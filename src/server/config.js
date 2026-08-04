@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeRechargePlan } = require("./billing/money");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const PROJECT_ENV_FILE = path.join(ROOT, ".env");
@@ -110,6 +111,44 @@ const DEFAULT_APP_CONFIG = {
   },
   security: {
     assetSigningSecret: "",
+    trustedProxies: [],
+  },
+  sms: {
+    provider: "disabled",
+    accessKeyId: "",
+    accessKeySecret: "",
+    signName: "",
+    templateCode: "",
+    endpoint: "dysmsapi.aliyuncs.com",
+    pepper: "",
+    codeTtlMs: 5 * 60 * 1000,
+    resendCooldownMs: 60 * 1000,
+    maxAttempts: 5,
+    limits: {
+      phonePerHour: 5,
+      phonePerDay: 10,
+      ipPerHour: 20,
+      ipPerDay: 100,
+      globalPerDay: 1000,
+    },
+    fakeAllowed: false,
+  },
+  alipay: {
+    enabled: false,
+    provider: "disabled",
+    appId: "",
+    privateKey: "",
+    alipayPublicKey: "",
+    sellerId: "",
+    gateway: "https://openapi.alipay.com",
+    timeoutMs: 5000,
+    returnUrl: "",
+    notifyUrl: "",
+    keyType: "PKCS8",
+    fakeAllowed: false,
+  },
+  billing: {
+    rechargePlans: [],
   },
   pgy: {
     enabled: false,
@@ -255,6 +294,22 @@ function readEnvValueFile(filePath, keyName) {
   return lines.length === 1 && !raw.includes("=") ? raw : "";
 }
 
+function parseRechargePlans(envValue, localValue) {
+  if (envValue) {
+    try {
+      const parsed = JSON.parse(envValue);
+      if (Array.isArray(parsed)) {
+        return parsed.map(normalizeRechargePlan).filter(Boolean);
+      }
+    } catch (error) {
+      // Fall through to local config on malformed env JSON.
+    }
+  }
+  return (Array.isArray(localValue) ? localValue : [])
+    .map(normalizeRechargePlan)
+    .filter(Boolean);
+}
+
 function loadAppConfig() {
   let localConfig = {};
 
@@ -304,6 +359,9 @@ function loadAppConfig() {
     .filter(Boolean)
     .filter((value, index, all) => all.indexOf(value) === index);
   const anySearchApiKey = anySearchApiKeys[0] || "";
+  const smsProviderName = String(process.env.SMS_PROVIDER || merged.sms?.provider || "disabled").trim().toLowerCase();
+  const alipayProviderName = String(process.env.ALIPAY_PROVIDER || merged.alipay?.provider || "disabled").trim().toLowerCase();
+  const rechargePlans = parseRechargePlans(process.env.RECHARGE_PLANS_JSON, merged.billing?.rechargePlans);
 
   return {
     assetStorage: resolveAssetStorageConfig(localConfig),
@@ -419,10 +477,48 @@ function loadAppConfig() {
     },
     security: {
       assetSigningSecret: String(process.env.ASSET_SIGNING_SECRET || merged.security?.assetSigningSecret || "").trim(),
+      trustedProxies: parseListConfig(process.env.TRUSTED_PROXIES, merged.security?.trustedProxies),
       cookieSecure: parseBooleanConfig(
         process.env.COOKIE_SECURE,
         parseBooleanConfig(merged.security?.cookieSecure, process.env.NODE_ENV === "production"),
       ),
+    },
+    sms: {
+      provider: smsProviderName,
+      accessKeyId: String(process.env.SMS_ALIYUN_ACCESS_KEY_ID || merged.sms?.accessKeyId || "").trim(),
+      accessKeySecret: String(process.env.SMS_ALIYUN_ACCESS_KEY_SECRET || merged.sms?.accessKeySecret || "").trim(),
+      signName: String(process.env.SMS_SIGN_NAME || merged.sms?.signName || "").trim(),
+      templateCode: String(process.env.SMS_TEMPLATE_CODE || merged.sms?.templateCode || "").trim(),
+      endpoint: String(process.env.SMS_ENDPOINT || merged.sms?.endpoint || "dysmsapi.aliyuncs.com").trim(),
+      pepper: String(process.env.SMS_PEPPER || merged.sms?.pepper || "").trim(),
+      codeTtlMs: Number(process.env.SMS_CODE_TTL_MS || merged.sms?.codeTtlMs || 5 * 60 * 1000),
+      resendCooldownMs: Number(process.env.SMS_RESEND_COOLDOWN_MS || merged.sms?.resendCooldownMs || 60 * 1000),
+      maxAttempts: Number(process.env.SMS_MAX_ATTEMPTS || merged.sms?.maxAttempts || 5),
+      limits: {
+        phonePerHour: Number(process.env.SMS_LIMIT_PHONE_PER_HOUR || merged.sms?.limits?.phonePerHour || 5),
+        phonePerDay: Number(process.env.SMS_LIMIT_PHONE_PER_DAY || merged.sms?.limits?.phonePerDay || 10),
+        ipPerHour: Number(process.env.SMS_LIMIT_IP_PER_HOUR || merged.sms?.limits?.ipPerHour || 20),
+        ipPerDay: Number(process.env.SMS_LIMIT_IP_PER_DAY || merged.sms?.limits?.ipPerDay || 100),
+        globalPerDay: Number(process.env.SMS_LIMIT_GLOBAL_PER_DAY || merged.sms?.limits?.globalPerDay || 1000),
+      },
+      fakeAllowed: parseBooleanConfig(process.env.SMS_FAKE_ALLOWED, parseBooleanConfig(merged.sms?.fakeAllowed, false)),
+    },
+    alipay: {
+      enabled: parseBooleanConfig(process.env.ALIPAY_ENABLED, parseBooleanConfig(merged.alipay?.enabled, false)),
+      provider: alipayProviderName,
+      appId: String(process.env.ALIPAY_APP_ID || merged.alipay?.appId || "").trim(),
+      privateKey: String(process.env.ALIPAY_PRIVATE_KEY || merged.alipay?.privateKey || "").trim(),
+      alipayPublicKey: String(process.env.ALIPAY_PUBLIC_KEY || merged.alipay?.alipayPublicKey || "").trim(),
+      sellerId: String(process.env.ALIPAY_SELLER_ID || merged.alipay?.sellerId || "").trim(),
+      gateway: String(process.env.ALIPAY_GATEWAY || merged.alipay?.gateway || "https://openapi.alipay.com").trim(),
+      timeoutMs: Number(process.env.ALIPAY_TIMEOUT_MS || merged.alipay?.timeoutMs || 5000),
+      returnUrl: String(process.env.ALIPAY_RETURN_URL || merged.alipay?.returnUrl || "").trim(),
+      notifyUrl: String(process.env.ALIPAY_NOTIFY_URL || merged.alipay?.notifyUrl || "").trim(),
+      keyType: String(process.env.ALIPAY_KEY_TYPE || merged.alipay?.keyType || "PKCS8").trim().toUpperCase(),
+      fakeAllowed: parseBooleanConfig(process.env.ALIPAY_FAKE_ALLOWED, parseBooleanConfig(merged.alipay?.fakeAllowed, false)),
+    },
+    billing: {
+      rechargePlans,
     },
     pgy: {
       enabled: parseBooleanConfig(process.env.PGY_CONTENT_SQUARE_ENABLED, parseBooleanConfig(merged.pgy?.enabled, hasPgyCookieSource)),
@@ -519,4 +615,5 @@ module.exports = {
   normalizeOssPrefix,
   resolveAssetStorageConfig,
   loadAppConfig,
+  parseRechargePlans,
 };

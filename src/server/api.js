@@ -9,6 +9,7 @@ const { handleBrandRoutes } = require("./api/brand-routes");
 const { handleTrendRoutes } = require("./api/trend-routes");
 const { handleImageGenerationRoutes } = require("./api/image-generation-routes");
 const { handleExcellentContentRoutes } = require("./api/excellent-content-routes");
+const { handlePaymentRoutes } = require("./api/payment-routes");
 const imageStore = require("./assets/image-store");
 const { createGeneratedAssetStorage } = require("./assets/generated-asset-storage");
 const generationDeletionService = require("./assets/generation-deletion-service");
@@ -24,6 +25,7 @@ const routeHandlers = [
   handleTrendRoutes,
   handleExcellentContentRoutes,
   handleImageGenerationRoutes,
+  handlePaymentRoutes,
 ];
 
 function createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner }) {

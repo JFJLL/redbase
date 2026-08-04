@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
+import { fetchRechargePlans } from "@/features/billing/api";
 
 const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
 const LOGO_SRC = "/assets/redbase-logo.png";
@@ -9,6 +10,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
+const billingAvailable = ref(false);
 
 const navItems = [
   { name: "home", icon: "首", label: "首页" },
@@ -19,7 +21,12 @@ const navItems = [
   { name: "excellent", icon: "优", label: "优秀内容" },
   { name: "generation", icon: "生", label: "生图任务" },
   { name: "history", icon: "历", label: "历史生成" },
+  { name: "billing", icon: "充", label: "积分充值" },
 ] as const;
+
+const visibleNavItems = computed(() =>
+  navItems.filter((item) => item.name !== "billing" || billingAvailable.value),
+);
 
 const displayName = computed(() => String(auth.user?.nickname || auth.user?.name || auth.user?.phone || "RedBase User"));
 const displayPhone = computed(() => String(auth.user?.phone || ""));
@@ -36,6 +43,13 @@ const accountExpiry = computed(() => getAccountPackageExpiry(accountUser.value))
 onMounted(() => {
   sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
   document.addEventListener("keydown", handleDocumentKeydown);
+  fetchRechargePlans()
+    .then((data) => {
+      billingAvailable.value = data.plans.length > 0;
+    })
+    .catch(() => {
+      billingAvailable.value = false;
+    });
 });
 
 onBeforeUnmount(() => {
@@ -80,7 +94,7 @@ async function handleLogout() {
         </RouterLink>
         <nav class="workspace-nav" aria-label="工作台导航">
           <RouterLink
-            v-for="item in navItems"
+            v-for="item in visibleNavItems"
             :key="item.name"
             :to="{ name: item.name }"
             class="sidebar-item"

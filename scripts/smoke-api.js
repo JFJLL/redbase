@@ -46,6 +46,10 @@ async function main() {
   const session = await request("/api/session", { cookie });
   assert(session.response.status === 200, `session failed: ${session.response.status}`);
 
+  const rechargePlans = await request("/api/billing/recharge-plans", { cookie });
+  assert(rechargePlans.response.status === 200, `recharge plans failed: ${rechargePlans.response.status}`);
+  assert(Array.isArray(rechargePlans.body.plans), "recharge plans must be an array");
+
   const brandName = `Smoke API ${Date.now()}`;
   const brand = await request("/api/brands", {
     method: "POST",
@@ -97,6 +101,7 @@ async function main() {
     ok: true,
     baseUrl: BASE_URL,
     userId: session.body.user?.id,
+    rechargePlans: rechargePlans.body.plans.length,
     brandId,
     productImageId,
     analysis: analysisStatus,

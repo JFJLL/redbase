@@ -66,6 +66,11 @@ export function createAppRouter(): Router {
             name: "history",
             component: () => import("@/features/history/views/HistoryView.vue"),
           },
+          {
+            path: "billing",
+            name: "billing",
+            component: () => import("@/features/billing/views/RechargeView.vue"),
+          },
         ],
       },
       {
