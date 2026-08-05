@@ -782,6 +782,15 @@ function goToIdeas(trend: TrendItem): void {
   padding: 10px 12px;
 }
 
+/* 旧版 styles.css:1165 提示卡契约：顶部说明完整位于卡内，正常换行、留白。 */
+.analysis-summary {
+  min-width: 0;
+  margin-bottom: 22px;
+  line-height: 1.8;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
 .trend-cards {
   display: flex;
   flex-direction: column;

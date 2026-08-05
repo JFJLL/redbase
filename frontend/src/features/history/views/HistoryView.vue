@@ -267,99 +267,101 @@ onUnmounted(() => {
       }}
     </div>
 
-    <article v-for="item in visibleHistory" :key="item.id" class="history-card" data-test="history-card">
-      <div class="history-card-top">
-        <div>
-          <div class="history-card-meta">
-            <span class="brand-tag">{{ item.channelLabel }}</span>
-            <span class="brand-tag">{{ typeLabel(item) }}</span>
-            <span v-if="aspectRatioOf(item)" class="brand-tag">{{ aspectRatioOf(item) }}</span>
-            <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
-            <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
-              已改图 {{ (item.payload?.editHistory || []).length }} 次
-            </span>
+    <div class="history-generate-list" data-test="history-generate-list">
+      <article v-for="item in visibleHistory" :key="item.id" class="history-card" data-test="history-card">
+        <div class="history-card-top">
+          <div>
+            <div class="history-card-meta">
+              <span class="brand-tag">{{ item.channelLabel }}</span>
+              <span class="brand-tag">{{ typeLabel(item) }}</span>
+              <span v-if="aspectRatioOf(item)" class="brand-tag">{{ aspectRatioOf(item) }}</span>
+              <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
+              <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
+                已改图 {{ (item.payload?.editHistory || []).length }} 次
+              </span>
+            </div>
+            <h3>{{ item.cardTitle }}</h3>
+            <div class="history-card-ref">{{ item.brandName }} · {{ item.trendTitle }}</div>
+            <div class="history-card-ref">{{ item.ideaTitle }}</div>
           </div>
-          <h3>{{ item.cardTitle }}</h3>
-          <div class="history-card-ref">{{ item.brandName }} · {{ item.trendTitle }}</div>
-          <div class="history-card-ref">{{ item.ideaTitle }}</div>
+          <div class="history-card-actions">
+            <button
+              v-if="getGenerationPrimaryImageUrl(item)"
+              type="button"
+              class="secondary-btn"
+              @click="openDetail(item)"
+            >
+              查看
+            </button>
+            <button type="button" class="secondary-btn" data-test="history-delete" @click="removeItem(item.id)">删除</button>
+          </div>
         </div>
-        <div class="history-card-actions">
-          <button
-            v-if="getGenerationPrimaryImageUrl(item)"
-            type="button"
-            class="secondary-btn"
-            @click="openDetail(item)"
-          >
-            查看
-          </button>
-          <button type="button" class="secondary-btn" data-test="history-delete" @click="removeItem(item.id)">删除</button>
+
+        <div v-if="item.type === 'moments'" class="history-copy">
+          <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
+          <p v-if="item.payload?.visualDirection"><strong>视觉方向：</strong>{{ item.payload?.visualDirection }}</p>
         </div>
-      </div>
+        <div v-else-if="item.type === 'wechat'" class="history-copy">
+          <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
+          <p v-if="item.payload?.intro"><strong>文章导语：</strong>{{ item.payload?.intro }}</p>
+        </div>
+        <div v-else class="history-copy">
+          <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
+          <p v-if="item.payload?.publishCaption"><strong>发布文案：</strong>{{ item.payload?.publishCaption }}</p>
+        </div>
 
-      <div v-if="item.type === 'moments'" class="history-copy">
-        <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
-        <p v-if="item.payload?.visualDirection"><strong>视觉方向：</strong>{{ item.payload?.visualDirection }}</p>
-      </div>
-      <div v-else-if="item.type === 'wechat'" class="history-copy">
-        <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
-        <p v-if="item.payload?.intro"><strong>文章导语：</strong>{{ item.payload?.intro }}</p>
-      </div>
-      <div v-else class="history-copy">
-        <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
-        <p v-if="item.payload?.publishCaption"><strong>发布文案：</strong>{{ item.payload?.publishCaption }}</p>
-      </div>
-
-      <div v-if="item.type === 'xhsCarousel'" class="history-grid">
-        <div v-for="(slide, index) in slideImages(item)" :key="index" class="history-slide-cell">
-          <div v-if="isImageFailed(slide.src)" class="history-image-error" data-test="history-image-error">
+        <div v-if="item.type === 'xhsCarousel'" class="history-grid">
+          <div v-for="(slide, index) in slideImages(item)" :key="index" class="history-slide-cell">
+            <div v-if="isImageFailed(slide.src)" class="history-image-error" data-test="history-image-error">
+              <span>图片加载失败</span>
+              <button
+                type="button"
+                class="secondary-btn"
+                data-test="history-image-retry"
+                @click="retryImage(slide.src)"
+              >
+                重试
+              </button>
+            </div>
+            <img
+              v-else
+              :src="slide.src"
+              :alt="slide.title"
+              loading="lazy"
+              decoding="async"
+              @click="openDetail(item, slide.src)"
+              @error="onHistoryImageError(slide.src)"
+            />
+          </div>
+        </div>
+        <button
+          v-else-if="previewSrc(item)"
+          type="button"
+          class="history-preview"
+          @click="openDetail(item)"
+        >
+          <div v-if="isImageFailed(previewSrc(item))" class="history-image-error" data-test="history-image-error">
             <span>图片加载失败</span>
             <button
               type="button"
               class="secondary-btn"
               data-test="history-image-retry"
-              @click="retryImage(slide.src)"
+              @click.stop="retryImage(previewSrc(item))"
             >
               重试
             </button>
           </div>
           <img
             v-else
-            :src="slide.src"
-            :alt="slide.title"
+            :src="previewSrc(item)"
+            :alt="item.cardTitle || ''"
             loading="lazy"
             decoding="async"
-            @click="openDetail(item, slide.src)"
-            @error="onHistoryImageError(slide.src)"
+            @error="onHistoryImageError(previewSrc(item))"
           />
-        </div>
-      </div>
-      <button
-        v-else-if="previewSrc(item)"
-        type="button"
-        class="history-preview"
-        @click="openDetail(item)"
-      >
-        <div v-if="isImageFailed(previewSrc(item))" class="history-image-error" data-test="history-image-error">
-          <span>图片加载失败</span>
-          <button
-            type="button"
-            class="secondary-btn"
-            data-test="history-image-retry"
-            @click.stop="retryImage(previewSrc(item))"
-          >
-            重试
-          </button>
-        </div>
-        <img
-          v-else
-          :src="previewSrc(item)"
-          :alt="item.cardTitle || ''"
-          loading="lazy"
-          decoding="async"
-          @error="onHistoryImageError(previewSrc(item))"
-        />
-      </button>
-    </article>
+        </button>
+      </article>
+    </div>
 
     <div v-if="detailItem" class="history-modal" @click.self="closeDetail()">
       <div class="history-modal-body">
@@ -515,15 +517,15 @@ onUnmounted(() => {
 
 .history-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .history-grid img {
   display: block;
   width: 100%;
-  aspect-ratio: 3 / 4;
-  object-fit: contain;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   cursor: pointer;
@@ -559,9 +561,9 @@ onUnmounted(() => {
 
 .history-preview img {
   display: block;
-  width: min(100%, 240px);
-  aspect-ratio: 3 / 4;
-  object-fit: contain;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
 }
@@ -609,6 +611,40 @@ onUnmounted(() => {
 .history-view {
   gap: 0;
   color: var(--workspace-text);
+}
+
+/* 旧版 styles.css:773 历史列表两列网格；卡内标题/引用/正文按行数截断。 */
+.history-generate-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--workspace-grid-gap);
+  align-items: start;
+}
+
+.history-card {
+  min-height: 0;
+  max-height: 680px;
+}
+
+.history-card-top h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.history-card-ref {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.history-copy p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .history-view .panel-header {
@@ -865,6 +901,10 @@ onUnmounted(() => {
   .history-filters {
     grid-template-columns: minmax(0, 1fr);
     padding: 12px;
+  }
+
+  .history-generate-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .history-filter-search {

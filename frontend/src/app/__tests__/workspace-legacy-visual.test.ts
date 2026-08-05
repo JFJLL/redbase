@@ -4,7 +4,8 @@ import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import WorkspaceShell from "@/app/views/WorkspaceShell.vue";
 import WorkspaceHomeView from "@/app/views/WorkspaceHomeView.vue";
-import GenerationViewSource from "@/features/generation/views/GenerationView.vue?raw";
+import IdeaGenerationDialogSource from "@/features/generation/components/IdeaGenerationDialog.vue?raw";
+import IdeasViewSource from "@/features/ideas/views/IdeasView.vue?raw";
 import ExcellentViewSource from "@/features/excellent/views/ExcellentView.vue?raw";
 import { useAuthStore } from "@/shared/stores/auth";
 
@@ -91,7 +92,6 @@ describe("legacy workspace visual shell", () => {
       "趋势分析",
       "内容选题",
       "优秀内容",
-      "生图任务",
       "历史生成",
     ]);
     expect(links.map((link) => link.attributes("href"))).toEqual([
@@ -101,7 +101,6 @@ describe("legacy workspace visual shell", () => {
       "/trends",
       "/ideas",
       "/excellent",
-      "/generation",
       "/history",
     ]);
     expect(wrapper.find("a.workspace-user").attributes("href")).toBe("/admin/");
@@ -153,12 +152,20 @@ describe("legacy workspace visual shell", () => {
   });
 
   it("keeps generation and excellent-content feature sentinels", () => {
-    expect(GenerationViewSource).toContain('data-test="generate-moments"');
-    expect(GenerationViewSource).toContain('data-test="generate-wechat"');
-    expect(GenerationViewSource).toContain('data-test="generate-xhs"');
-    expect(GenerationViewSource).toContain('data-test="generate-style"');
-    expect(GenerationViewSource).toContain('data-test="style-reference-input"');
-    expect(GenerationViewSource).toContain('data-test="wechat-warning"');
+    // 内容选题卡直接承接四类生图（旧版四个动作按钮）。
+    expect(IdeasViewSource).toContain('data-test="`idea-generate-moments-${index}`"');
+    expect(IdeasViewSource).toContain('data-test="`idea-generate-wechat-${index}`"');
+    expect(IdeasViewSource).toContain('data-test="`idea-generate-xhs-${index}`"');
+    expect(IdeasViewSource).toContain('data-test="`idea-generate-style-${index}`"');
+    // 比例恢复“智能＋具体比例”图形按钮网格。
+    expect(IdeasViewSource).toContain("idea-aspect-ratio-grid");
+    expect(IdeasViewSource).toContain("aspect-smart-mark");
+    // 内容选题内生成对话框：进度/结果/失败/重试与公众号比例提醒。
+    expect(IdeaGenerationDialogSource).toContain('data-test="gen-status"');
+    expect(IdeaGenerationDialogSource).toContain('data-test="gen-error"');
+    expect(IdeaGenerationDialogSource).toContain('data-test="gen-retry"');
+    expect(IdeaGenerationDialogSource).toContain('data-test="moments-result"');
+    expect(IdeaGenerationDialogSource).toContain('data-test="wechat-warning"');
     expect(ExcellentViewSource).toContain('data-test="refresh-button"');
     expect(ExcellentViewSource).toContain('data-test="analysis-ready"');
     expect(ExcellentViewSource).toContain('data-test="generate-fusion"');

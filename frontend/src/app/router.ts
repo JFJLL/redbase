@@ -59,7 +59,9 @@ export function createAppRouter(): Router {
           {
             path: "generation",
             name: "generation",
-            component: () => import("@/features/generation/views/GenerationView.vue"),
+            // 兼容入口：旧深链/分享链接重定向到内容选题，原 query 不丢
+            // （brandId/trendId/ideaIndex/action），由内容选题页直接承接生成。
+            redirect: (to) => ({ name: "ideas", query: to.query }),
           },
           {
             path: "history",

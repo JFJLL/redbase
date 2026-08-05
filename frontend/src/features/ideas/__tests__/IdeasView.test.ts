@@ -186,7 +186,7 @@ describe("IdeasView", () => {
     expect(wrapper.text()).toContain("改后的标题");
   });
 
-  it("jumps to the generation view with brand/trend/idea context and the target action", async () => {
+  it("opens the in-page generation dialog with brand/trend/idea context and the target action", async () => {
     const mounted = mountIdeas(baseHandler());
     wrapper = mounted.wrapper;
     await flushPromises();
@@ -195,13 +195,16 @@ describe("IdeasView", () => {
     await wrapper.find('[data-test="idea-generate-moments-0"]').trigger("click");
     await flushPromises();
 
-    expect(mounted.router.currentRoute.value.name).toBe("generation");
-    expect(mounted.router.currentRoute.value.query).toEqual({
-      brandId: "7",
-      trendId: "501",
-      ideaIndex: "0",
-      action: "moments",
-    });
+    // 内容选题直接承接生成：不再跳独立生图页。
+    expect(mounted.router.currentRoute.value.name).toBe("ideas");
+    const query = mounted.router.currentRoute.value.query;
+    expect(query.brandId).toBe("7");
+    expect(query.trendId).toBe("501");
+    expect(query.ideaIndex).toBe("0");
+    // action 一次性票据：对话框自动启动后即被消费（此处允许已消费或未消费两种中间态，
+    // 「恰好一次 POST」由 IdeaGenerationInIdeas 集成测试精确断言）。
+    expect(["moments", undefined]).toContain(query.action);
+    expect(wrapper.find('[data-test="idea-generation-dialog"]').exists()).toBe(true);
   });
 
   it("keeps deep-link brandId/trendId context after a fresh store load (refresh/return)", async () => {
@@ -289,7 +292,7 @@ describe("IdeasView", () => {
     expect(settings.text()).toContain("调整");
   });
 
-  it("navigates from each of the three cost buttons with the correct action and cost label", async () => {
+  it("opens the dialog from each of the four cost buttons with the correct action and cost label", async () => {
     const mounted = mountIdeas(baseHandler());
     wrapper = mounted.wrapper;
     await flushPromises();
@@ -299,19 +302,22 @@ describe("IdeasView", () => {
       ["idea-generate-moments-0", "moments", "1 积分"],
       ["idea-generate-wechat-0", "wechat", "1 积分"],
       ["idea-generate-xhs-0", "xhsCarousel", "4 积分"],
+      ["idea-generate-style-0", "styleImage", "1 积分"],
     ];
     for (const [selector, action, cost] of expectations) {
       const button = wrapper.find(`[data-test="${selector}"]`);
       expect(button.text()).toContain(cost);
       await button.trigger("click");
       await flushPromises();
-      expect(mounted.router.currentRoute.value.name).toBe("generation");
-      expect(mounted.router.currentRoute.value.query).toEqual({
-        brandId: "7",
-        trendId: "501",
-        ideaIndex: "0",
-        action,
-      });
+      expect(mounted.router.currentRoute.value.name).toBe("ideas");
+      const query = mounted.router.currentRoute.value.query;
+      expect(query.brandId).toBe("7");
+      expect(query.trendId).toBe("501");
+      expect(query.ideaIndex).toBe("0");
+      expect([action, undefined]).toContain(query.action);
+      expect(wrapper.find('[data-test="idea-generation-dialog"]').exists()).toBe(true);
+      await wrapper.find('[data-test="idea-generation-close"]').trigger("click");
+      await flushPromises();
     }
   });
 
@@ -399,9 +405,13 @@ describe("IdeasView", () => {
 
     expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("智能匹配 · 智能配色 · 智能比例");
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-ratio-0"]').setValue("1:1");
+    await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
     await wrapper.find('[data-test="idea-creative-style-0"]').setValue("editorial");
     await flushPromises();
+
+    // 比例网格选中态：智能＋具体比例按钮，选中 1:1。
+    expect(wrapper.find('[data-test="idea-ratio-0-smart"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
 
     // 重新进入（返回/刷新场景）：同一品牌:趋势:选题键位恢复自己的设置。
     wrapper.unmount();
@@ -410,7 +420,7 @@ describe("IdeasView", () => {
     await flushPromises();
     await flushPromises();
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
-    expect((wrapper.find('[data-test="idea-creative-ratio-0"]').element as HTMLSelectElement).value).toBe("1:1");
+    expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
     expect((wrapper.find('[data-test="idea-creative-style-0"]').element as HTMLSelectElement).value).toBe("editorial");
   });
 

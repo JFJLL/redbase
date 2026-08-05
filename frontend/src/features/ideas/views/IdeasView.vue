@@ -33,8 +33,9 @@ import {
   saveIdeaCreativeSettings,
   type IdeaCreativeSettings,
 } from "@/features/generation/ideaCreativeSettings";
+import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
 
-type GenerationAction = "moments" | "wechat" | "xhsCarousel";
+type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
 
 interface IdeaDraft {
   title: string;
@@ -74,6 +75,9 @@ const productMessages = reactive<Record<number, string>>({});
 const styleErrors = reactive<Record<number, string>>({});
 const logoErrors = reactive<Record<number, string>>({});
 const openCreativeSettings = reactive<Record<number, boolean>>({});
+// 创作设置展示版本：生成对话框/比例网格写回设置后 +1，强制摘要与选中态刷新。
+const settingsVersion = ref(0);
+const activeGeneration = ref<{ ideaIndex: number; action: GenerationAction } | null>(null);
 
 const assetLabel = computed(() => (isPersonal.value ? "内容参考图" : "产品图"));
 const logoLabel = computed(() => (isPersonal.value ? "个人头像" : "品牌 Logo"));
@@ -269,7 +273,24 @@ function updateCreativeSetting(
   patchSettings(index, { [field]: value } as Partial<IdeaCreativeSettings>);
 }
 
+function selectRatio(index: number, ratio: string): void {
+  patchSettings(index, { aspectRatioSelection: ratio });
+  settingsVersion.value += 1;
+}
+
+/** 旧版 app.js getAspectRatioShapeStyle：按比例绘制图形按钮的形状。 */
+function aspectRatioShapeStyle(ratio: string): Record<string, string> {
+  const [width, height] = String(ratio).split(":").map(Number);
+  const max = 30;
+  const scale = max / Math.max(width, height);
+  return {
+    width: `${Math.max(5, Math.round(width * scale))}px`,
+    height: `${Math.max(5, Math.round(height * scale))}px`,
+  };
+}
+
 function creativeSummary(index: number): string {
+  void settingsVersion.value;
   const settings = settingsFor(index);
   const style =
     XHS_CREATIVE_STYLE_OPTIONS.find((option) => option.value === settings.visualStylePreset)?.label || "智能匹配";
@@ -293,15 +314,79 @@ function parsePositiveInt(value: unknown): number | null {
   return Number.isFinite(num) && num > 0 ? num : null;
 }
 
+function parseIdeaIndex(value: unknown): number | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === undefined || raw === null || raw === "") return null;
+  const num = Number(raw);
+  return Number.isInteger(num) && num >= 0 ? num : null;
+}
+
+const GENERATION_ACTIONS: readonly GenerationAction[] = ["moments", "wechat", "xhsCarousel", "styleImage"];
+
+function parseAction(value: unknown): GenerationAction | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return GENERATION_ACTIONS.includes(raw as GenerationAction) ? (raw as GenerationAction) : null;
+}
+
 // 刷新/返回不丢上下文：进入页面时按 router query 恢复选中的品牌与趋势。
 onMounted(() => {
   const queryBrandId = parsePositiveInt(route.query.brandId);
   const queryTrendId = parsePositiveInt(route.query.trendId);
   if (queryBrandId && store.selectedBrandId !== queryBrandId) store.selectedBrandId = queryBrandId;
   if (queryTrendId && store.selectedTrendId !== queryTrendId) store.selectedTrendId = queryTrendId;
-  void loadPage();
+  void loadPage().then(() => {
+    // /generation 兼容重定向（保留 brandId/trendId/ideaIndex/action）：
+    // 上下文就绪后自动打开内容选题内生成对话框并启动对应动作。
+    applyDeepLinkGeneration();
+  });
   void loadProductLibrary();
 });
+
+function applyDeepLinkGeneration(): void {
+  const action = parseAction(route.query.action);
+  const ideaIndex = parseIdeaIndex(route.query.ideaIndex);
+  if (!action || ideaIndex === null) return;
+  if (!brand.value || !trend.value || !trend.value.ideas?.[ideaIndex]) return;
+  activeGeneration.value = { ideaIndex, action };
+}
+
+// SPA 深链复用：用户已停留在 /ideas 时，经 router.push 进入 /generation
+// （重定向回 /ideas 且 query 保留）不会重新挂载 IdeasView。必须主动同步目标
+// 品牌/趋势并应用一次性 action，否则深链静默失效。
+watch(
+  () =>
+    [
+      parsePositiveInt(route.query.brandId),
+      parsePositiveInt(route.query.trendId),
+      parseIdeaIndex(route.query.ideaIndex),
+      parseAction(route.query.action),
+    ] as const,
+  async ([queryBrandId, queryTrendId]) => {
+    let selectionChanged = false;
+    if (queryBrandId && store.selectedBrandId !== queryBrandId) {
+      store.selectedBrandId = queryBrandId;
+      selectionChanged = true;
+    }
+    if (queryTrendId && store.selectedTrendId !== queryTrendId) {
+      store.selectedTrendId = queryTrendId;
+      selectionChanged = true;
+    }
+    if (selectionChanged && store.selectedBrandId) {
+      try {
+        await store.ensureBrandDetail(
+          store.selectedBrandId,
+          scope.signalFor(`brand-detail:${store.selectedBrandId}`),
+        );
+      } catch (error) {
+        if (isAbortError(error) || handleUnauthorized(error)) return;
+        loadError.value = `加载失败：${String((error as { message?: unknown })?.message || "")}`;
+        return;
+      }
+    }
+    // 品牌/趋势就绪后复查深链（对话框打开至多一次；action 票据由对话框消费）。
+    applyDeepLinkGeneration();
+  },
+);
 
 // 切换品牌/趋势时重置提示词输入与草稿（旧版 renderIdeas 每次渲染同步）。
 watch(
@@ -318,6 +403,9 @@ watch(
     for (const key of Object.keys(productMessages)) delete productMessages[Number(key)];
     for (const key of Object.keys(styleErrors)) delete styleErrors[Number(key)];
     for (const key of Object.keys(logoErrors)) delete logoErrors[Number(key)];
+    // 深链兜底：品牌/趋势就绪（含被并行 loadPage 抢先/中止的场景）后复查
+    // /generation 兼容重定向的一次性 action，打开对话框至多一次。
+    applyDeepLinkGeneration();
   },
   { immediate: true },
 );
@@ -332,10 +420,6 @@ const displayMeta = computed(() => {
 const regenerateDisabled = computed(
   () => regenerating.value || !brand.value || !brand.value._detailLoaded || !trend.value,
 );
-
-onMounted(() => {
-  void loadPage();
-});
 
 async function loadPage(): Promise<void> {
   loadError.value = "";
@@ -443,20 +527,32 @@ function hasCompleteIdeaContentAssets(idea: TrendIdea): boolean {
   );
 }
 
-// 去生图任务页继续生成内容（图4 三个生图按钮的承接入口，携带完整上下文）。
-function goToGeneration(ideaIndex: number, action: GenerationAction): void {
+// 内容选题内直接承接生成：打开对话框并写入一次性 action 票据（URL query）。
+function openGeneration(ideaIndex: number, action: GenerationAction): void {
   const currentBrand = brand.value;
   const currentTrend = trend.value;
   if (!currentBrand || !currentTrend) return;
+  activeGeneration.value = { ideaIndex, action };
   void router.push({
-    name: "generation",
+    name: "ideas",
     query: {
+      ...route.query,
       brandId: String(currentBrand.id),
       trendId: String(currentTrend.id),
       ideaIndex: String(ideaIndex),
       action,
     },
   });
+}
+
+function closeGeneration(): void {
+  activeGeneration.value = null;
+  settingsVersion.value += 1;
+  if (route.query.action !== undefined) {
+    const query = { ...route.query };
+    delete query.action;
+    void router.replace({ query });
+  }
 }
 </script>
 
@@ -821,17 +917,34 @@ function goToGeneration(ideaIndex: number, action: GenerationAction): void {
                     </select>
                   </label>
                 </div>
-                <label class="idea-creative-field idea-creative-ratio-field">
+                <div class="idea-creative-field idea-creative-ratio-field">
                   <span>图片比例</span>
-                  <select
-                    :data-test="`idea-creative-ratio-${index}`"
-                    :value="settingsFor(index).aspectRatioSelection"
-                    @change="updateCreativeSetting(index, 'aspectRatioSelection', $event)"
-                  >
-                    <option value="smart">智能比例</option>
-                    <option v-for="ratio in IMAGE_ASPECT_RATIOS" :key="ratio" :value="ratio">{{ ratio }}</option>
-                  </select>
-                </label>
+                  <div class="idea-aspect-ratio-grid">
+                    <button
+                      v-for="ratio in ['smart', ...IMAGE_ASPECT_RATIOS]"
+                      :key="ratio"
+                      type="button"
+                      class="idea-aspect-ratio-option"
+                      :class="{ 'is-selected': settingsFor(index).aspectRatioSelection === ratio }"
+                      :data-test="`idea-ratio-${index}-${ratio}`"
+                      :aria-pressed="settingsFor(index).aspectRatioSelection === ratio"
+                      @click="selectRatio(index, ratio)"
+                    >
+                      <span class="idea-aspect-ratio-visual">
+                        <span v-if="ratio === 'smart'" class="aspect-smart-mark" aria-hidden="true"><i></i><i></i></span>
+                        <i v-else class="aspect-shape" :style="aspectRatioShapeStyle(ratio)" aria-hidden="true"></i>
+                      </span>
+                      <span>{{ ratio === "smart" ? "智能" : ratio }}</span>
+                    </button>
+                  </div>
+                  <small class="idea-ratio-hint">
+                    {{
+                      settingsFor(index).aspectRatioSelection === "smart"
+                        ? "按图片类型自动匹配（公众号 9:21，其余 3:4）"
+                        : "四种生图使用统一比例"
+                    }}
+                  </small>
+                </div>
               </div>
             </section>
 
@@ -840,7 +953,7 @@ function goToGeneration(ideaIndex: number, action: GenerationAction): void {
                 class="primary-btn small-btn cost-button"
                 type="button"
                 :data-test="`idea-generate-moments-${index}`"
-                @click="goToGeneration(index, 'moments')"
+                @click="openGeneration(index, 'moments')"
               >
                 <span>一键朋友圈图</span>
                 <small>1 积分</small>
@@ -849,7 +962,7 @@ function goToGeneration(ideaIndex: number, action: GenerationAction): void {
                 class="secondary-btn small-btn cost-button"
                 type="button"
                 :data-test="`idea-generate-wechat-${index}`"
-                @click="goToGeneration(index, 'wechat')"
+                @click="openGeneration(index, 'wechat')"
               >
                 <span>一键公众号长图</span>
                 <small>1 积分</small>
@@ -858,10 +971,19 @@ function goToGeneration(ideaIndex: number, action: GenerationAction): void {
                 class="secondary-btn small-btn cost-button"
                 type="button"
                 :data-test="`idea-generate-xhs-${index}`"
-                @click="goToGeneration(index, 'xhsCarousel')"
+                @click="openGeneration(index, 'xhsCarousel')"
               >
                 <span>一键小红书组图</span>
                 <small>4 积分</small>
+              </button>
+              <button
+                class="secondary-btn small-btn cost-button"
+                type="button"
+                :data-test="`idea-generate-style-${index}`"
+                @click="openGeneration(index, 'styleImage')"
+              >
+                <span>一键风格化图</span>
+                <small>1 积分</small>
               </button>
             </div>
             <div class="idea-tag-list">
@@ -908,6 +1030,15 @@ function goToGeneration(ideaIndex: number, action: GenerationAction): void {
         </button>
       </section>
     </div>
+
+    <!-- 内容选题内生成：进度、结果、失败与重试直接在此承接 -->
+    <IdeaGenerationDialog
+      v-if="activeGeneration"
+      :key="activeGeneration.ideaIndex"
+      :idea-index="activeGeneration.ideaIndex"
+      :action="activeGeneration.action"
+      @close="closeGeneration"
+    />
   </section>
 </template>
 
@@ -1419,9 +1550,98 @@ function goToGeneration(ideaIndex: number, action: GenerationAction): void {
   color: var(--workspace-brand-ink);
 }
 
+/* 旧版 styles.css:3055-3175 比例图形按钮网格：智能＋具体比例。 */
+.idea-aspect-ratio-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.idea-aspect-ratio-option {
+  min-width: 0;
+  min-height: 64px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  padding: 7px 3px;
+  border: 1px solid rgba(50, 37, 41, 0.09);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #75666b;
+  font-size: 0.76rem;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.idea-aspect-ratio-option:hover {
+  border-color: rgba(216, 59, 70, 0.28);
+  background: #fff;
+}
+
+.idea-aspect-ratio-option.is-selected {
+  border-color: #d83b46;
+  background: #fff4f2;
+  color: #a82e38;
+  box-shadow: inset 0 0 0 1px rgba(216, 59, 70, 0.08);
+}
+
+.idea-aspect-ratio-visual {
+  width: 34px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+}
+
+.aspect-shape {
+  display: inline-block;
+  box-sizing: border-box;
+  border: 1.6px solid currentColor;
+  border-radius: 3px;
+  background: rgba(216, 59, 70, 0.04);
+}
+
+.aspect-smart-mark {
+  position: relative;
+  width: 30px;
+  height: 28px;
+  display: inline-block;
+}
+
+.aspect-smart-mark i {
+  position: absolute;
+  width: 16px;
+  height: 20px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+}
+
+.aspect-smart-mark i:first-child {
+  left: 3px;
+  top: 5px;
+}
+
+.aspect-smart-mark i:last-child {
+  right: 3px;
+  top: 2px;
+  background: #fffaf8;
+}
+
+.idea-ratio-hint {
+  color: var(--workspace-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 @media (max-width: 760px) {
   .idea-cards {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .idea-aspect-ratio-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 </style>

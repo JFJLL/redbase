@@ -19,7 +19,6 @@ const navItems = [
   { name: "trends", icon: "趋", label: "趋势分析" },
   { name: "ideas", icon: "选", label: "内容选题" },
   { name: "excellent", icon: "优", label: "优秀内容" },
-  { name: "generation", icon: "生", label: "生图任务" },
   { name: "history", icon: "历", label: "历史生成" },
   { name: "billing", icon: "充", label: "积分充值" },
 ] as const;

@@ -288,6 +288,29 @@ function goTrends(brandId: number): void {
   white-space: pre-wrap;
 }
 
+/* 旧版 styles.css:3936 密度契约：超长档案不得撑满整页卡片。
+   展示层固定高度/行数，完整内容仍在品牌详情与编辑弹窗中。 */
+.brand-card-head > div {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.brand-meta h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.brand-description {
+  max-height: 150px;
+  overflow: hidden;
+}
+
+.brand-card .brand-description {
+  min-height: 150px;
+}
+
 .brand-actions {
   display: flex;
   gap: 10px;
