@@ -6,6 +6,10 @@ import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import {
+  countProductImageReferences,
+  removeProductImageFromAllSettings,
+} from "../ideaCreativeSettings";
+import {
   MAX_SELECTED_PRODUCT_IMAGES,
   MAX_SELECTED_PRODUCT_IMAGE_BYTES,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
@@ -37,6 +41,7 @@ const images = ref<ProductImageView[]>([]);
 const loading = ref(false);
 const uploading = ref(false);
 const message = ref("");
+const pendingDelete = ref<ProductImageView | null>(null);
 
 const selectedImages = computed(() => images.value.filter((image) => props.selectedIds.includes(image.id)));
 const selectedBytes = computed(() => selectedImages.value.reduce((total, image) => total + Number(image.sizeBytes || 0), 0));
@@ -140,16 +145,38 @@ async function handleUpload(event: Event) {
   }
 }
 
-async function handleDelete(image: ProductImageView) {
+function requestDelete(image: ProductImageView): void {
+  pendingDelete.value = image;
+}
+
+function cancelDelete(): void {
+  pendingDelete.value = null;
+}
+
+const deleteImpactCount = computed(() => {
+  const image = pendingDelete.value;
+  if (!image) return 0;
+  return countProductImageReferences(image.id);
+});
+
+async function confirmDelete() {
+  const image = pendingDelete.value;
+  pendingDelete.value = null;
+  if (!image) return;
   message.value = "";
   try {
     await deleteProductImage(image.id, scope.signalFor(`delete-${image.id}`));
+    // 删除成功后清理当前账号浏览器内所有选题键位中的失效引用（含本面板选中态）。
+    const cleaned = removeProductImageFromAllSettings(image.id);
     images.value = images.value.filter((item) => item.id !== image.id);
     emit(
       "update:selectedIds",
       props.selectedIds.filter((id) => id !== image.id),
     );
     emit("images-loaded", images.value);
+    if (cleaned > 0) {
+      message.value = `已删除，并清理 ${cleaned} 处选题中的图片引用。`;
+    }
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
@@ -188,7 +215,7 @@ async function handleDelete(image: ProductImageView) {
           <img :src="image.url" :alt="image.originalName" loading="lazy" decoding="async" />
           <span class="image-name">{{ image.originalName }}</span>
         </label>
-        <button type="button" class="image-delete" :data-test="`product-image-delete-${image.id}`" @click="handleDelete(image)">
+        <button type="button" class="image-delete" :data-test="`product-image-delete-${image.id}`" @click="requestDelete(image)">
           删除
         </button>
       </li>
@@ -196,6 +223,24 @@ async function handleDelete(image: ProductImageView) {
 
     <p v-if="message" class="panel-message" data-test="product-image-message">{{ message }}</p>
   </section>
+
+  <div v-if="pendingDelete" class="product-delete-backdrop" data-test="product-delete-confirm" @click.self="cancelDelete">
+    <section class="product-delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="productDeleteTitle">
+      <h3 id="productDeleteTitle">删除产品图</h3>
+      <p data-test="product-delete-impact">
+        {{
+          deleteImpactCount > 0
+            ? `该图片正被 ${deleteImpactCount} 处选题引用，删除后将同时移除这些引用。`
+            : "该图片未被任何选题引用。"
+        }}
+      </p>
+      <p>确定删除「{{ pendingDelete.originalName }}」吗？此操作不可恢复。</p>
+      <div class="product-delete-actions">
+        <button type="button" class="secondary-btn" data-test="product-delete-cancel" @click="cancelDelete">取消</button>
+        <button type="button" class="danger-btn" data-test="product-delete-confirm-action" @click="confirmDelete">确认删除</button>
+      </div>
+    </section>
+  </div>
 </template>
 
 <style scoped>
@@ -325,6 +370,50 @@ async function handleDelete(image: ProductImageView) {
   color: #b72e3a;
   font-size: 0.78rem;
   font-weight: 800;
+  cursor: pointer;
+}
+
+.product-delete-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 15, 25, 0.45);
+}
+
+.product-delete-modal {
+  display: grid;
+  gap: 10px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px;
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface);
+  color: var(--workspace-text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.product-delete-modal h3 {
+  margin: 0;
+}
+
+.product-delete-modal p {
+  margin: 0;
+  color: var(--workspace-muted);
+}
+
+.product-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.danger-btn {
+  border: 1px solid var(--workspace-danger, #c0392b);
+  background: var(--workspace-danger, #c0392b);
+  color: #fff;
+  border-radius: var(--workspace-radius);
+  padding: 6px 12px;
   cursor: pointer;
 }
 </style>

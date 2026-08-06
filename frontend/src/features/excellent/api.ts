@@ -136,8 +136,21 @@ export function fetchBrandRemixIdeas(
 export function fetchBrandProductImages(
   brandId: number | string,
   signal?: AbortSignal,
-): Promise<{ images: ProductImage[]; [key: string]: unknown }> {
+): Promise<{ images: ProductImage[]; unassignedImages?: ProductImage[]; [key: string]: unknown }> {
   return apiFetch(`/api/product-images?brandId=${Number(brandId)}&includeUnassigned=1`, { signal });
+}
+
+/** 把未归属素材认领到当前品牌（服务端校验 owner 与品牌归属）。 */
+export function claimProductImage(
+  imageId: number | string,
+  brandId: number | string,
+  signal?: AbortSignal,
+): Promise<{ image: ProductImage; brandId: number; [key: string]: unknown }> {
+  return apiFetch(`/api/product-images/${Number(imageId)}/claim`, {
+    method: "POST",
+    body: { brandId: Number(brandId) },
+    signal,
+  });
 }
 
 export interface RemixPreviewResult {

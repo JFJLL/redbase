@@ -38,6 +38,47 @@ function findImageJobByOwner(jobId, ownerUserId) {
   `).get(String(jobId || ""), Number(ownerUserId)));
 }
 
+/**
+ * Current user's recoverable image jobs, oldest first — recovery authority.
+ * 包含 pending/running，以及「已失败但从未退款」的任务：这类任务只能通过
+ * 轮询触发幂等退款（服务重启的超时清扫只置 failed，不写退款标记），
+ * 若不进入恢复列表，用户已扣积分将永远无法退回。
+ */
+function listActiveImageJobsByOwner(ownerUserId) {
+  return db.prepare(`
+    SELECT ${IMAGE_JOB_COLUMNS}
+    FROM image_jobs
+    WHERE owner_user_id = ?
+      AND (
+        status IN ('pending', 'running')
+        OR (
+          status = 'failed'
+          AND json_extract(generation_context_json, '$.creditEventId') IS NOT NULL
+          AND json_extract(generation_context_json, '$.refundCreditEventId') IS NULL
+        )
+      )
+    ORDER BY created_at_ms ASC
+  `).all(Number(ownerUserId)).map(mapImageJobRow);
+}
+
+/** 同组全部成员任务（含已完成/失败页）：恢复横幅按组回填终态页计数。 */
+function listImageJobsByOwnerAndCarouselGroup(ownerUserId, carouselGroupId) {
+  const groupId = String(carouselGroupId || "").trim();
+  if (!groupId) return [];
+  return db
+    .prepare(
+      `
+    SELECT ${IMAGE_JOB_COLUMNS}
+    FROM image_jobs
+    WHERE owner_user_id = ?
+      AND json_extract(generation_context_json, '$.carouselGroupId') = ?
+    ORDER BY created_at_ms ASC
+  `,
+    )
+    .all(Number(ownerUserId), groupId)
+    .map(mapImageJobRow);
+}
+
 function upsertImageJob(ownerUserId, job) {
   if (!job?.id) return null;
   const nowIso = new Date().toISOString();
@@ -89,6 +130,8 @@ function deleteImageJobsForGeneration(generationId) {
 
 module.exports = {
   findImageJobByOwner,
+  listActiveImageJobsByOwner,
+  listImageJobsByOwnerAndCarouselGroup,
   upsertImageJob,
   deleteImageJobsForGeneration,
 };

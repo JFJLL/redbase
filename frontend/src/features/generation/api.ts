@@ -407,7 +407,7 @@ export interface ImageEditRequest {
   title?: string;
   aspectRatio?: string;
   generationId?: number | null;
-  parentEditId?: number | null;
+  parentEditId?: string | number | null;
   slideIndex?: number | null;
 }
 
@@ -424,6 +424,53 @@ export function submitImageEdit(body: ImageEditRequest, signal?: AbortSignal): P
 
 export function fetchImageJob(jobId: string, signal?: AbortSignal): Promise<ImageJobStatusResult> {
   return apiFetch(`/api/image-jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
+/** 服务端当前用户未完成任务的最小恢复快照（不包含 provider token/URL）。 */
+export interface RecoverableImageJob {
+  jobId: string;
+  status: string;
+  type: string;
+  error?: string;
+  createdAt?: number;
+  generationId?: number | null;
+  brandId?: number;
+  trendId?: number;
+  ideaIndex?: number | null;
+  slideIndex?: number | null;
+  carouselGroupId?: string;
+  carouselTitle?: string;
+  publishTitle?: string;
+  publishCaption?: string;
+  caption?: string;
+  aspectRatio?: string;
+  creditEventId?: number | null;
+  singleSlideOnly?: boolean;
+  excellentRemix?: boolean;
+  contentMode?: string;
+  existingIdeaRef?: unknown;
+  sourceGenerationId?: number | null;
+  parentEditId?: string;
+  sourceSlideIndex?: number | null;
+  imageUrl?: string;
+  slide?: {
+    title?: string;
+    pageLabel?: string;
+    copy?: string;
+    prompt?: string;
+    visualDirection?: string;
+    style?: string;
+    composition?: string;
+    slideIndex?: number;
+    imageUrl?: string;
+    previewUrl?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export function fetchActiveImageJobs(signal?: AbortSignal): Promise<{ jobs: RecoverableImageJob[] }> {
+  return apiFetch("/api/image-jobs/active", { signal });
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

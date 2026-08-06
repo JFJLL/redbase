@@ -6,8 +6,8 @@
  * keyed by getIdeaProductKey(ideaIndex) = `${brandId}:${trendId}:${ideaIndex}`
  * (getIdeaAspectRatioSelection / getIdeaCreativeStyleSelection /
  * getIdeaWechatTemplateSelection / state.styleReferences / brandLogoUsage).
- * GenerationView restores the same idea's settings on re-entry and never
- * bleeds values across ideas. Cleared on account switch (notifyAuthReset).
+ * 内容选题页恢复同一选题的设置并在选题间隔离，永不串值。
+ * 账号切换（notifyAuthReset）时整体清空。
  */
 import { onAuthReset } from "@/shared/composables/useAbortScope";
 import {
@@ -88,6 +88,28 @@ export function saveIdeaCreativeSettings(key: string, settings: IdeaCreativeSett
     ...settings,
     selectedProductIds: [...settings.selectedProductIds],
   });
+}
+
+/** 统计引用了某张产品图的选题键位数（删除确认时展示影响）。 */
+export function countProductImageReferences(imageId: number): number {
+  let count = 0;
+  for (const settings of settingsByKey.values()) {
+    if (settings.selectedProductIds.some((id) => Number(id) === Number(imageId))) count += 1;
+  }
+  return count;
+}
+
+/** 删除图片后清理所有选题键位中的失效引用，返回被清理的键位数。 */
+export function removeProductImageFromAllSettings(imageId: number): number {
+  let cleaned = 0;
+  for (const [key, settings] of [...settingsByKey]) {
+    const next = settings.selectedProductIds.filter((id) => Number(id) !== Number(imageId));
+    if (next.length !== settings.selectedProductIds.length) {
+      settingsByKey.set(key, { ...settings, selectedProductIds: next });
+      cleaned += 1;
+    }
+  }
+  return cleaned;
 }
 
 /** Test helper. */

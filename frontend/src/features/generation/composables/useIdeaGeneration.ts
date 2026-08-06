@@ -21,7 +21,6 @@ import {
   previewXhsCarousel,
   refreshGenerationHistory,
   resolveAspectRatio,
-  submitImageEdit,
   submitMomentsImage,
   submitStyleImage,
   submitWechatLongImage,
@@ -35,6 +34,7 @@ import {
   type TrendDetail,
   type WechatPack,
 } from "../api";
+import { runImageEdit } from "./useImageEdit";
 import type { SessionUser } from "@/shared/types/api";
 
 export type IdeaGenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
@@ -69,7 +69,7 @@ function parseIndex(value: unknown): number | null {
 
 /**
  * 选题驱动的四类生图状态机（朋友圈图/公众号长图/小红书组图/风格化图）。
- * 由 GenerationView（独立兼容页）与 IdeaGenerationDialog（内容选题内）共用，
+ * 由 IdeaGenerationDialog（内容选题内）使用，
  * 保证自动/手动/失败重试走同一条「一次性 action 票据 + 素材门控 + 积分幂等」路径。
  * 所有请求走 @/shared/api/client，signal 由 useAbortScope 提供，卸载/退出登录时轮询自动停止。
  */
@@ -115,6 +115,40 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
 
   const startedActionKey = ref("");
 
+  /**
+   * 深链失效/越权/上下文不匹配时的固定用户错误。校验失败会清除 URL 上的
+   * action 票据，绝不自动回退到其他品牌/趋势/选题，也绝不发生成 POST。
+   */
+  const deepLinkError = ref("");
+
+  function invalidateDeepLinkTicket(): void {
+    deepLinkError.value =
+      "该生成链接已失效、无权访问或上下文不匹配，未执行任何扣费操作。请回到内容选题页重新选择后再生成。";
+    const query = { ...route.query };
+    delete query.action;
+    void router.replace({ query }).catch(() => {
+      // replace 失败时 action 保留，后续 watch 会再次校验并拦截，仍不会 POST。
+    });
+  }
+
+  /** 自动启动前的严格实体校验：brandId/trendId/ideaIndex 必须与真实上下文逐项匹配。 */
+  function validateDeepLinkForAction(
+    _action: IdeaGenerationAction,
+  ): "valid" | "invalid" | "pending" {
+    if (queryBrandId.value === null || queryTrendId.value === null || queryIdeaIndex.value === null) {
+      return "invalid";
+    }
+    const brand = context.brand.value;
+    const trend = context.trend.value;
+    const idea = context.idea.value;
+    // 上下文尚未就绪：不销毁票据、不发 POST，等待就绪 watch 复查（旧行为：票据保留）。
+    if (!brand || !trend || !idea) return "pending";
+    if (Number(brand.id) !== queryBrandId.value) return "invalid";
+    if (Number(trend.id) !== queryTrendId.value) return "invalid";
+    if (queryIdeaIndex.value !== context.ideaIndex.value) return "invalid";
+    return "valid";
+  }
+
   // —— 一键生成：一次性票据 + 自动启动就绪门控 ——
   // 自动启动前必须等齐：品牌/趋势/选题就绪、该选题创作设置已恢复、产品图库已加载。
   const ideaSettingsRestored = ref(false);
@@ -128,6 +162,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
    * URL 已无 action，不会再次自动提交。
    */
   async function consumeActionTicket(): Promise<boolean> {
+    deepLinkError.value = "";
     const query = { ...route.query };
     delete query.action;
     try {
@@ -145,6 +180,14 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     if (context.autoStartEnabled && !context.autoStartEnabled.value) return;
     const action = queryAction.value;
     if (!action) return;
+    // 严格深链校验：任何实体不匹配（含 store 静默回退的首条趋势）都不允许自动付费。
+    const verdict = validateDeepLinkForAction(action);
+    if (verdict === "invalid") {
+      invalidateDeepLinkTicket();
+      return;
+    }
+    if (verdict === "pending") return;
+    deepLinkError.value = "";
     if (!queryActionTargetsThisIdea.value) return;
     const actionKey = `${queryBrandId.value}:${queryTrendId.value}:${queryIdeaIndex.value}:${action}`;
     if (actionKey === startedActionKey.value) return;
@@ -430,6 +473,10 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
       const concept = await pollImageJob(submitResult.jobId, { signal, onUser: applyUser });
       pack.imageUrl = concept.imageUrl || concept.previewUrl;
       pack.previewUrl = concept.imageUrl || concept.previewUrl;
+      // 透传历史 generationId：公众号长图结果的“继续改图”依赖它建立父链。
+      if (concept.generationId) {
+        pack.generationId = Number(concept.generationId);
+      }
       wechatResult.value = pack;
       genPhase.value = "done";
       genStatus.value = "公众号长图已生成并写入历史生成。";
@@ -444,9 +491,10 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   }
 
   // —— c) 小红书组图（preview → slides/:i → complete） ——
-  const carousel = ref<{ pack: CarouselPack | null; creditEventId: number | null }>({
+  const carousel = ref<{ pack: CarouselPack | null; creditEventId: number | null; generationId: number | null }>({
     pack: null,
     creditEventId: null,
+    generationId: null,
   });
 
   async function generateXhsCarousel() {
@@ -455,7 +503,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     const aspectRatio = resolveAspectRatio(aspectRatioSelection.value, "xhsCarousel");
     const signal = scope.signalFor("xhs-carousel");
     startGeneration("xhsCarousel", "任务已进入队列，正在准备小红书组图方案...");
-    carousel.value = { pack: null, creditEventId: null };
+    carousel.value = { pack: null, creditEventId: null, generationId: null };
     carouselCompleted.value = false;
     try {
       const previewResult = await previewXhsCarousel(
@@ -480,6 +528,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
           slides: enrichXhsCarouselSlides({ ...previewPack, aspectRatio }),
         },
         creditEventId: null,
+        generationId: null,
       };
       genPhase.value = "done";
       genStatus.value = "组图方案已就绪，可单张或一键生成 4 张图。";
@@ -544,6 +593,11 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     const signal = scope.signalFor(`xhs-slide-poll-${slideIndex}`);
     try {
       const concept = await pollImageJob(jobId, { signal, onUser: applyUser });
+      // 组图历史行（按 carouselGroupId 合并）在单页完成落库后已存在；
+      // 记录其 generationId，供本页后续改图建立父链（generationId + slideIndex）。
+      if (concept.generationId) {
+        carousel.value.generationId = Number(concept.generationId) || carousel.value.generationId;
+      }
       pack.slides[slideIndex] = {
         ...pack.slides[slideIndex],
         imageUrl: concept.imageUrl || concept.previewUrl,
@@ -599,18 +653,18 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     slide.isEditing = true;
     slide.error = "";
     try {
-      const submitResult = await submitImageEdit(
+      const concept = await runImageEdit(
         {
           imageUrl,
-          prompt,
           title: String(slide.title || slide.pageLabel || ""),
           aspectRatio: pack.aspectRatio,
+          generationId: carousel.value.generationId,
+          slideIndex,
+          parentEditId: typeof slide.lastEditId === "string" ? slide.lastEditId : null,
         },
-        signal,
+        prompt,
+        { signal, onUser: applyUser },
       );
-      applyUser(submitResult.user);
-      if (!submitResult.jobId) throw new Error("改图任务创建失败");
-      const concept = await pollImageJob(submitResult.jobId, { signal, onUser: applyUser });
       pack.slides[slideIndex] = {
         ...pack.slides[slideIndex],
         imageUrl: concept.imageUrl || concept.previewUrl,
@@ -618,6 +672,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
         isEditing: false,
         editPrompt: "",
         error: "",
+        lastEditId: concept.jobId || slide.lastEditId,
       };
     } catch (error) {
       if (isAbortError(error)) return;
@@ -751,6 +806,8 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     productImagesReloadToken,
     consumeActionTicket,
     maybeAutoStartGeneration,
+    deepLinkError,
+    validateDeepLinkForAction,
     aspectRatioSelection,
     wechatTemplate,
     xhsStylePreset,

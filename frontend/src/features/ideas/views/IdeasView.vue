@@ -34,6 +34,7 @@ import {
   type IdeaCreativeSettings,
 } from "@/features/generation/ideaCreativeSettings";
 import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
+import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 
 type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
 
@@ -58,6 +59,7 @@ const trend = computed(() => store.selectedTrend);
 const isPersonal = computed(() => brand.value?.profileType === "personal");
 
 const loadError = ref("");
+const deepLinkError = ref("");
 const customPrompt = ref("");
 const promptMeta = ref("当前使用默认系统提示词生成。");
 const regenerating = ref(false);
@@ -345,8 +347,39 @@ onMounted(() => {
 function applyDeepLinkGeneration(): void {
   const action = parseAction(route.query.action);
   const ideaIndex = parseIdeaIndex(route.query.ideaIndex);
-  if (!action || ideaIndex === null) return;
-  if (!brand.value || !trend.value || !trend.value.ideas?.[ideaIndex]) return;
+  if (!action) return;
+  // 严格实体校验：query brandId/trendId 必须与真实加载的品牌/趋势一致
+  // （store 会把无效 trendId 静默回退到首条趋势，这里必须拦截），ideaIndex 必须在界内。
+  const queryBrandId = parsePositiveInt(route.query.brandId);
+  const queryTrendId = parsePositiveInt(route.query.trendId);
+  // 品牌未加载：保留一次性票据（不销毁、不打开），loadPage/brand-trend watch 复查。
+  if (!brand.value) return;
+  const brandValid = queryBrandId !== null && Number(brand.value.id) === queryBrandId;
+  if (!brandValid) {
+    deepLinkError.value =
+      "该生成链接已失效、无权访问或上下文不匹配，未执行任何扣费操作。请回到内容选题页重新选择后再生成。";
+    const query = { ...route.query };
+    delete query.action;
+    void router.replace({ query }).catch(() => {
+      // replace 失败不重试自动启动；对话框与 composable 的防线仍会拦截任何 POST。
+    });
+    return;
+  }
+  // 品牌匹配但趋势未加载：继续保留票据等待复查。
+  if (!trend.value) return;
+  const trendValid = queryTrendId !== null && Number(trend.value.id) === queryTrendId;
+  const ideaValid = ideaIndex !== null && Boolean(trend.value?.ideas?.[ideaIndex]);
+  if (!trendValid || !ideaValid) {
+    deepLinkError.value =
+      "该生成链接已失效、无权访问或上下文不匹配，未执行任何扣费操作。请回到内容选题页重新选择后再生成。";
+    const query = { ...route.query };
+    delete query.action;
+    void router.replace({ query }).catch(() => {
+      // replace 失败不重试自动启动；对话框与 composable 的防线仍会拦截任何 POST。
+    });
+    return;
+  }
+  deepLinkError.value = "";
   activeGeneration.value = { ideaIndex, action };
 }
 
@@ -553,6 +586,9 @@ function closeGeneration(): void {
     delete query.action;
     void router.replace({ query });
   }
+  // 对话框关闭即中止其轮询：立即补扫当前用户活动任务，由全局恢复服务接管，
+  // 避免任务在“生成中-关窗”间隙失去轮询（服务端状态仍是权威，不重复扣费）。
+  useImageJobRecovery().rescan();
 }
 </script>
 
@@ -571,6 +607,10 @@ function closeGeneration(): void {
     <div v-if="loadError" class="error-banner" data-test="load-error">
       {{ loadError }}
       <button class="text-btn" type="button" @click="loadPage">重试</button>
+    </div>
+
+    <div v-if="deepLinkError" class="error-banner" role="alert" data-test="deep-link-error">
+      {{ deepLinkError }}
     </div>
 
     <div class="idea-context-card" data-test="idea-context">

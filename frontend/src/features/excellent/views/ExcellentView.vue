@@ -19,6 +19,7 @@ import {
   generateExcellentRemixSlide,
   previewExcellentRemix,
   refreshExcellentContents,
+  claimProductImage,
   type ExcellentQueryFilters,
 } from "../api";
 import {
@@ -57,7 +58,16 @@ import {
 } from "../remixState";
 import { canGoNext, canGoPrevious, getNextImageIndex, getPreviousImageIndex } from "../imageNav";
 import { excellentImageSrc, type ExcellentImageProxyParams } from "../imageProxy";
-import { pollImageJob } from "@/features/generation/api";
+import {
+  restoreBoardScrollPosition,
+  saveBoardScrollPosition,
+} from "../boardScroll";
+import {
+  MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  pollImageJob,
+  uploadProductImage,
+} from "@/features/generation/api";
+import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import type {
   BrandSummary,
   ContentSourceOption,
@@ -197,6 +207,8 @@ async function loadBoard(board: ExcellentBoard) {
   try {
     const result = await fetchExcellentContents(formalFilters(board), scope.signalFor(`list-${board}`));
     applyExcellentListResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
+    // 首次/切回未加载榜单：列表就绪后恢复该榜单的浏览位置。
+    if (board === activeBoard.value && boardSlice.items.length) restoreBoardScroll();
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
@@ -282,9 +294,31 @@ async function refreshBoard(board: ExcellentBoard) {
 
 function switchBoard(board: ExcellentBoard) {
   if (activeBoard.value === board) return;
+  saveBoardScrollPosition(activeBoard.value, window.scrollY || 0);
   activeBoard.value = board;
+  // 切回已加载榜单时恢复各自浏览位置；未加载榜单在 loadBoard 完成后恢复。
+  if (slices[board].items.length) restoreBoardScroll();
   if (slices[board].status === "idle") loadBoard(board);
   if (!taxonomyOptions[board].length) loadTaxonomy(board);
+}
+
+let scrollSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleScrollSave(): void {
+  if (scrollSaveTimer) return;
+  scrollSaveTimer = setTimeout(() => {
+    scrollSaveTimer = null;
+    saveBoardScrollPosition(activeBoard.value, window.scrollY || 0);
+  }, 160);
+}
+
+function restoreBoardScroll(): void {
+  const position = restoreBoardScrollPosition(activeBoard.value);
+  if (position > 0) {
+    window.requestAnimationFrame(() => {
+      window.scrollTo(0, position);
+    });
+  }
 }
 
 function flattenTaxonomy(nodes: TaxonomyNode[] | undefined, depth = 0, out: Array<{ label: string; value: string }> = []) {
@@ -418,7 +452,10 @@ const brands = ref<BrandSummary[]>([]);
 const loadingBrand = ref(false);
 // —— 素材使用方式（旧版第 6 区：品牌 Logo + 产品实拍图）——
 const remixProductImages = ref<ProductImage[]>([]);
+const remixUnassignedImages = ref<ProductImage[]>([]);
 const remixProductImagesLoading = ref(false);
+const remixUploading = ref(false);
+const remixPickerMessage = ref("");
 const remixProductPickerOpen = ref(false);
 const submitPhase = ref<"idle" | "preview" | "slides" | "completing" | "done" | "error">("idle");
 const submitError = ref("");
@@ -482,6 +519,8 @@ async function openRemix(item: ExcellentNote) {
   completeContext.value = null;
   remixProductPickerOpen.value = false;
   remixProductImages.value = [];
+  remixUnassignedImages.value = [];
+  remixPickerMessage.value = "";
   // 参考学习分析改为惰性触发：首次点“生成内容方向”（或直接生成融合方案）时
   // 才调分析，命中 30 天缓存则直接读取，降低无意义模型消耗。品牌照常预加载。
   loadRemixBrands();
@@ -492,6 +531,8 @@ function closeRemix() {
   remix.value = null;
   remixProductPickerOpen.value = false;
   remixProductImages.value = [];
+  remixUnassignedImages.value = [];
+  remixPickerMessage.value = "";
 }
 
 /** 参考笔记卡数据：从当前榜单列表取（旧版 renderReferenceCardHtml 语义）。 */
@@ -529,10 +570,13 @@ async function openRemixProductPicker() {
     const result = await fetchBrandProductImages(state.brandId, scope.signalFor("remix-product-images"));
     if (!remix.value || remix.value.brandId !== state.brandId) return;
     remixProductImages.value = result.images || [];
+    remixUnassignedImages.value = result.unassignedImages || [];
+    remixPickerMessage.value = "";
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
     remixProductImages.value = [];
+    remixUnassignedImages.value = [];
     showToast(`产品素材加载失败：${(error as Error).message}`);
   } finally {
     remixProductImagesLoading.value = false;
@@ -541,6 +585,103 @@ async function openRemixProductPicker() {
 
 function closeRemixProductPicker() {
   remixProductPickerOpen.value = false;
+}
+
+function remixBrandRequestIsCurrent(state: ExcellentRemixState, brandId: number): boolean {
+  return remix.value === state && Number(state.brandId) === Number(brandId);
+}
+
+async function reloadRemixProductPicker(brandId: number, expectedState = remix.value) {
+  if (!expectedState || !remixBrandRequestIsCurrent(expectedState, brandId)) return false;
+  remixProductImagesLoading.value = true;
+  try {
+    const result = await fetchBrandProductImages(brandId, scope.signalFor(`remix-product-images-${Date.now()}`));
+    if (!remixBrandRequestIsCurrent(expectedState, brandId)) return false;
+    remixProductImages.value = result.images || [];
+    remixUnassignedImages.value = result.unassignedImages || [];
+    remixPickerMessage.value = "";
+    return true;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    if (!remixBrandRequestIsCurrent(expectedState, brandId)) return false;
+    remixPickerMessage.value = `素材刷新失败：${(error as Error).message}`;
+    return false;
+  } finally {
+    if (remixBrandRequestIsCurrent(expectedState, brandId)) {
+      remixProductImagesLoading.value = false;
+    }
+  }
+}
+
+async function claimRemixUnassigned(image: ProductImage) {
+  const state = remix.value;
+  if (!state?.brandId) return;
+  const requestedBrandId = Number(state.brandId);
+  try {
+    const result = await claimProductImage(image.id, requestedBrandId, scope.signalFor(`claim-${image.id}`));
+    if (!remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+    if (result.image && !state.productImageIds.some((id) => Number(id) === Number(result.image.id))) {
+      if (state.productImageIds.length < MAX_REMIX_PRODUCT_IMAGES) {
+        state.productImageIds = [...state.productImageIds, Number(result.image.id)];
+        refreshRemixAssetMode();
+        markFusionStale(state);
+      }
+    }
+    await reloadRemixProductPicker(requestedBrandId, state);
+    if (!remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+    remixPickerMessage.value = `「${result.image.name || result.image.fileName || "图片"}」已认领到当前品牌。`;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    if (!remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+    remixPickerMessage.value = `认领失败：${(error as Error).message}`;
+  }
+}
+
+async function handleRemixProductUpload(event: Event) {
+  const state = remix.value;
+  if (!state?.brandId) return;
+  const requestedBrandId = Number(state.brandId);
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length || remixUploading.value) return;
+  const oversized = files.find((file) => file.size > MAX_SINGLE_UPLOAD_IMAGE_BYTES);
+  if (oversized) {
+    remixPickerMessage.value = `单张产品图最多上传 ${Math.round(MAX_SINGLE_UPLOAD_IMAGE_BYTES / 1024 / 1024)}MB。`;
+    return;
+  }
+  remixUploading.value = true;
+  remixPickerMessage.value = "";
+  try {
+    for (const file of files) {
+      const signal = scope.signalFor(`remix-upload-${file.name}`);
+      const dataUrl = await fileToDataUrl(file, signal);
+      if (signal.aborted || !remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+      const result = await uploadProductImage({ name: file.name, dataUrl, brandId: requestedBrandId }, signal);
+      if (!remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+      if (result.image && !state.productImageIds.some((id) => Number(id) === Number(result.image.id))) {
+        if (state.productImageIds.length < MAX_REMIX_PRODUCT_IMAGES) {
+          state.productImageIds = [...state.productImageIds, Number(result.image.id)];
+          refreshRemixAssetMode();
+          markFusionStale(state);
+        }
+      }
+    }
+    await reloadRemixProductPicker(requestedBrandId, state);
+    if (!remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+    remixPickerMessage.value = "上传完成，已加入当前品牌素材库。";
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    if (!remixBrandRequestIsCurrent(state, requestedBrandId)) return;
+    remixPickerMessage.value = `上传失败：${(error as Error).message}`;
+  } finally {
+    if (remixBrandRequestIsCurrent(state, requestedBrandId)) {
+      remixUploading.value = false;
+    }
+  }
 }
 
 function refreshRemixAssetMode() {
@@ -676,7 +817,11 @@ function onRemixBrandChange() {
   state.productImageIds = [];
   markFusionStale(state);
   remixProductPickerOpen.value = false;
+  remixUploading.value = false;
+  remixProductImagesLoading.value = false;
   remixProductImages.value = [];
+  remixUnassignedImages.value = [];
+  remixPickerMessage.value = "";
   loadRemixIdeas();
 }
 
@@ -936,13 +1081,21 @@ async function submitRemix() {
 
 onMounted(() => {
   window.addEventListener("keydown", onDetailKeydown);
+  window.addEventListener("scroll", scheduleScrollSave, { passive: true });
   loadContentSources();
   loadTaxonomy(activeBoard.value);
   loadBoard(activeBoard.value);
+  restoreBoardScroll();
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onDetailKeydown);
+  window.removeEventListener("scroll", scheduleScrollSave);
+  if (scrollSaveTimer) {
+    clearTimeout(scrollSaveTimer);
+    scrollSaveTimer = null;
+  }
+  saveBoardScrollPosition(activeBoard.value, window.scrollY || 0);
   if (toastTimer) clearTimeout(toastTimer);
   if (refreshCooldownTimer) clearInterval(refreshCooldownTimer);
 });
@@ -1528,17 +1681,32 @@ onUnmounted(() => {
           <header class="excellent-modal-header">
             <div>
               <h3>选择产品实拍图</h3>
-              <p class="remix-subtitle">最多叠加 {{ MAX_REMIX_PRODUCT_IMAGES }} 张，只展示当前品牌素材。</p>
+              <p class="remix-subtitle">
+                最多叠加 {{ MAX_REMIX_PRODUCT_IMAGES }} 张（已选 {{ remix.productImageIds.length }}）；按最近使用排序。
+              </p>
             </div>
             <button type="button" class="secondary-btn" @click="closeRemixProductPicker()">关闭</button>
           </header>
+          <div class="remix-picker-upload">
+            <label class="upload-button">
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                data-test="remix-product-upload"
+                :disabled="remixUploading"
+                @change="handleRemixProductUpload"
+              />
+              <span>{{ remixUploading ? "上传中..." : "上传产品图到当前品牌" }}</span>
+            </label>
+          </div>
           <p v-if="remixProductImagesLoading" class="excellent-loading">正在加载产品素材...</p>
-          <ul v-else-if="remixProductImages.length" class="remix-product-list">
+          <ul v-else-if="remixProductImages.length" class="remix-product-list" data-test="remix-brand-images">
             <li v-for="image in remixProductImages" :key="image.id" class="remix-product-item">
               <label>
                 <input
                   type="checkbox"
-                  data-test="remix-product-check"
+                  :data-test="`remix-brand-image-${image.id}`"
                   :checked="remix.productImageIds.some((id) => Number(id) === Number(image.id))"
                   @change="toggleRemixProduct(Number(image.id), ($event.target as HTMLInputElement).checked)"
                 />
@@ -1547,7 +1715,35 @@ onUnmounted(() => {
               </label>
             </li>
           </ul>
-          <p v-else class="excellent-loading">当前品牌还没有产品素材，可先到内容选题页上传。</p>
+          <p v-else-if="!remixUnassignedImages.length" class="excellent-loading">
+            当前品牌还没有产品素材，可点击上方“上传产品图到当前品牌”添加。
+          </p>
+          <div v-if="remixUnassignedImages.length" class="remix-unassigned" data-test="remix-unassigned">
+            <p class="remix-subtitle">未归属素材（认领后进入当前品牌素材库）</p>
+            <ul class="remix-product-list">
+              <li v-for="image in remixUnassignedImages" :key="image.id" class="remix-product-item">
+                <label :data-test="`remix-unassigned-image-${image.id}`">
+                  <img
+                    v-if="image.url"
+                    :src="image.url"
+                    :alt="String(image.name || image.fileName || '')"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <span>{{ image.name || image.fileName || `图片 ${image.id}` }}</span>
+                </label>
+                <button
+                  type="button"
+                  class="secondary-btn"
+                  :data-test="`claim-unassigned-${image.id}`"
+                  @click="claimRemixUnassigned(image)"
+                >
+                  认领到当前品牌
+                </button>
+              </li>
+            </ul>
+          </div>
+          <p v-if="remixPickerMessage" class="excellent-status" data-test="remix-picker-message">{{ remixPickerMessage }}</p>
           <button type="button" class="primary-btn" @click="closeRemixProductPicker()">完成</button>
         </div>
       </div>

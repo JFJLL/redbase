@@ -1,26 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import { createPinia } from "pinia";
-import { createMemoryHistory, createRouter, type Router } from "vue-router";
-import GenerationView from "../views/GenerationView.vue";
+import { createPinia, setActivePinia } from "pinia";
+import { useAuthStore } from "@/shared/stores/auth";
+import IdeasView from "@/features/ideas/views/IdeasView.vue";
+import { makeBrandDetail, makeTrend } from "@/features/trends/__tests__/insightsTestUtils";
 import { pollImageJob, IMAGE_JOB_POLL_INTERVAL_MS } from "../api";
+import { makeIdeasRouter, installFlowFetch } from "../__tests__/ideasGenerationHarness";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
-}
-
-function makeRouter(): Router {
-  return createRouter({
-    history: createMemoryHistory(),
-    routes: [
-      { path: "/", name: "home", component: { template: "<div />" } },
-      { path: "/login", name: "login", component: { template: "<div />" } },
-      { path: "/ideas", name: "ideas", component: { template: "<div />" } },
-      { path: "/generation", name: "generation", component: { template: "<div />" } },
-    ],
   });
 }
 
@@ -90,7 +80,7 @@ describe("pollImageJob", () => {
   });
 });
 
-describe("GenerationView", () => {
+describe("real ideas entry (GenerationView removed)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -101,76 +91,66 @@ describe("GenerationView", () => {
     vi.unstubAllGlobals();
   });
 
-  async function mountView() {
-    const router = makeRouter();
-    await router.push("/");
-    await router.isReady();
-    return mount(GenerationView, { global: { plugins: [createPinia(), router] } });
-  }
-
-  it("shows a productized task overview without the bare edit form", async () => {
-    const fetchMock = vi.fn();
+  it("the ideas page hosts all four generation actions with no bare edit form anywhere", async () => {
+    const brandDetail = {
+      brand: makeBrandDetail([makeTrend(5, { id: 5, title: "夏日趋势" })], { id: 1, name: "测试品牌" }),
+    };
+    const fetchMock = installFlowFetch({ brandId: 1, brandDetail });
     vi.stubGlobal("fetch", fetchMock);
-    const wrapper = await mountView();
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", phone: "13800000000", credits: 5 };
+    auth.sessionLoaded = true;
+    const router = makeIdeasRouter();
+    await router.push({ name: "ideas" });
+    await router.isReady();
+    const wrapper = mount(IdeasView, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+    await flushPromises();
 
-    expect(wrapper.find('[data-test="no-context-overview"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="no-context-hint"]').text()).toContain("朋友圈图");
-    expect(wrapper.find('[data-test="no-context-hint"]').text()).toContain("公众号长图");
-    expect(wrapper.find('[data-test="no-context-hint"]').text()).toContain("小红书组图");
-    expect(wrapper.find('[data-test="no-context-hint"]').text()).toContain("风格化图");
-    expect(wrapper.find('[data-test="no-context-go-ideas"]').exists()).toBe(true);
+    // 四个生图动作仍存在（生产入口是内容选题页）。
+    expect(wrapper.find('[data-test="idea-generate-moments-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-generate-wechat-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-generate-xhs-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-generate-style-0"]').exists()).toBe(true);
     // 图3 的裸表单必须消失：原图地址 / 改图提示词 / 提交改图任务。
     expect(wrapper.find('input[name="imageUrl"]').exists()).toBe(false);
     expect(wrapper.find('textarea[name="prompt"]').exists()).toBe(false);
     expect(wrapper.find("form.generation-form").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("提交改图任务");
+    // 无 action 时不打开生成对话框。
+    expect(wrapper.find('[data-test="idea-generation-dialog"]').exists()).toBe(false);
   });
 
-  it("guides from the empty state to the ideas page to pick a topic", async () => {
-    const router = makeRouter();
-    await router.push("/");
+  it("/generation still guides to the ideas page preserving the deep-link query", async () => {
+    const router = makeIdeasRouter();
+    await router.push({ name: "generation", query: { brandId: "1", trendId: "5", ideaIndex: "0", action: "moments" } });
     await router.isReady();
-    const wrapper = mount(GenerationView, { global: { plugins: [createPinia(), router] } });
-    await flushPromises();
-
-    await wrapper.find('[data-test="no-context-go-ideas"]').trigger("click");
-    await flushPromises();
-
     expect(router.currentRoute.value.name).toBe("ideas");
+    expect(router.currentRoute.value.query).toEqual({
+      brandId: "1",
+      trendId: "5",
+      ideaIndex: "0",
+      action: "moments",
+    });
   });
 
-  it("does not auto-start any generation when entering from the sidebar without an action", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const method = (init?.method || "GET").toUpperCase();
-      if (method === "GET" && url === "/api/brands/1") {
-        return jsonResponse(200, {
-          brand: {
-            id: 1,
-            name: "测试品牌",
-            profileType: "brand",
-            logo: null,
-            trends: [
-              {
-                key: "b1",
-                title: "热点趋势",
-                description: "",
-                items: [{ id: 5, title: "夏日趋势", ideas: [{ title: "选题一", summary: "摘要" }] }],
-              },
-            ],
-          },
-        });
-      }
-      if (method === "GET" && url.split("?")[0] === "/api/product-images") {
-        return jsonResponse(200, { images: [] });
-      }
-      throw new Error(`unhandled fetch: ${method} ${url}`);
-    });
+  it("entering the ideas page without an action never auto-starts a generation", async () => {
+    const brandDetail = {
+      brand: makeBrandDetail([makeTrend(5, { id: 5, title: "夏日趋势" })], { id: 1, name: "测试品牌" }),
+    };
+    const fetchMock = installFlowFetch({ brandId: 1, brandDetail, productImages: { images: [] } });
     vi.stubGlobal("fetch", fetchMock);
-    const router = makeRouter();
-    await router.push({ name: "generation", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", phone: "13800000000", credits: 5 };
+    auth.sessionLoaded = true;
+    const router = makeIdeasRouter();
+    await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
     await router.isReady();
-    const wrapper = mount(GenerationView, { global: { plugins: [createPinia(), router] } });
+    const wrapper = mount(IdeasView, { global: { plugins: [pinia, router] } });
     await flushPromises();
     await flushPromises();
 
@@ -179,7 +159,7 @@ describe("GenerationView", () => {
         String(input).includes("/ideas/0/image") && String((init as RequestInit | undefined)?.method || "GET") === "POST",
     );
     expect(imagePosts).toHaveLength(0);
-    expect(wrapper.find('[data-test="context-loading"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="idea-context"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-generation-dialog"]').exists()).toBe(false);
   });
 });
