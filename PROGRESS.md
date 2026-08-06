@@ -1,5 +1,56 @@
 # PROGRESS
 
+## 任务：Vue 迁移闭环发布阻塞修复（2026-08-05，分支 codex/vue-migration-closure-20260805）
+
+### 任务0 基线核对
+
+- 分支 `codex/vue-migration-closure-20260805`，HEAD `a9fad7cc9ee84acef41e88971424c877f3426c5f`，33 项未提交改动全部保留（21 M + 1 D + 13 ?? 中的受跟踪/未跟踪组合，与交接一致）。
+- 交接冻结 patch SHA256 `72405f93…` 复核一致；CodeGraph 定点核对 `buildRecoverableImageJobSnapshot`（无签名）与 active 路由（未接 signLocalAssetUrls）属实。
+- 基线：后端恢复测试 12/12、前端恢复/深链/改图 23/23 通过。
+
+### 阶段1 红→绿：active 恢复 payload 本地图片签名
+
+- 红：新增契约测试（真实 `/api/generated-images/8801/slides/0/file` 路径 + 真实 PNG 文件 + 同一 appConfig 真实验签），断言本地 URL 带签名、未签名 401、签名 200、CDN 不改写、provider 不泄露；修复前 12/13（签名断言红）。
+- 修复：`GET /api/image-jobs/active` 改为 `signLocalAssetUrls(jobs.map(buildRecoverableImageJobSnapshot), appConfig)`，复用现有签名机制，资源路由验签强度零改动。
+- 绿：13/13；红绿证据 `outputs/red-green-active-signing.txt`。期间发现并如实记录两点实现细节：本地资源文件必须符合 `assertGenerationAssetOwnership` 的 `gi_<generationId>_` 命名约束（安全设计）；`handleHistoryRoutes` 的 `serveStoredGeneratedImage` 依赖上层注入 storage（与 src/server/api.js 生产接线一致）。
+
+### 阶段2 真正并发与 credit-event 关联测试
+
+- 单图“两标签”改为真实 `Promise.all`（原顺序调用），断言同 generationId、恰好一行历史、job 关联持久化；failed 退款改 4 路 `Promise.all`，断言无 500、恰好一次退款事件、积分只恢复一次、job refund marker 与退款事件一致。
+- 两个并发用例（9301/9302）使用真实非空 creditEventId，断言 credit event `generation_id` 关联正确 generation 且 payload 携带 generationPayload；9001 断言退款关联。
+- 12 个既有测试语义全部保留，测试数 12→13 不降。
+
+### 阶段3 证据纠正与隔离浏览器复验
+
+- 浏览器证据重写为两段式：第 0 节如实披露初跑误触一次真实 RunningHub（费用/任务/数据保留状态列为用户人工核对项，不猜测已清除）；第 1-4 节为整改后隔离复验（一次性 DB + 本地 health 轮询 + `node -r outputs/outbound-fail-fast.cjs` 出站 fail-fast，非回环请求进程内直接失败）。
+- Kimi WebBridge 真实 Chrome 复验：组内“一页完成（本地签名图）一页运行（本地 health 轮询）”，登录→刷新→退出重登三个检查点全部通过（active 200、回填在、签名形状正确、签名 URL fetch 200 image/png、img naturalWidth=1、无 provider 泄露）；横幅显示「组图正在恢复（1/4）」；截图 `kimi-recovery-signing-banner.png`。
+- 网络捕获 110 条：0 创建 POST、0 真实出站（仅 127.0.0.1 + 浏览器扩展噪音）；过滤摘要 `artifacts/verification/kimi-recovery-network-2026-08-05.json`。
+- evidence.json note 与证据文件同口径（含初跑误触披露）。
+
+### 阶段4 全量验证与 fresh-context 独立审查
+
+- 全量确定性验证通过：check / unit 613 / integration 266 / data 31 / typecheck:frontend / frontend 292 / build / budget PASS / eval:ai 126 / smoke:api ok（隔离 DB、无真实 AI、出站 fail-fast）。
+- 冻结完整 diff（含 13 个未跟踪文件）：`artifacts/verification/frozen-diff-bdcc77d81b07f64f88b8ad2e11a62ed74cfb5bc50f37a7f040b4112847765af5.patch`，SHA256 `bdcc77d8…`；fresh clone 应用 check=0/apply=0，33 文件 CR 归一化后 0 差异（16 个字节级差异为 Windows CRLF 噪声）。
+- 全新 reviewer（agent `019fd242-8633-7481-ba21-c248a6cbfdc1`，昵称 Bacon，`fork_turns=none`，未设置模型/推理覆盖，只读）：**APPROVE-WITH-CONCERNS，无 blocker/major**；2 条 minor（PM2 实例数人工核对项；evidence note 建议补初跑事实——已按建议更新）。原始输出 `reviewer-7-bacon-raw-output.md`，状态证明 `review-state-r3.json`。
+- 审查前/后 `git status --porcelain=v1` SHA256 均为 `A73AA9D35160E315680DD0E4AF1ED09660669426EABA4FBD7C2B16AFF905B446`，前后一致，reviewer 零写入。
+- 该轮 `verify-change.ps1 -RiskOverride R3` 曾以当时工作区 fingerprint `b39fe27f…` 通过；后续账本与 P1 修复已使该值仅保留为历史记录，当前发布指纹以 `.verification/receipt.json` 和 `-CheckReceipt` 实测为准，不再在账本中宣称旧值是“最终 diff”。
+- 未提交、未推送、未合并、未部署；一次性 DB/图片文件已删除；无真实服务调用（除已披露的一次初跑误触）。
+
+### 部署契约核对
+
+- 仓库内 deploy/ 仅 nginx 配置（单上游 127.0.0.1:3013）；`scripts/deploy-server.sh` 为 `pm2 restart redbase`；无 ecosystem/cluster/instances 配置；server.js 单进程。仓库侧未发现 cluster 或多实例配置，不写 BLOCKED.md。
+- 生产 PM2 实例数无法从仓库核实 → 发布前人工核对项：服务器执行 `pm2 jlist`/`pm2 describe redbase` 确认 `exec_mode: fork` 且 `instances: 1`。
+
+### 阶段5 第八轮独立审查发现并修复 P1（2026-08-06）
+
+- 第八轮 fresh-context reviewer（`/root/final_p1_release_review`）审查包含 PROGRESS.md 的 34 项补丁，结论 `REQUEST-CHANGES`：发现 2 个 major（仿图文弹窗上传/认领后素材模式未同步，真实生成静默丢产品图；历史组图默认入口缺 slideIndex、稀疏页过滤后使用错误下标）和 3 个 minor。该结论在修复后自动失效，等待全新 reviewer。
+- 红阶段：新增真实入口测试后 4 项失败——上传/认领后 slide POST 为 0/未带产品图；组图默认改图未发 `slideIndex: 0`；稀疏组图没有原始第 4 页页签。
+- 绿阶段：上传/认领成功后同步 `assetMode` 并使旧融合方案失效，四个真实 slide POST 均携带选中产品图；所有异步返回按发起时品牌复核，切换品牌后旧响应不污染新品牌；历史页展示模型保留 `sourceIndex`，默认选择第一张真实页，稀疏页按原始下标改图。定向测试 11/11 通过。
+- 产品图删除确认、全选题引用清理、三类单图继续改图、历史普通图/改图结果父链均复核保持通过；单实例限制仍为发布前人工核对项。
+- 下一步：跑全量 R3、冻结新的完整 diff、启动全新第九轮 reviewer；最终 reviewer 后禁止再修改受跟踪文件。
+
+## 历史任务（以下为先前记录）
+
 ## 任务：独立复验 P0 阻塞修复（2026-08-04，继续 codex/fix-vue-ui-regressions，未提交工作区保留）
 
 ### 任务0 取证

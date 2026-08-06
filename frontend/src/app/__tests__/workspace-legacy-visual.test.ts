@@ -36,12 +36,13 @@ describe("legacy workspace visual shell", () => {
     setActivePinia(pinia);
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ plans: [], fakeSettle: false }), {
+      vi.fn(async () => {
+        // 每次调用返回全新 Response：多个并发请求（积分套餐 + 任务恢复）各自消费独立 body。
+        return new Response(JSON.stringify({ plans: [], fakeSettle: false }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }),
-      ),
+        });
+      }),
     );
   });
 
@@ -181,15 +182,15 @@ describe("legacy workspace visual shell", () => {
   it("shows the recharge navigation when the backend returns plans", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
+      vi.fn(async () => {
+        return new Response(
           JSON.stringify({
             plans: [{ id: "p1", name: "测试套餐", credits: 10, amountYuan: "0.01" }],
             fakeSettle: false,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      ),
+        );
+      }),
     );
     const { wrapper } = await mountWorkspace();
     const labels = wrapper.findAll(".workspace-nav .sidebar-item-label").map((link) => link.text());

@@ -3,11 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
 import { fetchRechargePlans } from "@/features/billing/api";
+import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
+import RecoveredJobBanner from "@/features/generation/components/RecoveredJobBanner.vue";
 
 const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
 const LOGO_SRC = "/assets/redbase-logo.png";
 const router = useRouter();
 const auth = useAuthStore();
+const recovery = useImageJobRecovery();
 const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
 const billingAvailable = ref(false);
@@ -42,6 +45,7 @@ const accountExpiry = computed(() => getAccountPackageExpiry(accountUser.value))
 onMounted(() => {
   sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
   document.addEventListener("keydown", handleDocumentKeydown);
+  if (auth.isLoggedIn) recovery.start();
   fetchRechargePlans()
     .then((data) => {
       billingAvailable.value = data.plans.length > 0;
@@ -50,6 +54,23 @@ onMounted(() => {
       billingAvailable.value = false;
     });
 });
+
+// 登录后开始恢复当前用户的未完成生图任务；登出/切号时由 auth reset 中止并清空。
+watch(
+  () => auth.isLoggedIn,
+  (loggedIn) => {
+    if (loggedIn) recovery.start();
+  },
+);
+
+// 路由变化（打开/关闭弹窗、切换页面）后补扫当前用户的新活动任务；
+// rescan 只补充未跟踪 jobId，不重复轮询、不重复 complete。
+watch(
+  () => router.currentRoute.value.fullPath,
+  () => {
+    recovery.rescan();
+  },
+);
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleDocumentKeydown);
@@ -154,6 +175,7 @@ async function handleLogout() {
       </div>
     </aside>
     <main class="workspace-main">
+      <RecoveredJobBanner />
       <RouterView />
     </main>
 

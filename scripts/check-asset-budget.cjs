@@ -45,7 +45,6 @@ const ROUTE_CHUNKS = [
   "TrendsView",
   "IdeasView",
   "ExcellentView",
-  "GenerationView",
   "HistoryView",
   "AdminDashboardView",
 ];

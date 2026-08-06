@@ -1,15 +1,19 @@
 <script setup lang="ts">
 // 内容选题内生成对话框：直接承接四类生图的排队、进度、结果、失败与重试。
-// 复用 useIdeaGeneration 状态机（与兼容入口 GenerationView 同一套
-// 一次性 action 票据、素材加载门控、积分幂等与失败恢复），不复制请求逻辑。
+// 复用 useIdeaGeneration 状态机（一次性 action 票据、素材加载门控、
+// 积分幂等与失败恢复），不复制请求逻辑。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import ProductImagePanel from "../components/ProductImagePanel.vue";
+import ImageEditPanel from "../components/ImageEditPanel.vue";
 import { getIdeaSettingsKey } from "../ideaCreativeSettings";
 import { useIdeaGeneration, type IdeaGenerationAction } from "../composables/useIdeaGeneration";
+import type { ImageEditTarget } from "../composables/useImageEdit";
 import { useInsightsStore } from "@/features/trends/stores/insights";
 import {
+  IMAGE_ASPECT_RATIOS,
   hasXhsCarouselSlideImage,
   safeImageSrc,
+  SMART_ASPECT_RATIO_DEFAULTS,
   type BrandDetail,
   type IdeaDetail,
   type TrendDetail,
@@ -70,6 +74,8 @@ const {
   generateAllCarouselSlides,
   generateCarouselSlide,
   editCarouselSlide,
+  afterGenerationSuccess,
+  aspectRatioSelection,
   maybeAutoStartGeneration,
 } = gen;
 
@@ -125,6 +131,48 @@ function actionLabel(action: IdeaGenerationAction): string {
   if (action === "wechat") return "公众号长图";
   if (action === "xhsCarousel") return "小红书组图";
   return "风格化图";
+}
+
+// —— 共享改图面板：朋友圈图 / 公众号长图 / 风格化图结果继续改图 ——
+const editOpenFor = ref<"moments" | "wechat" | "styleImage" | null>(null);
+
+function resultAspectRatio(kind: "moments" | "wechat" | "styleImage", fallback?: string): string {
+  if (fallback && IMAGE_ASPECT_RATIOS.includes(fallback)) return fallback;
+  const selected = String(aspectRatioSelection.value || "smart");
+  if (IMAGE_ASPECT_RATIOS.includes(selected)) return selected;
+  return SMART_ASPECT_RATIO_DEFAULTS[kind] || "3:4";
+}
+
+const editTarget = computed<ImageEditTarget | null>(() => {
+  if (editOpenFor.value === "moments" && momentsResult.value) {
+    return {
+      imageUrl: String(momentsResult.value.imageUrl || momentsResult.value.previewUrl || ""),
+      title: String(momentsResult.value.title || ""),
+      aspectRatio: resultAspectRatio("moments", String(momentsResult.value.aspectRatio || "")),
+      generationId: Number(momentsResult.value.generationId || 0) || null,
+    };
+  }
+  if (editOpenFor.value === "wechat" && wechatResult.value) {
+    return {
+      imageUrl: String(wechatResult.value.imageUrl || wechatResult.value.previewUrl || ""),
+      title: String(wechatResult.value.title || wechatResult.value.publishTitle || ""),
+      aspectRatio: resultAspectRatio("wechat", String(wechatResult.value.aspectRatio || "")),
+      generationId: Number(wechatResult.value.generationId || 0) || null,
+    };
+  }
+  if (editOpenFor.value === "styleImage" && styleResult.value) {
+    return {
+      imageUrl: String(styleResult.value.imageUrl || styleResult.value.previewUrl || ""),
+      title: String(styleResult.value.title || "风格化图片"),
+      aspectRatio: resultAspectRatio("styleImage", String(styleResult.value.aspectRatio || "")),
+      generationId: Number(styleResult.value.generationId || 0) || null,
+    };
+  }
+  return null;
+});
+
+function onEdited(): void {
+  void afterGenerationSuccess();
 }
 </script>
 
@@ -190,6 +238,15 @@ function actionLabel(action: IdeaGenerationAction): string {
         <div class="meta-item"><span>视觉方向</span><div>{{ momentsResult.visualDirection }}</div></div>
         <div class="meta-item"><span>风格</span><div>{{ momentsResult.style }}</div></div>
         <div class="meta-item"><span>构图建议</span><div>{{ momentsResult.composition }}</div></div>
+        <button
+          type="button"
+          class="secondary-btn"
+          data-test="edit-moments-result"
+          @click="editOpenFor = editOpenFor === 'moments' ? null : 'moments'"
+        >
+          {{ editOpenFor === "moments" ? "收起改图" : "继续改图" }}
+        </button>
+        <ImageEditPanel v-if="editOpenFor === 'moments'" :target="editTarget" @edited="onEdited" />
       </div>
 
       <!-- 公众号长图结果 -->
@@ -208,6 +265,15 @@ function actionLabel(action: IdeaGenerationAction): string {
             decoding="async"
           />
         </figure>
+        <button
+          type="button"
+          class="secondary-btn"
+          data-test="edit-wechat-result"
+          @click="editOpenFor = editOpenFor === 'wechat' ? null : 'wechat'"
+        >
+          {{ editOpenFor === "wechat" ? "收起改图" : "继续改图" }}
+        </button>
+        <ImageEditPanel v-if="editOpenFor === 'wechat'" :target="editTarget" @edited="onEdited" />
       </div>
 
       <!-- 风格化图结果 -->
@@ -221,6 +287,15 @@ function actionLabel(action: IdeaGenerationAction): string {
             decoding="async"
           />
         </figure>
+        <button
+          type="button"
+          class="secondary-btn"
+          data-test="edit-style-result"
+          @click="editOpenFor = editOpenFor === 'styleImage' ? null : 'styleImage'"
+        >
+          {{ editOpenFor === "styleImage" ? "收起改图" : "继续改图" }}
+        </button>
+        <ImageEditPanel v-if="editOpenFor === 'styleImage'" :target="editTarget" @edited="onEdited" />
       </div>
 
       <!-- 小红书组图 -->

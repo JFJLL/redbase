@@ -26,7 +26,12 @@ const {
   touchProductImageUsed,
   ASSET_TYPE_PRODUCT,
 } = require("../db/repositories/product-image-repository");
-const { findImageJobByOwner, upsertImageJob } = require("../db/repositories/image-job-repository");
+const {
+  findImageJobByOwner,
+  listActiveImageJobsByOwner,
+  listImageJobsByOwnerAndCarouselGroup,
+  upsertImageJob,
+} = require("../db/repositories/image-job-repository");
 const {
   applyWechatCreativeDirection,
   applyXhsCreativeDirection,
@@ -429,6 +434,64 @@ function loadOwnedImageJob(imageJobs, jobId, userId) {
     return memoryJob;
   }
   return findImageJobByOwner(jobId, userId);
+}
+
+/**
+ * Minimal, non-sensitive recovery snapshot for the current user's active jobs.
+ * Enough to rebuild a carousel pack / resume polling; never exposes provider
+ * URLs, provider names, models, tokens or raw metadata.
+ */
+function buildRecoverableImageJobSnapshot(job) {
+  const context = job?.generationContext && typeof job.generationContext === "object" ? job.generationContext : {};
+  const metadata = job?.metadata && typeof job.metadata === "object" ? job.metadata : {};
+  const snapshot = {
+    jobId: job.id,
+    status: job.status,
+    type: String(context.type || ""),
+    error: String(job.error || ""),
+    createdAt: Number(job.createdAt || 0),
+    generationId: job.generationId == null ? null : job.generationId,
+  };
+  const contextKeys = [
+    "brandId",
+    "trendId",
+    "ideaIndex",
+    "slideIndex",
+    "carouselGroupId",
+    "carouselTitle",
+    "publishTitle",
+    "publishCaption",
+    "caption",
+    "aspectRatio",
+    "creditEventId",
+    "singleSlideOnly",
+    "excellentRemix",
+    "contentMode",
+    "existingIdeaRef",
+    "sourceGenerationId",
+    "parentEditId",
+    "sourceSlideIndex",
+  ];
+  for (const key of contextKeys) {
+    if (context[key] !== undefined && context[key] !== null) {
+      snapshot[key] = context[key];
+    }
+  }
+  const slide = {};
+  const slideKeys = ["title", "pageLabel", "copy", "prompt", "visualDirection", "style", "composition", "slideIndex"];
+  for (const key of slideKeys) {
+    if (metadata[key] !== undefined && metadata[key] !== null) {
+      slide[key] = metadata[key];
+    }
+  }
+  if (job.imageUrl) {
+    slide.imageUrl = job.imageUrl;
+    slide.previewUrl = job.imageUrl;
+  }
+  if (Object.keys(slide).length > 0) {
+    snapshot.slide = slide;
+  }
+  return snapshot;
 }
 
 function resolveExistingExcellentRemixGenerationForJob(userId, job, carouselGroupId) {
@@ -898,6 +961,34 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     return true;
   }
 
+  // 当前用户未完成任务恢复入口（刷新/重登后枚举权威任务）。只读，不消费积分。
+  if (req.method === "GET" && pathname === "/api/image-jobs/active") {
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    const jobs = listActiveImageJobsByOwner(user.id);
+    // 组图恢复按组回填终态页：已完成/失败页不进 active 列表，但横幅需要准确计数，
+    // 因此把 active 组的所有成员一并返回（客户端对终态页只展示不轮询）。
+    const included = new Set(jobs.map((job) => job.id));
+    const activeGroupIds = new Set(
+      jobs
+        .filter((job) => String(job.generationContext?.carouselGroupId || "").trim())
+        .map((job) => String(job.generationContext.carouselGroupId).trim()),
+    );
+    for (const groupId of activeGroupIds) {
+      for (const member of listImageJobsByOwnerAndCarouselGroup(user.id, groupId)) {
+        if (!included.has(member.id)) {
+          included.add(member.id);
+          jobs.push(member);
+        }
+      }
+    }
+    // 恢复 payload 复用与单任务轮询相同的本地资源签名机制：本地
+    // /api/generated-images/... URL 必须带有效 assetExpires/assetSignature，
+    // 外部 HTTPS 图片 URL 由 signLocalAssetUrls 原样保留。
+    json(res, 200, { jobs: signLocalAssetUrls(jobs.map(buildRecoverableImageJobSnapshot), appConfig) });
+    return true;
+  }
+
   const imageJobMatch = pathname.match(/^\/api\/image-jobs\/([a-f0-9]+)$/);
   if (req.method === "GET" && imageJobMatch) {
     const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
@@ -942,15 +1033,24 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     upsertImageJob(user.id, resolved);
     if (resolved.status === "completed" && resolved.generationContext && !resolved.generationId) {
       if (resolved.generationContext.type === "imageEdit") {
-        const editEntry = await appendImageEditToGenerationSql(user.id, resolved);
-        if (editEntry) {
-          updateCreditEventEditResult(resolved.generationContext.creditEventId, editEntry, resolved.generationContext.sourceGenerationId);
-          resolved.generationId = resolved.generationContext.sourceGenerationId;
-          if (editEntry.imageUrl) {
-            resolved.imageUrl = editEntry.imageUrl;
+        // 改图记录追加与组图落库/complete 可能并发 upsert 同一 generation 行：
+        // 锁 key 必须与组图写入方一致（组图按 carouselGroupId 加锁）。源 generation
+        // 属于组图时从 payload 推导 groupId 复用同一把锁；非组图行无并发写入方。
+        const sourceGenerationId = Number(resolved.generationContext.sourceGenerationId || 0);
+        const sourceGeneration = sourceGenerationId ? findGenerationByOwner(sourceGenerationId, user.id) : null;
+        const sourceGroupId = normalizeCarouselGroupId(sourceGeneration?.payload?.carouselGroupId || "");
+        const lockKey = sourceGroupId || `generation-${sourceGenerationId || "none"}`;
+        await withExcellentRemixGroupLock(user.id, lockKey, async () => {
+          const editEntry = await appendImageEditToGenerationSql(user.id, resolved);
+          if (editEntry) {
+            updateCreditEventEditResult(resolved.generationContext.creditEventId, editEntry, resolved.generationContext.sourceGenerationId);
+            resolved.generationId = resolved.generationContext.sourceGenerationId;
+            if (editEntry.imageUrl) {
+              resolved.imageUrl = editEntry.imageUrl;
+            }
+            upsertImageJob(user.id, resolved);
           }
-          upsertImageJob(user.id, resolved);
-        }
+        });
       } else if (resolved.generationContext.excellentRemix === true) {
         try {
           const generation = await persistExcellentRemixSlideFromCompletedJob({
@@ -987,30 +1087,89 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         const brand = findBrandByOwner(resolved.generationContext.brandId, user.id);
         const trend = findTrendItem(brand, resolved.generationContext.trendId);
         const idea = trend?.ideas?.[resolved.generationContext.ideaIndex];
-        if (brand && trend && idea && (resolved.generationContext.type !== "xhsCarouselSlide" || resolved.generationContext.singleSlideOnly)) {
-          const isSingleCarouselSlide = resolved.generationContext.type === "xhsCarouselSlide" && resolved.generationContext.singleSlideOnly;
+        const legacyCarouselGroupId = (() => {
+          if (resolved.generationContext.type !== "xhsCarouselSlide") return "";
+          if (resolved.generationContext.singleSlideOnly) return "";
+          // 迁移窗口内旧版整组任务：无 carouselGroupId，按 creditEventId 推导稳定分组键，
+          // 使恢复轮询也能按组落历史（一次扣费对应一行组历史）。
+          return resolved.generationContext.creditEventId ? `legacy-${resolved.generationContext.creditEventId}` : "";
+        })();
+        const legacyCarouselSlide =
+          resolved.generationContext.type === "xhsCarouselSlide" &&
+          !resolved.generationContext.singleSlideOnly &&
+          Boolean(legacyCarouselGroupId);
+        if (
+          brand &&
+          trend &&
+          idea &&
+          (resolved.generationContext.type !== "xhsCarouselSlide" ||
+            resolved.generationContext.singleSlideOnly ||
+            legacyCarouselSlide)
+        ) {
+          const isSingleCarouselSlide =
+            (resolved.generationContext.type === "xhsCarouselSlide" && resolved.generationContext.singleSlideOnly) ||
+            legacyCarouselSlide;
           const type = isSingleCarouselSlide ? "xhsCarousel" : resolved.generationContext.type || "moments";
           const channelLabel = isSingleCarouselSlide ? "小红书组图" : resolved.generationContext.channelLabel || "朋友圈图";
+          if (legacyCarouselSlide) {
+            resolved.generationContext = {
+              ...resolved.generationContext,
+              carouselGroupId: legacyCarouselGroupId,
+            };
+          }
           const payload = isSingleCarouselSlide
             ? buildSingleSlideCarouselPayload(resolved)
             : type === "wechat"
               ? buildGeneratedAssetPayload(resolved)
               : buildMomentsGenerationPayload(resolved);
-          const generation = isSingleCarouselSlide
-            ? await upsertSingleSlideCarouselGeneration({ userId: user.id, brand, trend, idea, job: resolved, payload, persistGenerationImages, generatedAssetStorage })
-            : createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
-          if (!isSingleCarouselSlide) {
-            await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
+          if (isSingleCarouselSlide) {
+            // 普通组图与仿图文共用进程内组锁：两个标签页并发轮询同一组时，
+            // 只允许一个 writer 创建/合并组历史行，另一个必须看到已存在行。
+            const groupId = normalizeCarouselGroupId(resolved.generationContext.carouselGroupId);
+            await withExcellentRemixGroupLock(user.id, groupId || `single-slide-${resolved.id}`, async () => {
+              const generation = await upsertSingleSlideCarouselGeneration({
+                userId: user.id,
+                brand,
+                trend,
+                idea,
+                job: resolved,
+                payload,
+                persistGenerationImages,
+                generatedAssetStorage,
+              });
+              updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, generation.payload || payload);
+              resolved.generationId = generation.id;
+              const currentSlideIndex = Number.isInteger(payload.sourceSlideIndex) ? payload.sourceSlideIndex : 0;
+              const currentSlide = generation.payload?.slides?.[currentSlideIndex];
+              const currentImageUrl = currentSlide?.imageUrl || currentSlide?.previewUrl || generation.previewUrl;
+              if (currentImageUrl) {
+                resolved.imageUrl = currentImageUrl;
+              }
+              upsertImageJob(user.id, resolved);
+            });
+          } else {
+            // 单图（朋友圈/公众号/风格化）并发首轮询（两个标签页同时恢复）也必须在
+            // job 级串行化：锁内复查 generationId，先到者落库并回写，后到者直接复用，
+            // 避免“先查后插”窗口产生重复历史行。
+            await withExcellentRemixGroupLock(user.id, `job-${resolved.id}`, async () => {
+              const persisted = findImageJobByOwner(resolved.id, user.id);
+              if (persisted?.generationId) {
+                resolved.generationId = persisted.generationId;
+                if (persisted.imageUrl && !resolved.imageUrl) {
+                  resolved.imageUrl = persisted.imageUrl;
+                }
+                return;
+              }
+              const generation = createSqlGenerationRecord(user.id, brand, trend, idea, type, channelLabel, payload);
+              await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
+              updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, generation.payload || payload);
+              resolved.generationId = generation.id;
+              if (generation.previewUrl) {
+                resolved.imageUrl = generation.previewUrl;
+              }
+              upsertImageJob(user.id, resolved);
+            });
           }
-          updateCreditEventGeneration(resolved.generationContext.creditEventId, generation, generation.payload || payload);
-          resolved.generationId = generation.id;
-          const currentSlideIndex = Number.isInteger(payload.sourceSlideIndex) ? payload.sourceSlideIndex : 0;
-          const currentSlide = isSingleCarouselSlide ? generation.payload?.slides?.[currentSlideIndex] : null;
-          const currentImageUrl = currentSlide?.imageUrl || currentSlide?.previewUrl || generation.previewUrl;
-          if (currentImageUrl) {
-            resolved.imageUrl = currentImageUrl;
-          }
-          upsertImageJob(user.id, resolved);
         }
       }
     }
@@ -2056,49 +2215,53 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const existingGenerationId = findGenerationIdForCreditEvent(Number(payload.creditEventId), user.id);
-    const existingGeneration =
-      (existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null) ||
-      findXhsCarouselGenerationByGroup(user.id, carouselPack.carouselGroupId);
-    if (existingGeneration) {
-      const nextPayload = mergeXhsCarouselSlidePayload(existingGeneration.payload || {}, {
-        ...carouselPack,
-        generatedMode: "group",
-        carouselGroupId: normalizeCarouselGroupId(carouselPack.carouselGroupId || existingGeneration.payload?.carouselGroupId),
-      });
-      const nextGeneration = {
-        ...existingGeneration,
-        cardTitle: nextPayload.title || existingGeneration.cardTitle,
-        previewUrl: nextPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
-        summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
-        payload: nextPayload,
-      };
-      const savedGeneration = await persistGenerationAndCommit(nextGeneration, { persistGenerationImages, generatedAssetStorage, commit: upsertGeneration });
-      updateCreditEventGeneration(Number(payload.creditEventId), savedGeneration, savedGeneration.payload);
-      json(res, 200, {
-        generation: sanitizeGeneration(savedGeneration, appConfig),
-        creditEventId: Number(payload.creditEventId) || null,
-        user: sanitizeUser(user),
-      });
-      return true;
-    }
+    // 普通组图 complete 与单页落库共用进程内组锁：并发 complete（两个标签页
+    // 同时恢复同一组图）串行执行，后到者必须合并进已存在的历史行，绝不重复插入。
+    const completeResult = await withExcellentRemixGroupLock(
+      user.id,
+      normalizeCarouselGroupId(carouselPack.carouselGroupId),
+      async () => {
+        const existingGenerationId = findGenerationIdForCreditEvent(Number(payload.creditEventId), user.id);
+        const existingGeneration =
+          (existingGenerationId ? findGenerationByOwner(existingGenerationId, user.id) : null) ||
+          findXhsCarouselGenerationByGroup(user.id, carouselPack.carouselGroupId);
+        if (existingGeneration) {
+          const nextPayload = mergeXhsCarouselSlidePayload(existingGeneration.payload || {}, {
+            ...carouselPack,
+            generatedMode: "group",
+            carouselGroupId: normalizeCarouselGroupId(carouselPack.carouselGroupId || existingGeneration.payload?.carouselGroupId),
+          });
+          const nextGeneration = {
+            ...existingGeneration,
+            cardTitle: nextPayload.title || existingGeneration.cardTitle,
+            previewUrl: nextPayload.slides.find(isGeneratedCarouselSlide)?.previewUrl || existingGeneration.previewUrl || "",
+            summary: nextPayload.publishCaption || nextPayload.caption || existingGeneration.summary || "",
+            payload: nextPayload,
+          };
+          const merged = await persistGenerationAndCommit(nextGeneration, { persistGenerationImages, generatedAssetStorage, commit: upsertGeneration });
+          const creditEvent = updateCreditEventGeneration(Number(payload.creditEventId), merged, merged.payload);
+          return { generation: merged, creditEventId: creditEvent?.id || Number(payload.creditEventId) || null };
+        }
 
-    const generation = createSqlGenerationRecord(user.id, brand, trend, idea, "xhsCarousel", "小红书组图", carouselPack);
-    await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
-    const creditEvent =
-      updateCreditEventGeneration(Number(payload.creditEventId), generation, carouselPack) ||
-      attachGenerationToLatestCreditEvent({
-        user,
-        actionType: "xhsCarousel",
-        brand,
-        trend,
-        idea,
-        generation,
-        generationPayload: carouselPack,
-      });
+        const generation = createSqlGenerationRecord(user.id, brand, trend, idea, "xhsCarousel", "小红书组图", carouselPack);
+        const created = await persistGenerationAndCommit(generation, { persistGenerationImages, generatedAssetStorage, commit: insertGeneration });
+        const creditEvent =
+          updateCreditEventGeneration(Number(payload.creditEventId), created, carouselPack) ||
+          attachGenerationToLatestCreditEvent({
+            user,
+            actionType: "xhsCarousel",
+            brand,
+            trend,
+            idea,
+            generation: created,
+            generationPayload: carouselPack,
+          });
+        return { generation: created, creditEventId: creditEvent?.id || null };
+      },
+    );
     json(res, 200, {
-      generation: sanitizeGeneration(generation, appConfig),
-      creditEventId: creditEvent?.id || null,
+      generation: sanitizeGeneration(completeResult.generation, appConfig),
+      creditEventId: completeResult.creditEventId,
       user: sanitizeUser(user),
     });
     return true;

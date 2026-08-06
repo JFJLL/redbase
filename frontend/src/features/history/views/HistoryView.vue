@@ -4,6 +4,8 @@ import { useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
+import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
+import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
 import {
   HISTORY_TYPE_LABELS,
   KNOWN_ASPECT_RATIOS,
@@ -31,6 +33,8 @@ const loading = ref(false);
 const loadError = ref("");
 const detailItem = ref<GenerationHistoryItem | null>(null);
 const detailSlideIndex = ref<number | null>(null);
+const editOpen = ref(false);
+const editEntryId = ref<string | null>(null);
 let filterTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 图片加载失败：明确错误态 + 重试；签名过期只刷新一次列表拿新签名，不无限循环。
@@ -48,6 +52,47 @@ const detailImageUrl = computed(() => {
     if (slideSrc) return slideSrc;
   }
   return safeImageSrc(item.previewUrl);
+});
+
+const editTarget = computed<ImageEditTarget | null>(() => {
+  const item = detailItem.value;
+  if (!item) return null;
+  const base = {
+    generationId: Number(item.id),
+    aspectRatio: String(item.payload?.aspectRatio || ""),
+  };
+  const history = Array.isArray(item.payload?.editHistory) ? item.payload.editHistory : [];
+  if (editEntryId.value) {
+    const entry = history.find((candidate) => String((candidate as { id?: unknown })?.id) === editEntryId.value);
+    if (entry) {
+      const record = entry as { id?: unknown; imageUrl?: string; previewUrl?: string; title?: string; sourceSlideIndex?: number };
+      return {
+        imageUrl: String(record.imageUrl || record.previewUrl || ""),
+        title: String(record.title || item.cardTitle || "改图结果"),
+        ...base,
+        parentEditId: String(record.id),
+        slideIndex: Number.isInteger(record.sourceSlideIndex) ? Number(record.sourceSlideIndex) : detailSlideIndex.value,
+      };
+    }
+  }
+  return {
+    imageUrl: detailImageUrl.value,
+    title: item.cardTitle || "历史图片",
+    ...base,
+    slideIndex: detailSlideIndex.value,
+  };
+});
+
+const editHistoryEntries = computed(() => {
+  const item = detailItem.value;
+  if (!item || !Array.isArray(item.payload?.editHistory)) return [];
+  return item.payload.editHistory as Array<{
+    id?: unknown;
+    imageUrl?: string;
+    previewUrl?: string;
+    title?: string;
+    createdAt?: string;
+  }>;
 });
 
 function isImageFailed(url: string): boolean {
@@ -85,10 +130,14 @@ function scheduleSignatureRefresh() {
   }, 250);
 }
 
-function slideImages(item: GenerationHistoryItem): Array<{ src: string; title: string }> {
+function slideImages(item: GenerationHistoryItem): Array<{ sourceIndex: number; src: string; title: string }> {
   return (item.payload?.slides || [])
     .slice(0, 4)
-    .map((slide) => ({ src: safeImageSrc(slide.imageUrl || slide.previewUrl), title: slide.title || "" }))
+    .map((slide, sourceIndex) => ({
+      sourceIndex,
+      src: safeImageSrc(slide.imageUrl || slide.previewUrl),
+      title: slide.title || "",
+    }))
     .filter((entry) => Boolean(entry.src));
 }
 
@@ -174,14 +223,33 @@ async function removeItem(generationId: number) {
 
 function openDetail(item: GenerationHistoryItem, slideUrl = "") {
   detailItem.value = item;
-  const slides = Array.isArray(item.payload?.slides) ? item.payload.slides : [];
-  const matchIndex = slides.findIndex((slide) => safeImageSrc(slide.imageUrl || slide.previewUrl) === slideUrl);
-  detailSlideIndex.value = matchIndex >= 0 ? matchIndex : null;
+  const slides = slideImages(item);
+  const requestedUrl = slideUrl || safeImageSrc(item.previewUrl);
+  const selected = slides.find((slide) => slide.src === requestedUrl) || slides[0] || null;
+  detailSlideIndex.value = selected?.sourceIndex ?? null;
+  editOpen.value = false;
+  editEntryId.value = null;
 }
 
 function closeDetail() {
   detailItem.value = null;
   detailSlideIndex.value = null;
+  editOpen.value = false;
+  editEntryId.value = null;
+}
+
+function openEditFromHistory(entryId: string | null): void {
+  editEntryId.value = entryId;
+  editOpen.value = true;
+}
+
+async function onEdited(): Promise<void> {
+  try {
+    await auth.refreshUser();
+  } catch (error) {
+    if (isAbortError(error) || isUnauthorized(error)) return;
+  }
+  await loadHistory();
 }
 
 async function loadBrands() {
@@ -289,6 +357,7 @@ onUnmounted(() => {
               v-if="getGenerationPrimaryImageUrl(item)"
               type="button"
               class="secondary-btn"
+              data-test="history-detail"
               @click="openDetail(item)"
             >
               查看
@@ -370,6 +439,19 @@ onUnmounted(() => {
           <button type="button" class="secondary-btn" @click="closeDetail()">关闭</button>
         </header>
         <p class="history-card-ref">{{ detailItem.channelLabel }} · {{ typeLabel(detailItem) }}</p>
+        <div v-if="slideImages(detailItem).length > 1" class="history-slide-tabs" data-test="history-slide-tabs">
+          <button
+            v-for="slide in slideImages(detailItem)"
+            :key="slide.sourceIndex"
+            type="button"
+            class="secondary-btn history-slide-tab"
+            :class="{ 'is-active': detailSlideIndex === slide.sourceIndex }"
+            :data-test="`history-slide-tab-${slide.sourceIndex}`"
+            @click="detailSlideIndex = slide.sourceIndex"
+          >
+            第 {{ slide.sourceIndex + 1 }} 张
+          </button>
+        </div>
         <template v-if="detailImageUrl">
           <div v-if="isImageFailed(detailImageUrl)" class="history-image-error" data-test="history-image-error">
             <span>图片加载失败</span>
@@ -390,6 +472,35 @@ onUnmounted(() => {
             @error="onHistoryImageError(detailImageUrl)"
           />
         </template>
+        <div v-if="editHistoryEntries.length" class="history-edit-history" data-test="history-edit-history">
+          <strong>改图记录</strong>
+          <ul class="history-edit-history-list">
+            <li v-for="entry in editHistoryEntries" :key="String(entry.id || '')" class="history-edit-history-item">
+              <img
+                v-if="safeImageSrc(entry.imageUrl || entry.previewUrl)"
+                :src="safeImageSrc(entry.imageUrl || entry.previewUrl)"
+                :alt="entry.title || '改图结果'"
+                loading="lazy"
+                decoding="async"
+              />
+              <span>{{ entry.title || "改图结果" }}</span>
+              <button
+                type="button"
+                class="secondary-btn"
+                :data-test="`history-edit-history-item-${String(entry.id || '')}`"
+                @click="openEditFromHistory(String(entry.id || ''))"
+              >
+                继续改图
+              </button>
+            </li>
+          </ul>
+        </div>
+        <div class="history-edit-actions">
+          <button type="button" class="secondary-btn" data-test="history-edit-open" @click="openEditFromHistory(null)">
+            {{ editOpen ? "收起改图" : "改图" }}
+          </button>
+        </div>
+        <ImageEditPanel v-if="editOpen" :target="editTarget" @edited="onEdited" />
       </div>
     </div>
   </section>
@@ -605,6 +716,54 @@ onUnmounted(() => {
 .history-modal-image {
   max-width: 100%;
   border-radius: var(--radius-md);
+}
+
+.history-slide-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.history-slide-tab.is-active {
+  border-color: var(--color-brand, #2f6fed);
+  color: var(--color-brand, #2f6fed);
+  font-weight: 700;
+}
+
+.history-edit-history {
+  display: grid;
+  gap: 8px;
+}
+
+.history-edit-history-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-edit-history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-edit-history-item img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-md, 8px);
+}
+
+.history-edit-history-item span {
+  flex: 1;
+  font-size: 13px;
+}
+
+.history-edit-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* Legacy light-workspace history parity. */
