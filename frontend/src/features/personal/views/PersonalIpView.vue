@@ -768,10 +768,6 @@ function avatarInitial(name: string): string {
   gap: var(--workspace-grid-gap);
 }
 
-.brand-list > .brand-card:only-child {
-  grid-column: 1 / -1;
-}
-
 .brand-card {
   position: relative;
   overflow: hidden;

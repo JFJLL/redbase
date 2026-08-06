@@ -3,6 +3,7 @@ import BrandsViewSource from "@/features/brands/views/BrandsView.vue?raw";
 import TrendsViewSource from "@/features/trends/views/TrendsView.vue?raw";
 import ExcellentViewSource from "@/features/excellent/views/ExcellentView.vue?raw";
 import HistoryViewSource from "@/features/history/views/HistoryView.vue?raw";
+import WorkspaceHomeViewSource from "@/app/views/WorkspaceHomeView.vue?raw";
 
 // 视觉回归契约（2026-08-05 交接基线）：
 // 旧版 D:\download\redbase\public\styles.css 的密度约束必须以 CSS 形式存在，
@@ -70,5 +71,14 @@ describe("workspace visual-regression CSS contract", () => {
     expect(ExcellentViewSource).toContain("excellent-asset-block");
     expect(ExcellentViewSource).toContain("remix-open-product-picker");
     expect(ExcellentViewSource).toContain("excellent-originality-note");
+  });
+
+  it("首页四张功能卡同行等高，标题/正文/入口位置对齐，入口推到底部", () => {
+    expect(WorkspaceHomeViewSource).toMatch(/\.home-grid\s*\{[\s\S]*?align-items:\s*stretch/);
+    expect(WorkspaceHomeViewSource).toMatch(/\.home-card\s*\{[\s\S]*?display:\s*flex/);
+    expect(WorkspaceHomeViewSource).toMatch(/\.home-card\s*\{[\s\S]*?flex-direction:\s*column/);
+    expect(WorkspaceHomeViewSource).toMatch(/\.inline-link\s*\{[\s\S]*?margin-top:\s*auto/);
+    // 最后一张换行时仍保持相同列宽（minmax(0,1fr) 防溢出）。
+    expect(WorkspaceHomeViewSource).toMatch(/grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
   });
 });

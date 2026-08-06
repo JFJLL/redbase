@@ -95,8 +95,13 @@ describe("IdeasView", () => {
     expect(cards[0].text()).toContain("面向人群：一线城市上班族");
     expect(cards[0].text()).toContain("开头钩子：工位上的第一口秋天");
     expect(cards[0].text()).toContain("#咖啡日常");
-    // 内容资产未补齐时的占位提示
-    expect(cards[0].text()).toContain("趋势和选题已生成。朋友圈、小红书和公众号的完整发布文案会在你首次生成对应内容时自动补齐。");
+    // 内容资产未补齐时仍渲染四行字段结构，值为诚实占位（不伪装成最终文案）。
+    const incomplete = cards[0].text();
+    expect(incomplete).toContain("朋友圈标题：");
+    expect(incomplete).toContain("朋友圈文案：");
+    expect(incomplete).toContain("小红书标题：");
+    expect(incomplete).toContain("小红书文案：");
+    expect(incomplete).toContain("首次生成时自动补齐");
   });
 
   it("regenerates ideas with the custom prompt and applies trend + credits from the response", async () => {

@@ -2355,6 +2355,7 @@ onUnmounted(() => {
 }
 
 .excellent-card-body {
+  flex: 1;
   gap: 10px;
   padding: 14px;
 }
@@ -2371,6 +2372,8 @@ onUnmounted(() => {
 }
 
 .excellent-card-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: auto;
 }

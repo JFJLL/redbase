@@ -734,19 +734,16 @@ function closeGeneration(): void {
             <div><strong>面向人群：</strong>{{ idea.audience }}</div>
             <div><strong>开头钩子：</strong>{{ idea.hook }}</div>
 
-            <div v-if="!hasCompleteIdeaContentAssets(idea)" class="idea-asset-preview is-incomplete">
-              趋势和选题已生成。朋友圈、小红书和公众号的完整发布文案会在你首次生成对应内容时自动补齐。
-            </div>
-            <div v-else class="idea-asset-preview">
-              <div><strong>朋友圈标题：</strong>{{ idea.contentAssets.moments?.title || "" }}</div>
-              <div><strong>朋友圈文案：</strong>{{ idea.contentAssets.moments?.caption || "" }}</div>
+            <div class="idea-asset-preview" :class="{ 'is-incomplete': !hasCompleteIdeaContentAssets(idea) }">
+              <div><strong>朋友圈标题：</strong>{{ idea.contentAssets.moments?.title || "首次生成时自动补齐" }}</div>
+              <div><strong>朋友圈文案：</strong>{{ idea.contentAssets.moments?.caption || "首次生成时自动补齐" }}</div>
               <div>
                 <strong>小红书标题：</strong
-                >{{ idea.contentAssets.xhsCarousel?.publishTitle || idea.contentAssets.xhsCarousel?.title || "" }}
+                >{{ idea.contentAssets.xhsCarousel?.publishTitle || idea.contentAssets.xhsCarousel?.title || "首次生成时自动补齐" }}
               </div>
               <div>
                 <strong>小红书文案：</strong
-                >{{ idea.contentAssets.xhsCarousel?.publishCaption || idea.contentAssets.xhsCarousel?.caption || "" }}
+                >{{ idea.contentAssets.xhsCarousel?.publishCaption || idea.contentAssets.xhsCarousel?.caption || "首次生成时自动补齐" }}
               </div>
             </div>
 
@@ -1227,11 +1224,6 @@ function closeGeneration(): void {
   color: var(--color-text-secondary);
 }
 
-.idea-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .idea-tag-list {
   display: flex;
   flex-wrap: wrap;
@@ -1523,8 +1515,29 @@ function closeGeneration(): void {
 }
 
 .idea-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-top: 4px;
+}
+
+.idea-actions .cost-button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 54px;
+  padding: 8px 10px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.idea-actions .cost-button small {
+  font-size: 11px;
+  line-height: 1.2;
+  opacity: 0.85;
 }
 
 .idea-tag-list {
@@ -1682,6 +1695,10 @@ function closeGeneration(): void {
 
   .idea-aspect-ratio-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .idea-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

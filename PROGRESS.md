@@ -245,3 +245,13 @@
 - 对抗性复现通过：P5 对已存在/不存在手机号及连续请求均固定拒绝，且不调用 SMS provider、不写验证码；P6 在支付关闭/网关不可用时返回空套餐，启用时正常返回，存量 notify 测试继续通过。
 - 独立运行：P5/P6 后端 28/28、前端导航 9/9、`npm test` 564/564、integration 225/225、data 31/31；两张 Kimi 关闭/启用截图已人工核对。
 - 独立证据写入 `artifacts/verification/independent-review-evidence.md`；随后按最终指纹刷新 evidence，并执行完整 R3 verifier 与 `-CheckReceipt`。
+
+### 上线后 UI 细节修复（2026-08-06）
+
+- 分支：codex/fix-post-deploy-ui-polish（基于 origin/master 7ca13167），仅前端展示层改动。
+- 7 项用户可见修复：① 趋势 analysis-summary 不再被通用 overflow:hidden 裁切（overflow:visible + height:auto）；② 未完整选题卡渲染与完整卡相同的四行发布字段（缺失值用“首次生成时自动补齐”诚实占位）；③ 四个生图按钮改为 4 列等宽网格（窄屏 2 列换行）；④ 个人 IP 单卡不再 grid-column:1/-1 跨整行；⑤ 优秀内容卡 body flex:1、actions 双列等宽并推到底部；⑥ 首页同排卡片等高（3 列网格 3+1 布局）、入口 margin-top:auto 对齐；⑦ 常驻“生图任务恢复”横幅移除，RecoveredJobBanner 重写为自动消失 toast（4s，失败 role=alert，600ms 窗口聚合多任务，jobId/groupId+终态去重，扫描/轮询无 UI；404/401 终态直接展示服务端原因，不冒充“积分已退回”）。
+- 红→绿：新增 recoveredJobToast.test.ts（10 例）、trendsLayoutContract/ideasLayoutContract/personalLayoutContract/excellentLayoutContract（结构契约），扩展 workspace-regression-contract 首页契约；红灯（origin/master 基线 + 最终版测试文件 44 例）19 失败/25 通过、绿灯全通过，日志见 `.verification/red-green-ui-polish-red.log` 与 `.verification/frontend-ui.log`。
+- 安全边界未动：useImageJobRecovery 扫描/轮询语义、服务端 image job/退款、数据库、AI/短信/支付均未修改；恢复流程零创建 POST、退款幂等保持。
+- 浏览器验收（Kimi WebBridge，隔离 DB + 出站 fail-fast，端口 3014）：1433×780 / 1722×794 / 1722×888 / 390×844 逐页测量与截图；analysis-summary clientHeight==scrollHeight（79==79）、clientWidth>=scrollWidth；四按钮等宽等高；个人 IP 卡 666px==品牌卡；优秀内容按钮同基线；首页四卡 175px 等高；390px 无横向溢出。失败 toast 弹出→5s 内消失→刷新后不重复；fetch 日志仅 GET active+ab1001f，零 POST；退款恰好一次（59→60 积分）。机器可读测量报告与截图见 `artifacts/verification/ui-polish-20260806/`（browser-report.json、*.png）。
+- 独立审查：冻结 diff（含未跟踪测试文件）与 SHA256 见 `artifacts/verification/ui-polish-20260806/frozen-diff.patch` 与 `agent-review-evidence.md`；首轮 fresh reviewer（id 019fd5f7-0f91-7151-9af0-3d4a40967795）REQUEST_CHANGES（验证契约未闭合 + 404/401 文案覆盖不全）；按审查意见补齐红绿日志、receipt/evidence，修复 404/401 聚合/组图文案与死字段后换新 reviewer 复审，完整轮次记录见 `agent-review-evidence.md`。
+- 全量验证与 receipt：见 .verification/receipt.json（覆盖本次 14 文件 diff 的最终指纹）。
