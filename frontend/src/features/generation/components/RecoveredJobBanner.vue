@@ -1,150 +1,230 @@
 <script setup lang="ts">
-// 全局生图任务恢复横幅：展示服务端权威任务在刷新/离开/关闭弹窗后的恢复进度。
-// 只读展示 + 可关闭终态条目；不在此发起任何生成 POST。
-import { computed } from "vue";
+// 生图任务恢复提示（toast presenter）：
+// 常驻“生图任务恢复”卡片已移除。恢复服务照常扫描/轮询服务端权威任务；
+// 终态事件只以自动消失的 toast 呈现，扫描与轮询过程不产生任何常驻 UI。
+// 只读展示，不在此发起任何生成 POST；失败退款与历史写入仍由服务端轮询时幂等完成。
+import { onBeforeUnmount, ref, watch } from "vue";
 import { useImageJobRecovery } from "../composables/useImageJobRecovery";
+
+const TOAST_DURATION_MS = 4000;
+const AGGREGATE_WINDOW_MS = 600;
+
+interface RecoveryToastEvent {
+  kind: "completed" | "failed";
+  label: string;
+  group: boolean;
+  hasFailedSlides: boolean;
+  /** 404/401 等未扣费终态：不得冒充“积分已退回”。 */
+  noRefund: boolean;
+  errorText: string;
+}
 
 const recovery = useImageJobRecovery();
 
-const visible = computed(() => {
-  const state = recovery.state;
-  return state.tasks.length > 0 || state.groups.length > 0 || Boolean(state.error);
-});
+const toastMessage = ref("");
+const toastRole = ref<"status" | "alert">("status");
 
-function dismissTask(jobId: string): void {
-  recovery.dismissTask(jobId);
+let dismissTimer: ReturnType<typeof setTimeout> | null = null;
+let aggregateTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingEvents: RecoveryToastEvent[] = [];
+/** 会话内已提示过的终态：rescan/路由变化/重复轮询不重复弹同一终态。 */
+const seenTerminal = new Set<string>();
+
+function groupLabel(title: string): string {
+  return title.includes("组图") ? title : `${title}组图`;
 }
 
-function dismissGroup(groupId: string): void {
-  recovery.dismissGroup(groupId);
+function isNoRefundTerminal(errorText: string): boolean {
+  return errorText.includes("不存在") || errorText.includes("无权") || errorText.includes("登录");
 }
 
-function taskText(label: string, status: string, error?: string): string {
-  if (status === "completed") return `${label}已恢复完成并写入历史。`;
-  if (status === "failed") {
-    const message = String(error || "");
-    if (message.includes("不存在") || message.includes("无权") || message.includes("登录")) {
-      return `${label}：${message}`;
-    }
-    return `${label}生成失败，积分已按规则退回。`;
+function showToast(message: string, role: "status" | "alert"): void {
+  toastMessage.value = message;
+  toastRole.value = role;
+  if (dismissTimer) clearTimeout(dismissTimer);
+  dismissTimer = setTimeout(() => {
+    toastMessage.value = "";
+    dismissTimer = null;
+  }, TOAST_DURATION_MS);
+}
+
+function buildFailureMessage(events: RecoveryToastEvent[]): string {
+  const tasks = events.filter((event) => !event.group);
+  const groups = events.filter((event) => event.group);
+  const parts: string[] = [];
+  const refundTasks = tasks.filter((event) => !event.noRefund);
+  const noRefundTasks = tasks.filter((event) => event.noRefund);
+  if (refundTasks.length === 1) {
+    parts.push(`${refundTasks[0].label}生成失败，积分已退回。`);
+  } else if (refundTasks.length > 1) {
+    parts.push(`${refundTasks.length} 个生图任务生成失败，积分已退回。`);
   }
-  return `${label}正在恢复生成…`;
+  if (noRefundTasks.length === 1) {
+    // 404/401 等终态并未产生可退款项，直接展示服务端原因，不冒充“积分已退回”。
+    parts.push(`${noRefundTasks[0].label}：${noRefundTasks[0].errorText}`);
+  } else if (noRefundTasks.length > 1) {
+    parts.push(`${noRefundTasks.length} 个生图任务已停止恢复。`);
+  }
+  const failedGroups = groups.filter((event) => event.hasFailedSlides);
+  const refundFailedGroups = failedGroups.filter((event) => !event.noRefund);
+  const noRefundFailedGroups = failedGroups.filter((event) => event.noRefund);
+  const historyGroups = groups.filter(
+    (event) =>
+      !event.hasFailedSlides &&
+      (event.errorText.includes("写入历史失败") || event.errorText.includes("上下文已失效")),
+  );
+  const partialGroups = groups.filter(
+    (event) => !event.hasFailedSlides && !historyGroups.includes(event),
+  );
+  if (refundFailedGroups.length === 1) {
+    parts.push(`${groupLabel(refundFailedGroups[0].label)}生成失败，积分已退回。`);
+  } else if (refundFailedGroups.length > 1) {
+    parts.push(`${refundFailedGroups.length} 个组图生成失败，积分已退回。`);
+  }
+  if (noRefundFailedGroups.length === 1) {
+    parts.push(`${groupLabel(noRefundFailedGroups[0].label)}：${noRefundFailedGroups[0].errorText}`);
+  } else if (noRefundFailedGroups.length > 1) {
+    parts.push(`${noRefundFailedGroups.length} 个组图已停止恢复。`);
+  }
+  if (historyGroups.length === 1) {
+    parts.push(`${groupLabel(historyGroups[0].label)}写入历史失败，可稍后重试。`);
+  } else if (historyGroups.length > 1) {
+    parts.push(`${historyGroups.length} 个组图写入历史失败，可稍后重试。`);
+  }
+  if (partialGroups.length === 1) {
+    parts.push(`${groupLabel(partialGroups[0].label)}部分页面未生成，可重新生成。`);
+  } else if (partialGroups.length > 1) {
+    parts.push(`${partialGroups.length} 个组图部分页面未生成，可重新生成。`);
+  }
+  return parts.join("；");
 }
+
+function buildSuccessMessage(events: RecoveryToastEvent[]): string {
+  const tasks = events.filter((event) => !event.group);
+  const groups = events.filter((event) => event.group);
+  const parts: string[] = [];
+  if (tasks.length === 1) {
+    parts.push(`${tasks[0].label}已完成，已写入历史。`);
+  } else if (tasks.length > 1) {
+    parts.push(`${tasks.length} 个生图任务已完成，已写入历史。`);
+  }
+  if (groups.length === 1) {
+    parts.push(`${groupLabel(groups[0].label)}已完成，已写入历史。`);
+  } else if (groups.length > 1) {
+    parts.push(`${groups.length} 个组图已完成，已写入历史。`);
+  }
+  return parts.join("；");
+}
+
+function flushEvents(): void {
+  aggregateTimer = null;
+  if (!pendingEvents.length) return;
+  const events = pendingEvents.splice(0, pendingEvents.length);
+  const failed = events.filter((event) => event.kind === "failed");
+  const completed = events.filter((event) => event.kind === "completed");
+  // 失败优先：同一窗口内既有失败又有成功时只提示失败摘要。
+  if (failed.length) {
+    showToast(buildFailureMessage(failed), "alert");
+  } else {
+    showToast(buildSuccessMessage(completed), "status");
+  }
+}
+
+function queueEvent(event: RecoveryToastEvent): void {
+  pendingEvents.push(event);
+  if (aggregateTimer) clearTimeout(aggregateTimer);
+  aggregateTimer = setTimeout(flushEvents, AGGREGATE_WINDOW_MS);
+}
+
+// 深监听恢复状态：只对“非终态 → 终态”的跃迁出 toast；多个终态在短窗口内合并为一条。
+watch(
+  () => recovery.state,
+  (state) => {
+    if (state.tasks.length === 0 && state.groups.length === 0 && state.error === "") {
+      // 会话清空（登出/切号）：允许新会话重新提示同一批任务。
+      seenTerminal.clear();
+      return;
+    }
+    for (const task of state.tasks) {
+      if (task.status === "completed" || task.status === "failed") {
+        const key = `task:${task.jobId}:${task.status}`;
+        if (seenTerminal.has(key)) continue;
+        seenTerminal.add(key);
+        queueEvent({
+          kind: task.status,
+          label: task.label,
+          group: false,
+          hasFailedSlides: false,
+          noRefund: isNoRefundTerminal(task.error || ""),
+          errorText: task.error || "",
+        });
+      }
+    }
+    for (const group of state.groups) {
+      if (group.completed) {
+        const key = `group:${group.groupId}:completed`;
+        if (seenTerminal.has(key)) continue;
+        seenTerminal.add(key);
+        queueEvent({
+          kind: "completed",
+          label: group.title,
+          group: true,
+          hasFailedSlides: false,
+          noRefund: false,
+          errorText: "",
+        });
+      } else if (group.error) {
+        const key = `group:${group.groupId}:failed`;
+        if (seenTerminal.has(key)) continue;
+        seenTerminal.add(key);
+        queueEvent({
+          kind: "failed",
+          label: group.title,
+          group: true,
+          hasFailedSlides: group.slides.some((slide) => slide.status === "failed"),
+          noRefund:
+            isNoRefundTerminal(group.error) ||
+            group.slides.some(
+              (slide) => slide.status === "failed" && isNoRefundTerminal(slide.error || ""),
+            ),
+          errorText: group.error,
+        });
+      }
+    }
+  },
+  { deep: true },
+);
+
+onBeforeUnmount(() => {
+  if (dismissTimer) clearTimeout(dismissTimer);
+  if (aggregateTimer) clearTimeout(aggregateTimer);
+});
 </script>
 
 <template>
-  <section v-if="visible" class="recovered-job-banner" data-test="recovered-job-banner" aria-live="polite">
-    <div class="recovered-job-head">
-      <strong>生图任务恢复</strong>
-      <span v-if="recovery.state.scanning" class="recovered-job-hint">正在检查未完成任务…</span>
-      <span v-else class="recovered-job-hint">未完成任务已从服务端恢复，不重复扣费。</span>
-    </div>
-
-    <p v-if="recovery.state.error" class="recovered-job-error" data-test="recovered-job-error">
-      {{ recovery.state.error }}
-      <button type="button" class="recovered-job-dismiss" data-test="recovered-job-error-dismiss" @click="recovery.dismissError()">
-        知道了
-      </button>
-    </p>
-
-    <ul v-if="recovery.state.tasks.length" class="recovered-job-list">
-      <li v-for="task in recovery.state.tasks" :key="task.jobId" class="recovered-job-item">
-        <span :class="['recovered-job-status', `is-${task.status}`]" data-test="recovered-job-status">
-          {{ taskText(task.label, task.status, task.error) }}
-        </span>
-        <button
-          type="button"
-          class="recovered-job-dismiss"
-          :data-test="`recovered-job-dismiss-${task.jobId}`"
-          @click="dismissTask(task.jobId)"
-        >
-          {{ task.status === "polling" ? "停止恢复" : "知道了" }}
-        </button>
-      </li>
-    </ul>
-
-    <ul v-if="recovery.state.groups.length" class="recovered-job-list">
-      <li v-for="group in recovery.state.groups" :key="group.groupId" class="recovered-job-item">
-        <span :class="['recovered-job-status', group.completed ? 'is-completed' : 'is-polling']">
-          {{
-            group.completed
-              ? `${group.title}组图已恢复完成并写入历史。`
-              : group.error
-                ? `${group.title}组图恢复中断：${group.error}`
-                : `${group.title}组图正在恢复（${group.slides.filter((slide) => slide.status === "completed").length}/4）…`
-          }}
-        </span>
-        <button
-          type="button"
-          class="recovered-job-dismiss"
-          :data-test="`recovered-group-dismiss-${group.groupId}`"
-          @click="dismissGroup(group.groupId)"
-        >
-          {{ group.completed || group.error ? "知道了" : "停止恢复" }}
-        </button>
-      </li>
-    </ul>
-  </section>
+  <div v-if="toastMessage" class="recovered-job-toast" :role="toastRole" data-test="recovered-job-toast">
+    {{ toastMessage }}
+  </div>
 </template>
 
 <style scoped>
-.recovered-job-banner {
-  display: grid;
-  gap: 8px;
-  margin: 0 0 14px;
-  padding: 12px 16px;
-  border: 1px solid var(--workspace-border, #e3e6ea);
-  border-left: 4px solid var(--workspace-accent, #2f6fed);
-  border-radius: var(--workspace-radius, 10px);
-  background: var(--workspace-surface-soft, #f6f8fa);
-  color: var(--workspace-text, #1d2430);
+.recovered-job-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  box-sizing: border-box;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 10px 18px;
+  border-radius: var(--workspace-radius-sm, 10px);
+  background: rgba(42, 31, 34, 0.92);
+  color: #fff;
   font-size: 0.9rem;
-}
-
-.recovered-job-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.recovered-job-hint {
-  color: var(--workspace-muted, #687385);
-}
-
-.recovered-job-list {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.recovered-job-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.recovered-job-status.is-completed {
-  color: var(--workspace-success, #1d7f4c);
-}
-
-.recovered-job-status.is-failed {
-  color: var(--workspace-danger, #c0392b);
-}
-
-.recovered-job-error {
-  margin: 0;
-  color: var(--workspace-danger, #c0392b);
-}
-
-.recovered-job-dismiss {
-  border: 0;
-  background: transparent;
-  color: var(--workspace-muted, #687385);
-  cursor: pointer;
-  text-decoration: underline;
-  white-space: nowrap;
+  line-height: 1.5;
+  text-align: center;
+  box-shadow: 0 10px 28px rgba(42, 31, 34, 0.2);
+  /* 纯提示浮层：不拦截点击、不抢焦点。 */
+  pointer-events: none;
 }
 </style>

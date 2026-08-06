@@ -67,11 +67,13 @@ const entries = [
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--workspace-grid-gap);
-  align-items: start;
+  align-items: stretch;
 }
 
 .home-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: auto;
   padding: 20px;
   border: 1px solid var(--workspace-border);
@@ -110,6 +112,7 @@ const entries = [
 
 .inline-link {
   display: inline-block;
+  margin-top: auto;
   color: var(--workspace-brand-ink);
   font-size: 0.88rem;
   font-weight: 700;

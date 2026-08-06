@@ -785,6 +785,8 @@ function goToIdeas(trend: TrendItem): void {
 /* 旧版 styles.css:1165 提示卡契约：顶部说明完整位于卡内，正常换行、留白。 */
 .analysis-summary {
   min-width: 0;
+  overflow: visible;
+  height: auto;
   margin-bottom: 22px;
   line-height: 1.8;
   overflow-wrap: break-word;
@@ -1002,7 +1004,6 @@ function goToIdeas(trend: TrendItem): void {
 
 .xhs-category-control,
 .history-block,
-.analysis-summary,
 .trend-card {
   position: relative;
   overflow: hidden;
