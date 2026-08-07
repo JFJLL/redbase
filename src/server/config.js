@@ -164,6 +164,10 @@ const DEFAULT_APP_CONFIG = {
     ossAccessKeyId: "",
     ossAccessKeySecret: "",
   },
+  trendAnalysis: {
+    // 创意模式：跳过 Pgy/AnySearch 证据，直接由大模型基于品牌档案虚构生成趋势与选题。
+    freeForm: false,
+  },
 };
 
 function deepMerge(base, override) {
@@ -536,6 +540,12 @@ function loadAppConfig() {
       ossObjectKey: String(process.env.PGY_OSS_OBJECT_KEY || merged.pgy?.ossObjectKey || "").trim(),
       ossAccessKeyId: String(process.env.PGY_OSS_ACCESS_KEY_ID || merged.pgy?.ossAccessKeyId || "").trim(),
       ossAccessKeySecret: String(process.env.PGY_OSS_ACCESS_KEY_SECRET || merged.pgy?.ossAccessKeySecret || "").trim(),
+    },
+    trendAnalysis: {
+      freeForm: parseBooleanConfig(
+        process.env.TREND_FREEFORM,
+        parseBooleanConfig(merged.trendAnalysis?.freeForm, false),
+      ),
     },
   };
 }

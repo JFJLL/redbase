@@ -260,3 +260,89 @@ test("invalid generic trend and self-score gates improve strategy quality", () =
   assert.ok(structureIssues.some((issue) => issue.reason === "invalid-generic-trend"));
   assert.ok(structureIssues.some((issue) => issue.reason === "low-self-score"));
 });
+
+test("freeForm prompts switch to creative mode without evidence anchors", () => {
+  const trafficMeta = TREND_BUCKET_META.find((item) => item.key === "traffic");
+  const systemPrompt = buildTrendAnalysisSystemPrompt(
+    [trafficMeta],
+    { trendCount: 10, profileType: "brand", freeForm: true },
+  );
+  assert.match(systemPrompt, /创意假设模式/);
+  assert.doesNotMatch(systemPrompt, /必须先从对应来源标题中逐字保留/);
+  assert.doesNotMatch(systemPrompt, /网页事实片段/);
+
+  const userPrompt = buildTrendAnalysisUserPrompt(
+    brand,
+    { freeForm: true, trendCount: 10 },
+    [trafficMeta],
+  );
+  assert.match(userPrompt, /创意假设模式/);
+  assert.doesNotMatch(userPrompt, /如果搜索结果不足/);
+  assert.doesNotMatch(userPrompt, /AnySearch\/Pgy 证据为准/);
+});
+
+test("freeForm validation skips unsupported-hard-claim and stale-window gates", () => {
+  const normalized = normalizeTrendSet([{
+    title: "折叠桌面灯分区补光讨论升温",
+    category: "内容机会",
+    market_change: "用户从固定台灯讨论转向折叠便携补光",
+    consumer_shift: "租房人群更在意桌面收纳与移动补光",
+    why_now: "近期讨论集中在小空间线材冲突",
+    brand_opportunity: "LightMate 可展示折叠灯归位动作",
+    content_direction: "做桌面摆位前后对照组图",
+    summary: "用户从固定台灯讨论转向折叠便携补光；租房人群更在意桌面收纳与移动补光",
+    reason: "折叠桌面灯分区补光讨论升温，可做成小空间补光清单并自然带入品牌收纳动作。",
+    score: 78,
+    novelty_score: 80,
+    brand_fit_score: 85,
+    actionability_score: 76,
+    tags: ["#折叠灯", "#桌面补光", "#小空间"],
+    ideas: [
+      {
+        title: "租房桌面折叠灯摆位对照",
+        summary: "展示拥挤桌面到折叠归位的前后对比，说明小空间补光怎么收。",
+        angle: "前后对照 + 收纳动作",
+        brandFit: "用 LightMate 折叠灯完成归位演示",
+        audience: "租房居家办公人群",
+        hook: "桌面太挤了，灯还能这样收？",
+        tags: ["#租房改造", "#桌面收纳", "#补光"],
+      },
+      {
+        title: "分区补光任务清单",
+        summary: "按键盘区屏幕区分区补光，讲清便携灯怎么跟着任务移动。",
+        angle: "任务清单 + 分区场景",
+        brandFit: "把折叠灯放进居家办公任务流",
+        audience: "居家办公租房党",
+        hook: "补光不是越亮越好，分区才重要",
+        tags: ["#居家办公", "#分区补光", "#折叠灯"],
+      },
+    ],
+  }], brand, 100);
+
+  const hardItem = {
+    ...normalized[0],
+    summary: "该话题互动量高，热度持续上升，销量增长 20%。",
+  };
+  const items = Array.from({ length: 10 }, (_, index) => ({
+    ...normalized[0],
+    title: `${normalized[0].title}${index}`,
+    stableKey: `freeform-${index}`,
+    ...(index === 0 ? hardItem : {}),
+  }));
+  const bucket = [{ key: "traffic", title: "流量", description: "", items }];
+  const meta = [TREND_BUCKET_META.find((item) => item.key === "traffic")];
+
+  const strictIssues = getTrendGenerationIssues(bucket, meta, null, brand, null);
+  assert.ok(strictIssues.some((issue) => issue.reason === "unsupported-hard-claim"));
+
+  const freeFormIssues = getTrendGenerationIssues(
+    bucket,
+    meta,
+    null,
+    brand,
+    null,
+    new Date(),
+    { freeForm: true },
+  );
+  assert.equal(freeFormIssues.some((issue) => issue.reason === "unsupported-hard-claim"), false);
+});

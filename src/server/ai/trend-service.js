@@ -313,7 +313,64 @@ function buildBrandGrowthStrategyPrompt() {
   ].join("\n");
 }
 
+function buildFreeFormTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], options = {}) {
+  const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
+  const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
+  const isPersonal = options.profileType === "personal";
+  return [
+    isPersonal
+      ? "你是资深小红书个人 IP 内容策划顾问，擅长从个人档案、专长与内容栏目出发，构思有传播潜力的假设性内容选题方向。"
+      : "你是资深小红书品牌内容策划顾问，擅长从品牌档案、行业常识与消费者洞察出发，构思可执行的假设性内容趋势与营销机会。",
+    "当前为创意假设模式：本轮不提供任何外部热点证据，趋势与选题由你基于品牌档案和行业常识直接构思生成，属于可执行的内容创意方向，不是对真实热点的报道。",
+    "任务链路：品牌档案 → 消费者洞察与行业常识 → 创意趋势假设 → 可执行内容方向。",
+    "可以大胆构思人群场景、内容形式和运营机制；用户可见文案可以写得有感染力（如“引发共鸣”“正在被讨论”），但不得编造可核验的具体事实：数字、百分比、排名、销量、价格、机构名称、认证、权威背书、具体日期或“已证实热点”。",
+    "每条机会必须同时回答：市场/内容场发生了什么变化、用户为什么变化、品牌为什么现在该抓、下一步内容怎么做。",
+    "禁止空话套话：不得使用“消费升级、年轻人关注健康、品质生活、用户越来越重视、追求更好的生活”等正确但无价值的表述。",
+    isPersonal
+      ? "所有趋势要基于个人档案做内容机会判断，突出本人真实表达、专长与栏目；不得虚构本人未提供的经历、结果、收入、客户案例或资质。"
+      : "所有趋势要基于品牌智能层做内容机会判断；品牌结合只能使用品牌档案明确提供的事实，档案未提供卖点时用真实使用场景自然带入。",
+    "请只输出 JSON，不要输出 Markdown，不要补充解释。",
+    'JSON 顶层结构必须是：{"trendBuckets":[...]}。',
+    `trendBuckets 只输出当前请求的 ${selectedBucketMeta.length} 个对象，key 分别是 ${formatBucketKeys(selectedBucketMeta)}；不要额外生成其他 bucket，也不要输出任何品牌摘要字段。`,
+    "当前 bucket 独立规则：",
+    formatBucketPromptRules(selectedBucketMeta),
+    "每个 bucket 必须包含：key, title, description, items。",
+    `每个 items 输出 ${trendCount} 条 trend。`,
+    "trend 的 title、summary、reason 以及两条 ideas 的全部文案都必须由你完整生成；服务端不会用模板补写或改写用户可见内容。",
+    "每条 title 和 summary 都要写出具体的人群、场景、用户矛盾或内容形式，不能只写抽象判断。",
+    "禁止使用“值得关注”“有待观察”“可从某场景验证”等批量套用句式；十条趋势的标题结构和推荐理由也不得套用同一句法。",
+    "每条 trend 必须包含：id 或 stableKey、title, category, market_change, consumer_shift, why_now, brand_opportunity, content_direction, confidence_score, summary, score, novelty_score, brand_fit_score, actionability_score, tags, reason, ideas。",
+    "营销机会字段要求：",
+    "- market_change：市场/内容场发生了什么具体变化（必填，20-70字）",
+    "- consumer_shift：用户为什么变化、需求或表达如何迁移（必填，20-70字）",
+    "- why_now：为什么现在值得抓（必填，16-60字）",
+    "- brand_opportunity：当前品牌为什么该抓、抓什么（必填，24-80字）",
+    "- content_direction：下一步内容怎么做（必填，20-70字）",
+    "- confidence_score：0-100 整数，表示机会置信度；可与 score 相同或接近",
+    "trend.title 控制在 16-42 个中文字符；summary 用 45-90 字概括 market_change + consumer_shift；reason 用 40-110 字写 why_now + brand_opportunity；机会字段要覆盖策略框架中的过去→现在→原因→品牌，ideas 承接动作；说清后立即结束。",
+    "score 必须是 0 到 100 的整数，代表该创意机会的相对价值；建议取 novelty_score、brand_fit_score、actionability_score 的较低者附近，避免一项极低却总分虚高。",
+    "reason 至少 36 个中文字符，首句必须直接写出该趋势的核心变化或机会点，并说明具体人群场景、内容机制和品牌参与方式；禁止以“来源、证据、报告、案例”开头，禁止套用“内容上可转化为……品牌可……”的批量句式。",
+    "十条 reason 至少使用五种明显不同的句法和论证顺序；相邻两条不能复用相同开头或“话题/形式 + 可转化 + 品牌可”三段模板。",
+    "tags 必须是 3 到 5 个以 # 开头的字符串。",
+    "ideas 必须是 2 条，且都服务 content_direction；每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
+    buildIdeaDiversityPrompt(selectedBucketMeta),
+    buildRichIdeaRequirementsPrompt(),
+    "contentAssets 必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
+    "两条 idea 的 contentAssets 必须分别沿用各自路线，不要复用同一套朋友圈文案、小红书文案、组图页标题或公众号导语。",
+    buildContentAssetsSchemaPrompt(),
+    buildTrendDeduplicationPrompt(trendCount),
+    "创意边界：本批为假设性内容方向，不代表真实热点；用户可见文案避免“数据证明”“权威认证”“搜索显示”“最新政策明确”“销量领先”等表述；不要写具体年份、日期、价格和促销金额。",
+    buildSensitiveRiskPrompt(),
+    buildBucketSpecificHardeningPrompt(selectedBucketMeta),
+    buildLeanIdeaRequirementsPrompt(),
+    "所有字段都用中文输出，允许品牌名保留原文。",
+  ].join("\n");
+}
+
 function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], options = {}) {
+  if (options.freeForm) {
+    return buildFreeFormTrendAnalysisSystemPrompt(bucketMeta, options);
+  }
   const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
   const isPersonal = options.profileType === "personal";
@@ -569,9 +626,11 @@ function buildPersonalMaterialPromptBlock(brand, options = {}) {
   ].join("\n");
 }
 
-function buildPersonalProfileContextLines(brand) {
+function buildPersonalProfileContextLines(brand, freeForm = false) {
   return [
-    "个人 IP 档案只定义本人身份、读者、真实经历和表达边界，不是当前趋势证据；热点事实与时效判断必须以本次 AnySearch/Pgy 证据为准。",
+    freeForm
+      ? "个人 IP 档案定义本人身份、读者、真实经历和表达边界；本批为创意假设模式，趋势由 AI 基于档案与行业常识虚构生成，不代表真实热点。"
+      : "个人 IP 档案只定义本人身份、读者、真实经历和表达边界，不是当前趋势证据；热点事实与时效判断必须以本次 AnySearch/Pgy 证据为准。",
     `IP 名称：${brand.name}`,
     `内容领域：${brand.industry}`,
     `目标读者：${brand.audience}`,
@@ -587,16 +646,18 @@ function buildPersonalProfileContextLines(brand) {
   ];
 }
 
-function buildTrendBrandContextLines(brand, bucketMeta, brandIntelligence = null) {
+function buildTrendBrandContextLines(brand, bucketMeta, brandIntelligence = null, freeForm = false) {
   if (brand?.profileType === "personal") {
-    return buildPersonalProfileContextLines(brand);
+    return buildPersonalProfileContextLines(brand, freeForm);
   }
   const intelligence = resolveBrandIntelligenceForPrompt(brand, bucketMeta, brandIntelligence);
   const intelligenceLines = formatBrandIntelligencePromptLines(intelligence);
 
   if (!isMedicineTrafficPrompt(brand, bucketMeta)) {
     return [
-      "品牌档案只定义品牌身份、受众和内容边界，不是当前趋势证据；热点事实与时效判断必须以本次 AnySearch/Pgy 证据为准。",
+      freeForm
+        ? "品牌档案定义品牌身份、受众和内容边界；本批为创意假设模式，趋势由 AI 基于品牌档案与行业常识虚构生成，不代表真实热点。"
+        : "品牌档案只定义品牌身份、受众和内容边界，不是当前趋势证据；热点事实与时效判断必须以本次 AnySearch/Pgy 证据为准。",
       `品牌名称：${brand.name}`,
       `行业：${brand.industry}`,
       `目标受众：${brand.audience}`,
@@ -625,6 +686,7 @@ function buildTrendBrandContextLines(brand, bucketMeta, brandIntelligence = null
 function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_BUCKET_META[0]]) {
   const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   const isPersonal = brand?.profileType === "personal";
+  const freeForm = Boolean(options.freeForm);
   const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
   const batchNumber = Math.max(1, Number(options.batchNumber || 1));
   const totalBatches = Math.max(1, Number(options.totalBatches || 1));
@@ -633,7 +695,9 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     : [];
   const pgyEvidenceBlock = buildPgyEvidencePromptBlock(options.pgyEvidence);
   const anySearchEvidenceBlock = buildAnySearchEvidencePromptBlock(options.anySearchEvidence);
-  const marketSignalsBlock = formatMarketSignalsPromptBlock(options.marketSignals);
+  const marketSignalsBlock = freeForm
+    ? "市场信号层：本轮为创意假设模式，无外部证据；直接基于品牌档案与行业常识构思趋势，不需要锚定任何证据话题。"
+    : formatMarketSignalsPromptBlock(options.marketSignals);
   const categoryBlock = buildXhsCategoryPromptBlock(options.xhsCategoryPath || options.pgyEvidence?.categoryPath || "");
   const retryFeedback = String(options.retryFeedback || "").trim();
   const medicineBrand = isMedicineBrand(brand);
@@ -652,19 +716,25 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     ? [
         `重要：必须返回 trendBuckets，且 ${formatBucketKeys(selectedBucketMeta)} ${selectedBucketMeta.length} 个当前 bucket 的 items 都不能为空。`,
         "每条 trend 必须有 2 条 idea，且每条 idea 必须包含完整 contentAssets（moments、xhsCarousel、wechatLongImage 三个对象）。",
-        "如果搜索结果不足，请降级为可验证的趋势方向，不要编造具体机构、日期、数据或 evidenceIds。",
+        freeForm
+          ? "如果某个方向不够具体，请换成更具体的人群场景、用户矛盾或内容形式，不要输出残缺 JSON。"
+          : "如果搜索结果不足，请降级为可验证的趋势方向，不要编造具体机构、日期、数据或 evidenceIds。",
         "只返回 JSON 对象，不要解释失败原因，不要输出自然语言说明。",
       ]
     : [];
   return [
     isPersonal
-      ? "请基于以下个人 IP 档案、真实素材与市场信号，围绕小红书平台把证据转成适合本人持续表达的内容机会；只为用户当前点击的维度生成结果。"
-      : "请基于以下品牌信息、品牌智能层与市场信号，围绕小红书平台把证据转成营销机会与内容方向；只为用户当前点击的维度生成结果。",
+      ? freeForm
+        ? "请基于以下个人 IP 档案与真实素材，围绕小红书平台直接构思适合本人持续表达的假设性内容趋势与选题（创意模式：不依赖外部热点证据）；只为用户当前点击的维度生成结果。"
+        : "请基于以下个人 IP 档案、真实素材与市场信号，围绕小红书平台把证据转成适合本人持续表达的内容机会；只为用户当前点击的维度生成结果。"
+      : freeForm
+        ? "请基于以下品牌信息与品牌智能层，围绕小红书平台直接构思品牌的假设性内容趋势与营销机会（创意模式：不依赖外部热点证据）；只为用户当前点击的维度生成结果。"
+        : "请基于以下品牌信息、品牌智能层与市场信号，围绕小红书平台把证据转成营销机会与内容方向；只为用户当前点击的维度生成结果。",
     "",
     "当前 bucket 独立规则：",
     formatBucketPromptRules(selectedBucketMeta),
     "",
-    ...buildTrendBrandContextLines(brand, selectedBucketMeta, brandIntelligence),
+    ...buildTrendBrandContextLines(brand, selectedBucketMeta, brandIntelligence, freeForm),
     ...(categoryBlock && !pgyEvidenceBlock ? ["", categoryBlock] : []),
     ...(pgyEvidenceBlock ? ["", pgyEvidenceBlock] : []),
     ...(anySearchEvidenceBlock ? ["", anySearchEvidenceBlock] : []),
@@ -689,7 +759,9 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
       : medicineBrand
       ? "4. 对每条趋势判断：是否强化品牌作为内容发起/整理/共创方的优势、是否创造家长沟通或育儿相关新内容场景、是否避开功效/诊疗红海；不得为了品牌结合而新增感冒、用药、护理、功效或其他健康产品话题。"
       : "4. 禁止停留在“是否适合品牌”的模糊判断。对每条趋势必须明确判断：是否强化品牌优势、是否创造新消费场景、是否避开竞品红海；reason 与 idea.brandFit 要落到品牌智能层中的竞争优势、购买触发场景与内容边界。",
-    options.anySearchEvidence && !hasReliableWebEvidence
+    freeForm
+      ? "5. score 按创意的新鲜度、品牌贴合度与可执行性拉开差距；不要所有趋势都给高分，也不得以虚构数据为分数找理由。"
+      : options.anySearchEvidence && !hasReliableWebEvidence
       ? "5. 本次只有网页内容样本/社交讨论样本，score 必须在 0-79 内按相对内容机会拉开差距；不得用热门、收藏、互动、增长或普遍性为分数找理由。"
       : "5. score 要按本批证据内的相对内容机会给出，不要所有趋势都给高分；80 分以上必须有网页事实片段明确支持。",
     "6. 每条趋势必须填 market_change、consumer_shift、why_now、brand_opportunity、content_direction；缺一即无效。",
@@ -699,17 +771,31 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     isPersonal
       ? "8. 不要输出个人档案摘要字段，也不要补充本人未提供的身份、经历、结果、收入、客户案例、资质或产品功效。"
       : "8. 不要输出品牌摘要字段，也不要补充品牌档案没有依据的产品功能、认证、功效或适用人群。",
-    anySearchEvidenceBlock
+    freeForm
+      ? "9. 本批为创意假设：可以虚构趋势概念、场景和内容机制，但不要编造具体数字、百分比、排名、销量、价格、机构、认证或“已证实热点”表述。"
+      : anySearchEvidenceBlock
       ? "9. 如果涉及新闻、社会议题或近期热点，必须引用对应 evidenceIds；没有证据时只能表达为待验证方向，不要编造具体机构、日期、排名或数据。"
       : "9. 只使用本次 Pgy 证据概括站内热门信号，不要编造具体机构、日期、站外排名或数据。",
     "10. 不要输出固定行业样例；只有品牌档案、趋势或选题自然需要时才出现具体场景。",
-    "10.1 title、summary、reason 必须是对当前证据的具体分析，不得复述系统规则，不得使用批量兜底话术；每条 summary 至少点明一个对应证据中的具体话题词。",
-    "10.2 不能只靠品牌名、产品名、年份或泛受众词对齐来源；每条都要写出所引证据独有的事件、问题、表达形式或讨论对象。",
-    "11. 十条趋势必须使用不同的主路线、用户场景和 idea 执行动作，不得同义改写；证据不足 10 条时允许复用来源专名，但复用项仍必须遵守各自槽位的不同唯一机制。",
-    `12. 当前北京时间日期为 ${getShanghaiDateParts(options.validationNow || options.anySearchEvidence?.retrievedAt || new Date()).isoDate}；只有证据明确支持时才能写近期或当前。`,
-    "12.1 不得输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”等内部判断标签，也不得把历史常识包装成当前热点。",
+    freeForm
+      ? "10.1 title、summary、reason 必须是对该趋势的具体分析，不得复述系统规则，不得使用批量兜底话术；每条 summary 至少点明一个具体人群、场景、用户矛盾或内容形式。"
+      : "10.1 title、summary、reason 必须是对当前证据的具体分析，不得复述系统规则，不得使用批量兜底话术；每条 summary 至少点明一个对应证据中的具体话题词。",
+    freeForm
+      ? "10.2 不能只靠品牌名、行业名或泛受众词；每条都要写出具体的人群场景、用户矛盾或内容形式。"
+      : "10.2 不能只靠品牌名、产品名、年份或泛受众词对齐来源；每条都要写出所引证据独有的事件、问题、表达形式或讨论对象。",
+    freeForm
+      ? "11. 十条趋势必须使用不同的人群场景、主路线和 idea 执行动作，不得同义改写或批量复用同一套结构。"
+      : "11. 十条趋势必须使用不同的主路线、用户场景和 idea 执行动作，不得同义改写；证据不足 10 条时允许复用来源专名，但复用项仍必须遵守各自槽位的不同唯一机制。",
+    freeForm
+      ? "12. 不要写具体年份、日期或“近期”“当下”等时效断言；避免把虚构趋势写成已发生事实。"
+      : `12. 当前北京时间日期为 ${getShanghaiDateParts(options.validationNow || options.anySearchEvidence?.retrievedAt || new Date()).isoDate}；只有证据明确支持时才能写近期或当前。`,
+    freeForm
+      ? "12.1 不得输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”等内部判断标签。"
+      : "12.1 不得输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”等内部判断标签，也不得把历史常识包装成当前热点。",
     "12.2 用户可见文案不得出现早于当前年份的年份；不得输出商品价格、促销价、券后价或套餐金额；不得出现‘（：’‘(:’等畸形标点。",
-    "13. 网页内容样本/社交讨论样本只支持内容方向，不支持数字、强度、政策、医学或功效事实。",
+    freeForm
+      ? "13. 创意假设不代表真实热点；不得使用“数据证明”“权威认证”“搜索显示”“已证实”等表述。"
+      : "13. 网页内容样本/社交讨论样本只支持内容方向，不支持数字、强度、政策、医学或功效事实。",
     "14. 健康、儿童、药品、医疗和政策内容不得给答案、建议、疗效、安全性、适用性或购买推荐。",
     buildMedicineBrandSafetyPrompt(brand, selectedBucketMeta),
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
@@ -1675,7 +1761,8 @@ function getTrendCopyQualityIssues(trendBuckets, validationNow = new Date()) {
   return issues;
 }
 
-function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, brand, pgyEvidence, validationNow = new Date()) {
+function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, brand, pgyEvidence, validationNow = new Date(), options = {}) {
+  const freeForm = Boolean(options.freeForm);
   return [
     ...getTrendStructureIssues(trendBuckets, bucketMeta),
     ...getTrendQualityIssues(trendBuckets),
@@ -1684,11 +1771,11 @@ function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, b
     ...(anySearchEvidence ? getEvidenceGroundingIssues(trendBuckets, anySearchEvidence, brand) : []),
     ...(anySearchEvidence ? getInternalEvidenceJargonIssues(trendBuckets) : []),
     ...(anySearchEvidence ? getInlineEvidenceReferenceIssues(trendBuckets) : []),
-    ...(!anySearchEvidence ? getUnsupportedHardClaimIssues(trendBuckets) : []),
+    ...(!anySearchEvidence && !freeForm ? getUnsupportedHardClaimIssues(trendBuckets) : []),
     ...(pgyEvidence ? getPgyEvidenceGroundingIssues(trendBuckets, pgyEvidence, brand) : []),
     ...getUnsupportedBrandClaimIssues(trendBuckets, brand),
     ...getMedicineSafetyIssues(trendBuckets, brand),
-    ...getStaleMarketingWindowIssues(trendBuckets, validationNow),
+    ...(!freeForm ? getStaleMarketingWindowIssues(trendBuckets, validationNow) : []),
     ...getTrendCopyQualityIssues(trendBuckets, validationNow),
   ];
 }
@@ -3262,6 +3349,15 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     maxCalls: options.maxAiCalls ?? DEFAULT_BUDGETS.trend_analysis,
   });
   const startedAt = Date.now();
+  // 创意模式（freeForm）：跳过 Pgy/AnySearch 证据，直接由大模型基于品牌档案虚构生成。
+  const freeForm = Boolean(options.freeForm ?? appConfig?.trendAnalysis?.freeForm);
+  if (freeForm) {
+    console.warn("[trend-analysis] free-form creative mode enabled; skipping evidence sources", {
+      brandId: brand.id,
+      brandName: brand.name,
+      bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
+    });
+  }
   // Brand Info → Brand Intelligence → Trend Analysis
   // Brand intelligence is currently deterministic (0 model calls). A future
   // model-backed path must consume from aiBudget / brand_intelligence budget.
@@ -3278,7 +3374,9 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     purchase_trigger: String(brandIntelligence.purchase_trigger || "").slice(0, 80),
     aiBudget: aiBudget.snapshot(),
   });
-  const resolvedPgyEvidence = await resolvePgyEvidenceForTrendAnalysis(appConfig, brand, selectedBucketMeta, options);
+  const resolvedPgyEvidence = freeForm
+    ? null
+    : await resolvePgyEvidenceForTrendAnalysis(appConfig, brand, selectedBucketMeta, options);
   const pgyEvidence = resolvedPgyEvidence && (resolvedPgyEvidence.notes || []).length >= TREND_ITEMS_PER_BUCKET
     ? resolvedPgyEvidence
     : null;
@@ -3294,13 +3392,13 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
   try {
     const isXhsBucket = selectedBucketMeta.some((bucket) => bucket.key === "xhs");
     const requiresAnySearch = !isXhsBucket || !pgyEvidence;
-    if (requiresAnySearch && !appConfig?.searchProvider?.enabled) {
+    if (requiresAnySearch && !appConfig?.searchProvider?.enabled && !freeForm) {
       const disabledError = new Error("AnySearch 搜索服务尚未启用，已停止生成以避免无来源内容。");
       disabledError.code = "ANYSEARCH_DISABLED";
       throw disabledError;
     }
     const searchStartedAt = Date.now();
-    const anySearchEvidence = requiresAnySearch
+    const anySearchEvidence = requiresAnySearch && !freeForm
       ? options.anySearchEvidence || await fetchAnySearchEvidence(appConfig, brand, selectedBucketMeta, {
           ...(options.anySearchOptions || {}),
           allowSparseEvidence: true,
@@ -3308,6 +3406,12 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       : null;
     const searchDurationMs = Date.now() - searchStartedAt;
     const analysisWarnings = [];
+    if (freeForm) {
+      analysisWarnings.push({
+        code: "TREND_FREEFORM_MODE",
+        message: "创意模式：本批趋势与选题由 AI 基于品牌档案直接虚构生成，未绑定真实热点证据。",
+      });
+    }
     let effectiveAnySearchEvidence = anySearchEvidence;
     if (anySearchEvidence) {
       console.log("[trend-analysis] AnySearch evidence ready", {
@@ -3384,6 +3488,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     const fullGenerationSystemPrompt = buildTrendAnalysisSystemPrompt(selectedBucketMeta, {
       trendCount: TREND_ITEMS_PER_BUCKET,
       profileType: brand.profileType,
+      freeForm,
     });
     let retryFeedback = "";
     let trendBuckets = null;
@@ -3416,7 +3521,9 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         break;
       }
 
-      const requiresFullRegeneration = shouldRegenerateEntireTrendBatch(
+      // 创意模式没有证据槽位可做定点修复，有校验问题时统一走全量重写。
+      const requiresFullRegeneration = (freeForm && lastValidationIssues.length > 0)
+        || shouldRegenerateEntireTrendBatch(
         lastValidationIssues,
         candidateBuckets,
         selectedBucketMeta,
@@ -3452,6 +3559,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             retryFeedback,
             strict: generationAttempt > 0,
             validationNow,
+            freeForm,
           }, selectedBucketMeta);
       modelTiming.modelRequests += 1;
       if (repairPlan) {
@@ -3654,6 +3762,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             brand,
             pgyEvidence,
             validationNow,
+            { freeForm },
           );
       if (!validationIssues.length) {
         const userVisibleBuckets = replaceMedicineTrafficBrandAlias(candidateBuckets, brand, selectedBucketMeta);
@@ -3666,6 +3775,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
               brand,
               pgyEvidence,
               validationNow,
+              { freeForm },
             );
         if (!postAliasIssues.length) {
           const qualityFiltered = filterTrendsByQuality(userVisibleBuckets);
