@@ -85,33 +85,12 @@ test("send-code returns a demo code only in the fake test environment", async ()
   assert.match(res.body.demoCode, /^\d{6}$/);
 });
 
-test("register requires a valid six-digit code", async () => {
-  const withoutCode = await callAuth("/api/auth/register", {
-    phone: "13900002222",
-    name: "无码",
-    password: "secret66",
-  });
-  assert.equal(withoutCode.statusCode, 400);
-  assert.match(withoutCode.body.error, /验证码/);
-
-  const wrongCode = await callAuth("/api/auth/register", {
-    phone: "13900002222",
-    name: "错码",
-    password: "secret66",
-    code: "000000",
-  });
-  assert.equal(wrongCode.statusCode, 400);
-  assert.match(wrongCode.body.error, /验证码/);
-});
-
-test("register consumes the code atomically and creates a session", async () => {
+test("register works with password only and does not require an SMS code", async () => {
   const phone = "13900003333";
-  const code = await issueCode(phone);
   const res = await callAuth("/api/auth/register", {
     phone,
     name: "小红",
     password: "secret66",
-    code,
   });
   assert.equal(res.statusCode, 201);
   assert.equal(res.body.user.phone, phone);
@@ -121,19 +100,17 @@ test("register consumes the code atomically and creates a session", async () => 
     phone,
     name: "重复",
     password: "secret66",
-    code,
   });
   assert.equal(reused.statusCode, 400);
   assert.equal(reused.body.error, "该手机号已注册");
 
-  const secondRegister = await callAuth("/api/auth/register", {
+  // 未携带验证码也能直接注册（password-only）。
+  const direct = await callAuth("/api/auth/register", {
     phone: "13900004444",
     name: "另一人",
     password: "secret66",
-    code,
   });
-  assert.equal(secondRegister.statusCode, 400);
-  assert.match(secondRegister.body.error, /验证码/);
+  assert.equal(direct.statusCode, 201);
 });
 
 test("reset send-code answers uniformly for existing and missing phones", async () => {

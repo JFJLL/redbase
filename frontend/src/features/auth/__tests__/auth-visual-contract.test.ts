@@ -161,15 +161,13 @@ describe("AuthPanel visual contract", () => {
       expect(close.text()).not.toContain("×");
     });
 
-    it("code input and code button share one row container in the register form", async () => {
+    it("register form is password-only and has no SMS code row", async () => {
       stubFetch(emptyApps);
       const { wrapper } = await mountAuth("register");
       const row = wrapper.find("#registerForm .auth-code-row");
-      expect(row.exists()).toBe(true);
-      expect(row.find("input[name=code]").exists()).toBe(true);
-      expect(row.find(".auth-code-btn").exists()).toBe(true);
-      expect(row.find(".auth-code-btn").element.parentElement).toBe(row.element);
-      expect(row.find("input[name=code]").element.parentElement?.parentElement).toBe(row.element);
+      expect(row.exists()).toBe(false);
+      expect(wrapper.find("#registerForm input[name=code]").exists()).toBe(false);
+      expect(wrapper.find("#registerForm .auth-code-btn").exists()).toBe(false);
     });
 
     it("code input and code button share one row container in the reset form", async () => {
@@ -195,16 +193,14 @@ describe("AuthPanel visual contract", () => {
       expect(wrapper.find("#resetForm").exists()).toBe(true);
     });
 
-    it("register mode renders every key control: tabs, code row, submit, close", async () => {
+    it("register mode renders every key control: tabs, phone/name/password, submit, close", async () => {
       stubFetch(emptyApps);
       const { wrapper } = await mountAuth("register");
       expect(wrapper.find(".auth-modal-close").exists()).toBe(true);
       expect(wrapper.findAll(".auth-tab").length).toBe(2);
       expect(wrapper.find("#registerForm input[name=phone]").exists()).toBe(true);
       expect(wrapper.find("#registerForm input[name=name]").exists()).toBe(true);
-      expect(wrapper.find("#registerForm input[name=code]").exists()).toBe(true);
       expect(wrapper.find("#registerForm input[name=password]").exists()).toBe(true);
-      expect(wrapper.find("#registerForm .auth-code-btn").exists()).toBe(true);
       expect(wrapper.find("#registerForm .auth-submit-btn").exists()).toBe(true);
     });
   });
@@ -212,29 +208,33 @@ describe("AuthPanel visual contract", () => {
   describe("behavior states", () => {
     it("code button stays disabled until a valid phone number is entered", async () => {
       stubFetch(emptyApps);
-      const { wrapper } = await mountAuth("register");
+      const { wrapper } = await mountAuth("login");
+      await wrapper.find(".auth-forgot-link").trigger("click");
+      await flushPromises();
       const btn = () => wrapper.find(".auth-code-btn").element as HTMLButtonElement;
       expect(btn().disabled).toBe(true);
-      await wrapper.find("#registerForm input[name=phone]").setValue("13800000000");
+      await wrapper.find("#resetForm input[name=phone]").setValue("13800000000");
       expect(btn().disabled).toBe(false);
-      await wrapper.find("#registerForm input[name=phone]").setValue("123");
+      await wrapper.find("#resetForm input[name=phone]").setValue("123");
       expect(btn().disabled).toBe(true);
     });
 
     it("code button shows sending, countdown and re-enabled states", async () => {
       stubFetch(emptyApps);
-      const { wrapper } = await mountAuth("register");
+      const { wrapper } = await mountAuth("login");
+      await wrapper.find(".auth-forgot-link").trigger("click");
+      await flushPromises();
       let resolveSend!: (response: Response) => void;
       const gate = new Promise<Response>((resolvePromise) => {
         resolveSend = resolvePromise;
       });
       stubFetch({
         "GET /api/auth/feishu/apps": () => jsonResponse(200, { apps: [] }),
-        "POST /api/auth/send-code": () => gate,
+        "POST /api/auth/reset-password/send-code": () => gate,
       });
       vi.useFakeTimers();
-      await wrapper.find("#registerForm input[name=phone]").setValue("13800000000");
-      await wrapper.find("#registerForm .auth-code-btn").trigger("click");
+      await wrapper.find("#resetForm input[name=phone]").setValue("13800000000");
+      await wrapper.find("#resetForm .auth-code-btn").trigger("click");
       await vi.advanceTimersByTimeAsync(0);
 
       const btn = () => wrapper.find(".auth-code-btn").element as HTMLButtonElement;

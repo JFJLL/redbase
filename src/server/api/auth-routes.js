@@ -15,7 +15,6 @@ const {
   phoneExists,
   updateUserPassword,
   createUserWithSession,
-  registerUserWithVerification,
   resetPasswordWithVerification,
   createSessionForUser,
   migrateUserPhoneWithSession,
@@ -81,7 +80,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
 
   if (req.method === "POST" && pathname === "/api/auth/register") {
     const payload = await collectBody(req);
-    const { phone, name, password, code } = payload;
+    const { phone, name, password } = payload;
     const accountType = "customer";
     const department = "";
     if (!isValidPhone(phone)) {
@@ -92,21 +91,12 @@ async function handleAuthRoutes(context, req, res, pathname) {
       badRequest(res, "请填写昵称并设置至少 6 位密码");
       return true;
     }
-    if (!code || !/^\d{6}$/.test(String(code))) {
-      badRequest(res, "请输入 6 位验证码");
-      return true;
-    }
     if (phoneExists(phone)) {
       badRequest(res, "该手机号已注册");
       return true;
     }
 
     const token = randomToken();
-    const smsConfig = appConfig?.sms || {};
-    if (!smsConfig.pepper) {
-      badRequest(res, "验证码服务未启用");
-      return true;
-    }
     const user = {
       name,
       phone,
@@ -116,24 +106,7 @@ async function handleAuthRoutes(context, req, res, pathname) {
       credits: INITIAL_CREDITS[accountType],
       createdAt: new Date().toISOString(),
     };
-    let savedUser;
-    try {
-      savedUser = registerUserWithVerification({
-        user,
-        token,
-        purpose: "register",
-        phone,
-        codeHmac: hmacVerificationCode(smsConfig.pepper, "register", phone, code),
-        nowMs: Date.now(),
-        maxAttempts: Number(smsConfig.maxAttempts || 5),
-      });
-    } catch (error) {
-      if (String(error?.code || "") === "VERIFICATION_INVALID") {
-        badRequest(res, "验证码错误或已过期");
-        return true;
-      }
-      throw error;
-    }
+    const savedUser = createUserWithSession({ user, token });
 
     req.__redbaseApiUser = buildApiUserLog(savedUser);
     setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });

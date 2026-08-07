@@ -60,30 +60,7 @@ describe("RegisterView", () => {
     return { wrapper, router };
   }
 
-  it("requests a register code via POST /api/auth/send-code and shows the backend notice", async () => {
-    const fetchMock = stubFetch({
-      "GET /api/auth/feishu/apps": () => jsonResponse(200, { apps: [] }),
-      "POST /api/auth/send-code": () =>
-        jsonResponse(200, { message: "验证码已发送，5 分钟内有效。", demoCode: "246810" }),
-    });
-    const { wrapper } = await mountView();
-
-    await wrapper.find("input[name=phone]").setValue("13800000000");
-    const sendBtn = wrapper.find(".auth-code-btn");
-    await sendBtn!.trigger("click");
-    await flushPromises();
-
-    const call = fetchMock.mock.calls.find(([url]) => String(url) === "/api/auth/send-code");
-    expect(JSON.parse(String((call![1] as RequestInit).body))).toEqual({
-      phone: "13800000000",
-      purpose: "register",
-    });
-    expect(wrapper.find(".code-notice").text()).toBe(
-      "验证码已发送，5 分钟内有效。（测试验证码：246810）",
-    );
-  });
-
-  it("registers with phone/name/password/code and navigates to brands", async () => {
+  it("registers with password only (no SMS code) and navigates to brands", async () => {
     const fetchMock = stubFetch({
       "GET /api/auth/feishu/apps": () => jsonResponse(200, { apps: [] }),
       "POST /api/auth/register": () => jsonResponse(201, { user: { id: "u9", name: "小红" } }),
@@ -94,7 +71,7 @@ describe("RegisterView", () => {
     await wrapper.find("input[name=phone]").setValue("13800000000");
     await wrapper.find("input[name=name]").setValue("小红");
     await wrapper.find("input[name=password]").setValue("secret66");
-    await wrapper.find("input[name=code]").setValue("246810");
+    expect(wrapper.find("input[name=code]").exists()).toBe(false);
     await wrapper.find("form").trigger("submit");
     await flushPromises();
 
@@ -103,7 +80,6 @@ describe("RegisterView", () => {
       phone: "13800000000",
       name: "小红",
       password: "secret66",
-      code: "246810",
     });
     expect(push).toHaveBeenCalledWith({ name: "brands" });
   });
@@ -118,7 +94,6 @@ describe("RegisterView", () => {
     await wrapper.find("input[name=phone]").setValue("13800000000");
     await wrapper.find("input[name=name]").setValue("小红");
     await wrapper.find("input[name=password]").setValue("secret66");
-    await wrapper.find("input[name=code]").setValue("246810");
     await wrapper.find("form").trigger("submit");
     await flushPromises();
 

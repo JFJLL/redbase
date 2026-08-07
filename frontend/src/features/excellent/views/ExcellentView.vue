@@ -2980,7 +2980,7 @@ onUnmounted(() => {
   background: #f3e7e2;
   color: var(--workspace-brand-ink);
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .excellent-remix-template strong {
@@ -3046,7 +3046,7 @@ onUnmounted(() => {
   background: #f3e7e2;
   color: var(--workspace-brand-ink);
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .excellent-logo-row {

@@ -76,7 +76,7 @@ function handlePrimaryClick(): void {
   background: #1f7cff;
   color: #fff;
   font: inherit;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -109,7 +109,7 @@ function handlePrimaryClick(): void {
   background: #f8fafc;
   color: #1c2440;
   font: inherit;
-  font-weight: 800;
+  font-weight: 700;
   text-align: left;
   cursor: pointer;
 }

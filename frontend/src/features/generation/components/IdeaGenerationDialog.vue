@@ -128,6 +128,19 @@ function retryDisabled(): boolean {
   return busy.value || productLibraryBlocked.value;
 }
 
+function slideStatus(slide: {
+  error?: string;
+  isEditing?: boolean;
+  isGenerating?: boolean;
+  imageUrl?: string;
+  previewUrl?: string;
+}): string {
+  if (slide.error) return "生成失败";
+  if (slide.isEditing) return "改图中";
+  if (slide.isGenerating) return "生图中";
+  return Boolean(safeImageSrc(slide.imageUrl || slide.previewUrl)) ? "已生成" : "待生成";
+}
+
 function actionLabel(action: IdeaGenerationAction): string {
   if (action === "moments") return "朋友圈图";
   if (action === "wechat") return "公众号长图";
@@ -308,65 +321,80 @@ function onEdited(): void {
           </button>
         </div>
         <ul class="carousel-slides">
-          <li
-            v-for="(slide, index) in carousel.pack.slides"
-            :key="index"
-            class="carousel-slide"
-            :data-test="`xhs-slide-${index}`"
-          >
-            <div class="slide-head">
-              <strong>{{ slide.pageLabel }}</strong>
-              <button
-                v-if="!hasXhsCarouselSlideImage(slide)"
-                type="button"
-                class="secondary-btn"
-                :data-test="`generate-xhs-slide-${index}`"
-                :disabled="slide.isGenerating"
-                @click="generateCarouselSlide(index)"
-              >
-                {{ slide.isGenerating ? "生成中..." : "生成本页" }}
-              </button>
-            </div>
-            <p class="slide-direction">{{ slide.visualDirection }}</p>
-            <label v-if="!hasXhsCarouselSlideImage(slide)" class="form-field">
-              <span>本页提示词（可编辑，随生成请求提交）</span>
-              <textarea
-                v-model="slide.prompt"
-                rows="2"
-                :data-test="`xhs-slide-prompt-${index}`"
-                placeholder="补充或修改本页画面提示词"
-              ></textarea>
-            </label>
-            <figure v-if="safeImageSrc(slide.imageUrl || slide.previewUrl)">
-              <img
-                :src="safeImageSrc(slide.imageUrl || slide.previewUrl)"
-                :alt="slide.pageLabel || ''"
-                loading="lazy"
-                decoding="async"
-              />
-            </figure>
-            <div v-if="hasXhsCarouselSlideImage(slide)" class="slide-edit">
-              <label class="form-field">
-                <span>继续改图提示词</span>
-                <textarea
-                  v-model="slide.editPrompt"
-                  rows="2"
-                  :data-test="`xhs-slide-edit-prompt-${index}`"
-                  placeholder="描述希望修改的内容"
-                ></textarea>
-              </label>
-              <button
-                type="button"
-                class="secondary-btn"
-                :data-test="`edit-xhs-slide-${index}`"
-                :disabled="slide.isEditing"
-                @click="editCarouselSlide(index)"
-              >
-                {{ slide.isEditing ? "改图中..." : "改这一页" }}
-              </button>
-            </div>
-            <p v-if="slide.error" class="job-error">{{ slide.error }}</p>
-          </li>
+            <li
+              v-for="(slide, index) in carousel.pack.slides"
+              :key="index"
+              class="carousel-slide"
+              :data-test="`xhs-slide-${index}`"
+            >
+              <div class="slide-preview">
+                <img
+                  v-if="hasXhsCarouselSlideImage(slide)"
+                  :src="safeImageSrc(slide.imageUrl || slide.previewUrl)"
+                  :alt="slide.pageLabel || ''"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="primary-btn slide-start-btn"
+                  :data-test="`generate-xhs-slide-${index}`"
+                  :disabled="slide.isGenerating"
+                  @click="generateCarouselSlide(index)"
+                >
+                  {{ slide.isGenerating ? "生图中..." : "开始生图" }}
+                </button>
+                <p class="slide-status">{{ slideStatus(slide) }}</p>
+              </div>
+              <div class="slide-meta">
+                <h3>
+                  {{ slide.pageLabel }}<template v-if="slide.title"> · {{ slide.title }}</template>
+                </h3>
+                <div class="slide-meta-item">
+                  <span>视觉方向</span>
+                  <div>{{ slide.visualDirection }}</div>
+                </div>
+                <div class="slide-meta-item">
+                  <span>风格</span>
+                  <div>{{ slide.style }}</div>
+                </div>
+                <div class="slide-meta-item">
+                  <span>构图建议</span>
+                  <div>{{ slide.composition }}</div>
+                </div>
+                <label v-if="!hasXhsCarouselSlideImage(slide)" class="form-field">
+                  <span>本页提示词（可编辑，随生成请求提交）</span>
+                  <textarea
+                    v-model="slide.prompt"
+                    rows="3"
+                    :data-test="`xhs-slide-prompt-${index}`"
+                    placeholder="补充或修改本页画面提示词"
+                  ></textarea>
+                </label>
+                <div v-if="hasXhsCarouselSlideImage(slide)" class="slide-edit">
+                  <label class="form-field">
+                    <span>继续改图提示词</span>
+                    <textarea
+                      v-model="slide.editPrompt"
+                      rows="3"
+                      :data-test="`xhs-slide-edit-prompt-${index}`"
+                      placeholder="描述希望修改的内容"
+                    ></textarea>
+                  </label>
+                  <button
+                    type="button"
+                    class="secondary-btn"
+                    :data-test="`edit-xhs-slide-${index}`"
+                    :disabled="slide.isEditing"
+                    @click="editCarouselSlide(index)"
+                  >
+                    {{ slide.isEditing ? "改图中..." : "改这一页" }}
+                  </button>
+                </div>
+                <p v-if="slide.error" class="job-error">{{ slide.error }}</p>
+              </div>
+            </li>
         </ul>
       </div>
     </section>
@@ -443,7 +471,7 @@ function onEdited(): void {
 .idea-generation-kicker {
   color: var(--workspace-brand-ink);
   font-size: 0.78rem;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: 0.08em;
 }
 
@@ -452,7 +480,7 @@ function onEdited(): void {
   color: var(--workspace-text);
   font-family: var(--workspace-font-heading);
   font-size: 1.35rem;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.35;
 }
@@ -546,11 +574,10 @@ function onEdited(): void {
 
 .meta-item span {
   color: var(--workspace-brand-ink);
-  font-weight: 800;
+  font-weight: 700;
 }
 
-.carousel-head,
-.slide-head {
+.carousel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -562,30 +589,104 @@ function onEdited(): void {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
 }
 
 .carousel-slide {
   display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
   min-width: 0;
-  gap: 10px;
-  padding: 14px;
+  gap: 18px;
+  align-items: stretch;
+  padding: 0;
   border: 1px solid var(--workspace-border);
   border-radius: var(--workspace-radius);
   background: var(--workspace-surface-soft);
 }
 
-.slide-direction {
+.slide-preview {
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 22px;
+  background: var(--workspace-surface);
+}
+
+.slide-preview img {
+  width: 100%;
+  max-height: 520px;
+  display: block;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid var(--workspace-brand-border);
+}
+
+.slide-start-btn {
+  min-width: 132px;
+  min-height: 44px;
+}
+
+.slide-status {
   margin: 0;
   color: var(--workspace-text-muted);
-  font-size: 0.82rem;
-  line-height: 1.65;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.slide-meta {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.slide-meta h3 {
+  margin: 0;
+  color: var(--workspace-text);
+  font-family: var(--workspace-font-heading);
+  font-size: 1.12rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.slide-meta-item {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.slide-meta-item span {
+  color: var(--workspace-brand-ink);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.slide-meta-item div {
+  color: var(--workspace-text-body);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 .slide-edit {
   display: grid;
+  min-width: 0;
   gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .carousel-slide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .slide-preview {
+    min-height: 240px;
+  }
 }
 
 .form-field {
@@ -594,7 +695,7 @@ function onEdited(): void {
   gap: 7px;
   color: var(--workspace-text-body);
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .form-field textarea {
@@ -628,7 +729,7 @@ function onEdited(): void {
   border-radius: var(--workspace-radius-sm);
   font-family: inherit;
   font-size: 0.9rem;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
 }
 

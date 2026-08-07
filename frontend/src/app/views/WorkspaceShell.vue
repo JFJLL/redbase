@@ -360,7 +360,7 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   border-radius: var(--workspace-radius);
   color: #564d50;
   font-size: 0.98rem;
-  font-weight: 800;
+  font-weight: 700;
   text-decoration: none;
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
@@ -383,7 +383,7 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   background: rgba(216, 68, 68, 0.08);
   color: var(--workspace-brand-ink);
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .sidebar-item:hover .sidebar-item-icon,

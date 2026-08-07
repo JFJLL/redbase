@@ -259,7 +259,7 @@ async function confirmDelete() {
   color: var(--workspace-text);
   font-family: var(--workspace-font-heading);
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .panel-header p {
@@ -283,7 +283,7 @@ async function confirmDelete() {
   background: var(--workspace-surface);
   color: var(--workspace-brand-ink);
   font-size: 0.84rem;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -369,7 +369,7 @@ async function confirmDelete() {
   background: #fffafa;
   color: #b72e3a;
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
 }
 

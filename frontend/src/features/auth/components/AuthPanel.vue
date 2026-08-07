@@ -2,7 +2,7 @@
 import { onBeforeUnmount, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
-import { resetPassword, sendCode, sendResetPasswordCode } from "../api";
+import { resetPassword, sendResetPasswordCode } from "../api";
 import FeishuLoginButtons from "./FeishuLoginButtons.vue";
 
 type AuthMode = "login" | "register" | "reset";
@@ -22,7 +22,7 @@ const resetSuccess = ref(false);
 const cooldownSeconds = ref(0);
 let cooldownTimer: ReturnType<typeof setInterval> | null = null;
 const loginForm = reactive({ phone: "", password: "" });
-const registerForm = reactive({ phone: "", name: "", password: "", code: "" });
+const registerForm = reactive({ phone: "", name: "", password: "" });
 const resetForm = reactive({ phone: "", code: "", password: "" });
 
 function startCooldown(seconds: number): void {
@@ -88,21 +88,6 @@ async function handleLogin(): Promise<void> {
   }
 }
 
-async function handleSendCodeForRegister(): Promise<void> {
-  sendingCode.value = true;
-  errorMessage.value = "";
-  codeNotice.value = "";
-  try {
-    const data = await sendCode(registerForm.phone, "register");
-    codeNotice.value = data.demoCode ? `${data.message}（测试验证码：${data.demoCode}）` : data.message;
-    startCooldown(60);
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    sendingCode.value = false;
-  }
-}
-
 async function handleSendCodeForReset(): Promise<void> {
   sendingCode.value = true;
   errorMessage.value = "";
@@ -126,7 +111,6 @@ async function handleRegister(): Promise<void> {
       phone: registerForm.phone,
       name: registerForm.name,
       password: registerForm.password,
-      code: registerForm.code,
     });
     await refreshAuthUser();
     await goToWorkspace();
@@ -220,29 +204,6 @@ function close(): void {
               <span>昵称</span>
               <input v-model="registerForm.name" name="name" placeholder="请输入你的昵称" required />
             </label>
-            <div class="auth-code-row">
-              <label class="auth-code-field">
-                <span>验证码</span>
-                <input
-                  v-model="registerForm.code"
-                  name="code"
-                  type="text"
-                  inputmode="numeric"
-                  maxlength="6"
-                  placeholder="6 位验证码"
-                  autocomplete="one-time-code"
-                  required
-                />
-              </label>
-              <button
-                class="auth-code-btn"
-                type="button"
-                :disabled="sendingCode || cooldownSeconds > 0 || !/^1\d{10}$/.test(registerForm.phone)"
-                @click="handleSendCodeForRegister"
-              >
-                {{ cooldownSeconds > 0 ? `${cooldownSeconds}s` : sendingCode ? "发送中..." : "获取验证码" }}
-              </button>
-            </div>
             <label>
               <span>登录密码</span>
               <input
@@ -257,7 +218,6 @@ function close(): void {
             <button class="primary-btn auth-submit-btn" type="submit" :disabled="submitting">
               {{ submitting ? "注册中..." : "注册并进入工作台" }}
             </button>
-            <p v-if="codeNotice" class="code-notice" role="status">{{ codeNotice }}</p>
           </form>
 
           <form v-else-if="activeMode === 'login'" id="loginForm" class="auth-form" @submit.prevent="handleLogin">

@@ -60,17 +60,7 @@ const appConfig = {
   },
 };
 
-test("phone registration consumes a code and always creates an external customer account", async () => {
-  const codeRes = createRes();
-  await handleAuthRoutes(
-    { appConfig },
-    createJsonReq("/api/auth/send-code", { phone: "13912345678", purpose: "register" }),
-    codeRes,
-    "/api/auth/send-code",
-  );
-  assert.equal(codeRes.statusCode, 200);
-  assert.match(codeRes.body.demoCode, /^\d{6}$/);
-
+test("phone registration uses password only and always creates an external customer account", async () => {
   const res = createRes();
   const handled = await handleAuthRoutes(
     { appConfig },
@@ -80,7 +70,6 @@ test("phone registration consumes a code and always creates an external customer
       password: "secret123",
       accountType: "yimei",
       department: "客户一部",
-      code: codeRes.body.demoCode,
     }),
     res,
     "/api/auth/register",

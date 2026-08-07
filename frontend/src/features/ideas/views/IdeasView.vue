@@ -1563,7 +1563,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   align-items: center;
   color: #2d8b71;
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .idea-context-top h3,
@@ -1768,7 +1768,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   background: rgba(255, 255, 255, 0.72);
   color: #75666b;
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 700;
   font-family: inherit;
   cursor: pointer;
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
@@ -1845,7 +1845,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   background: #fffafa;
   color: #b72e3a;
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -1896,7 +1896,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   border-radius: var(--workspace-radius-sm, 6px);
   background: var(--workspace-danger, #c0392b);
   color: #fff;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
 }
 

@@ -1008,7 +1008,7 @@ onUnmounted(() => {
   min-width: 0;
   color: #6f687a;
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .history-filters input,
