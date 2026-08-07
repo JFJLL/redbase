@@ -351,7 +351,7 @@ test("freeForm validation skips unsupported-hard-claim and stale-window gates", 
   assert.equal(freeFormIssues.some((issue) => issue.reason === "unsupported-hard-claim"), false);
 });
 
-test("freeForm validation flags theme clusters shared by three or more titles", () => {
+test("freeForm validation flags theme clusters shared by five or more titles", () => {
   const normalized = normalizeTrendSet([{
     title: "折叠桌面灯分区补光讨论",
     category: "内容机会",
@@ -393,13 +393,13 @@ test("freeForm validation flags theme clusters shared by three or more titles", 
     "更好人生故事征集：记录你的奋斗瞬间",
     "更好人生直播圆桌：探讨职场女性的成长",
     "更好人生观点辩论：奋斗与生活的平衡",
+    "更好人生连续打卡：记录每一天",
+    "更好人生共创工作坊：共同定义更好人生",
     "深夜独居的治愈仪式",
     "办公室下午茶品质指南",
     "周末聚会待客之道",
     "独居女性的深夜充电",
-    "职场女性的早晨仪式",
     "从纪录片到餐桌的叙事链路",
-    "成分党如何辨别牛奶品质",
   ];
   const items = clusteredTitles.map((title, index) => ({
     ...normalized[0],
@@ -419,13 +419,47 @@ test("freeForm validation flags theme clusters shared by three or more titles", 
     { freeForm: true },
   );
   const clusterIssues = issues.filter((issue) => issue.reason === "theme-cluster");
-  assert.ok(clusterIssues.length >= 1, "three titles sharing a 4-char phrase must be flagged");
-  assert.ok(clusterIssues.every((issue) => ["更好人生", "职场女性"].includes(issue.claim)));
+  assert.ok(clusterIssues.length >= 1, "five titles sharing a 4-char phrase must be flagged");
+  assert.ok(clusterIssues.every((issue) => issue.claim === "更好人生"));
 
   const nonFreeFormIssues = getTrendGenerationIssues(bucket, meta, null, brand, null);
   assert.equal(
     nonFreeFormIssues.some((issue) => issue.reason === "theme-cluster"),
     false,
     "theme-cluster gate must only apply in freeForm mode",
+  );
+
+  // 阈值边界：3 条共享短语不应触发（避免单一主题品牌误伤）。
+  const mildTitles = [
+    "深夜独居的治愈仪式",
+    "深夜独居的充电时刻",
+    "深夜独居的一杯热奶",
+    "办公室下午茶品质指南",
+    "周末聚会待客之道",
+    "独居女性的早晨仪式",
+    "从纪录片到餐桌的叙事链路",
+    "成分党如何辨别牛奶品质",
+    "职场女性的开工便当",
+    "新手妈妈的十分钟早餐",
+  ];
+  const mildItems = mildTitles.map((title, index) => ({
+    ...normalized[0],
+    title,
+    stableKey: `mild-${index}`,
+  }));
+  const mildBucket = [{ key: "traffic", title: "流量", description: "", items: mildItems }];
+  const mildIssues = getTrendGenerationIssues(
+    mildBucket,
+    meta,
+    null,
+    brand,
+    null,
+    new Date(),
+    { freeForm: true },
+  );
+  assert.equal(
+    mildIssues.some((issue) => issue.reason === "theme-cluster"),
+    false,
+    "three titles sharing a phrase must not trigger theme-cluster",
   );
 });

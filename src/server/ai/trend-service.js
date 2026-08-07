@@ -79,6 +79,16 @@ const TREND_FULL_MODEL_MAX_OUTPUT_TOKENS = 16384;
 const TREND_FREEFORM_MAX_OUTPUT_TOKENS = 24576;
 // 创意模式主输出缺内容资产时，最多用补全模型修复的选题数。
 const MAX_FREEFORM_CONTENT_ASSET_REPAIRS = 4;
+// 创意模式多次尝试后仍凑不齐 10 条时，达到该数量就交付部分批次（优于整批失败）。
+const MIN_FREEFORM_DELIVERY_ITEMS = 6;
+// 创意模式下的软性校验（不阻断交付）：自评分是模型自评、reason/summary/ideas 相似
+// 在单一主题品牌（如益生菌）里难以完全避免，硬卡会导致整批失败。
+const FREEFORM_SOFT_ISSUE_REASONS = new Set([
+  "low-self-score",
+  "near-duplicate-reason",
+  "near-duplicate-summary",
+  "near-duplicate-ideas",
+]);
 
 const IDEA_ROUTE_PAIRS = {
   xhs: ["热点证据解读", "用户场景转化"],
@@ -339,7 +349,7 @@ function buildFreeFormCreativeSlotPlan(trendCount = TREND_ITEMS_PER_BUCKET) {
   return [
     `本批 ${count} 个创意槽位（这是内容机制的差异化约束，不是可复制的文案模板）：`,
     "必须严格按下列顺序一槽一条；每条 trend 使用本槽唯一内容机制，禁止换成其他槽位的机制，禁止把同一主题换说法重复输出；相邻槽位必须使用不同的人群、消费场景与内容形式，十条趋势的标题结构和推荐理由也不得套用同一句法。",
-    "同一品牌口号、栏目词或产品卖点（如品牌档案中的标语）最多允许出现在 2 条 trend 的 title 里；同一 4 字及以上短语出现在 3 条及以上标题会被判定为重复并整批重写。其余条目必须从不同人群、场景、问题或内容形式切入，不得整批围绕同一句话展开。",
+    "同一品牌口号、栏目词或产品卖点（如品牌档案中的标语）最多允许出现在 2 条 trend 的 title 里；同一 4 字及以上短语出现在 5 条及以上标题会被判定为重复并整批重写。其余条目必须从不同人群、场景、问题或内容形式切入，不得整批围绕同一句话展开。",
     ...slots,
   ].join("\n");
 }
@@ -380,7 +390,7 @@ function buildFreeFormTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[
     "- confidence_score：0-100 整数，表示机会置信度；可与 score 相同或接近",
     "trend.title 控制在 16-42 个中文字符；summary 用 45-90 字概括 market_change + consumer_shift；reason 用 40-110 字写 why_now + brand_opportunity；机会字段要覆盖策略框架中的过去→现在→原因→品牌，ideas 承接动作；说清后立即结束。",
     "score 必须是 0 到 100 的整数，代表该创意机会的相对价值；建议取 novelty_score、brand_fit_score、actionability_score 的较低者附近，避免一项极低却总分虚高。",
-    `自评分：每条 trend 必须输出 novelty_score、brand_fit_score、actionability_score（0-100 整数）；任一项低于 ${TREND_SELF_SCORE_MIN} 的趋势会被自动过滤，不要输出；只保留三项均 ≥ ${TREND_SELF_SCORE_MIN} 的创意机会。`,
+    "自评分：每条 trend 必须输出 novelty_score、brand_fit_score、actionability_score（0-100 整数）；任一项低于 60 的趋势会被自动过滤，不要输出；只保留三项均 ≥ 60 的创意机会。",
     "reason 至少 36 个中文字符，首句必须直接写出该趋势的核心变化或机会点，并说明具体人群场景、内容机制和品牌参与方式；禁止以“来源、证据、报告、案例”开头，禁止套用“内容上可转化为……品牌可……”的批量句式。",
     "十条 reason 至少使用五种明显不同的句法和论证顺序；相邻两条不能复用相同开头或“话题/形式 + 可转化 + 品牌可”三段模板。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
@@ -1846,7 +1856,7 @@ function formatTrendRetryFeedback(issues) {
     feedback.push("十条趋势必须使用不同的人群、问题、场景或内容形式；标题、摘要、推荐理由和两条 ideas 都不得重复或批量复用。 ");
   }
   if (reasons.has("theme-cluster")) {
-    feedback.push("多条趋势围绕同一短语/口号/人群词扎堆；同一 4 字及以上短语最多允许出现在 2 条标题中，其余必须换不同的人群、场景和主题切入。 ");
+    feedback.push("多条趋势围绕同一短语/口号/人群词扎堆；同一 4 字及以上短语出现在 5 条及以上标题会被判定为重复，其余必须换不同的人群、场景和主题切入。 ");
   }
   if (["missing-evidence-ids", "invalid-evidence-id", "missing-search-evidence", "missing-pgy-evidence"].some((reason) => reasons.has(reason))) {
     feedback.push("每条趋势必须引用输入中真实存在的 evidenceIds，不能漏引或补造编号。 ");
@@ -3156,7 +3166,7 @@ function getDuplicateTrendIssues(trendBuckets, existingItemsByBucket = new Map()
 }
 
 // 创意模式专用：检测多条标题围绕同一短语/口号/人群词扎堆（4 字以上短语出现在
-// ≥3 条 title 中），触发整批重写以强制差异化。品牌名/行业/产品词本身不算。
+// ≥5 条 title 中），触发整批重写以强制差异化。品牌名/行业/产品词本身不算。
 function getFreeFormThemeClusterIssues(trendBuckets, brand) {
   const issues = [];
   const ignoredContext = [
@@ -3193,7 +3203,7 @@ function getFreeFormThemeClusterIssues(trendBuckets, brand) {
       }
     });
     const offendingGrams = [...gramCount.entries()]
-      .filter(([, count]) => count >= 3)
+      .filter(([, count]) => count >= 5)
       .sort((left, right) => right[1] - left[1])
       .map(([gram]) => gram);
     if (!offendingGrams.length) continue;
@@ -3213,6 +3223,13 @@ function getFreeFormThemeClusterIssues(trendBuckets, brand) {
     }
   }
   return issues;
+}
+
+// 创意模式软性校验过滤：自评分与 reason/summary/ideas 相似度不阻断交付，
+// 避免单一主题品牌（如益生菌）因主题词天然重复导致整批失败。
+function filterFreeFormSoftIssues(issues, freeForm) {
+  if (!freeForm) return issues;
+  return (issues || []).filter((issue) => !FREEFORM_SOFT_ISSUE_REASONS.has(String(issue?.reason || "")));
 }
 
 function getAnySearchEvidenceCoverageIssues(trendBuckets, searchEvidence) {
@@ -3652,6 +3669,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     let trendBuckets = null;
     let candidateBuckets = null;
     let lastValidationIssues = [];
+    // 创意模式跨尝试保留最优批次：最后一次输出差时，用前面较好的批次兜底交付。
+    let bestFreeFormBatch = null;
     let budgetExceeded = false;
     // Delivery policy: the XHS/Pgy path is a single main-model call with local
     // Pgy top-up; other buckets get one main generation plus at most one
@@ -3912,29 +3931,35 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         });
         break;
       }
-      let validationIssues = repairIssues.length
-        ? repairIssues
-        : getTrendGenerationIssues(
-            candidateBuckets,
-            selectedBucketMeta,
-            effectiveAnySearchEvidence,
-            brand,
-            pgyEvidence,
-            validationNow,
-            { freeForm },
-          );
-      if (!validationIssues.length) {
-        const userVisibleBuckets = replaceMedicineTrafficBrandAlias(candidateBuckets, brand, selectedBucketMeta);
-        const postAliasIssues = userVisibleBuckets === candidateBuckets
-          ? []
+      let validationIssues = filterFreeFormSoftIssues(
+        repairIssues.length
+          ? repairIssues
           : getTrendGenerationIssues(
-              userVisibleBuckets,
+              candidateBuckets,
               selectedBucketMeta,
               effectiveAnySearchEvidence,
               brand,
               pgyEvidence,
               validationNow,
               { freeForm },
+            ),
+        freeForm,
+      );
+      if (!validationIssues.length) {
+        const userVisibleBuckets = replaceMedicineTrafficBrandAlias(candidateBuckets, brand, selectedBucketMeta);
+        const postAliasIssues = userVisibleBuckets === candidateBuckets
+          ? []
+          : filterFreeFormSoftIssues(
+              getTrendGenerationIssues(
+                userVisibleBuckets,
+                selectedBucketMeta,
+                effectiveAnySearchEvidence,
+                brand,
+                pgyEvidence,
+                validationNow,
+                { freeForm },
+              ),
+              freeForm,
             );
         if (!postAliasIssues.length) {
           const qualityFiltered = filterTrendsByQuality(userVisibleBuckets);
@@ -3963,6 +3988,24 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           // into the same model-repair path; claims and the real brand stay out of
           // the repair prompt.
           validationIssues = postAliasIssues;
+        }
+      }
+
+      if (freeForm) {
+        const itemCount = (candidateBuckets || []).reduce((sum, bucket) => sum + (bucket.items || []).length, 0);
+        if (
+          itemCount > 0
+          && (
+            !bestFreeFormBatch
+            || itemCount > bestFreeFormBatch.itemCount
+            || (itemCount === bestFreeFormBatch.itemCount && validationIssues.length < bestFreeFormBatch.issueCount)
+          )
+        ) {
+          bestFreeFormBatch = {
+            buckets: (candidateBuckets || []).map((bucket) => ({ ...bucket, items: [...(bucket.items || [])] })),
+            itemCount,
+            issueCount: validationIssues.length,
+          };
         }
       }
 
@@ -4015,6 +4058,66 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           enumerable: false,
           configurable: true,
         });
+      }
+    }
+
+    if (!trendBuckets) {
+      // 创意模式兜底：尝试全部耗尽后，用历史最优批次交付部分结果（≥6 条），
+      // 优于整批失败。缺内容资产的条目先补全，补不全的丢弃，绝不交付骨架。
+      if (freeForm && bestFreeFormBatch && bestFreeFormBatch.itemCount >= MIN_FREEFORM_DELIVERY_ITEMS) {
+        let bestBuckets = attachEvidenceSnapshots(bestFreeFormBatch.buckets, null, null);
+        let bestAssetIssues = getContentAssetCompletenessIssues(bestBuckets);
+        if (bestAssetIssues.length && aiBudget.remaining() >= 1) {
+          const bestRepair = await repairFreeFormContentAssets(appConfig, brand, bestBuckets, bestAssetIssues, {
+            textModelImpl,
+            aiBudget,
+            textTimeoutMs: options.textTimeoutMs,
+          });
+          bestAssetIssues = getContentAssetCompletenessIssues(bestRepair.trendBuckets);
+        }
+        let completeBuckets = bestBuckets
+          .map((bucket) => ({
+            ...bucket,
+            // 骨架条目（0/1 条 ideas）一律不交付：只保留恰好 2 条且内容资产完整的选题。
+            items: (bucket.items || []).filter(
+              (trend) => Array.isArray(trend.ideas) && trend.ideas.length === 2 && trend.ideas.every(isIdeaContentAssetsComplete),
+            ),
+          }))
+          .filter((bucket) => bucket.items.length > 0);
+        // 兜底交付仍过安全关：品牌功效声明/医药安全不合格的条目直接丢弃。
+        const safetyIssues = [
+          ...getUnsupportedBrandClaimIssues(completeBuckets, brand),
+          ...getMedicineSafetyIssues(completeBuckets, brand),
+        ];
+        if (safetyIssues.length) {
+          const unsafeKeys = new Set(
+            safetyIssues
+              .filter((issue) => Number.isInteger(issue.trendIndex))
+              .map((issue) => `${issue.bucketKey}:${issue.trendIndex}`),
+          );
+          completeBuckets = completeBuckets
+            .map((bucket) => ({
+              ...bucket,
+              items: (bucket.items || []).filter((_item, index) => !unsafeKeys.has(`${bucket.key}:${index}`)),
+            }))
+            .filter((bucket) => bucket.items.length > 0);
+        }
+        const totalItems = completeBuckets.reduce((sum, bucket) => sum + bucket.items.length, 0);
+        if (totalItems >= MIN_FREEFORM_DELIVERY_ITEMS) {
+          console.warn("[trend-analysis] freeForm partial delivery", {
+            brandId: brand.id,
+            brandName: brand.name,
+            totalItems,
+            issueCount: bestFreeFormBatch.issueCount,
+            aiBudget: aiBudget.snapshot(),
+          });
+          trendBuckets = finalizeModelTrendBuckets(completeBuckets, selectedBucketMeta, baseId);
+          Object.defineProperty(trendBuckets, "marketSignals", {
+            value: marketSignals,
+            enumerable: false,
+            configurable: true,
+          });
+        }
       }
     }
 

@@ -255,6 +255,64 @@ test("a first-call transport failure with evidence fails without saving", async 
   assert.equal(modelCalls, 1);
 });
 
+test("freeForm delivers a partial batch when the model cannot produce ten trends", async () => {
+  clearAnySearchCache();
+  const result = await generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7900, {
+    bucketKey: "traffic",
+    textModelImpl: async () => {
+      const batch = generatedTrendBatch("部分批", { bucketKey: "traffic" });
+      return { trendBuckets: [{ key: "traffic", items: batch.trendBuckets[0].items.slice(0, 8) }] };
+    },
+    maxAiCalls: 2,
+  });
+  assert.equal(result[0].items.length, 8);
+});
+
+test("freeForm partial delivery never keeps skeleton items without two complete ideas", async () => {
+  clearAnySearchCache();
+  const result = await generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7905, {
+    bucketKey: "traffic",
+    textModelImpl: async () => {
+      const batch = generatedTrendBatch("骨架批", { bucketKey: "traffic" });
+      const items = batch.trendBuckets[0].items;
+      // 6 条完整 + 2 条骨架（无 ideas），部分交付必须只保留完整条目。
+      const skeletons = items.slice(6, 8).map((item) => ({ ...item, ideas: [] }));
+      return { trendBuckets: [{ key: "traffic", items: [...items.slice(0, 6), ...skeletons] }] };
+    },
+    maxAiCalls: 2,
+  });
+  assert.equal(result[0].items.length, 6);
+  assert.ok(result[0].items.every((trend) => trend.ideas.length === 2));
+});
+
+test("freeForm soft-filters low self-scores instead of failing the batch", async () => {
+  clearAnySearchCache();
+  const result = await generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7910, {
+    bucketKey: "traffic",
+    textModelImpl: async () => {
+      const batch = generatedTrendBatch("软分批", { bucketKey: "traffic" });
+      batch.trendBuckets[0].items = batch.trendBuckets[0].items.map((item) => ({
+        ...item,
+        novelty_score: 65,
+        brand_fit_score: 66,
+        actionability_score: 67,
+      }));
+      return batch;
+    },
+    maxAiCalls: 2,
+  });
+  assert.equal(result[0].items.length, 10);
+});
+
 test("generation plan lines carry rerank slot anchors and claim boundaries", () => {
   const plan = buildAnySearchGenerationPlan({
     evidence: [
