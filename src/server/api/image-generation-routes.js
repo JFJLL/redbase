@@ -38,6 +38,7 @@ const {
   buildImageConceptMetadataFromIdea,
   buildXhsCarouselPackFromIdea,
   buildWechatLongImagePackFromIdea,
+  hasCompleteIdeaContentAssets,
 } = require("../ai/content-service");
 const { sanitizePayloadForClient } = require("../utils");
 const { resolveAspectRatio } = require("./aspect-ratios");
@@ -848,22 +849,50 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     }
   }
 
-  async function ensureIdeaAssetsForImage(brand, trend, ideaIndex) {
-    if (!ensureTrendIdeaContentAssets) return trend.ideas[Number(ideaIndex)];
-    const result = await ensureTrendIdeaContentAssets(brand, trend, Number(ideaIndex));
-    if (result.filled) {
-      const persisted = updateCurrentTrendIdeaContentAssets(
-        brand.id,
-        brand.ownerUserId,
-        trend.id,
-        Number(ideaIndex),
-        result.idea.contentAssets,
-      );
-      if (!persisted) {
-        throw new Error("当前选题内容资产保存失败，请刷新趋势后重试。");
-      }
+  function isIdeaAssetsComplete(idea) {
+    try {
+      return hasCompleteIdeaContentAssets(idea);
+    } catch {
+      return false;
     }
-    return result.idea;
+  }
+
+  // 历史骨架兼容补齐：只在“当前持久化数据仍不完整”时调用模型，且同一
+  // brandId:trendId:ideaIndex 在进程内串行化，先重新读取最新快照再决定，
+  // 并发首次生图不会重复补齐、重复扣费或互相覆盖。完整新选题直接短路返回。
+  async function ensureIdeaAssetsForImage(user, brand, trend, ideaIndex) {
+    if (!ensureTrendIdeaContentAssets) return trend.ideas[Number(ideaIndex)];
+    const targetIndex = Number(ideaIndex);
+    const freshSnapshot = () => {
+      const freshBrand = findBrandByOwner(brand.id, user.id);
+      const freshTrend = freshBrand ? findTrendItem(freshBrand, trend.id) : null;
+      return {
+        freshBrand,
+        freshTrend,
+        freshIdea: freshTrend?.ideas?.[targetIndex] || null,
+      };
+    };
+    const initial = freshSnapshot();
+    if (initial.freshIdea && isIdeaAssetsComplete(initial.freshIdea)) return initial.freshIdea;
+    return withExcellentRemixGroupLock(user.id, `idea-assets:${brand.id}:${trend.id}:${targetIndex}`, async () => {
+      const rechecked = freshSnapshot();
+      if (rechecked.freshIdea && isIdeaAssetsComplete(rechecked.freshIdea)) return rechecked.freshIdea;
+      const fillTrend = rechecked.freshTrend || trend;
+      const result = await ensureTrendIdeaContentAssets(brand, fillTrend, targetIndex);
+      if (result.filled) {
+        const persisted = updateCurrentTrendIdeaContentAssets(
+          brand.id,
+          brand.ownerUserId,
+          trend.id,
+          targetIndex,
+          result.idea.contentAssets,
+        );
+        if (!persisted) {
+          throw new Error("当前选题内容资产保存失败，请刷新趋势后重试。");
+        }
+      }
+      return result.idea;
+    });
   }
 
   const imageMatch = pathname.match(/^\/api\/brands\/(\d+)\/trends\/(\d+)\/ideas\/(\d+)\/image$/);
@@ -906,7 +935,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       metadata = buildImageConceptMetadataFromIdea(idea);
     } catch (error) {
       try {
-        metadata = buildImageConceptMetadataFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(imageMatch[3])));
+        metadata = buildImageConceptMetadataFromIdea(await ensureIdeaAssetsForImage(user, brand, trend, Number(imageMatch[3])));
       } catch (fillError) {
         contentAssetsUnavailable(res, fillError);
         return true;
@@ -1304,7 +1333,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       wechatPack = buildWechatLongImagePackFromIdea(idea);
     } catch (error) {
       try {
-        wechatPack = buildWechatLongImagePackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(wechatLongImageMatch[3])));
+        wechatPack = buildWechatLongImagePackFromIdea(await ensureIdeaAssetsForImage(user, brand, trend, Number(wechatLongImageMatch[3])));
       } catch (fillError) {
         contentAssetsUnavailable(res, fillError);
         return true;
@@ -1863,7 +1892,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         try {
           carouselPack = buildXhsCarouselPackFromIdea(idea);
         } catch (error) {
-          carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(xhsCarouselPreviewMatch[3])));
+          carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(user, brand, trend, Number(xhsCarouselPreviewMatch[3])));
         }
       }
     } catch (fillError) {
@@ -1926,7 +1955,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       carouselPack = buildXhsCarouselPackFromIdea(idea);
     } catch (error) {
       try {
-        carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, Number(xhsCarouselMatch[3])));
+        carouselPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(user, brand, trend, Number(xhsCarouselMatch[3])));
       } catch (fillError) {
         contentAssetsUnavailable(res, fillError);
         return true;
@@ -2077,7 +2106,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       defaultPack = buildXhsCarouselPackFromIdea(idea);
     } catch (error) {
       try {
-        defaultPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(brand, trend, ideaIndex));
+        defaultPack = buildXhsCarouselPackFromIdea(await ensureIdeaAssetsForImage(user, brand, trend, ideaIndex));
       } catch (fillError) {
         contentAssetsUnavailable(res, fillError);
         return true;

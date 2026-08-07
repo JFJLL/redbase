@@ -3,10 +3,13 @@
 // 复用 useIdeaGeneration 状态机（一次性 action 票据、素材加载门控、
 // 积分幂等与失败恢复），不复制请求逻辑。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import ProductImagePanel from "../components/ProductImagePanel.vue";
 import ImageEditPanel from "../components/ImageEditPanel.vue";
 import { getIdeaSettingsKey } from "../ideaCreativeSettings";
-import { useIdeaGeneration, type IdeaGenerationAction } from "../composables/useIdeaGeneration";
+import {
+  useIdeaGeneration,
+  type IdeaGenerationAction,
+  type IdeaProductLibrary,
+} from "../composables/useIdeaGeneration";
 import type { ImageEditTarget } from "../composables/useImageEdit";
 import { useInsightsStore } from "@/features/trends/stores/insights";
 import {
@@ -23,6 +26,8 @@ const props = defineProps<{
   ideaIndex: number;
   /** 用户点击或深链携带的生成动作；genKind 未初始化/图库加载中/失败时用于正确展示名称。 */
   action: IdeaGenerationAction;
+  /** 外层内容选题页的唯一产品图库（列表 + 状态 + 重载入口），弹窗不再渲染图库。 */
+  productLibrary?: IdeaProductLibrary;
 }>();
 
 const emit = defineEmits<{
@@ -48,15 +53,13 @@ const gen = useIdeaGeneration({
   trend,
   idea,
   settingsKey,
+  productLibrary: props.productLibrary,
 });
 
 const {
   contextError,
   productImagesError,
   retryProductImagesLoad,
-  productImagesReloadToken,
-  onProductImagesLoaded,
-  onProductImagesLoadError,
   busy,
   productLibraryBlocked,
   genStatus,
@@ -69,7 +72,6 @@ const {
   wechatConfirm,
   wechatDisableWarning,
   resolveWechatConfirm,
-  selectedProductIds,
   retryGeneration,
   generateAllCarouselSlides,
   generateCarouselSlide,
@@ -207,13 +209,6 @@ function onEdited(): void {
           重新加载产品图
         </button>
       </div>
-
-      <ProductImagePanel
-        v-model:selected-ids="selectedProductIds"
-        :reload-token="productImagesReloadToken"
-        @images-loaded="onProductImagesLoaded"
-        @images-load-error="onProductImagesLoadError"
-      />
 
       <p v-if="genStatus" class="job-status" data-test="gen-status">{{ genStatus }}</p>
       <p v-if="genError" class="job-error" data-test="gen-error">{{ genError }}</p>

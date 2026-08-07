@@ -33,7 +33,6 @@ const loading = ref(false);
 const loadError = ref("");
 const detailItem = ref<GenerationHistoryItem | null>(null);
 const detailSlideIndex = ref<number | null>(null);
-const editOpen = ref(false);
 const editEntryId = ref<string | null>(null);
 let filterTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -57,43 +56,46 @@ const detailImageUrl = computed(() => {
 const editTarget = computed<ImageEditTarget | null>(() => {
   const item = detailItem.value;
   if (!item) return null;
-  const base = {
-    generationId: Number(item.id),
-    aspectRatio: String(item.payload?.aspectRatio || ""),
-  };
-  const history = Array.isArray(item.payload?.editHistory) ? item.payload.editHistory : [];
-  if (editEntryId.value) {
-    const entry = history.find((candidate) => String((candidate as { id?: unknown })?.id) === editEntryId.value);
-    if (entry) {
-      const record = entry as { id?: unknown; imageUrl?: string; previewUrl?: string; title?: string; sourceSlideIndex?: number };
-      return {
-        imageUrl: String(record.imageUrl || record.previewUrl || ""),
-        title: String(record.title || item.cardTitle || "改图结果"),
-        ...base,
-        parentEditId: String(record.id),
-        slideIndex: Number.isInteger(record.sourceSlideIndex) ? Number(record.sourceSlideIndex) : detailSlideIndex.value,
-      };
-    }
-  }
   return {
     imageUrl: detailImageUrl.value,
     title: item.cardTitle || "历史图片",
-    ...base,
+    generationId: Number(item.id),
+    aspectRatio: String(item.payload?.aspectRatio || ""),
     slideIndex: detailSlideIndex.value,
   };
 });
 
-const editHistoryEntries = computed(() => {
+interface EditHistoryEntry {
+  id?: unknown;
+  imageUrl?: string;
+  previewUrl?: string;
+  title?: string;
+  createdAt?: string;
+  completedAt?: string;
+  aspectRatio?: string;
+  sourceSlideIndex?: number;
+}
+
+const editHistoryEntries = computed<EditHistoryEntry[]>(() => {
   const item = detailItem.value;
   if (!item || !Array.isArray(item.payload?.editHistory)) return [];
-  return item.payload.editHistory as Array<{
-    id?: unknown;
-    imageUrl?: string;
-    previewUrl?: string;
-    title?: string;
-    createdAt?: string;
-  }>;
+  return item.payload.editHistory as EditHistoryEntry[];
 });
+
+/** 历史记录自己的内联改图面板目标：父链由记录自身推导，不共享主表单。 */
+function editTargetForEntry(entry: EditHistoryEntry): ImageEditTarget | null {
+  const item = detailItem.value;
+  if (!item) return null;
+  const entryId = entry.id != null ? String(entry.id) : "";
+  return {
+    imageUrl: String(entry.imageUrl || entry.previewUrl || ""),
+    title: String(entry.title || item.cardTitle || "改图结果"),
+    generationId: Number(item.id),
+    aspectRatio: String(entry.aspectRatio || item.payload?.aspectRatio || ""),
+    ...(entryId ? { parentEditId: entryId } : {}),
+    slideIndex: Number.isInteger(entry.sourceSlideIndex) ? Number(entry.sourceSlideIndex) : detailSlideIndex.value,
+  };
+}
 
 function isImageFailed(url: string): boolean {
   return Boolean(url) && failedImageUrls.has(url);
@@ -227,20 +229,23 @@ function openDetail(item: GenerationHistoryItem, slideUrl = "") {
   const requestedUrl = slideUrl || safeImageSrc(item.previewUrl);
   const selected = slides.find((slide) => slide.src === requestedUrl) || slides[0] || null;
   detailSlideIndex.value = selected?.sourceIndex ?? null;
-  editOpen.value = false;
   editEntryId.value = null;
 }
 
 function closeDetail() {
   detailItem.value = null;
   detailSlideIndex.value = null;
-  editOpen.value = false;
   editEntryId.value = null;
 }
 
 function openEditFromHistory(entryId: string | null): void {
+  // 幂等选中：点击记录展开它自己的内联面板；面板内按钮的点击冒泡不会切换面板。
   editEntryId.value = entryId;
-  editOpen.value = true;
+}
+
+function selectSlide(sourceIndex: number): void {
+  detailSlideIndex.value = sourceIndex;
+  editEntryId.value = null;
 }
 
 async function onEdited(): Promise<void> {
@@ -438,7 +443,24 @@ onUnmounted(() => {
           <h3>{{ detailItem.cardTitle || "历史图片" }}</h3>
           <button type="button" class="secondary-btn" @click="closeDetail()">关闭</button>
         </header>
-        <p class="history-card-ref">{{ detailItem.channelLabel }} · {{ typeLabel(detailItem) }}</p>
+
+        <div class="history-asset-header" data-test="history-asset-header">
+          <p class="history-card-ref"><strong>生成类型：</strong>{{ detailItem.channelLabel }} · {{ typeLabel(detailItem) }}</p>
+          <p v-if="detailItem.ideaTitle" class="history-card-ref"><strong>来源选题：</strong>{{ detailItem.ideaTitle }}</p>
+          <div v-if="detailItem.type === 'moments'" class="history-copy">
+            <p v-if="detailItem.payload?.caption"><strong>朋友圈文案：</strong>{{ detailItem.payload?.caption }}</p>
+            <p v-if="detailItem.payload?.visualDirection"><strong>视觉方向：</strong>{{ detailItem.payload?.visualDirection }}</p>
+          </div>
+          <div v-else-if="detailItem.type === 'wechat'" class="history-copy">
+            <p v-if="detailItem.payload?.publishTitle"><strong>发布标题：</strong>{{ detailItem.payload?.publishTitle }}</p>
+            <p v-if="detailItem.payload?.intro"><strong>文章导语：</strong>{{ detailItem.payload?.intro }}</p>
+          </div>
+          <div v-else class="history-copy">
+            <p v-if="detailItem.payload?.publishTitle"><strong>发布标题：</strong>{{ detailItem.payload?.publishTitle }}</p>
+            <p v-if="detailItem.payload?.publishCaption"><strong>发布文案：</strong>{{ detailItem.payload?.publishCaption }}</p>
+          </div>
+        </div>
+
         <div v-if="slideImages(detailItem).length > 1" class="history-slide-tabs" data-test="history-slide-tabs">
           <button
             v-for="slide in slideImages(detailItem)"
@@ -447,35 +469,55 @@ onUnmounted(() => {
             class="secondary-btn history-slide-tab"
             :class="{ 'is-active': detailSlideIndex === slide.sourceIndex }"
             :data-test="`history-slide-tab-${slide.sourceIndex}`"
-            @click="detailSlideIndex = slide.sourceIndex"
+            @click="selectSlide(slide.sourceIndex)"
           >
             第 {{ slide.sourceIndex + 1 }} 张
           </button>
         </div>
-        <template v-if="detailImageUrl">
-          <div v-if="isImageFailed(detailImageUrl)" class="history-image-error" data-test="history-image-error">
-            <span>图片加载失败</span>
-            <button
-              type="button"
-              class="secondary-btn"
-              data-test="history-image-retry"
-              @click="retryImage(detailImageUrl)"
-            >
-              重试
-            </button>
+
+        <div class="history-detail-grid" data-test="history-detail-grid">
+          <div class="history-detail-preview" data-test="history-detail-preview">
+            <template v-if="detailImageUrl">
+              <div v-if="isImageFailed(detailImageUrl)" class="history-image-error" data-test="history-image-error">
+                <span>图片加载失败</span>
+                <button
+                  type="button"
+                  class="secondary-btn"
+                  data-test="history-image-retry"
+                  @click="retryImage(detailImageUrl)"
+                >
+                  重试
+                </button>
+              </div>
+              <img
+                v-else
+                :src="detailImageUrl"
+                :alt="detailItem.cardTitle || '历史生成图片'"
+                @error="onHistoryImageError(detailImageUrl)"
+              />
+            </template>
           </div>
-          <img
-            v-else
-            :src="detailImageUrl"
-            alt="历史生成图片"
-            class="history-modal-image"
-            @error="onHistoryImageError(detailImageUrl)"
-          />
-        </template>
-        <div v-if="editHistoryEntries.length" class="history-edit-history" data-test="history-edit-history">
-          <strong>改图记录</strong>
-          <ul class="history-edit-history-list">
-            <li v-for="entry in editHistoryEntries" :key="String(entry.id || '')" class="history-edit-history-item">
+          <div class="history-detail-form" data-test="history-edit-open" @click="editEntryId = null">
+            <h3>原图改图</h3>
+            <ImageEditPanel v-if="!editEntryId" :target="editTarget" @edited="onEdited" />
+            <p v-else class="history-edit-hint" data-test="history-edit-hint">
+              已选择一条改图记录，正在基于该结果继续改图。
+            </p>
+          </div>
+        </div>
+
+        <section class="history-edit-history" data-test="history-edit-history">
+          <strong>图片修改历史</strong>
+          <p v-if="!editHistoryEntries.length" class="history-edit-empty">还没有改图记录。</p>
+          <ul v-else class="history-edit-history-list">
+            <li
+              v-for="entry in editHistoryEntries"
+              :key="String(entry.id || '')"
+              class="history-edit-history-item"
+              :class="{ 'is-active': editEntryId === String(entry.id || '') }"
+              :data-test="`history-edit-history-item-${String(entry.id || '')}`"
+              @click="openEditFromHistory(String(entry.id || ''))"
+            >
               <img
                 v-if="safeImageSrc(entry.imageUrl || entry.previewUrl)"
                 :src="safeImageSrc(entry.imageUrl || entry.previewUrl)"
@@ -483,24 +525,27 @@ onUnmounted(() => {
                 loading="lazy"
                 decoding="async"
               />
-              <span>{{ entry.title || "改图结果" }}</span>
-              <button
-                type="button"
-                class="secondary-btn"
-                :data-test="`history-edit-history-item-${String(entry.id || '')}`"
-                @click="openEditFromHistory(String(entry.id || ''))"
-              >
-                继续改图
-              </button>
+              <div class="history-edit-history-meta">
+                <div class="history-card-meta">
+                  <span class="brand-tag">改图</span>
+                  <span v-if="entry.sourceSlideIndex != null" class="brand-tag">
+                    第 {{ Number(entry.sourceSlideIndex) + 1 }} 张
+                  </span>
+                  <span class="history-card-time" data-test="history-edit-history-time">
+                    {{ formatTime(entry.createdAt || entry.completedAt) }}
+                  </span>
+                </div>
+                <h3>{{ entry.title || "改图结果" }}</h3>
+                <ImageEditPanel
+                  v-if="editEntryId === String(entry.id || '')"
+                  :target="editTargetForEntry(entry)"
+                  label="基于此结果继续改图"
+                  @edited="onEdited"
+                />
+              </div>
             </li>
           </ul>
-        </div>
-        <div class="history-edit-actions">
-          <button type="button" class="secondary-btn" data-test="history-edit-open" @click="openEditFromHistory(null)">
-            {{ editOpen ? "收起改图" : "改图" }}
-          </button>
-        </div>
-        <ImageEditPanel v-if="editOpen" :target="editTarget" @edited="onEdited" />
+        </section>
       </div>
     </div>
   </section>
@@ -745,25 +790,105 @@ onUnmounted(() => {
 
 .history-edit-history-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--workspace-border, var(--color-border));
+  border-radius: var(--workspace-radius, var(--radius-md));
+  background: var(--workspace-surface-soft, #faf7f5);
+  cursor: pointer;
+}
+
+.history-edit-history-item.is-active {
+  border-color: var(--workspace-brand, var(--color-brand, #2f6fed));
 }
 
 .history-edit-history-item img {
-  width: 56px;
-  height: 56px;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
   object-fit: cover;
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
+  border: 1px solid var(--workspace-border, var(--color-border));
 }
 
-.history-edit-history-item span {
+.history-edit-history-meta {
   flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.history-edit-history-meta h3 {
+  margin: 0;
   font-size: 13px;
 }
 
-.history-edit-actions {
+.history-edit-empty {
+  margin: 0;
+  color: var(--workspace-text-muted, var(--color-text-secondary));
+  font-size: 13px;
+}
+
+.history-asset-header {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--workspace-border, var(--color-border));
+  border-radius: var(--workspace-radius, var(--radius-md));
+  background: var(--workspace-surface-soft, #faf7f5);
+}
+
+.history-asset-header p {
+  margin: 0;
+}
+
+.history-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.history-detail-preview {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border: 1px solid var(--workspace-border, var(--color-border));
+  border-radius: var(--workspace-radius-sm, var(--radius-md));
+  background: #faf7f5;
+}
+
+.history-detail-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.history-detail-form {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.history-detail-form h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.history-edit-hint {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed var(--workspace-border, var(--color-border));
+  border-radius: var(--workspace-radius-sm, var(--radius-md));
+  color: var(--workspace-text-muted, var(--color-text-secondary));
+  font-size: 13px;
+  background: var(--workspace-surface-soft, #faf7f5);
 }
 
 /* Legacy light-workspace history parity. */
@@ -1023,7 +1148,7 @@ onUnmounted(() => {
 }
 
 .history-modal-body {
-  width: min(680px, 100%);
+  width: min(920px, 100%);
   padding: 24px;
   border: 1px solid var(--workspace-border);
   border-radius: var(--workspace-radius);
@@ -1063,6 +1188,10 @@ onUnmounted(() => {
   }
 
   .history-generate-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .history-detail-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

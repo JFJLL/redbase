@@ -48,7 +48,7 @@ test("recordAiRun persists required observability fields", () => {
   assert.ok(run.id);
   assert.equal(run.task, "trend_analysis");
   assert.equal(run.model, "deepseek/deepseek-v4-flash");
-  assert.equal(run.prompt_version, "trend-v1");
+  assert.equal(run.prompt_version, "trend-v2");
   assert.equal(run.latency, 1234);
   assert.equal(run.success, true);
   assert.equal(run.quality_score, null);

@@ -39,6 +39,15 @@ import type { SessionUser } from "@/shared/types/api";
 
 export type IdeaGenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
 
+/** 外层（IdeasView）唯一产品图库源：列表与 loading/loaded/error 状态由宿主提供。 */
+export interface IdeaProductLibrary {
+  images: Ref<ProductImageView[]>;
+  loading: Ref<boolean>;
+  loaded: Ref<boolean>;
+  error: Ref<string>;
+  reload: () => void;
+}
+
 export interface IdeaGenerationContext {
   /** 品牌/趋势/选题定位（宿主提供：独立生图页来自 route query，内容选题对话框来自 store 选中态）。 */
   brandId: ComputedRef<number | null>;
@@ -52,6 +61,8 @@ export interface IdeaGenerationContext {
   settingsKey: ComputedRef<string>;
   /** 自动启动允许开关：对话框只在打开且 query action 指向本选题时自动启动。 */
   autoStartEnabled?: ComputedRef<boolean>;
+  /** 外层产品图库（内容选题页唯一素材入口）。缺省时回退到弹窗内部图库状态。 */
+  productLibrary?: IdeaProductLibrary;
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -151,10 +162,15 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
 
   // —— 一键生成：一次性票据 + 自动启动就绪门控 ——
   // 自动启动前必须等齐：品牌/趋势/选题就绪、该选题创作设置已恢复、产品图库已加载。
+  // 图库状态优先来自外层 IdeasView（唯一素材入口）；无外层源时回退内部状态。
   const ideaSettingsRestored = ref(false);
-  const productImagesLoaded = ref(false);
-  const productImagesError = ref("");
-  const productImagesReloadToken = ref(0);
+  const internalProductImagesLoaded = ref(false);
+  const internalProductImagesError = ref("");
+  const internalProductImagesReloadToken = ref(0);
+  const externalLibrary = context.productLibrary || null;
+  const productImagesLoaded = externalLibrary ? externalLibrary.loaded : internalProductImagesLoaded;
+  const productImagesError = externalLibrary ? externalLibrary.error : internalProductImagesError;
+  const productImagesReloadToken = internalProductImagesReloadToken;
 
   /**
    * 消费一次性票据：任何生成 POST 之前，先把 URL 上的 action 移除（保留
@@ -227,7 +243,9 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   const useProductImages = ref(true);
 
   const selectedProductIds = ref<number[]>([]);
-  const loadedProductImages = ref<ProductImageView[]>([]);
+  const loadedProductImages = externalLibrary
+    ? externalLibrary.images
+    : ref<ProductImageView[]>([]);
   const styleReference = ref<StyleReferenceImage | null>(null);
 
   /** 进入选题时恢复该选题自己的创作设置（getIdea*Selection 语义）。 */
@@ -285,18 +303,24 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   );
 
   function onProductImagesLoaded(images: ProductImageView[]) {
+    if (externalLibrary) return;
     loadedProductImages.value = images;
-    productImagesLoaded.value = true;
-    productImagesError.value = "";
+    internalProductImagesLoaded.value = true;
+    internalProductImagesError.value = "";
   }
 
   function onProductImagesLoadError(message: string) {
-    productImagesLoaded.value = false;
-    productImagesError.value = message || "产品素材加载失败";
+    if (externalLibrary) return;
+    internalProductImagesLoaded.value = false;
+    internalProductImagesError.value = message || "产品素材加载失败";
   }
 
   function retryProductImagesLoad(): void {
-    productImagesReloadToken.value += 1;
+    if (externalLibrary) {
+      externalLibrary.reload();
+      return;
+    }
+    internalProductImagesReloadToken.value += 1;
   }
 
   /** 产品图库防线：开启产品图且图库未加载完成/加载失败时，任何生成入口（自动/手动/重试）都不允许发 POST。 */

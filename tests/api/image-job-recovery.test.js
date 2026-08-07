@@ -8,8 +8,8 @@ process.env.REDBASE_DB_FILE = ":memory:";
 
 const { openDatabase } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
-const { insertUser, insertSession } = require("../../src/server/db/repositories/auth-repository");
-const { insertBrand, upsertBrandFull } = require("../../src/server/db/repositories/brand-repository");
+const { insertUser, insertSession, findUserById } = require("../../src/server/db/repositories/auth-repository");
+const { insertBrand, upsertBrandFull, findBrandByOwner: brandRepositoryFindBrandByOwner } = require("../../src/server/db/repositories/brand-repository");
 const {
   upsertImageJob,
   findImageJobByOwner,
@@ -1008,4 +1008,168 @@ test("concurrent edit-append and slide-merge on the same carousel group row keep
   assert.equal(Array.isArray(row.payload.editHistory) ? row.payload.editHistory.length : 0, 1, "edit entry preserved");
   const filled = row.payload.slides.filter((slide) => Boolean(String(slide.imageUrl || slide.previewUrl || "").trim()));
   assert.equal(filled.length, 2, "merged slide preserved alongside the edit entry");
+});
+
+function completeContentAssets(label) {
+  return {
+    moments: {
+      title: `${label}朋友圈配图`,
+      caption: `${label}从小空间桌面的真实使用出发，整理照明、收纳和移动使用时值得关注的细节。`,
+      visualDirection: "小空间桌面与折叠灯的真实使用画面",
+    },
+    xhsCarousel: {
+      title: `${label}小红书组图`,
+      publishTitle: `${label}桌面照明检查清单`,
+      publishCaption: `${label}整理小空间桌面照明的选择思路，从照明区域、折叠收纳和移动场景逐项判断。`,
+      caption: `${label}四页组图说明桌面照明选择逻辑。`,
+      slides: [1, 2, 3, 4].map((index) => ({
+        pageLabel: `第 ${index} 张`,
+        title: `${label}检查项 ${index}`,
+        copy: `${label}第 ${index} 个检查项说明实际使用条件。`,
+        visualDirection: `${label}小桌面使用场景 ${index}`,
+      })),
+    },
+    wechatLongImage: {
+      title: `${label}公众号长图`,
+      publishTitle: `${label}小空间桌面照明怎么选`,
+      intro: `${label}围绕有限桌面空间，建立照明区域、收纳方式和移动使用的判断框架。`,
+      outline: [`${label}判断照明区域`, `${label}比较收纳方式`, `${label}核对移动场景`],
+      positioning: `${label}帮助小空间用户建立桌面照明选择框架。`,
+      cta: `${label}保存清单，布置桌面前逐项核对。`,
+      visualDirection: `${label}桌面照明选择框架长图。`,
+    },
+  };
+}
+
+test("concurrent first image generation on the same skeleton idea fills assets exactly once", async () => {
+  // 历史骨架选题：contentAssets 缺失（{}），两条并发首次生图只允许一次模型补齐，
+  // 不重复扣费、不互相覆盖；已完整的新选题则完全不走模型。
+  const skeletonIdea = {
+    title: "并发补齐选题",
+    summary: "摘要",
+    angle: "角度",
+    brandFit: "结合",
+    audience: "人群",
+    hook: "钩子",
+    tags: ["#测试"],
+    contentAssets: {},
+  };
+  const trendId = 8100;
+  upsertBrandFull({
+    id: 10,
+    ownerUserId: 1,
+    name: "Recovery Brand",
+    industry: "母婴",
+    audience: "新手妈妈",
+    description: "恢复测试品牌",
+    product: "测试产品",
+    goal: "测试目标",
+    knowledgeBase: "测试资料库",
+    logo: null,
+    assetTags: [],
+    analyses: [],
+    trends: [
+      {
+        key: "global",
+        title: "全网热点指数",
+        description: "测试维度",
+        items: [
+          {
+            id: trendId,
+            stableKey: `skeleton-trend-${trendId}`,
+            rank: 1,
+            title: "并发补齐趋势",
+            category: "测试",
+            summary: "测试摘要",
+            score: 90,
+            reason: "测试原因",
+            ideas: [skeletonIdea],
+          },
+        ],
+      },
+    ],
+  });
+
+  let fillModelCalls = 0;
+  let completeCheckCalls = 0;
+  let jobCounter = 0;
+  const context = makeContext({
+    createImageJob: async () => {
+      jobCounter += 1;
+      return {
+        id: `skeleton-fill-job-${jobCounter}`,
+        status: "pending",
+        provider: "wavespeed",
+        providerMode: "text-to-image",
+        providerResultUrl: "",
+        imageUrl: "",
+        error: "",
+        generationId: null,
+        createdAt: Date.now(),
+        metadata: {},
+        generationContext: {},
+      };
+    },
+    ensureTrendIdeaContentAssets: async (brand, trend, ideaIndex) => {
+      fillModelCalls += 1;
+      // 模拟模型延迟，保证两个请求真正并发进入补齐路径。
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const idea = trend.ideas[Number(ideaIndex)];
+      idea.contentAssets = completeContentAssets(`并发补齐${fillModelCalls}`);
+      return { idea, filled: true };
+    },
+  });
+
+  function createJsonReq(url, payload) {
+    const body = JSON.stringify(payload);
+    const req = Readable.from([Buffer.from(body)]);
+    req.method = "POST";
+    req.url = url;
+    req.headers = {
+      host: "localhost:3013",
+      cookie: "redbase_session=recovery-token",
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(body)),
+    };
+    return req;
+  }
+
+  async function submitMoments() {
+    const res = createRes();
+    await handleImageGenerationRoutes(
+      context,
+      createJsonReq(`/api/brands/10/trends/${trendId}/ideas/0/image`, { aspectRatio: "3:4" }),
+      res,
+      `/api/brands/10/trends/${trendId}/ideas/0/image`,
+    );
+    return res;
+  }
+
+  const startingCredits = findUserById(1).credits;
+  const [first, second] = await Promise.all([submitMoments(), submitMoments()]);
+  assert.equal(first.statusCode, 202);
+  assert.equal(second.statusCode, 202);
+  assert.equal(fillModelCalls, 1, "concurrent fills must call the model exactly once");
+  assert.equal(completeCheckCalls, 0);
+
+  // 持久化后的选题必须完整，且两个请求各创建了一个任务（各自独立扣费 1 积分）。
+  const storedBrand = brandRepositoryFindBrandByOwner(10, 1);
+  const storedTrend = findTrendItem(storedBrand, trendId);
+  const storedIdea = storedTrend.ideas[0];
+  assert.ok(storedIdea.contentAssets.moments.caption);
+  assert.equal(storedIdea.contentAssets.xhsCarousel.slides.length, 4);
+  assert.ok(storedIdea.contentAssets.wechatLongImage.intro);
+  assert.equal(findUserById(1).credits, startingCredits - 2);
+
+  // 已完整的新选题：再次生图不得调用补齐模型。
+  const before = fillModelCalls;
+  const res = createRes();
+  await handleImageGenerationRoutes(
+    context,
+    createJsonReq(`/api/brands/10/trends/${trendId}/ideas/0/image`, { aspectRatio: "3:4" }),
+    res,
+    `/api/brands/10/trends/${trendId}/ideas/0/image`,
+  );
+  assert.equal(res.statusCode, 202);
+  assert.equal(fillModelCalls, before, "complete ideas must not call the fill model again");
 });

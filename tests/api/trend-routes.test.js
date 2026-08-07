@@ -60,8 +60,27 @@ function makeTrend(id, title) {
         tags: ["#选题"],
         contentAssets: {
           moments: { title: "朋友圈", caption: "朋友圈文案", visualDirection: "视觉方向" },
-          xhsCarousel: { title: "小红书", publishTitle: "发布标题", publishCaption: "发布文案", caption: "文案", slides: [] },
-          wechatLongImage: { title: "公众号", publishTitle: "长图标题", intro: "导语", outline: [], positioning: "定位", cta: "行动", visualDirection: "视觉方向" },
+          xhsCarousel: {
+            title: "小红书",
+            publishTitle: "发布标题",
+            publishCaption: "发布文案",
+            caption: "文案",
+            slides: [1, 2, 3, 4].map((index) => ({
+              pageLabel: `第 ${index} 张`,
+              title: `页标题 ${index}`,
+              copy: `第 ${index} 页文案`,
+              visualDirection: `第 ${index} 页视觉方向`,
+            })),
+          },
+          wechatLongImage: {
+            title: "公众号",
+            publishTitle: "长图标题",
+            intro: "导语",
+            outline: ["大纲一", "大纲二", "大纲三"],
+            positioning: "定位",
+            cta: "行动",
+            visualDirection: "视觉方向",
+          },
         },
       },
       {
@@ -74,8 +93,27 @@ function makeTrend(id, title) {
         tags: ["#选题"],
         contentAssets: {
           moments: { title: "朋友圈", caption: "朋友圈文案", visualDirection: "视觉方向" },
-          xhsCarousel: { title: "小红书", publishTitle: "发布标题", publishCaption: "发布文案", caption: "文案", slides: [] },
-          wechatLongImage: { title: "公众号", publishTitle: "长图标题", intro: "导语", outline: [], positioning: "定位", cta: "行动", visualDirection: "视觉方向" },
+          xhsCarousel: {
+            title: "小红书",
+            publishTitle: "发布标题",
+            publishCaption: "发布文案",
+            caption: "文案",
+            slides: [1, 2, 3, 4].map((index) => ({
+              pageLabel: `第 ${index} 张`,
+              title: `页标题 ${index}`,
+              copy: `第 ${index} 页文案`,
+              visualDirection: `第 ${index} 页视觉方向`,
+            })),
+          },
+          wechatLongImage: {
+            title: "公众号",
+            publishTitle: "长图标题",
+            intro: "导语",
+            outline: ["大纲一", "大纲二", "大纲三"],
+            positioning: "定位",
+            cta: "行动",
+            visualDirection: "视觉方向",
+          },
         },
       },
     ],
@@ -218,8 +256,36 @@ test("POST trend analysis returns exactly ten items and replays the same request
   );
   assert.equal(firstRes.statusCode, 200);
   assert.equal(firstRes.body.brand.trends.find((bucket) => bucket.key === "traffic").items.length, 10);
+  const persistedIdeas = firstRes.body.brand.trends
+    .find((bucket) => bucket.key === "traffic")
+    .items.flatMap((item) => item.ideas || []);
+  assert.equal(persistedIdeas.length, 20);
+  assert.ok(
+    persistedIdeas.every(
+      (idea) =>
+        idea.contentAssets?.moments?.caption &&
+        idea.contentAssets?.xhsCarousel?.slides?.length === 4 &&
+        idea.contentAssets?.wechatLongImage?.intro,
+    ),
+  );
   assert.equal(firstRes.body.user.credits, 4);
   assert.equal(modelCalls, 1);
+
+  const storedBrand = findBrandByOwner(30, 1);
+  const storedBucket = (storedBrand.trends || []).find((bucket) => bucket.key === "traffic");
+  assert.equal(storedBucket.items.length, 10);
+  assert.ok(
+    storedBucket.items.every(
+      (item) =>
+        item.ideas.length === 2 &&
+        item.ideas.every(
+          (idea) =>
+            idea.contentAssets?.moments?.caption &&
+            idea.contentAssets?.xhsCarousel?.slides?.length === 4 &&
+            idea.contentAssets?.wechatLongImage?.intro,
+        ),
+    ),
+  );
 
   const replayRes = createRes();
   await handleTrendRoutes(

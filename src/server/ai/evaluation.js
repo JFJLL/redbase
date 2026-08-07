@@ -22,7 +22,7 @@ function randomId() {
 
 /** Stable prompt version labels - bump when prompts change meaningfully. */
 const PROMPT_VERSIONS = Object.freeze({
-  trend_analysis: "trend-v1",
+  trend_analysis: "trend-v2",
   image_generation: "image-v1",
 });
 

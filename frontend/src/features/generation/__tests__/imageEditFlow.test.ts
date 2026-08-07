@@ -312,4 +312,26 @@ describe("HistoryView edit flow (ordinary image, carousel slide, edit history ch
     expect(body.parentEditId).toBe("edit-1");
     expect(body.imageUrl).toBe("/api/generated-images/2/edit-1/file?sig=ddd");
   });
+
+  it("renders the selected edit-history record's own inline panel while the main form steps aside", async () => {
+    const { wrapper } = await mountHistory();
+    await wrapper.findAll('[data-test="history-detail"]')[1].trigger("click");
+    await flushPromises();
+
+    await wrapper.find('[data-test="history-edit-history-item-edit-1"]').trigger("click");
+    await flushPromises();
+
+    const record = wrapper.find('[data-test="history-edit-history-item-edit-1"]');
+    expect(record.find('[data-test="image-edit-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="history-edit-open"] [data-test="image-edit-panel"]').exists()).toBe(false);
+
+    await record.find('[data-test="image-edit-prompt"]').setValue("沿历史结果再改");
+    await record.find('[data-test="image-edit-submit"]').trigger("click");
+    await flushPromises();
+
+    const post = fetchMock.mock.calls.find(([url]) => String(url) === "/api/image-edits");
+    const body = JSON.parse(String((post?.[1] as RequestInit | undefined)?.body || "{}")) as Record<string, unknown>;
+    expect(body.parentEditId).toBe("edit-1");
+    expect(body.generationId).toBe(2);
+  });
 });
