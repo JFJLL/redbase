@@ -26,7 +26,6 @@ const {
 } = require("../integrations/anysearch");
 const {
   TREND_SELF_SCORE_MIN,
-  collectTrendClaimTexts,
   extractTrendSelfScores,
   findAffirmedEvidenceClaim,
   findInvalidGenericTrendCopy,
@@ -358,8 +357,12 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
     "reason 至少 36 个中文字符，首句必须自然写出与 title 相同的来源专名或独特短语，并说明具体话题/形式、可转成的运营机制和品牌参与方式；直接从专有话题、用户矛盾、内容机制或执行动作切入，禁止以‘来源、证据、报告、案例’开头，禁止套用‘内容上可转化为……品牌可……’的批量句式。",
     "十条 reason 至少使用五种明显不同的句法和论证顺序；相邻两条不能复用相同开头或‘话题/形式 + 可转化 + 品牌可’三段模板。证据边界通过克制措辞体现，不得把 S 编号、内部取证等级或校验规则写进用户可见文案。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
-    "ideas 必须是 2 条，且都服务 content_direction；每条 idea 只包含：title, summary, angle, brandFit, audience, hook, tags；不要输出 contentAssets。",
+    "ideas 必须是 2 条，且都服务 content_direction；每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
     buildIdeaDiversityPrompt(selectedBucketMeta),
+    buildRichIdeaRequirementsPrompt(),
+    "contentAssets 必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
+    "两条 idea 的 contentAssets 必须分别沿用各自路线，不要复用同一套朋友圈文案、小红书文案、组图页标题或公众号导语。",
+    buildContentAssetsSchemaPrompt(),
     buildTrendDeduplicationPrompt(trendCount),
     buildTrendFreshnessPrompt(),
     buildEvidenceBoundaryPrompt(),
@@ -474,7 +477,7 @@ function buildAnySearchEvidencePromptBlock(searchEvidence) {
 
 function buildLeanIdeaRequirementsPrompt() {
   return [
-    "每条 idea 只输出 title, summary, angle, brandFit, audience, hook, tags；趋势分析阶段不要输出 contentAssets。",
+    "每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
     "idea.title：14-26 个中文字符，要像可直接派给运营执行的小红书选题标题。",
     "idea.summary：36-64 个中文字符，说明内容价值和用户关注点。",
     "idea.angle：20-40 个中文字符，写清楚具体切入方式。",
@@ -482,6 +485,8 @@ function buildLeanIdeaRequirementsPrompt() {
     "idea.audience：12-28 个中文字符，描述具体人群和场景。",
     "idea.hook：18-34 个中文字符，输出可直接使用的开头或封面钩子。",
     "idea.tags：必须输出 3-5 个与当前选题直接相关、以 # 开头的标签，不能省略。",
+    "contentAssets 必须包含 moments、xhsCarousel、wechatLongImage 三个完整对象，且必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
+    buildContentAssetsSchemaPrompt(),
   ].join("\n");
 }
 
@@ -646,7 +651,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
   const strictLines = options.strict
     ? [
         `重要：必须返回 trendBuckets，且 ${formatBucketKeys(selectedBucketMeta)} ${selectedBucketMeta.length} 个当前 bucket 的 items 都不能为空。`,
-        "每条 trend 必须有 2 条 idea，每条 idea 只输出选题骨架字段，不要输出 contentAssets。",
+        "每条 trend 必须有 2 条 idea，且每条 idea 必须包含完整 contentAssets（moments、xhsCarousel、wechatLongImage 三个对象）。",
         "如果搜索结果不足，请降级为可验证的趋势方向，不要编造具体机构、日期、数据或 evidenceIds。",
         "只返回 JSON 对象，不要解释失败原因，不要输出自然语言说明。",
       ]
@@ -690,7 +695,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     "6. 每条趋势必须填 market_change、consumer_shift、why_now、brand_opportunity、content_direction；缺一即无效。",
     "6.1 禁止“消费升级、年轻人关注健康、品质生活、用户越来越重视”等正确但无商业判断的空话。",
     "7. 选题要能直接给运营同学使用：两条 idea 都服务 content_direction，标题、角度、钩子要有小红书笔记感，避免空泛文案。",
-    "7. 每条趋势固定生成 2 条 idea，只输出 title、summary、angle、brandFit、audience、hook、tags，不输出 contentAssets；两条只能在本槽唯一机制内采用不同场景、叙事切口和执行步骤，每个字段用一两句说清。",
+    "7. 每条趋势固定生成 2 条 idea，每条 idea 必须同步生成完整 contentAssets（moments、xhsCarousel、wechatLongImage），不能只返回选题骨架或同义改写；两条只能在本槽唯一机制内采用不同场景、叙事切口和执行步骤，每个字段用一两句说清。",
     isPersonal
       ? "8. 不要输出个人档案摘要字段，也不要补充本人未提供的身份、经历、结果、收入、客户案例、资质或产品功效。"
       : "8. 不要输出品牌摘要字段，也不要补充品牌档案没有依据的产品功能、认证、功效或适用人群。",
@@ -710,7 +715,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     ...(retryFeedback ? ["上一次输出未通过服务端校验，本次必须修正：", retryFeedback] : []),
     ...strictLines,
-    "最终输出前自检：只返回一个 JSON 对象；每条 trend 九个字段完整、ideas 恰好 2 条且各字段完整；不得缺少 category。",
+    "最终输出前自检：只返回一个 JSON 对象；每条 trend 九个字段完整、ideas 恰好 2 条且每条包含完整 contentAssets（moments、xhsCarousel、wechatLongImage 三个对象）；不得缺少 category。",
     ...(anySearchEvidenceBlock
       ? ["S 编号只能出现在 evidenceIds 数组，任何 title、summary、reason、tags 或 ideas 字符串中都不得写 S1/S2 之类编号；用户可见文案也不得解释内部取证等级或校验规则；不得写来源未证明的热门、高频、收藏、互动、增长、引发分享或普遍性。"]
       : []),
@@ -1027,6 +1032,36 @@ function normalizeTrendIdea(idea) {
   normalized.tags = normalizeModelTags(rawIdea.tags);
   normalized.contentAssets = normalizeIdeaContentAssets(rawIdea);
   return normalized;
+}
+
+// 完整性判定必须对“残缺/非法 contentAssets”容错：normalizeIdeaContentAssets
+// 对组图页数、大纲条数等结构缺口会抛错，调用方应把它视同不完整而非崩溃。
+function isIdeaContentAssetsComplete(idea) {
+  try {
+    return hasCompleteIdeaContentAssets(idea);
+  } catch {
+    return false;
+  }
+}
+
+function getContentAssetCompletenessIssues(trendBuckets) {
+  const issues = [];
+  for (const bucket of trendBuckets || []) {
+    for (const [trendIndex, trend] of (bucket.items || []).entries()) {
+      for (const [ideaIndex, idea] of (trend?.ideas || []).entries()) {
+        if (!isIdeaContentAssetsComplete(idea)) {
+          issues.push({
+            reason: "missing-content-assets",
+            bucketKey: bucket.key,
+            trendIndex,
+            ideaIndex,
+            title: String(trend?.title || "").slice(0, 80),
+          });
+        }
+      }
+    }
+  }
+  return issues;
 }
 
 function normalizeRawTrend(trend) {
@@ -1488,6 +1523,9 @@ function getTrendStructureIssues(trendBuckets, bucketMeta = TREND_BUCKET_META) {
         if (!Array.isArray(idea?.tags) || normalizeModelTags(idea.tags).length < 3) {
           issues.push({ reason: "missing-idea-tags", bucketKey: meta.key, trendIndex, ideaIndex });
         }
+        if (!isIdeaContentAssetsComplete(idea)) {
+          issues.push({ reason: "missing-content-assets", bucketKey: meta.key, trendIndex, ideaIndex });
+        }
       }
     }
   }
@@ -1664,6 +1702,9 @@ function formatTrendRetryFeedback(issues) {
   if (["missing-trend-field", "missing-opportunity-field", "insufficient-reason-detail", "invalid-score", "invalid-self-score", "missing-trend-tags", "idea-count", "missing-idea-field", "missing-idea-tags"].some((reason) => reasons.has(reason))) {
     feedback.push(`补齐每条趋势的 market_change、consumer_shift、why_now、brand_opportunity、content_direction，以及 novelty_score、brand_fit_score、actionability_score 和两条 idea 的全部 schema 字段；reason 至少用 36 个中文字符说明具体来源话题、内容机会和判断边界，趋势与 idea 的 tags 都要有 3-5 个，三项自评分均 ≥ ${TREND_SELF_SCORE_MIN}。 `);
   }
+  if (reasons.has("missing-content-assets")) {
+    feedback.push("每条 idea 必须完整输出 contentAssets：moments（title/caption/visualDirection）、xhsCarousel（title/publishTitle/publishCaption/caption + 固定 4 页 slides，每页 pageLabel/title/copy/visualDirection）、wechatLongImage（title/publishTitle/intro/outline 3-5 条/positioning/cta/visualDirection）；缺失、页数不足或空对象一律不合格。 ");
+  }
   if (reasons.has("empty-opportunity-platitude")) {
     feedback.push("删除消费升级、年轻人关注健康、品质生活、用户越来越重视等空话；market_change/brand_opportunity/content_direction 必须写具体变化、品牌抓手和下一步内容动作。 ");
   }
@@ -1794,7 +1835,7 @@ function buildTargetedTrendRepairSystemPrompt(bucketMeta, repairCount) {
     `tags 必须是 3-5 个以 # 开头的字符串；score 与三项自评分必须是 0-100 的整数，且 novelty_score、brand_fit_score、actionability_score 均 ≥ ${TREND_SELF_SCORE_MIN}。`,
     "score 是本批证据内的相对内容机会分；没有网页事实片段直接支持时最高 79 分，不得用虚构的热门、收藏、互动或搜索强度解释分数。",
     "reason 至少 36 个中文字符，必须按过去→现在→原因→品牌写清策略判断，并说明内容转化逻辑和证据边界；不能用‘活动有效、当前可复制、增加互动、该方向源于、缺乏热度数据、适合作为内容实验’等内部校验式句子敷衍。",
-    "ideas 必须是 2 条，每条只包含 title、summary、angle、brandFit、audience、hook、tags，不要输出 contentAssets；idea.tags 也必须是 3-5 个；ideas 必须承接明确可执行的内容动作。",
+    "ideas 必须是 2 条，每条必须包含 title、summary、angle、brandFit、audience、hook、tags、contentAssets；contentAssets 必须包含 moments、xhsCarousel、wechatLongImage 三个完整对象；idea.tags 也必须是 3-5 个；ideas 必须承接明确可执行的内容动作。",
     "重写后的趋势不得与已通过标题重复、互为前缀或只做同义改写。",
     `当前维度：${formatBucketTitles(selectedBucketMeta)}。`,
     buildTrendFreshnessPrompt(),
@@ -1807,6 +1848,7 @@ function buildTargetedTrendRepairSystemPrompt(bucketMeta, repairCount) {
     "网页内容样本或社交讨论样本只能生成中性的内容形式观察或待验证讨论方向。即使来源标题写有机构、政策或权威结论，用户可见文案也不得断言该机构发布了什么、政策要求什么或医学上应当怎么做。",
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     buildLeanIdeaRequirementsPrompt(),
+    buildContentAssetsSchemaPrompt(),
     "食品、乳品和母婴话题没有品牌档案或可靠证据直接支持时，不得写营养功效、医生/专家推荐、适用年龄、宝宝安心食用、特定人群专用或绝对安全。",
   ].filter(Boolean).join("\n");
 }
@@ -1839,6 +1881,7 @@ function toLeanTrendRepairInput(trend) {
       audience: idea?.audience || "",
       hook: idea?.hook || "",
       tags: idea?.tags || [],
+      contentAssets: idea?.contentAssets || {},
     })),
   };
 }
@@ -2015,9 +2058,10 @@ function buildTargetedTrendRepairUserPrompt(brand, options, repairPlan, trendBuc
     "requiredRoute 是该槽位唯一允许的内容机制；两条 ideas 都必须在此机制内部采用不同场景或步骤，不能切换成其他互动机制。",
     "每个待重写条目的 title、summary 和 reason 都必须自然保留 requiredSourceEvidence 的 title/excerpt 里至少一个具体事件、问题或表达形式；reason 首句必须写出与 title 相同的来源专名或独特短语，但用户可见文案不得写 S 编号。",
     "若 validationErrors 含 ungrounded-title，title 必须直接写出 requiredSourceEvidence 中的具体话题锚点；只写‘家长、育儿、健康、信息、品牌、趋势、内容’等泛词不算修复。",
+    "若 validationErrors 含 missing-content-assets，必须为对应 idea 完整生成 contentAssets（moments、xhsCarousel 固定 4 页 slides、wechatLongImage，各字段按 schema）；不允许返回空对象或部分骨架。",
     "返回 item 时沿用 identity.stableKey 和 identity.evidenceIds；其余所有用户可见字段都重新由模型生成，不要复述被拒绝的原文。",
     "必须完整重写每个不合格 item，不要解释规则，不要在文案中复述“证据不足”“禁止”“不得”等校验说明。",
-    "输出前逐项自检：每条必须有非空 stableKey、title、category、summary、reason、evidenceIds，score 必须是整数，tags 必须 3-5 个，ideas 必须恰好 2 条且每条七个字段完整。",
+    "输出前逐项自检：每条必须有非空 stableKey、title、category、summary、reason、evidenceIds，score 必须是整数，tags 必须 3-5 个，ideas 必须恰好 2 条且每条八个字段完整（含完整 contentAssets）。",
     `最终只返回一个 JSON 对象，顶层不得是数组；唯一顶层键为 items，items 数组必须恰好包含 ${repairItems.length} 个完整趋势对象。`,
     "items 中不得输出 originalPosition、bucketKey、validationErrors、requiredSourceEvidence 或 identity；不得返回空壳、位置编号或字段摘要。",
     "每个 items[] 对象必须完整包含 stableKey、title、category、summary、score、tags、reason、evidenceIds、ideas，缺少任何一个字段都视为本次修复失败。",
@@ -2714,6 +2758,28 @@ function finalizeModelTrendBuckets(trendBuckets, bucketMeta, baseId) {
   });
 }
 
+function collectIdeaAssetClaimEntries(contentAssets, prefix) {
+  const entries = [];
+  const walk = (value, path) => {
+    const leafKey = String(path || "").split(".").at(-1) || "";
+    if (["evidenceIds", "id", "score"].includes(leafKey)) return;
+    if (typeof value === "string") {
+      entries.push({ field: path || leafKey || "text", text: value });
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => walk(item, `${path}.${index}`));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [childKey, childValue] of Object.entries(value)) {
+      walk(childValue, path ? `${path}.${childKey}` : childKey);
+    }
+  };
+  walk(contentAssets, prefix);
+  return entries;
+}
+
 function getBrandClaimTextEntries(trend) {
   const entries = [
     "title",
@@ -2733,9 +2799,9 @@ function getBrandClaimTextEntries(trend) {
     entries.push({ field: `tags.${tagIndex}`, text: String(tag || "") });
   }
   for (const [ideaIndex, idea] of (trend?.ideas || []).entries()) {
-    for (const text of collectTrendClaimTexts(idea?.contentAssets || {})) {
-      entries.push({ field: `ideas.${ideaIndex}.contentAssets`, text });
-    }
+    entries.push(
+      ...collectIdeaAssetClaimEntries(idea?.contentAssets || {}, `ideas.${ideaIndex}.contentAssets`),
+    );
     for (const field of ["title", "summary", "angle", "brandFit", "audience", "hook"]) {
       const text = String(idea?.[field] || "");
       entries.push({ field: `ideas.${ideaIndex}.${field}`, text });
@@ -3021,7 +3087,7 @@ function getXhsPgyDeliveryIssues(trendBuckets, brand) {
   const structural = getTrendStructureIssues(trendBuckets, [TREND_BUCKET_META[0]])
     .filter((issue) => [
       "missing-trend-field", "missing-idea-field", "idea-count",
-      "missing-trend-tags", "missing-idea-tags", "invalid-score",
+      "missing-trend-tags", "missing-idea-tags", "missing-content-assets", "invalid-score",
     ].includes(issue.reason));
   return [
     ...structural,
@@ -3744,6 +3810,16 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       validationError.issues = lastValidationIssues;
       throw validationError;
     }
+    // 完整 contentAssets 是成功交付的硬门槛：任何本地降级/证据槽位/Pgy 兜底卡
+    // 都无法凭空生成真实发布文案，出现不完整选题时整批失败（不落库、不扣费、
+    // 旧快照不被覆盖），绝不静默交付骨架。
+    const contentAssetIssues = getContentAssetCompletenessIssues(trendBuckets);
+    if (contentAssetIssues.length) {
+      const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。`);
+      validationError.code = "TREND_MODEL_VALIDATION_FAILED";
+      validationError.issues = contentAssetIssues;
+      throw validationError;
+    }
     const budgetSnap = aiBudget.snapshot();
     const metrics = {
       searchDurationMs,
@@ -3967,7 +4043,7 @@ async function ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex, 
   if (!idea) {
     throw new Error("当前选题不存在，请重新生成或刷新页面后再试。");
   }
-  if (hasCompleteIdeaContentAssets(idea)) {
+  if (isIdeaContentAssetsComplete(idea)) {
     return { idea, filled: false };
   }
 
@@ -4055,6 +4131,8 @@ module.exports = {
   attachEvidenceSnapshots,
   getAnySearchEvidenceCoverageIssues,
   hasValidAnySearchEvidenceCoverage,
+  isIdeaContentAssetsComplete,
+  getContentAssetCompletenessIssues,
   getXhsPgyDeliveryIssues,
   fillXhsBucketsFromPgy,
   applyLocalDeliveryDegrade,

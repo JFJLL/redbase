@@ -218,11 +218,10 @@ describe("idea generation through the real ideas entry", () => {
     expect(wrapper.find('[data-test="style-result"]').exists()).toBe(true);
   });
 
-  it("uploads and deletes product images with confirmation", async () => {
+  it("uploads a product image from the idea card and the next request carries it", async () => {
     let uploaded = false;
-    let deleted = false;
-    const { wrapper } = await openIdeaAction("moments", {
-      overrides: (url, init) => {
+    const { wrapper, fetchMock } = await mountIdeasGeneration(
+      baseOptions((url, init) => {
         const method = String(init?.method || "GET");
         if (method === "POST" && url === "/api/product-images") {
           const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -233,15 +232,13 @@ describe("idea generation through the real ideas entry", () => {
             image: { id: 22, originalName: "upload.png", url: "/api/product-images/22/file?sig=u", sizeBytes: 1000 },
           });
         }
-        if (method === "DELETE" && url === "/api/product-images/22") {
-          deleted = true;
-          return jsonResponse(200, { ok: true });
-        }
         return undefined;
-      },
-    });
+      }),
+      { brandId: "1", trendId: "5", ideaIndex: "0" },
+    );
 
-    const input = wrapper.find('[data-test="product-image-upload"]');
+    // 上传入口只在外层选题卡（唯一素材入口），弹窗内不再有产品图库。
+    const input = wrapper.find('[data-test="idea-product-upload-input-0"]');
     const file = new File(["hello-bytes"], "upload.png", { type: "image/png" });
     Object.defineProperty(input.element, "files", { value: [file], configurable: true });
     await input.trigger("change");
@@ -251,12 +248,48 @@ describe("idea generation through the real ideas entry", () => {
     }
     expect(uploaded).toBe(true);
 
-    await wrapper.find('[data-test="product-image-delete-22"]').trigger("click");
+    await wrapper.find('[data-test="idea-generate-moments-0"]').trigger("click");
     await flushPromises();
-    expect(wrapper.find('[data-test="product-delete-confirm"]').exists()).toBe(true);
-    await wrapper.find('[data-test="product-delete-confirm-action"]').trigger("click");
     await flushPromises();
-    expect(deleted).toBe(true);
+
+    const body = callBody(fetchMock, "POST", "/api/brands/1/trends/5/ideas/0/image") as Record<string, unknown>;
+    expect(body.productImages).toEqual([{ id: 22, name: "upload.png" }]);
+  });
+
+  it("keeps upload inside the outer idea card and shows the library dialog there", async () => {
+    const { wrapper } = await mountIdeasGeneration(
+      baseOptions(),
+      { brandId: "1", trendId: "5", ideaIndex: "0" },
+    );
+
+    await wrapper.find('[data-test="idea-open-library-0"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-test="product-library-dialog-0"]').exists()).toBe(true);
+    wrapper.find('[data-test="idea-library-close-0"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-test="product-library-dialog-0"]').exists()).toBe(false);
+  });
+
+  it("keeps product image upload and delete controls out of the generation dialog", async () => {
+    let uploaded = false;
+    let deleted = false;
+    const { wrapper } = await openIdeaAction("moments", {
+      overrides: (url, init) => {
+        const method = String(init?.method || "GET");
+        if (method === "POST" && url === "/api/product-images") {
+          uploaded = true;
+          return undefined;
+        }
+        return undefined;
+      },
+    });
+
+    // 弹窗只负责生成进度/结果/改图，不再渲染产品图库（上传/选择/删除 UI）。
+    expect(wrapper.find('[data-test="product-image-panel"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="product-image-upload"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="product-image-delete-22"]').exists()).toBe(false);
+    expect(uploaded).toBe(false);
+    expect(deleted).toBe(false);
   });
 
   it("stops polling when the view unmounts mid-generation", async () => {
@@ -312,7 +345,10 @@ describe("idea generation through the real ideas entry", () => {
     expect(cards.text()).toContain("开头钩子");
     expect(wrapper.find('[data-test="idea-use-brand-logo-0"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="idea-style-upload-0"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="product-image-panel"]').exists()).toBe(true);
+    // 弹窗 DOM 不再包含产品图库；图库入口只在外层选题卡。
+    expect(wrapper.find('[data-test="product-image-panel"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="idea-product-upload-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-open-library-0"]').exists()).toBe(true);
   });
 
   it("auto-starts the requested generation from the action query and completes it", async () => {

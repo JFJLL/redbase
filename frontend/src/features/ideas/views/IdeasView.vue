@@ -23,17 +23,21 @@ import {
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
+  deleteProductImage,
   fetchProductImages,
   uploadProductImage,
   type ProductImageView,
 } from "@/features/generation/api";
 import {
+  countProductImageReferences,
   getIdeaCreativeSettings,
   getIdeaSettingsKey,
+  removeProductImageFromAllSettings,
   saveIdeaCreativeSettings,
   type IdeaCreativeSettings,
 } from "@/features/generation/ideaCreativeSettings";
 import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
+import type { IdeaProductLibrary } from "@/features/generation/composables/useIdeaGeneration";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 
 type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
@@ -69,8 +73,12 @@ const editErrors = reactive<Record<number, string>>({});
 // —— 每选题素材与创作设置（按键位 品牌ID:趋势ID:选题序号 记忆，与生图任务页共享） ——
 const libraryImages = ref<ProductImageView[]>([]);
 const libraryLoading = ref(false);
+const libraryLoaded = ref(false);
 const libraryError = ref("");
 const openLibraryFor = ref<number | null>(null);
+const pendingDeleteImage = ref<ProductImageView | null>(null);
+const libraryDeleting = ref(false);
+const libraryMessage = ref("");
 const uploadingProduct = ref<number | null>(null);
 const uploadingLogo = ref(false);
 const productMessages = reactive<Record<number, string>>({});
@@ -109,10 +117,12 @@ function formatImageName(name: string, max: number): string {
 
 async function loadProductLibrary(): Promise<void> {
   libraryLoading.value = true;
+  libraryLoaded.value = false;
   libraryError.value = "";
   try {
     const result = await fetchProductImages(scope.signalFor("product-library"));
     libraryImages.value = result.images || [];
+    libraryLoaded.value = true;
   } catch (error) {
     if (isAbortError(error)) return;
     if (handleUnauthorized(error)) return;
@@ -304,10 +314,58 @@ function creativeSummary(index: number): string {
 
 function openLibrary(index: number): void {
   openLibraryFor.value = index;
+  pendingDeleteImage.value = null;
+  libraryMessage.value = "";
 }
 
 function closeLibrary(): void {
   openLibraryFor.value = null;
+  pendingDeleteImage.value = null;
+}
+
+function requestLibraryDelete(image: ProductImageView): void {
+  if (libraryDeleting.value) return;
+  pendingDeleteImage.value = image;
+}
+
+function cancelLibraryDelete(): void {
+  pendingDeleteImage.value = null;
+}
+
+const libraryDeleteImpact = computed(() => {
+  const image = pendingDeleteImage.value;
+  return image ? countProductImageReferences(image.id) : 0;
+});
+
+/**
+ * 删除确认：复用现有 DELETE /api/product-images/:id 与
+ * removeProductImageFromAllSettings 清理规则（与 ProductImagePanel 同一套，
+ * 不复制第二套）。取消/失败/中止都不会清理引用或列表。
+ */
+async function confirmLibraryDelete(): Promise<void> {
+  if (libraryDeleting.value) return;
+  const image = pendingDeleteImage.value;
+  if (!image) return;
+  pendingDeleteImage.value = null;
+  libraryDeleting.value = true;
+  libraryMessage.value = "";
+  try {
+    // 与图库加载/上传共用 scope：账号切换（notifyAuthReset）或卸载会中止 DELETE；
+    // 即便旧响应在中止后到达，也绝不清理引用或列表，避免污染新上下文。
+    const signal = scope.signalFor(`library-delete:${image.id}`);
+    await deleteProductImage(image.id, signal);
+    if (signal.aborted) return;
+    const cleaned = removeProductImageFromAllSettings(image.id);
+    libraryImages.value = libraryImages.value.filter((item) => item.id !== image.id);
+    libraryMessage.value =
+      cleaned > 0 ? `已删除，并清理 ${cleaned} 处选题中的图片引用。` : "图片已删除。";
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (handleUnauthorized(error)) return;
+    libraryMessage.value = `删除失败：${String((error as { message?: unknown })?.message || "")}`;
+  } finally {
+    libraryDeleting.value = false;
+  }
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -432,6 +490,8 @@ watch(
     for (const key of Object.keys(editingDrafts)) delete editingDrafts[Number(key)];
     for (const key of Object.keys(editErrors)) delete editErrors[Number(key)];
     openLibraryFor.value = null;
+    pendingDeleteImage.value = null;
+    libraryMessage.value = "";
     for (const key of Object.keys(openCreativeSettings)) delete openCreativeSettings[Number(key)];
     for (const key of Object.keys(productMessages)) delete productMessages[Number(key)];
     for (const key of Object.keys(styleErrors)) delete styleErrors[Number(key)];
@@ -590,6 +650,15 @@ function closeGeneration(): void {
   // 避免任务在“生成中-关窗”间隙失去轮询（服务端状态仍是权威，不重复扣费）。
   useImageJobRecovery().rescan();
 }
+
+// 弹窗只消费外层图库（唯一素材入口）：列表 + 状态 + 重载全部来自本页。
+const productLibraryProp = computed<IdeaProductLibrary>(() => ({
+  images: libraryImages,
+  loading: libraryLoading,
+  loaded: libraryLoaded,
+  error: libraryError,
+  reload: loadProductLibrary,
+}));
 </script>
 
 <template>
@@ -734,17 +803,34 @@ function closeGeneration(): void {
             <div><strong>面向人群：</strong>{{ idea.audience }}</div>
             <div><strong>开头钩子：</strong>{{ idea.hook }}</div>
 
-            <div class="idea-asset-preview" :class="{ 'is-incomplete': !hasCompleteIdeaContentAssets(idea) }">
-              <div><strong>朋友圈标题：</strong>{{ idea.contentAssets.moments?.title || "首次生成时自动补齐" }}</div>
-              <div><strong>朋友圈文案：</strong>{{ idea.contentAssets.moments?.caption || "首次生成时自动补齐" }}</div>
-              <div>
-                <strong>小红书标题：</strong
-                >{{ idea.contentAssets.xhsCarousel?.publishTitle || idea.contentAssets.xhsCarousel?.title || "首次生成时自动补齐" }}
+            <template v-if="hasCompleteIdeaContentAssets(idea)">
+              <div class="idea-asset-preview">
+                <div><strong>朋友圈标题：</strong>{{ idea.contentAssets.moments?.title }}</div>
+                <div><strong>朋友圈文案：</strong>{{ idea.contentAssets.moments?.caption }}</div>
+                <div>
+                  <strong>小红书标题：</strong
+                  >{{ idea.contentAssets.xhsCarousel?.publishTitle || idea.contentAssets.xhsCarousel?.title }}
+                </div>
+                <div>
+                  <strong>小红书文案：</strong
+                  >{{ idea.contentAssets.xhsCarousel?.publishCaption || idea.contentAssets.xhsCarousel?.caption }}
+                </div>
               </div>
-              <div>
-                <strong>小红书文案：</strong
-                >{{ idea.contentAssets.xhsCarousel?.publishCaption || idea.contentAssets.xhsCarousel?.caption || "首次生成时自动补齐" }}
-              </div>
+            </template>
+            <div v-else class="idea-assets-incomplete" data-test="idea-assets-incomplete" role="alert">
+              <p>
+                该选题缺少完整内容资产（朋友圈 / 小红书 / 公众号文案），可能来自旧版骨架数据，无法直接用于生图。
+                请重新生成趋势或选题后获得完整文案。
+              </p>
+              <button
+                type="button"
+                class="secondary-btn small-btn"
+                :data-test="`idea-regenerate-assets-${index}`"
+                :disabled="regenerating"
+                @click="handleRegenerate"
+              >
+                {{ regenerating ? "生成中..." : "重新生成选题（1 积分）" }}
+              </button>
             </div>
 
             <!-- 品牌 Logo 开关 -->
@@ -1059,13 +1145,55 @@ function closeGeneration(): void {
               <img :src="image.url" :alt="image.originalName" loading="lazy" decoding="async" />
               <span>{{ image.originalName }}</span>
             </label>
+            <button
+              type="button"
+              class="idea-library-delete"
+              :data-test="`idea-library-delete-${openLibraryFor}-${image.id}`"
+              :disabled="libraryDeleting"
+              @click="requestLibraryDelete(image)"
+            >
+              删除
+            </button>
           </li>
         </ul>
         <p v-else class="panel-hint">还没有已上传的产品图，可先在选题卡内上传。</p>
+        <p v-if="libraryMessage" class="idea-control-message" data-test="library-message">{{ libraryMessage }}</p>
         <button class="primary-btn small-btn" type="button" :data-test="`idea-library-done-${openLibraryFor}`" @click="closeLibrary">
           完成
         </button>
       </section>
+      <div
+        v-if="pendingDeleteImage"
+        class="idea-library-delete-backdrop"
+        data-test="library-delete-confirm"
+        @click.self="cancelLibraryDelete"
+      >
+        <section class="idea-library-delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="libraryDeleteTitle">
+          <h3 id="libraryDeleteTitle">删除{{ assetLabel }}</h3>
+          <p data-test="library-delete-impact">
+            {{
+              libraryDeleteImpact > 0
+                ? `该图片正被 ${libraryDeleteImpact} 处选题引用，删除后将同时移除这些引用。`
+                : "该图片未被任何选题引用。"
+            }}
+          </p>
+          <p>确定删除「{{ pendingDeleteImage.originalName }}」吗？此操作不可恢复。</p>
+          <div class="idea-library-delete-actions">
+            <button type="button" class="secondary-btn" data-test="library-delete-cancel" @click="cancelLibraryDelete">
+              取消
+            </button>
+            <button
+              type="button"
+              class="danger-btn"
+              data-test="library-delete-confirm-action"
+              :disabled="libraryDeleting"
+              @click="confirmLibraryDelete"
+            >
+              确认删除
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
 
     <!-- 内容选题内生成：进度、结果、失败与重试直接在此承接 -->
@@ -1074,6 +1202,7 @@ function closeGeneration(): void {
       :key="activeGeneration.ideaIndex"
       :idea-index="activeGeneration.ideaIndex"
       :action="activeGeneration.action"
+      :product-library="productLibraryProp"
       @close="closeGeneration"
     />
   </section>
@@ -1222,6 +1351,22 @@ function closeGeneration(): void {
 
 .idea-asset-preview.is-incomplete {
   color: var(--color-text-secondary);
+}
+
+.idea-assets-incomplete {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(180, 35, 24, 0.18);
+  border-radius: var(--radius-md);
+  background: #fff1f1;
+  color: #8c2b22;
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.idea-assets-incomplete p {
+  margin: 0;
 }
 
 .idea-tag-list {
@@ -1686,6 +1831,78 @@ function closeGeneration(): void {
   color: var(--workspace-text-muted);
   font-size: 0.78rem;
   line-height: 1.5;
+}
+
+.idea-library-item {
+  display: grid;
+  gap: 8px;
+}
+
+.idea-library-delete {
+  min-height: 32px;
+  border: 1px solid rgba(183, 46, 58, 0.16);
+  border-radius: var(--workspace-radius-sm, 6px);
+  background: #fffafa;
+  color: #b72e3a;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.idea-library-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.idea-library-delete-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 15, 25, 0.45);
+}
+
+.idea-library-delete-modal {
+  display: grid;
+  gap: 10px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px;
+  border-radius: var(--workspace-radius, 10px);
+  background: var(--workspace-surface, #fff);
+  color: var(--workspace-text, #222);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.idea-library-delete-modal h3 {
+  margin: 0;
+}
+
+.idea-library-delete-modal p {
+  margin: 0;
+  color: var(--workspace-muted, #687385);
+}
+
+.idea-library-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.danger-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--workspace-danger, #c0392b);
+  border-radius: var(--workspace-radius-sm, 6px);
+  background: var(--workspace-danger, #c0392b);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.danger-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 @media (max-width: 760px) {

@@ -204,8 +204,8 @@ describe("one-click auto-start ticket and readiness gate (real ideas entry)", ()
 
   it("blocks auto-start when the product gallery fails, shows a recoverable error, and resumes after retry", async () => {
     saveMomentsSettings({ useProductImages: true, selectedProductIds: [11, 12] });
-    // 页面图库与对话框图库各消费一次失败；第三次（重试）成功。
-    let galleryFailures = 2;
+    // 图库只在内容选题页（唯一素材入口）加载：一次失败，重试后成功。
+    let galleryFailures = 1;
     const fetchMock = installFlowFetch(
       baseOptions((url, init) => {
         if (String(init?.method || "GET") === "GET" && url.split("?")[0] === "/api/product-images") {

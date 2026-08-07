@@ -47,6 +47,37 @@ function markdownFixture() {
   ].join("\n");
 }
 
+function completeContentAssets(label) {
+  return {
+    moments: {
+      title: `${label}朋友圈配图`,
+      caption: `${label}从小空间桌面的真实使用出发，整理照明、收纳和移动使用时值得关注的细节。`,
+      visualDirection: "小空间桌面与折叠灯的真实使用画面",
+    },
+    xhsCarousel: {
+      title: `${label}小红书组图`,
+      publishTitle: `${label}桌面照明检查清单`,
+      publishCaption: `${label}整理小空间桌面照明的选择思路，从照明区域、折叠收纳和移动场景逐项判断。`,
+      caption: `${label}四页组图说明桌面照明选择逻辑。`,
+      slides: [1, 2, 3, 4].map((index) => ({
+        pageLabel: `第 ${index} 张`,
+        title: `${label}检查项 ${index}`,
+        copy: `${label}第 ${index} 个检查项说明实际使用条件。`,
+        visualDirection: `${label}小桌面使用场景 ${index}`,
+      })),
+    },
+    wechatLongImage: {
+      title: `${label}公众号长图`,
+      publishTitle: `${label}小空间桌面照明怎么选`,
+      intro: `${label}围绕有限桌面空间，建立照明区域、收纳方式和移动使用的判断框架。`,
+      outline: [`${label}判断照明区域`, `${label}比较收纳方式`, `${label}核对移动场景`],
+      positioning: `${label}帮助小空间用户建立桌面照明选择框架。`,
+      cta: `${label}保存清单，布置桌面前逐项核对。`,
+      visualDirection: `${label}桌面照明选择框架长图。`,
+    },
+  };
+}
+
 // Same shape as the anysearch-integration fixture builder: ten distinct,
 // evidence-grounded cards that pass the full validation pipeline.
 function generatedTrendBatch(prefix, options = {}) {
@@ -98,6 +129,7 @@ function generatedTrendBatch(prefix, options = {}) {
             audience,
             hook: `${variant.title}最容易忽略的条件是什么？`,
             tags: [`#${variant.title}`, "#真实场景", "#品牌运营"],
+            contentAssets: completeContentAssets(`${label}${routeIndex === 0 ? "A" : "B"}`),
           })),
         };
       }),
@@ -201,10 +233,10 @@ test("a real but completely irrelevant candidate picked by the rerank model is d
   assert.ok(plan.evidence.every((item) => !/篮球|钢铁/.test(item.title)));
 });
 
-test("a first-call transport failure with evidence still delivers ten degraded cards", async () => {
+test("a first-call transport failure with evidence fails without saving", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  const result = await generateAiTrendSet({
+  await assert.rejects(generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7800, {
@@ -216,16 +248,11 @@ test("a first-call transport failure with evidence still delivers ten degraded c
       error.code = "ETIMEDOUT";
       throw error;
     },
-  });
+  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
 
+  // 完整 contentAssets 是硬门槛：本地证据槽位卡不能凭空生成真实发布文案，
+  // 一次传输失败即整批失败（不落库、不扣费），不再交付降级骨架。
   assert.equal(modelCalls, 1);
-  assert.equal(result[0].items.length, 10);
-  assert.ok(result[0].items.every((item) => item.degraded === true));
-  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
-  assert.equal(
-    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
-    10,
-  );
 });
 
 test("generation plan lines carry rerank slot anchors and claim boundaries", () => {
@@ -372,7 +399,7 @@ test("one duplicate card cannot sink the other nine", async () => {
   assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("a short xhs model batch is topped up from Pgy notes with warnings in one call", async () => {
+test("a short xhs model batch fails instead of topping up with Pgy skeleton cards", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -385,7 +412,7 @@ test("a short xhs model batch is topped up from Pgy notes with warnings in one c
       author: {},
     })),
   };
-  const result = await generateAiTrendSet({
+  await assert.rejects(generateAiTrendSet({
     searchProvider: { enabled: true },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7600, {
@@ -397,17 +424,13 @@ test("a short xhs model batch is topped up from Pgy notes with warnings in one c
       batch.trendBuckets[0].items = batch.trendBuckets[0].items.slice(0, 4);
       return batch;
     },
-  });
+  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
 
+  // Pgy 兜底卡没有真实 contentAssets，补齐会静默交付骨架：按新契约整批失败。
   assert.equal(modelCalls, 1);
-  assert.equal(result[0].items.length, 10);
-  assert.equal(
-    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
-    6,
-  );
 });
 
-test("a fully unparsable xhs model response degrades to ten Pgy cards after one call", async () => {
+test("a fully unparsable xhs model response fails instead of Pgy skeleton cards", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -420,7 +443,7 @@ test("a fully unparsable xhs model response degrades to ten Pgy cards after one 
       author: {},
     })),
   };
-  const result = await generateAiTrendSet({
+  await assert.rejects(generateAiTrendSet({
     searchProvider: { enabled: true },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7700, {
@@ -430,15 +453,7 @@ test("a fully unparsable xhs model response degrades to ten Pgy cards after one 
       modelCalls += 1;
       return ["sorry", "no json"];
     },
-  });
+  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
 
   assert.equal(modelCalls, 1);
-  assert.equal(result[0].items.length, 10);
-  assert.ok(result[0].items.every((item) => item.degraded === true));
-  assert.equal(
-    result.analysisWarnings.filter((warning) => warning.code === "TREND_ITEM_FALLBACK").length,
-    10,
-  );
-  // Pgy-built cards keep the note order so evidence snapshots stay aligned.
-  assert.ok(result[0].items.every((item) => item.evidence?.[0]?.provider === "pgy"));
 });

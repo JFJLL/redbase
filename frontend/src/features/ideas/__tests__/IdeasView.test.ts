@@ -95,13 +95,12 @@ describe("IdeasView", () => {
     expect(cards[0].text()).toContain("面向人群：一线城市上班族");
     expect(cards[0].text()).toContain("开头钩子：工位上的第一口秋天");
     expect(cards[0].text()).toContain("#咖啡日常");
-    // 内容资产未补齐时仍渲染四行字段结构，值为诚实占位（不伪装成最终文案）。
-    const incomplete = cards[0].text();
-    expect(incomplete).toContain("朋友圈标题：");
-    expect(incomplete).toContain("朋友圈文案：");
-    expect(incomplete).toContain("小红书标题：");
-    expect(incomplete).toContain("小红书文案：");
-    expect(incomplete).toContain("首次生成时自动补齐");
+    // 骨架选题（contentAssets 缺失）不再显示“首次生成时自动补齐”占位：
+    // 明确标识数据不完整并提供重新生成入口。
+    expect(cards[0].find('[data-test="idea-assets-incomplete"]').exists()).toBe(true);
+    expect(cards[0].text()).toContain("缺少完整内容资产");
+    expect(cards[0].find('[data-test="idea-regenerate-assets-0"]').exists()).toBe(true);
+    expect(cards[0].text()).not.toContain("首次生成时自动补齐");
   });
 
   it("regenerates ideas with the custom prompt and applies trend + credits from the response", async () => {

@@ -1,5 +1,67 @@
 # PROGRESS
 
+## 任务：RedBase 旧版内容生成流程恢复（2026-08-06，分支 codex/restore-legacy-content-generation-flow）
+
+### 任务0 基线核对
+
+- 从最新 origin/master（`6c9d5564b9f7be6454c2cd9ea988e4667e88dc04`，fetch 后无新增，与交接一致）创建 `codex/restore-legacy-content-generation-flow`；同名分支不存在，未覆盖。
+- 本地原分支 `codex/fix-post-deploy-ui-polish` @ `0aa9ca1`，工作树干净，无用户改动需要保留。
+- 旧仓库 `D:\download\redbase`（HEAD b415280）只读核对：M package-lock.json、?? scripts/run-tests.cjs 与交接一致，未清理/覆盖。
+- 基线全绿：check pass；unit 613/613；integration 266/266；data 31/31；typecheck:frontend pass；frontend 319/319；build pass；budget PASS；eval:ai 126/126；smoke:api ok（一次性 DB outputs/baseline-smoke.sqlite + 出站 fail-fast，端口 3013，服务 PID 已停）。
+
+### 阶段1（服务端，红→绿完成）
+
+- 契约变更（按交接 4.1 与 32a6ba1^ 完整 contentAssets 契约，未整文件回滚）：
+  - `buildTrendAnalysisSystemPrompt` / `buildLeanIdeaRequirementsPrompt` / `buildTargetedTrendRepairSystemPrompt` / `buildTrendAnalysisUserPrompt`：删除“不要输出 contentAssets”，要求每条 idea 同一 JSON 内完整生成 moments、xhsCarousel（固定4页）、wechatLongImage。
+  - `getTrendStructureIssues` 新增 `missing-content-assets` 校验；`formatTrendRetryFeedback`、`getXhsPgyDeliveryIssues` 同步覆盖；修复往返 `toLeanTrendRepairInput` 携带 contentAssets。
+  - 最终完整性硬门槛：`generateTrendBucketGroup` 交付前校验全部 idea 资产完整，不完整即抛 `TREND_MODEL_VALIDATION_FAILED`（不落库、不扣费、旧快照不覆盖）。证据槽位/Pgy 兜底卡不再作为完整成功交付（本地无法凭空生成真实发布文案）。
+  - `ensureTrendIdeaContentAssets` 用容错完整性判定（残缺/非法资产视同不完整走补齐）。
+  - 历史骨架并发补齐：`image-generation-routes.ensureIdeaAssetsForImage` 改为按 `brandId:trendId:ideaIndex` 进程内锁 + 锁内重读最新快照，完整即短路；并发首次生图只调用一次模型、只持久化一次。
+  - `PROMPT_VERSIONS.trend_analysis` 升为 `trend-v2`（evaluation.test 同步）。
+- 红→绿：新契约测试（136 项）在旧 src 上 10 失败/126 通过（红日志 outputs/red-green-phase1-red.log），实现后 136/136 全绿。
+- 全量单元 615/615（基线 613 + 净增 2）。
+
+### 阶段2（历史生成改图工作台，子代理 Nash 完成，红→绿）
+
+- 普通图详情：顶部资产信息卡（生成类型/来源选题/发布文案）；主区域桌面双栏=左侧稳定预览 + 右侧「原图改图」表单常驻（删除「改图/收起改图」开关），≤760px 单列。
+- 组图：只渲染真实页 tab 并保留原始 sourceIndex；选择页同步左侧预览与右侧表单 target.slideIndex。
+- 改图历史：独立「图片修改历史」，每条=左结果图 + 右元信息 + 记录自身内联 ImageEditPanel；继续改图 target 带 generationId=原记录、parentEditId=改图记录 id、slideIndex=entry.sourceSlideIndex 优先。设计取舍：同一时刻只展开一个可提交面板（记录面板选中时主表单让位），满足新旧用例共存。
+- 保留签名刷新、失败重试、tab 选中态；文件：HistoryView.vue、historyView.test.ts（+4）、imageEditFlow.test.ts（+1）。
+- 红→绿：红阶段 5 失败/15 通过（outputs/red-green-phase2-red.log），绿阶段 20/20，全量前端 326 通过。
+
+### 阶段3（生成弹窗移除重复产品图库 + 外层唯一素材入口，完成）
+
+- `useIdeaGeneration` 新增 `productLibrary` 外部图库注入（images/loading/loaded/error/reload）；无外层源时回退内部状态（组件契约向后兼容）。
+- `IdeaGenerationDialog` 删除 `ProductImagePanel` 渲染与相关绑定；弹窗只展示生成进度/错误/重试/结果/继续改图；图库失败错误块与「重新加载产品图」保留，重载指向外层同一数据源。
+- `IdeasView` 增加 `libraryLoaded` 并把图库列表与状态作为 `productLibrary` 传入弹窗；上传/选择/开关仍只在外层。
+- 内容选题卡：完整资产显示真实四行文案；骨架选题显示 `idea-assets-incomplete` 明确不完整提示 + 「重新生成选题」按钮，删除“首次生成时自动补齐”正常态占位。
+- 服务端配套：`getBrandClaimTextEntries` 改为资产内叶子级路径（contentAssets 内的违规文案可被本地就地清理而不破坏资产包），新增回归测试。
+- 红→绿：6 项旧契约测试红灯（弹窗图库、占位文案），改写后全量前端 326/326（基线 319）、typecheck 通过。
+
+### 阶段4（进行中）
+
+- 全量单元 616/616（基线 613 + 净增 3）；前端 326/326（基线 319 + 净增 7）。
+
+### 阶段4 全量验证与 Kimi 浏览器验收（完成）
+
+- 确定性通道全绿：check pass；unit 616/616；integration 269/269；data 31/31；typecheck:frontend pass；frontend 326/326；build pass；budget PASS；eval:ai 128/128；smoke:api ok（一次性 DB + 出站 fail-fast）。
+- `verify-change.ps1 -PlanOnly -RiskOverride R3`：risk R3，7 lanes（static/unit/integration/smoke/ai-eval/kimi-browser/agent-review），fingerprint 随最终 diff。
+- Kimi WebBridge 验收（隔离 DB + 出站 fail-fast，端口 3015，一次性种子 outputs/seed-legacy-flow-browser.cjs）：
+  - 完整选题卡显示真实四行发布文案、无占位；骨架选题卡显示不完整提示 + 重新生成入口。
+  - 生成弹窗 DOM 无产品图库；朋友圈/公众号 POST 均携带外层选中 {id:91101,name:"产品图A.png"}；风格图 POST 携带 styleReferenceImages（无参考图为 []，参考路径由确定性测试覆盖）。
+  - action 消费后刷新 0 新增 POST；历史普通图顶部资产信息 + 左图右常驻表单 + 独立修改历史；稀疏组图只显示真实页（第1/2/4张），选第4张改图 POST slideIndex:3/generationId:911003；改图历史内联面板 POST generationId:911004/parentEditId:edit911004a。
+  - 网络隔离：仅 127.0.0.1:3015；截图 6 张 + browser-report.json + 服务端日志，证据见 artifacts/verification/legacy-flow-restoration-20260806/。
+  - 生成/改图请求出站被 fail-fast 拦截（OUTBOUND_FAIL_FAST 错误），零真实付费调用。
+
+### 阶段5 冻结 diff、独立审查与最终 receipt
+
+- 冻结完整 diff（20 文件，含全部受跟踪改动；未跟踪/忽略目录不参与）：第一轮冻结 `frozen-diff-2892acb3…`（SHA256 `2892acb3ce79d2becbc1d2235975603d3252cfb9134644a7a9467a5d30600046`），最终冻结补丁见下方 `frozen-diff-<final>.patch`（本轮账本定稿后重新冻结，SHA256 见 artifacts/verification/frozen-diff-*.sha256 与 review-state-2.json）。
+- 第一轮 fresh-context reviewer（agent `019fd6b2-bc19-7e23-8d78-15e9b0df9c04`，昵称 Huygens，fork_turns="none"，只读）：结论 APPROVE-WITH-CONCERNS（0 blocker / 0 major / 5 minor），10 项清单全 PASS；原始输出 `reviewer-1-huygens-raw-output.md`、状态证明 `review-state.json`。
+- 5 项 minor 处置（不修改代码，记录为遗留风险）：① 产品图删除在生产 UI 无入口（任务外层入口枚举为加载/上传/选择/开关，删除不在范围；删除 API 与 ProductImagePanel 组件测试仍在）；② style-image/xhs-preview 请求不携带 productImages（服务端契约从未接受，风格图走 styleReferenceImages，非本次回归）；③ 结构性非法资产解析期抛错跳过修复重试（仍不落库不扣费，契约安全）；④ 并发补齐锁为进程内互斥（当前单实例部署可接受）；⑤ 门槛错误文案表述 + 测试死代码（无行为影响）。
+- 第二轮 fresh-context reviewer（最终冻结补丁，agent id、原始输出与工作树哈希见 `artifacts/verification/legacy-flow-restoration-20260806/review-state-2.json` 与 `reviewer-2-*-raw-output.md`）：复核本账本定稿后的最终 diff，结论见其原始输出。
+- `.verification/evidence.json` 与 `.verification/receipt.json` 以最终 diff 指纹为准；receipt status=pass、fingerprint 与最终 diff 一致、`-CheckReceipt` 通过、`git diff --check` 干净（最终值见 receipt.json）。
+- 未提交、未推送、未合并、未部署；旧仓库 D:\download\redbase 未触碰；一次性 DB/图片文件已清理；无真实 AI/付费调用（浏览器验收全程 OUTBOUND_FAIL_FAST 拦截）。
+
 ## 任务：Vue 迁移闭环发布阻塞修复（2026-08-05，分支 codex/vue-migration-closure-20260805）
 
 ### 任务0 基线核对
@@ -255,3 +317,44 @@
 - 浏览器验收（Kimi WebBridge，隔离 DB + 出站 fail-fast，端口 3014）：1433×780 / 1722×794 / 1722×888 / 390×844 逐页测量与截图；analysis-summary clientHeight==scrollHeight（79==79）、clientWidth>=scrollWidth；四按钮等宽等高；个人 IP 卡 666px==品牌卡；优秀内容按钮同基线；首页四卡 175px 等高；390px 无横向溢出。失败 toast 弹出→5s 内消失→刷新后不重复；fetch 日志仅 GET active+ab1001f，零 POST；退款恰好一次（59→60 积分）。机器可读测量报告与截图见 `artifacts/verification/ui-polish-20260806/`（browser-report.json、*.png）。
 - 独立审查：冻结 diff（含未跟踪测试文件）与 SHA256 见 `artifacts/verification/ui-polish-20260806/frozen-diff.patch` 与 `agent-review-evidence.md`；首轮 fresh reviewer（id 019fd5f7-0f91-7151-9af0-3d4a40967795）REQUEST_CHANGES（验证契约未闭合 + 404/401 文案覆盖不全）；按审查意见补齐红绿日志、receipt/evidence，修复 404/401 聚合/组图文案与死字段后换新 reviewer 复审，完整轮次记录见 `agent-review-evidence.md`。
 - 全量验证与 receipt：见 .verification/receipt.json（覆盖本次 14 文件 diff 的最终指纹）。
+
+### 发布前产品素材契约复核与删除入口恢复（2026-08-07，codex/restore-legacy-content-generation-flow）
+
+上一轮 20 个受跟踪文件保持未提交（分支与 HEAD=origin/master=6c9d5564 不变），本轮在其上叠加，未切分支、未 reset/checkout/清理/重打补丁。
+
+#### 请求契约证明（红→绿，新增测试先红灯后转绿）
+
+- 新增 `frontend/src/features/generation/__tests__/productMediaRequestContract.test.ts`（4 例）：
+  - 小红书组图 4 个真实 `slides/:i` POST 全部携带外层最新选择 `[{id:11,name:"product-a.png"},{id:12,name:"product-b.png"}]`；
+  - preview 请求体严格等于 `{aspectRatio,visualStylePreset}`（无 productImages），complete 无 productImages 字段；
+  - `useProductImages=false` 时 4 个 slide POST 的 productImages 均为 `[]`；
+  - 图库加载失败且开关开启时 0 preview / 0 slide / 0 complete（无扣费）、action 票据保留，重载成功后恰好 1 次 preview + 4 个 slide；
+  - style-image 即使外层已选产品图，也只携带独立 `styleReferenceImages`，无 productImages。
+- 结论：preview/complete 协议正确（只准备方案/只归档），未为统一字段错误修改协议；风格化图保持独立风格参考契约。
+
+#### 外层删除入口恢复（红→绿，新增测试先红灯后转绿）
+
+- 新增 `frontend/src/features/ideas/__tests__/libraryDelete.test.ts`（7 例）；实现集中在 `IdeasView.vue`：
+  - 「选择已上传图片」素材库每张图新增「删除」按钮；确认弹窗复用 `countProductImageReferences` 展示引用影响数；
+  - 取消：0 DELETE、图片/选择/所有选题键位引用不变；
+  - 成功：恰好 1 次 `DELETE /api/product-images/:id`，从 `libraryImages` 移除，复用 `removeProductImageFromAllSettings` 清理当前账号全部选题键位；
+  - 失败：图片、选择、引用全部保持不变并显示错误；
+  - 删除当前已选素材后，下一次生成请求不再携带已删除 ID；
+  - 账号切换/中止：DELETE 走 `scope.signalFor` + await 后 `signal.aborted` 复查，旧响应不落地；品牌切换 watcher 重置素材库与确认态。
+- 未复制第二套清理规则：与 ProductImagePanel 共用 `deleteProductImage / countProductImageReferences / removeProductImageFromAllSettings`。
+- 生成弹窗继续无产品图库（上传/选择/删除 DOM 断言保持）。
+
+#### Kimi WebBridge 浏览器验收（隔离 DB + loopback fake provider + 进程级出站 fail-fast）
+
+- 证据目录 `artifacts/verification/product-media-contract-20260807/`（browser-report.json、10 张截图、browser-evidence.md）。
+- preview 请求体仅 `{aspectRatio,visualStylePreset}`；4 个 slide POST 全部携带外层两张产品图 `{id,name}`；complete 无 productImages；关闭开关后 4 个 slide 均为 `[]`；style-image 只携带 styleReferenceImages。
+- 删除：影响数提示 2 处引用 → 取消 0 DELETE → 成功恰好 1 次 DELETE 且 idea1 跨选题引用被清理 → 模拟后端失败图片/选择/引用不变 → 恢复后真实 DELETE 恰好 1 次、素材库清空。
+- 网络隔离：externalEntries=7 全为浏览器扩展噪音；图片任务全部由 127.0.0.1:4013 fake provider 完成；诊断轮真实出站被 OUTBOUND_FAIL_FAST 拒绝记录在服务端日志。零真实 AI/付费调用。
+
+#### 全量验证与独立审查
+
+- 前端 48 文件 / 337 测试（上一轮基线 46/326，+2 文件/+11 测试）；typecheck 通过；node unit 128/128；static/integration/ai-eval 全绿。
+- `verify-change.ps1 -RiskOverride R3`：static/unit/integration/smoke/ai-eval/kimi-browser/agent-review 7 lanes 全 pass；`.verification/receipt.json` 重新生成（status=pass，fingerprint `2a4ff3776a5d5eb936201b7996f58d55f5feed8efbd6ad97ef89b80fb3f3df40`）并通过 `-CheckReceipt`。
+- 冻结完整 diff（22 文件，含上一轮 20 个受跟踪改动 + 本轮 2 个新增测试）：`artifacts/verification/frozen-diff-954be0745b495f5ace4b8e79d9f15ace09b16fe10d041f4e34e2930ec9ab37e1.patch`，SHA256 `954be0745b495f5ace4b8e79d9f15ace09b16fe10d041f4e34e2930ec9ab37e1`。
+- Fresh-context 只读 reviewer：agent `019fda12-e655-7031-a389-52d9ad42ab6c`（Kant），fork_turns="none"（fork_context=false），未参与两轮实现；结论 APPROVE-WITH-CONCERNS（0 blocker / 0 major / 5 minor 全部非阻断遗留风险）。审查前后工作树均 22 项、diff SHA256 不变；原始输出 `reviewer-1-kant-raw-output.md`、prestate/poststate 同目录。
+- 未提交、未推送、未合并、未部署。

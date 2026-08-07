@@ -68,7 +68,7 @@ describe("ideas card layout contract", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the same four publish-copy fields on incomplete and complete idea cards", async () => {
+  it("renders complete publish copy on complete cards and an explicit incomplete state on skeleton cards", async () => {
     const mounted = mountIdeas(baseHandler());
     wrapper = mounted.wrapper;
     await flushPromises();
@@ -78,12 +78,11 @@ describe("ideas card layout contract", () => {
     expect(cards).toHaveLength(2);
 
     const incomplete = cards[0]!.text();
-    expect(incomplete).toContain("朋友圈标题：");
-    expect(incomplete).toContain("朋友圈文案：");
-    expect(incomplete).toContain("小红书标题：");
-    expect(incomplete).toContain("小红书文案：");
-    // 诚实占位：不把选题摘要伪装成最终发布文案。
-    expect(incomplete).toContain("首次生成时自动补齐");
+    // 骨架选题不再以“自动补齐”占位冒充正常完成态：明确标识数据不完整并提供重生成入口。
+    expect(cards[0]!.find('[data-test="idea-assets-incomplete"]').exists()).toBe(true);
+    expect(incomplete).toContain("缺少完整内容资产");
+    expect(incomplete).toContain("重新生成选题");
+    expect(incomplete).not.toContain("首次生成时自动补齐");
 
     const complete = cards[1]!.text();
     expect(complete).toContain("朋友圈标题：");
@@ -116,7 +115,8 @@ describe("ideas card layout contract", () => {
     );
   });
 
-  it("uses honest placeholders for missing content assets", () => {
-    expect(IdeasViewSource).toContain("首次生成时自动补齐");
+  it("never renders the legacy auto-fill placeholder as a normal state", () => {
+    expect(IdeasViewSource).not.toContain("首次生成时自动补齐");
+    expect(IdeasViewSource).toContain('data-test="idea-assets-incomplete"');
   });
 });

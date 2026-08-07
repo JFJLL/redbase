@@ -40,6 +40,37 @@ insertBrand({
   assetTags: [],
 });
 
+function completeContentAssets(label) {
+  return {
+    moments: {
+      title: `${label}朋友圈配图`,
+      caption: `${label}从小空间桌面的真实使用出发，整理照明、收纳和移动使用时值得关注的细节。`,
+      visualDirection: "小空间桌面与折叠灯的真实使用画面",
+    },
+    xhsCarousel: {
+      title: `${label}小红书组图`,
+      publishTitle: `${label}桌面照明检查清单`,
+      publishCaption: `${label}整理小空间桌面照明的选择思路，从照明区域、折叠收纳和移动场景逐项判断。`,
+      caption: `${label}四页组图说明桌面照明选择逻辑。`,
+      slides: [1, 2, 3, 4].map((index) => ({
+        pageLabel: `第 ${index} 张`,
+        title: `${label}检查项 ${index}`,
+        copy: `${label}第 ${index} 个检查项说明实际使用条件。`,
+        visualDirection: `${label}小桌面使用场景 ${index}`,
+      })),
+    },
+    wechatLongImage: {
+      title: `${label}公众号长图`,
+      publishTitle: `${label}小空间桌面照明怎么选`,
+      intro: `${label}围绕有限桌面空间，建立照明区域、收纳方式和移动使用的判断框架。`,
+      outline: [`${label}判断照明区域`, `${label}比较收纳方式`, `${label}核对移动场景`],
+      positioning: `${label}帮助小空间用户建立桌面照明选择框架。`,
+      cta: `${label}保存清单，布置桌面前逐项核对。`,
+      visualDirection: `${label}桌面照明选择框架长图。`,
+    },
+  };
+}
+
 function makeIdea(label) {
   return {
     title: `${label}选题`,
@@ -49,7 +80,7 @@ function makeIdea(label) {
     audience: "目标人群",
     hook: `${label}钩子`,
     tags: ["#选题"],
-    contentAssets: {},
+    contentAssets: completeContentAssets(label),
   };
 }
 
@@ -186,7 +217,7 @@ test("the persisted analysis record keeps the delivered snapshot for the degrade
   assert.equal(snapshotBucket.items.length, 10);
 });
 
-test("a first-call transport failure with evidence still delivers ten cards and charges once", async () => {
+test("a first-call transport failure with evidence fails without saving or charging", async () => {
   clearAnySearchCache();
   const before = findUserById(1).credits;
   const evidenceMarkdown = [
@@ -201,8 +232,8 @@ test("a first-call transport failure with evidence still delivers ten cards and 
   ].join("\n");
   let modelCalls = 0;
   // End-to-end through the real trend service: the main model dies at
-  // transport level on its only call, yet the route still completes the
-  // normal success transaction (saved + charged once) from evidence slots.
+  // transport level on its only call. 完整 contentAssets 是硬门槛，证据槽位
+  // 兜底卡不能凭空生成真实发布文案，因此整批失败：不保存、不扣费。
   const context = {
     appConfig: { security: { assetSigningSecret: "test-secret" } },
     async generateAiTrendSet(brand, baseId, options) {
@@ -233,12 +264,10 @@ test("a first-call transport failure with evidence still delivers ten cards and 
     res,
     "/api/brands/40/analyses",
   );
-  assert.equal(res.statusCode, 200);
+  assert.equal(res.statusCode, 400);
   assert.equal(modelCalls, 1);
-  assert.equal(res.body.user.credits, before - 1);
-  assert.equal(findUserById(1).credits, before - 1);
-  const bucket = res.body.brand.trends.find((entry) => entry.key === "track");
-  assert.equal(bucket.items.length, 10);
-  assert.ok(res.body.warnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
-  assert.ok(res.body.warnings.some((warning) => warning.code === "TREND_ITEM_FALLBACK"));
+  assert.match(res.body.error, /未保存也未扣积分/);
+  assert.equal(findUserById(1).credits, before);
+  const brand = findBrandByOwner(40, 1);
+  assert.ok(!(brand.trends || []).some((bucket) => bucket.key === "track"));
 });
