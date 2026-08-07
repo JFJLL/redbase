@@ -268,6 +268,9 @@ test("freeForm prompts switch to creative mode without evidence anchors", () => 
     { trendCount: 10, profileType: "brand", freeForm: true },
   );
   assert.match(systemPrompt, /创意假设模式/);
+  assert.match(systemPrompt, /创意槽位/);
+  assert.match(systemPrompt, /自评分/);
+  assert.match(systemPrompt, /TREND_SELF_SCORE_MIN|70/);
   assert.doesNotMatch(systemPrompt, /必须先从对应来源标题中逐字保留/);
   assert.doesNotMatch(systemPrompt, /网页事实片段/);
 
@@ -277,6 +280,7 @@ test("freeForm prompts switch to creative mode without evidence anchors", () => 
     [trafficMeta],
   );
   assert.match(userPrompt, /创意假设模式/);
+  assert.match(userPrompt, /创意槽位计划/);
   assert.doesNotMatch(userPrompt, /如果搜索结果不足/);
   assert.doesNotMatch(userPrompt, /AnySearch\/Pgy 证据为准/);
 });
@@ -345,4 +349,83 @@ test("freeForm validation skips unsupported-hard-claim and stale-window gates", 
     { freeForm: true },
   );
   assert.equal(freeFormIssues.some((issue) => issue.reason === "unsupported-hard-claim"), false);
+});
+
+test("freeForm validation flags theme clusters shared by three or more titles", () => {
+  const normalized = normalizeTrendSet([{
+    title: "折叠桌面灯分区补光讨论",
+    category: "内容机会",
+    market_change: "用户从固定台灯讨论转向折叠便携补光",
+    consumer_shift: "租房人群更在意桌面收纳与移动补光",
+    why_now: "近期讨论集中在小空间线材冲突",
+    brand_opportunity: "LightMate 可展示折叠灯归位动作",
+    content_direction: "做桌面摆位前后对照组图",
+    summary: "用户从固定台灯讨论转向折叠便携补光",
+    reason: "折叠桌面灯分区补光讨论升温，可做成小空间补光清单并自然带入品牌收纳动作。",
+    score: 78,
+    novelty_score: 80,
+    brand_fit_score: 85,
+    actionability_score: 76,
+    tags: ["#折叠灯", "#桌面补光", "#小空间"],
+    ideas: [
+      {
+        title: "租房桌面折叠灯摆位对照",
+        summary: "展示拥挤桌面到折叠归位的前后对比。",
+        angle: "前后对照 + 收纳动作",
+        brandFit: "用 LightMate 折叠灯完成归位演示",
+        audience: "租房居家办公人群",
+        hook: "桌面太挤了，灯还能这样收？",
+        tags: ["#租房改造", "#桌面收纳", "#补光"],
+      },
+      {
+        title: "分区补光任务清单",
+        summary: "按键盘区屏幕区分区补光。",
+        angle: "任务清单 + 分区场景",
+        brandFit: "把折叠灯放进居家办公任务流",
+        audience: "居家办公租房党",
+        hook: "补光不是越亮越好，分区才重要",
+        tags: ["#居家办公", "#分区补光", "#折叠灯"],
+      },
+    ],
+  }], brand, 100);
+
+  const clusteredTitles = [
+    "更好人生故事征集：记录你的奋斗瞬间",
+    "更好人生直播圆桌：探讨职场女性的成长",
+    "更好人生观点辩论：奋斗与生活的平衡",
+    "深夜独居的治愈仪式",
+    "办公室下午茶品质指南",
+    "周末聚会待客之道",
+    "独居女性的深夜充电",
+    "职场女性的早晨仪式",
+    "从纪录片到餐桌的叙事链路",
+    "成分党如何辨别牛奶品质",
+  ];
+  const items = clusteredTitles.map((title, index) => ({
+    ...normalized[0],
+    title,
+    stableKey: `cluster-${index}`,
+  }));
+  const bucket = [{ key: "traffic", title: "流量", description: "", items }];
+  const meta = [TREND_BUCKET_META.find((item) => item.key === "traffic")];
+
+  const issues = getTrendGenerationIssues(
+    bucket,
+    meta,
+    null,
+    brand,
+    null,
+    new Date(),
+    { freeForm: true },
+  );
+  const clusterIssues = issues.filter((issue) => issue.reason === "theme-cluster");
+  assert.ok(clusterIssues.length >= 1, "three titles sharing a 4-char phrase must be flagged");
+  assert.ok(clusterIssues.every((issue) => ["更好人生", "职场女性"].includes(issue.claim)));
+
+  const nonFreeFormIssues = getTrendGenerationIssues(bucket, meta, null, brand, null);
+  assert.equal(
+    nonFreeFormIssues.some((issue) => issue.reason === "theme-cluster"),
+    false,
+    "theme-cluster gate must only apply in freeForm mode",
+  );
 });

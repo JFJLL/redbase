@@ -313,6 +313,33 @@ function buildBrandGrowthStrategyPrompt() {
   ].join("\n");
 }
 
+const FREE_FORM_CREATIVE_ROUTES = [
+  ["用户问题观察", "唯一机制是问题清单审阅；整理目标人群的真实提问或纠结点，不发起征集、投票或共创"],
+  ["信息来源核验", "唯一机制是查证流程演示；展示信息辨别步骤或对照逻辑，不使用征集、投票、挑战或共创"],
+  ["真实场景记录", "唯一机制是过程日记；用 vlog、时间线或场景记录呈现某个生活过程，不使用投票、征集或挑战"],
+  ["营销案例链路", "唯一机制是案例链路拆解；拆解内容触点与运营步骤，不发起挑战、征集或共创"],
+  ["IP 栏目结构", "唯一机制是栏目框架表；设计栏目角色与内容结构，不使用投票、征集、挑战或共创"],
+  ["直播讨论形式", "唯一机制是直播圆桌议程；设计直播/连麦议题与流程，不使用征集、挑战或共创"],
+  ["用户内容征集", "唯一机制是 UGC 故事征集；征集体验表达或问题样本，不做投票、挑战或共同编辑"],
+  ["观点差异对照", "唯一机制是观点辩论或正反对照；不做征集、挑战或共创"],
+  ["话题活动机制", "唯一机制是参与挑战或连续打卡；不做普通故事征集、投票或共同编辑"],
+  ["品牌内容共创", "唯一机制是编辑共创工作坊；参与者共同决定主题与产出，不使用问卷、直播、辩论、投票、征集、打卡或挑战"],
+];
+
+function buildFreeFormCreativeSlotPlan(trendCount = TREND_ITEMS_PER_BUCKET) {
+  const count = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(trendCount || TREND_ITEMS_PER_BUCKET)));
+  const slots = Array.from({ length: count }, (_, index) => {
+    const [name, boundary] = FREE_FORM_CREATIVE_ROUTES[index % FREE_FORM_CREATIVE_ROUTES.length];
+    return `${index + 1}. 内容机制「${name}」：${boundary}；两条 ideas 必须在本机制内采用不同人群场景或执行步骤，不得串用其他机制。`;
+  });
+  return [
+    `本批 ${count} 个创意槽位（这是内容机制的差异化约束，不是可复制的文案模板）：`,
+    "必须严格按下列顺序一槽一条；每条 trend 使用本槽唯一内容机制，禁止换成其他槽位的机制，禁止把同一主题换说法重复输出；相邻槽位必须使用不同的人群、消费场景与内容形式，十条趋势的标题结构和推荐理由也不得套用同一句法。",
+    "同一品牌口号、栏目词或产品卖点（如品牌档案中的标语）最多允许出现在 2 条 trend 的 title 里；同一 4 字及以上短语出现在 3 条及以上标题会被判定为重复并整批重写。其余条目必须从不同人群、场景、问题或内容形式切入，不得整批围绕同一句话展开。",
+    ...slots,
+  ].join("\n");
+}
+
 function buildFreeFormTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], options = {}) {
   const selectedBucketMeta = normalizePromptBucketMeta(bucketMeta);
   const trendCount = Math.max(1, Math.min(TREND_ITEMS_PER_BUCKET, Number(options.trendCount || TREND_ITEMS_PER_BUCKET)));
@@ -349,6 +376,7 @@ function buildFreeFormTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[
     "- confidence_score：0-100 整数，表示机会置信度；可与 score 相同或接近",
     "trend.title 控制在 16-42 个中文字符；summary 用 45-90 字概括 market_change + consumer_shift；reason 用 40-110 字写 why_now + brand_opportunity；机会字段要覆盖策略框架中的过去→现在→原因→品牌，ideas 承接动作；说清后立即结束。",
     "score 必须是 0 到 100 的整数，代表该创意机会的相对价值；建议取 novelty_score、brand_fit_score、actionability_score 的较低者附近，避免一项极低却总分虚高。",
+    `自评分：每条 trend 必须输出 novelty_score、brand_fit_score、actionability_score（0-100 整数）；任一项低于 ${TREND_SELF_SCORE_MIN} 的趋势会被自动过滤，不要输出；只保留三项均 ≥ ${TREND_SELF_SCORE_MIN} 的创意机会。`,
     "reason 至少 36 个中文字符，首句必须直接写出该趋势的核心变化或机会点，并说明具体人群场景、内容机制和品牌参与方式；禁止以“来源、证据、报告、案例”开头，禁止套用“内容上可转化为……品牌可……”的批量句式。",
     "十条 reason 至少使用五种明显不同的句法和论证顺序；相邻两条不能复用相同开头或“话题/形式 + 可转化 + 品牌可”三段模板。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
@@ -359,6 +387,7 @@ function buildFreeFormTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[
     "两条 idea 的 contentAssets 必须分别沿用各自路线，不要复用同一套朋友圈文案、小红书文案、组图页标题或公众号导语。",
     buildContentAssetsSchemaPrompt(),
     buildTrendDeduplicationPrompt(trendCount),
+    buildFreeFormCreativeSlotPlan(trendCount),
     "创意边界：本批为假设性内容方向，不代表真实热点；用户可见文案避免“数据证明”“权威认证”“搜索显示”“最新政策明确”“销量领先”等表述；不要写具体年份、日期、价格和促销金额。",
     buildSensitiveRiskPrompt(),
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
@@ -784,7 +813,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
       ? "10.2 不能只靠品牌名、行业名或泛受众词；每条都要写出具体的人群场景、用户矛盾或内容形式。"
       : "10.2 不能只靠品牌名、产品名、年份或泛受众词对齐来源；每条都要写出所引证据独有的事件、问题、表达形式或讨论对象。",
     freeForm
-      ? "11. 十条趋势必须使用不同的人群场景、主路线和 idea 执行动作，不得同义改写或批量复用同一套结构。"
+      ? "11. 必须严格按系统提示词中的创意槽位计划一槽一条；十条趋势必须使用不同的人群场景、内容机制和 idea 执行动作，不得同义改写或批量复用同一套结构。"
       : "11. 十条趋势必须使用不同的主路线、用户场景和 idea 执行动作，不得同义改写；证据不足 10 条时允许复用来源专名，但复用项仍必须遵守各自槽位的不同唯一机制。",
     freeForm
       ? "12. 不要写具体年份、日期或“近期”“当下”等时效断言；避免把虚构趋势写成已发生事实。"
@@ -1767,6 +1796,7 @@ function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, b
     ...getTrendStructureIssues(trendBuckets, bucketMeta),
     ...getTrendQualityIssues(trendBuckets),
     ...getDuplicateTrendIssues(trendBuckets),
+    ...(freeForm ? getFreeFormThemeClusterIssues(trendBuckets, brand) : []),
     ...(anySearchEvidence ? getAnySearchEvidenceCoverageIssues(trendBuckets, anySearchEvidence) : []),
     ...(anySearchEvidence ? getEvidenceGroundingIssues(trendBuckets, anySearchEvidence, brand) : []),
     ...(anySearchEvidence ? getInternalEvidenceJargonIssues(trendBuckets) : []),
@@ -1810,6 +1840,9 @@ function formatTrendRetryFeedback(issues) {
     "duplicate-ideas", "near-duplicate-ideas", "near-duplicate-mechanism",
   ].some((reason) => reasons.has(reason))) {
     feedback.push("十条趋势必须使用不同的人群、问题、场景或内容形式；标题、摘要、推荐理由和两条 ideas 都不得重复或批量复用。 ");
+  }
+  if (reasons.has("theme-cluster")) {
+    feedback.push("多条趋势围绕同一短语/口号/人群词扎堆；同一 4 字及以上短语最多允许出现在 2 条标题中，其余必须换不同的人群、场景和主题切入。 ");
   }
   if (["missing-evidence-ids", "invalid-evidence-id", "missing-search-evidence", "missing-pgy-evidence"].some((reason) => reasons.has(reason))) {
     feedback.push("每条趋势必须引用输入中真实存在的 evidenceIds，不能漏引或补造编号。 ");
@@ -3104,6 +3137,66 @@ function getDuplicateTrendIssues(trendBuckets, existingItemsByBucket = new Map()
   return issues;
 }
 
+// 创意模式专用：检测多条标题围绕同一短语/口号/人群词扎堆（4 字以上短语出现在
+// ≥3 条 title 中），触发整批重写以强制差异化。品牌名/行业/产品词本身不算。
+function getFreeFormThemeClusterIssues(trendBuckets, brand) {
+  const issues = [];
+  const ignoredContext = [
+    brand?.name,
+    brand?.industry,
+    brand?.product,
+    brand?.goal,
+    brand?.knowledgeBase,
+    ...(Array.isArray(brand?.assetTags) ? brand.assetTags : []),
+  ].map((value) => String(value || "").replace(/\s+/g, ""));
+  const ignoredGrams = new Set();
+  for (const context of ignoredContext) {
+    for (let index = 0; index + 4 <= context.length; index += 1) {
+      ignoredGrams.add(context.slice(index, index + 4));
+    }
+  }
+
+  for (const bucket of trendBuckets || []) {
+    const titles = (bucket.items || []).map((trend) => String(trend?.title || "")
+      .normalize("NFKC")
+      .replace(/[\s\p{P}\p{S}]+/gu, ""));
+    const gramCount = new Map();
+    const gramIndexes = new Map();
+    titles.forEach((title, trendIndex) => {
+      const grams = new Set();
+      for (let index = 0; index + 4 <= title.length; index += 1) {
+        const gram = title.slice(index, index + 4);
+        if (/^[\u3400-\u9fff]+$/u.test(gram) && !ignoredGrams.has(gram)) grams.add(gram);
+      }
+      for (const gram of grams) {
+        gramCount.set(gram, (gramCount.get(gram) || 0) + 1);
+        if (!gramIndexes.has(gram)) gramIndexes.set(gram, []);
+        gramIndexes.get(gram).push(trendIndex);
+      }
+    });
+    const offendingGrams = [...gramCount.entries()]
+      .filter(([, count]) => count >= 3)
+      .sort((left, right) => right[1] - left[1])
+      .map(([gram]) => gram);
+    if (!offendingGrams.length) continue;
+    const reportedIndexes = new Set();
+    for (const gram of offendingGrams) {
+      for (const trendIndex of gramIndexes.get(gram) || []) {
+        if (reportedIndexes.has(trendIndex)) continue;
+        reportedIndexes.add(trendIndex);
+        issues.push({
+          bucketKey: bucket.key,
+          trendIndex,
+          title: String(bucket.items?.[trendIndex]?.title || "").slice(0, 80),
+          reason: "theme-cluster",
+          claim: gram,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
 function getAnySearchEvidenceCoverageIssues(trendBuckets, searchEvidence) {
   const evidenceById = new Map(
     (searchEvidence?.evidence || [])
@@ -4003,7 +4096,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         message: evaluationError?.message || "unknown error",
       });
     }
-    return attachAnalysisWarnings(trendBuckets, analysisWarnings);
+    // 创意模式结果不带警告返回：虚构内容本身就是模式预期，不弹"降级/待验证"提醒。
+    return attachAnalysisWarnings(trendBuckets, freeForm ? [] : analysisWarnings);
   } catch (error) {
     if (isAiCallBudgetExceededError(error)) {
       console.warn("[trend-analysis] AI call budget exceeded", {
