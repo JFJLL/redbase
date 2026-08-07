@@ -75,6 +75,10 @@ const TREND_FULL_MODEL_REQUEST_TIMEOUT_MS = 140000;
 const TREND_ANALYSIS_MODEL_BUDGET_MS = 180000;
 const TREND_MODEL_TRANSPORT_ATTEMPTS = 3;
 const TREND_FULL_MODEL_MAX_OUTPUT_TOKENS = 16384;
+// 创意模式单次输出上限放宽：完整批次约需 1.8-2 万输出 token，16384 容易截断。
+const TREND_FREEFORM_MAX_OUTPUT_TOKENS = 24576;
+// 创意模式主输出缺内容资产时，最多用补全模型修复的选题数。
+const MAX_FREEFORM_CONTENT_ASSET_REPAIRS = 4;
 
 const IDEA_ROUTE_PAIRS = {
   xhs: ["热点证据解读", "用户场景转化"],
@@ -1886,6 +1890,20 @@ function formatTrendRetryFeedback(issues) {
   return examples.length ? `${summary}\n本次具体错误位置：\n${examples.join("\n")}` : summary;
 }
 
+function formatTrendValidationFailureSummary(issues) {
+  const reasonSet = new Set((issues || []).map((issue) => issue.reason));
+  const reasons = [...reasonSet];
+  const labels = [];
+  if (["trend-count", "bucket-count", "repair-count"].some((reason) => reasonSet.has(reason))) labels.push("趋势数量不足");
+  if (reasonSet.has("missing-content-assets")) labels.push("内容资产缺失");
+  if (reasonSet.has("theme-cluster") || reasons.some((reason) => /duplicate|near-duplicate/.test(reason))) labels.push("内容重复");
+  if (["low-self-score", "invalid-self-score"].some((reason) => reasonSet.has(reason))) labels.push("自评分过低");
+  if (["unsupported-brand-claim", "unsafe-medicine-guidance"].some((reason) => reasonSet.has(reason))) labels.push("安全校验未通过");
+  if (["missing-trend-field", "missing-idea-field", "missing-idea-tags", "missing-opportunity-field"].some((reason) => reasonSet.has(reason))) labels.push("字段缺失");
+  if (!labels.length) labels.push("输出未通过校验");
+  return `（原因：${[...new Set(labels)].join("、")}）`;
+}
+
 function buildTargetedTrendRepairPlan(
   issues,
   trendBuckets,
@@ -3261,6 +3279,53 @@ function attachAnalysisWarnings(trendBuckets, warnings = []) {
   return trendBuckets;
 }
 
+// 创意模式兜底：主输出缺内容资产时，逐条调用补全模型修复（受 AI 调用预算限制），
+// 避免"输出截断/单条残缺"直接拖垮整批。修复失败不影响其余已修复条目。
+async function repairFreeFormContentAssets(
+  appConfig,
+  brand,
+  trendBuckets,
+  issues,
+  { textModelImpl, aiBudget, textTimeoutMs, maxRepairs = MAX_FREEFORM_CONTENT_ASSET_REPAIRS } = {},
+) {
+  const keys = new Set();
+  const targets = [];
+  for (const issue of issues || []) {
+    if (!Number.isInteger(issue.trendIndex) || !Number.isInteger(issue.ideaIndex)) continue;
+    const key = `${issue.bucketKey}:${issue.trendIndex}:${issue.ideaIndex}`;
+    if (keys.has(key)) continue;
+    keys.add(key);
+    targets.push({ bucketKey: issue.bucketKey, trendIndex: issue.trendIndex, ideaIndex: issue.ideaIndex });
+  }
+  let repairedCount = 0;
+  for (const target of targets.slice(0, maxRepairs)) {
+    if (aiBudget.remaining() < 1) break;
+    const bucket = (trendBuckets || []).find((entry) => entry.key === target.bucketKey);
+    const trend = bucket?.items?.[target.trendIndex];
+    if (!trend) continue;
+    aiBudget.consume();
+    try {
+      const { filled } = await ensureTrendIdeaContentAssets(appConfig, brand, trend, target.ideaIndex, {
+        textModelImpl,
+        textTimeoutMs,
+        maxOutputTokens: 8192,
+      });
+      if (filled) repairedCount += 1;
+    } catch (error) {
+      console.warn("[trend-analysis] freeForm content-asset repair failed", {
+        brandId: brand.id,
+        brandName: brand.name,
+        bucketKey: target.bucketKey,
+        trendIndex: target.trendIndex,
+        ideaIndex: target.ideaIndex,
+        code: error?.code || "UNKNOWN",
+        message: String(error?.message || "unknown error").slice(0, 160),
+      });
+    }
+  }
+  return { trendBuckets, repairedCount };
+}
+
 // Safety + structural issues only — the XHS/Pgy path skips business gates
 // (duplicates, self-scores, grounding, generic copy, intensity wording).
 function getXhsPgyDeliveryIssues(trendBuckets, brand) {
@@ -3681,9 +3746,10 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         aiBudget: aiBudget.snapshot(),
       });
       const modelStartedAt = Date.now();
+      const fullOutputCap = freeForm ? TREND_FREEFORM_MAX_OUTPUT_TOKENS : TREND_FULL_MODEL_MAX_OUTPUT_TOKENS;
       const configuredOutputTokens = Number(options.trendMaxOutputTokens || Math.min(
-        appConfig.textProvider.maxOutputTokens || TREND_FULL_MODEL_MAX_OUTPUT_TOKENS,
-        TREND_FULL_MODEL_MAX_OUTPUT_TOKENS,
+        appConfig.textProvider.maxOutputTokens || fullOutputCap,
+        fullOutputCap,
       ));
       const requestMaxOutputTokens = repairPlan
         ? Math.min(configuredOutputTokens, Math.max(4096, repairCount * 4096))
@@ -3925,7 +3991,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       // One main generation plus at most one model repair (or full retry when
       // the first output was unparsable). Anything left after that goes to the
       // local degrade path instead of another model call.
-      if (generationAttempt >= 1) break;
+      // 创意模式给 3 次机会：超大 JSON 输出偶发截断/单条残缺，多一次全量重写能显著提高成功率。
+      if (generationAttempt >= (freeForm ? 2 : 1)) break;
     }
 
     if (!trendBuckets && isPgyXhsFlow) {
@@ -4008,17 +4075,36 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         // No model output and no evidence to degrade from.
         throwBudgetExceeded(aiBudget);
       }
-      const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。`);
+      const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。${formatTrendValidationFailureSummary(lastValidationIssues)}`);
       validationError.code = "TREND_MODEL_VALIDATION_FAILED";
       validationError.issues = lastValidationIssues;
       throw validationError;
     }
     // 完整 contentAssets 是成功交付的硬门槛：任何本地降级/证据槽位/Pgy 兜底卡
-    // 都无法凭空生成真实发布文案，出现不完整选题时整批失败（不落库、不扣费、
-    // 旧快照不被覆盖），绝不静默交付骨架。
-    const contentAssetIssues = getContentAssetCompletenessIssues(trendBuckets);
+    // 都无法凭空生成真实发布文案。创意模式先尝试逐条补全（受 AI 预算限制），
+    // 补不完才整批失败（不落库、不扣费、旧快照不被覆盖），绝不静默交付骨架。
+    let contentAssetIssues = getContentAssetCompletenessIssues(trendBuckets);
+    if (contentAssetIssues.length && freeForm && aiBudget.remaining() >= 1) {
+      const repair = await repairFreeFormContentAssets(appConfig, brand, trendBuckets, contentAssetIssues, {
+        textModelImpl,
+        aiBudget,
+        textTimeoutMs: options.textTimeoutMs,
+      });
+      contentAssetIssues = getContentAssetCompletenessIssues(repair.trendBuckets);
+      if (repair.repairedCount > 0) {
+        modelTiming.aiCallsUsed = aiBudget.snapshot().calls_used;
+        modelTiming.aiCallsRemaining = aiBudget.remaining();
+        console.warn("[trend-analysis] freeForm content-asset repair", {
+          brandId: brand.id,
+          brandName: brand.name,
+          repairedCount: repair.repairedCount,
+          remainingIssues: contentAssetIssues.length,
+          aiBudget: aiBudget.snapshot(),
+        });
+      }
+    }
     if (contentAssetIssues.length) {
-      const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。`);
+      const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。${formatTrendValidationFailureSummary(contentAssetIssues)}`);
       validationError.code = "TREND_MODEL_VALIDATION_FAILED";
       validationError.issues = contentAssetIssues;
       throw validationError;
