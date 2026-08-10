@@ -208,7 +208,7 @@ test("frontend wires the creative settings into generation requests and keeps tr
   // 趋势结果面板仍是独立滚动容器，并使用动态剩余高度而非固定偏移。
   assert.match(trendsSource, /data-test="trend-scroll-panel"/);
   assert.match(trendsSource, /overflow-y:\s*auto/);
-  assert.match(trendsSource, /window\.innerHeight - documentTop - 24/);
+  assert.match(trendsSource, /window\.innerHeight - viewportTop - 24/);
   assert.doesNotMatch(trendsSource, /max-height:\s*calc\(100vh - 250px\)/);
   assert.match(trendsSource, /\.trend-right-panel\s*\{[^}]*flex:\s*1[^}]*flex-direction:\s*column/s);
   assert.match(trendsSource, /\.trend-right-panel\s*\{[^}]*min-width:\s*0/s);

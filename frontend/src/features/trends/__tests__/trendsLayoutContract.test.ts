@@ -47,10 +47,19 @@ describe("trends analysis summary layout contract", () => {
     const rightPanelRules = rules.filter((rule) => rule.selector.includes(".trend-right-panel"));
     expect(rightPanelRules.some((rule) => rule.body.includes("overflow-y: auto"))).toBe(true);
     expect(TrendsViewSource).toContain('data-test="trend-scroll-panel"');
-    expect(TrendsViewSource).toContain(":style=\"{ maxHeight: trendRightPanelMaxHeight || undefined }\"");
-    expect(TrendsViewSource).toContain("window.innerHeight - documentTop - 24");
+    expect(TrendsViewSource).toContain("height: trendRightPanelMaxHeight || undefined");
+    expect(TrendsViewSource).toContain(":style=\"{ height: trendRightPanelMaxHeight || undefined }\"");
+    expect(TrendsViewSource).toContain("window.innerHeight - viewportTop - 24");
     expect(TrendsViewSource).not.toContain("max-height: calc(100vh - 250px)");
     expect(TrendsViewSource).not.toContain(":global(body:has(.trends-panel))");
     expect(TrendsViewSource).not.toContain(":global(html:has(.trends-panel))");
+  });
+
+  it("makes the history pane a matching independent scroll surface", () => {
+    const rules = styleRules(TrendsViewSource);
+    const historyRules = rules.filter((rule) => rule.selector.includes(".history-block"));
+    expect(historyRules.some((rule) => rule.body.includes("flex: 1 1 auto"))).toBe(true);
+    expect(historyRules.some((rule) => rule.body.includes("overflow-y: auto"))).toBe(true);
+    expect(TrendsViewSource).toContain(".trend-left-panel");
   });
 });

@@ -116,6 +116,11 @@ describe("TrendsView", () => {
     // 历史分析列表渲染真实字段
     expect(wrapper.find('[data-test="history-list"]').text()).toContain("红磨坊咖啡 - 小红书热点话题");
     expect(wrapper.find('[data-test="history-list"]').text()).toContain("2026-07-20 10:00");
+    const leftPanelHeight = wrapper.find<HTMLElement>(".trend-left-panel").element.style.height;
+    const rightPanelHeight = wrapper.find<HTMLElement>('[data-test="trend-scroll-panel"]').element.style.height;
+    expect(leftPanelHeight).not.toBe("");
+    expect(leftPanelHeight).toBe(rightPanelHeight);
+    expect(wrapper.find(".history-block").exists()).toBe(true);
   });
 
   it("sorts non-zero-padded history timestamps by real time, newest first", async () => {

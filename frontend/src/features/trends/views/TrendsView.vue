@@ -46,6 +46,7 @@ const analysisNotice = ref("");
 const analysisWarning = ref<TrendWarningNotice | null>(null);
 const historyError = ref("");
 const detailError = ref("");
+const trendsPanelRef = ref<HTMLElement | null>(null);
 const trendRightPanelRef = ref<HTMLElement | null>(null);
 const brandChipRowRef = ref<HTMLElement | null>(null);
 const trendModeRowRef = ref<HTMLElement | null>(null);
@@ -58,8 +59,8 @@ function updateTrendScrollHeight(): void {
     trendRightPanelMaxHeight.value = "";
     return;
   }
-  const documentTop = panel.getBoundingClientRect().top + window.scrollY;
-  const availableHeight = Math.floor(window.innerHeight - documentTop - 24);
+  const viewportTop = panel.getBoundingClientRect().top;
+  const availableHeight = Math.floor(window.innerHeight - viewportTop - 24);
   trendRightPanelMaxHeight.value = `${Math.max(180, availableHeight)}px`;
 }
 
@@ -68,6 +69,7 @@ function observeTrendLayout(): void {
   window.addEventListener("resize", updateTrendScrollHeight);
   if (typeof ResizeObserver === "undefined") return;
   trendLayoutObserver = new ResizeObserver(updateTrendScrollHeight);
+  if (trendsPanelRef.value) trendLayoutObserver.observe(trendsPanelRef.value);
   if (brandChipRowRef.value) trendLayoutObserver.observe(brandChipRowRef.value);
   if (trendModeRowRef.value) trendLayoutObserver.observe(trendModeRowRef.value);
 }
@@ -371,7 +373,7 @@ function goToIdeas(trend: TrendItem): void {
 </script>
 
 <template>
-  <section class="trends-panel">
+  <section ref="trendsPanelRef" class="trends-panel">
     <header class="panel-header">
       <div>
         <div class="panel-icon-title">
@@ -416,7 +418,7 @@ function goToIdeas(trend: TrendItem): void {
     </div>
 
     <div class="trend-screen">
-      <div class="trend-left-panel">
+      <div class="trend-left-panel" :style="{ height: trendRightPanelMaxHeight || undefined }">
         <label v-if="isXhsMode" class="xhs-category-control">
           <span>小红书内容类目</span>
           <select
@@ -496,7 +498,10 @@ function goToIdeas(trend: TrendItem): void {
         ref="trendRightPanelRef"
         class="trend-right-panel"
         data-test="trend-scroll-panel"
-        :style="{ maxHeight: trendRightPanelMaxHeight || undefined }"
+        :style="{
+          height: trendRightPanelMaxHeight || undefined,
+          maxHeight: trendRightPanelMaxHeight || undefined,
+        }"
       >
         <div class="analysis-tip analysis-summary" data-test="analysis-summary">{{ summaryText }}</div>
         <div class="trend-cards" data-test="trend-list">
@@ -670,6 +675,7 @@ function goToIdeas(trend: TrendItem): void {
   }
 
   .trend-right-panel {
+    height: auto !important;
     max-height: none !important;
     overflow: visible;
     padding-right: 0;
@@ -1021,12 +1027,14 @@ function goToIdeas(trend: TrendItem): void {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
   gap: var(--workspace-grid-gap);
+  align-items: stretch;
 }
 
 .trend-left-panel,
 .trend-right-panel {
   width: auto;
   gap: 14px;
+  min-height: 0;
 }
 
 .xhs-category-control,
@@ -1080,6 +1088,13 @@ function goToIdeas(trend: TrendItem): void {
 .history-item {
   padding: 12px 0;
   border-color: var(--workspace-border);
+}
+
+.history-block {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .text-btn {
@@ -1159,6 +1174,15 @@ function goToIdeas(trend: TrendItem): void {
 @media (max-width: 760px) {
   .trend-screen {
     display: flex;
+  }
+
+  .trend-left-panel {
+    height: auto !important;
+  }
+
+  .history-block {
+    flex: none;
+    overflow: visible;
   }
 }
 </style>
