@@ -18,6 +18,7 @@ import {
   getTrendBucketsForBrand,
   mergeGeneratedTrendResult,
   normalizeTrendBucketKey,
+  sortTrendAnalysesNewestFirst,
 } from "../model/trendBuckets";
 import type {
   InsightsBrand,
@@ -49,7 +50,7 @@ function markBrandDetail(brand: InsightsBrand, previous: Partial<InsightsBrand> 
     _detailLoaded: true,
   };
   next.trends = Array.isArray(next.trends) ? next.trends : [];
-  next.analyses = Array.isArray(next.analyses) ? next.analyses : [];
+  next.analyses = sortTrendAnalysesNewestFirst(next.analyses);
   next.trendCount = countBrandTrends(next);
   next.analysisCount = next.analyses.length;
   return next;

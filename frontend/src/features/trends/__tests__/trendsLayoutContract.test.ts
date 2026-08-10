@@ -41,4 +41,16 @@ describe("trends analysis summary layout contract", () => {
     expect(TrendsViewSource).toContain("overflow-wrap: break-word");
     expect(TrendsViewSource).toContain("line-height: 1.8");
   });
+
+  it("keeps an independently scrolling result window without a hard-coded viewport offset", () => {
+    const rules = styleRules(TrendsViewSource);
+    const rightPanelRules = rules.filter((rule) => rule.selector.includes(".trend-right-panel"));
+    expect(rightPanelRules.some((rule) => rule.body.includes("overflow-y: auto"))).toBe(true);
+    expect(TrendsViewSource).toContain('data-test="trend-scroll-panel"');
+    expect(TrendsViewSource).toContain(":style=\"{ maxHeight: trendRightPanelMaxHeight || undefined }\"");
+    expect(TrendsViewSource).toContain("window.innerHeight - documentTop - 24");
+    expect(TrendsViewSource).not.toContain("max-height: calc(100vh - 250px)");
+    expect(TrendsViewSource).not.toContain(":global(body:has(.trends-panel))");
+    expect(TrendsViewSource).not.toContain(":global(html:has(.trends-panel))");
+  });
 });

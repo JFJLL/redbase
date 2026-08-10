@@ -170,10 +170,8 @@ test("the final structured image prompt keeps the selected creative settings", (
 //   getIdea*Selection(ideaIndex)）→ 新实现为内容选题页按选题维度的创作设置
 //   （idea-creative-style / idea-creative-template select + 比例网格），并透传
 //   进生成请求体（useIdeaGeneration 中 preview/slide/wechat 请求体）。
-// - 【真实缺口，已记入 BLOCKED.md】旧 styles.css 的趋势面板滚动契约
-//   （.trend-right-panel overflow-y:auto、html:has 锁滚、760px 媒体查询降级）
-//   未在 TrendsView 样式中迁移；此处断言指向已存在的等价布局意图
-//   （flex 列布局的右侧结果面板）。
+// - 趋势面板保留独立滚动，但高度按真实 top 动态计算，避免品牌行换行后
+//   固定视口偏移裁掉第 10 条趋势。
 test("frontend wires the creative settings into generation requests and keeps trend results scrollable", () => {
   const ideasSource = fs.readFileSync(
     path.join(__dirname, "../frontend/src/features/ideas/views/IdeasView.vue"),
@@ -207,8 +205,11 @@ test("frontend wires the creative settings into generation requests and keeps tr
   );
   assert.match(generationComposableSource, /wechatTemplate:\s*wechatTemplate\.value/);
 
-  // 趋势结果面板仍是独立的右侧列容器（滚动样式缺口见 BLOCKED.md）
-  assert.match(trendsSource, /<div class="trend-right-panel">/);
+  // 趋势结果面板仍是独立滚动容器，并使用动态剩余高度而非固定偏移。
+  assert.match(trendsSource, /data-test="trend-scroll-panel"/);
+  assert.match(trendsSource, /overflow-y:\s*auto/);
+  assert.match(trendsSource, /window\.innerHeight - documentTop - 24/);
+  assert.doesNotMatch(trendsSource, /max-height:\s*calc\(100vh - 250px\)/);
   assert.match(trendsSource, /\.trend-right-panel\s*\{[^}]*flex:\s*1[^}]*flex-direction:\s*column/s);
   assert.match(trendsSource, /\.trend-right-panel\s*\{[^}]*min-width:\s*0/s);
 });

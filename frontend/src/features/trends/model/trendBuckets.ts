@@ -8,7 +8,7 @@ import {
   PERSONAL_TREND_BUCKET_DESCRIPTIONS,
   type TrendBucketMeta,
 } from "./constants";
-import type { InsightsBrand, TrendBucket, TrendItem, XhsCategoryNode, XhsCategoryOption } from "./types";
+import type { BrandAnalysis, InsightsBrand, TrendBucket, TrendItem, XhsCategoryNode, XhsCategoryOption } from "./types";
 
 export function normalizeTrendBucketKey(key: unknown): string {
   const value = String(key || "");
@@ -70,6 +70,39 @@ export function countBrandTrends(brand: InsightsBrand): number {
   return getTrendBucketsForBrand(brand).reduce((sum, bucket) => sum + (bucket.items?.length || 0), 0);
 }
 
+function analysisTimestampMs(timestamp: unknown): number {
+  const value = String(timestamp || "").trim();
+  const localMatch = value.match(
+    /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/,
+  );
+  if (localMatch) {
+    const [, year, month, day, hour = "0", minute = "0", second = "0"] = localMatch;
+    return new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ).getTime();
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** 历史分析按真实时间倒序；不能直接比较非补零日期字符串（8/7 会误排在 8/10 前）。 */
+export function sortTrendAnalysesNewestFirst(analyses: BrandAnalysis[] | undefined): BrandAnalysis[] {
+  return (Array.isArray(analyses) ? analyses : [])
+    .map((analysis, index) => ({ analysis, index, timestampMs: analysisTimestampMs(analysis?.timestamp) }))
+    .sort(
+      (left, right) =>
+        right.timestampMs - left.timestampMs
+        || Number(right.analysis?.id || 0) - Number(left.analysis?.id || 0)
+        || left.index - right.index,
+    )
+    .map(({ analysis }) => analysis);
+}
+
 /** 历史分析记录名称形如「品牌名 - 小红书热点话题」，据此反推维度 key。 */
 export function getAnalysisBucketKey(analysis: { name?: string } | null | undefined): string {
   const name = String(analysis?.name || "");
@@ -121,9 +154,7 @@ export function mergeGeneratedTrendResult(
   return {
     ...nextBrand,
     trends,
-    analyses: [...analysesById.values()].sort((left, right) =>
-      String(right?.timestamp || "").localeCompare(String(left?.timestamp || "")),
-    ),
+    analyses: sortTrendAnalysesNewestFirst([...analysesById.values()]),
   };
 }
 

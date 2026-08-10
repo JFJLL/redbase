@@ -3,7 +3,7 @@
 // public/app.js 的 bindAnalysisButton / renderBrandChips / renderTrendModeTabs /
 // renderTrendAnalysisButton / renderXhsCategorySelector / renderHistory /
 // renderAnalysisSummary / renderTrends / restoreAnalysisSnapshot / deleteAnalysisSnapshot。
-import { computed, onMounted, onScopeDispose, ref } from "vue";
+import { computed, nextTick, onMounted, onScopeDispose, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError, isAbortError } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
@@ -46,12 +46,40 @@ const analysisNotice = ref("");
 const analysisWarning = ref<TrendWarningNotice | null>(null);
 const historyError = ref("");
 const detailError = ref("");
+const trendRightPanelRef = ref<HTMLElement | null>(null);
+const brandChipRowRef = ref<HTMLElement | null>(null);
+const trendModeRowRef = ref<HTMLElement | null>(null);
+const trendRightPanelMaxHeight = ref("");
+let trendLayoutObserver: ResizeObserver | null = null;
+
+function updateTrendScrollHeight(): void {
+  const panel = trendRightPanelRef.value;
+  if (!panel || window.innerWidth <= 760) {
+    trendRightPanelMaxHeight.value = "";
+    return;
+  }
+  const documentTop = panel.getBoundingClientRect().top + window.scrollY;
+  const availableHeight = Math.floor(window.innerHeight - documentTop - 24);
+  trendRightPanelMaxHeight.value = `${Math.max(180, availableHeight)}px`;
+}
+
+function observeTrendLayout(): void {
+  updateTrendScrollHeight();
+  window.addEventListener("resize", updateTrendScrollHeight);
+  if (typeof ResizeObserver === "undefined") return;
+  trendLayoutObserver = new ResizeObserver(updateTrendScrollHeight);
+  if (brandChipRowRef.value) trendLayoutObserver.observe(brandChipRowRef.value);
+  if (trendModeRowRef.value) trendLayoutObserver.observe(trendModeRowRef.value);
+}
 
 // 轮询定时器与本组件持有的 busy key：卸载/退出登录（路由离开）时必须清理。
 const pollTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const activeBusyKeys = new Set<string>();
 
 onScopeDispose(() => {
+  window.removeEventListener("resize", updateTrendScrollHeight);
+  trendLayoutObserver?.disconnect();
+  trendLayoutObserver = null;
   for (const timer of pollTimers.values()) clearTimeout(timer);
   pollTimers.clear();
   if (activeBusyKeys.size) {
@@ -120,6 +148,7 @@ const bucketDescription = computed(() =>
 
 onMounted(() => {
   void loadPage();
+  void nextTick(observeTrendLayout);
 });
 
 async function loadPage(): Promise<void> {
@@ -162,6 +191,9 @@ async function loadSelectedBrandDetail(): Promise<void> {
   } catch (error) {
     if (isAbortError(error) || handleUnauthorized(error)) return;
     detailError.value = `${profileLabel.value}详情加载失败：${String((error as { message?: unknown })?.message || "")}`;
+  } finally {
+    await nextTick();
+    updateTrendScrollHeight();
   }
 }
 
@@ -356,7 +388,7 @@ function goToIdeas(trend: TrendItem): void {
     </div>
     <div v-if="detailError" class="error-banner" data-test="detail-error">{{ detailError }}</div>
 
-    <div class="brand-chip-row" data-test="brand-chips">
+    <div ref="brandChipRowRef" class="brand-chip-row" data-test="brand-chips">
       <button
         v-for="item in store.brands"
         :key="item.id"
@@ -370,7 +402,7 @@ function goToIdeas(trend: TrendItem): void {
       </button>
     </div>
 
-    <div class="trend-mode-row" data-test="trend-mode-tabs">
+    <div ref="trendModeRowRef" class="trend-mode-row" data-test="trend-mode-tabs">
       <button
         v-for="bucket in modeBuckets"
         :key="bucket.key"
@@ -460,7 +492,12 @@ function goToIdeas(trend: TrendItem): void {
         </section>
       </div>
 
-      <div class="trend-right-panel">
+      <div
+        ref="trendRightPanelRef"
+        class="trend-right-panel"
+        data-test="trend-scroll-panel"
+        :style="{ maxHeight: trendRightPanelMaxHeight || undefined }"
+      >
         <div class="analysis-tip analysis-summary" data-test="analysis-summary">{{ summaryText }}</div>
         <div class="trend-cards" data-test="trend-list">
           <article class="trend-card">
@@ -614,22 +651,12 @@ function goToIdeas(trend: TrendItem): void {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* 旧版桌面端独立滚动（styles.css .trend-right-panel）。 */
-  max-height: calc(100vh - 250px);
+  /* 高度由实际 top 动态计算；品牌按钮换行时仍保留完整的独立滚动窗口。 */
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 8px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-}
-
-/* 旧版桌面端页面锁滚语义：趋势页激活时整页不滚，由右侧结果面板独立滚动。 */
-@media (min-width: 761px) {
-  :global(html:has(.trends-panel)),
-  :global(body:has(.trends-panel)) {
-    height: 100%;
-    overflow: hidden;
-  }
 }
 
 /* 窄屏降级（旧版 ≤760px）：整页滚动、单列布局，右侧面板不再独立滚动。 */
@@ -643,7 +670,7 @@ function goToIdeas(trend: TrendItem): void {
   }
 
   .trend-right-panel {
-    max-height: none;
+    max-height: none !important;
     overflow: visible;
     padding-right: 0;
   }

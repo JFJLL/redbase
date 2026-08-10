@@ -118,6 +118,68 @@ describe("TrendsView", () => {
     expect(wrapper.find('[data-test="history-list"]').text()).toContain("2026-07-20 10:00");
   });
 
+  it("sorts non-zero-padded history timestamps by real time, newest first", async () => {
+    const historyBrand = makeBrandDetail([makeTrend(501)], {
+      analyses: [
+        { id: 1, name: "8月7日", timestamp: "2026/8/7 17:09:30", trendSnapshot: [] },
+        { id: 2, name: "8月10日", timestamp: "2026/8/10 14:31:30", trendSnapshot: [] },
+        { id: 3, name: "7月28日", timestamp: "2026/7/28 11:20:29", trendSnapshot: [] },
+      ],
+    });
+    const mounted = mountTrends((url, init) => {
+      const method = String(init?.method || "GET");
+      if (method === "GET" && url === "/api/brands?summary=1") {
+        return jsonResponse(200, { brands: [makeBrandSummary()] });
+      }
+      if (method === "GET" && url === "/api/brands/7") {
+        return jsonResponse(200, { brand: historyBrand });
+      }
+      if (method === "GET" && url === "/api/trends/xhs/categories") {
+        return jsonResponse(200, XHS_CATEGORY_TREE);
+      }
+      return undefined;
+    });
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.findAll(".history-item").map((item) => item.text())).toEqual([
+      expect.stringContaining("8月10日"),
+      expect.stringContaining("8月7日"),
+      expect.stringContaining("7月28日"),
+    ]);
+  });
+
+  it("preserves timezone semantics when sorting ISO history timestamps", async () => {
+    const historyBrand = makeBrandDetail([makeTrend(501)], {
+      analyses: [
+        { id: 1, name: "带偏移的较早记录", timestamp: "2026-08-10T12:00:00+08:00", trendSnapshot: [] },
+        { id: 2, name: "UTC 的较晚记录", timestamp: "2026-08-10T10:00:00Z", trendSnapshot: [] },
+      ],
+    });
+    const mounted = mountTrends((url, init) => {
+      const method = String(init?.method || "GET");
+      if (method === "GET" && url === "/api/brands?summary=1") {
+        return jsonResponse(200, { brands: [makeBrandSummary()] });
+      }
+      if (method === "GET" && url === "/api/brands/7") {
+        return jsonResponse(200, { brand: historyBrand });
+      }
+      if (method === "GET" && url === "/api/trends/xhs/categories") {
+        return jsonResponse(200, XHS_CATEGORY_TREE);
+      }
+      return undefined;
+    });
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.findAll(".history-item").map((item) => item.text())).toEqual([
+      expect.stringContaining("UTC 的较晚记录"),
+      expect.stringContaining("带偏移的较早记录"),
+    ]);
+  });
+
   it("POSTs the legacy analysis request body { requestId, bucketKey, xhsCategoryPath }", async () => {
     const analysisBrand = makeBrandDetail(makeTrendItems(10));
     const handler: FetchHandler = (url, init) => {
