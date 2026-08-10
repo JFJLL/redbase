@@ -193,7 +193,13 @@ function onEdited(): void {
 
 <template>
   <div class="idea-generation-backdrop" data-test="idea-generation-dialog" @click.self="close">
-    <section class="idea-generation-panel" role="dialog" aria-modal="true" aria-labelledby="ideaGenerationTitle">
+    <section
+      class="idea-generation-panel"
+      :class="{ 'idea-generation-panel--xhs': genKind === 'xhsCarousel' }"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ideaGenerationTitle"
+    >
       <header class="idea-generation-head">
         <div>
           <div class="idea-generation-kicker">内容选题生成</div>
@@ -584,6 +590,13 @@ function onEdited(): void {
   gap: 14px;
 }
 
+/* 小红书组图沿用旧版的宽屏画布，避免固定左栏挤压右侧文案。 */
+.idea-generation-panel--xhs {
+  width: min(1180px, 100%);
+  max-height: calc(100vh - 56px);
+  padding: 28px 28px 96px;
+}
+
 .carousel-slides {
   list-style: none;
   margin: 0;
@@ -595,7 +608,7 @@ function onEdited(): void {
 
 .carousel-slide {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
+  grid-template-columns: 420px minmax(0, 1fr);
   min-width: 0;
   gap: 18px;
   align-items: stretch;
@@ -606,7 +619,7 @@ function onEdited(): void {
 }
 
 .slide-preview {
-  min-height: 320px;
+  min-height: 360px;
   display: grid;
   place-items: center;
   align-content: center;
@@ -826,6 +839,12 @@ function onEdited(): void {
   }
 
   .carousel-slides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1180px) {
+  .idea-generation-panel--xhs .carousel-slide {
     grid-template-columns: minmax(0, 1fr);
   }
 }

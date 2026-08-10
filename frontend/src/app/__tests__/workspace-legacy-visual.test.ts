@@ -167,6 +167,11 @@ describe("legacy workspace visual shell", () => {
     expect(IdeaGenerationDialogSource).toContain('data-test="gen-retry"');
     expect(IdeaGenerationDialogSource).toContain('data-test="moments-result"');
     expect(IdeaGenerationDialogSource).toContain('data-test="wechat-warning"');
+    expect(IdeaGenerationDialogSource).toContain(":class=\"{ 'idea-generation-panel--xhs': genKind === 'xhsCarousel' }\"");
+    expect(IdeaGenerationDialogSource).toContain("idea-generation-panel--xhs");
+    expect(IdeaGenerationDialogSource).toContain("width: min(1180px, 100%)");
+    expect(IdeaGenerationDialogSource).toContain("grid-template-columns: 420px minmax(0, 1fr)");
+    expect(IdeaGenerationDialogSource).toContain("@media (max-width: 1180px)");
     expect(ExcellentViewSource).toContain('data-test="refresh-button"');
     expect(ExcellentViewSource).toContain('data-test="analysis-ready"');
     expect(ExcellentViewSource).toContain('data-test="generate-fusion"');
