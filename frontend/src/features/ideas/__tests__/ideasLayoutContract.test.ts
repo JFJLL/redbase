@@ -4,7 +4,6 @@ import { createPinia, setActivePinia } from "pinia";
 import { useAuthStore } from "@/shared/stores/auth";
 import IdeasView from "../views/IdeasView.vue";
 import IdeasViewSource from "../views/IdeasView.vue?raw";
-import type { TrendIdea } from "@/features/trends/model/types";
 import {
   installFetchMock,
   jsonResponse,
@@ -15,23 +14,6 @@ import {
   makeTrend,
   type FetchHandler,
 } from "@/features/trends/__tests__/insightsTestUtils";
-
-function completeIdea(): TrendIdea {
-  return makeIdea({
-    title: "完整生成选题",
-    contentAssets: {
-      moments: { title: "朋友圈标题A", caption: "朋友圈文案A" },
-      xhsCarousel: {
-        title: "小红书标题A",
-        publishTitle: "小红书标题A",
-        caption: "小红书文案A",
-        publishCaption: "小红书文案A",
-        slides: [{}, {}, {}, {}],
-      },
-      wechatLongImage: { intro: "公众号长图简介" },
-    },
-  });
-}
 
 function mountIdeas(handler: FetchHandler) {
   const fetchMock = installFetchMock(handler);
@@ -45,7 +27,7 @@ function mountIdeas(handler: FetchHandler) {
   return { wrapper, fetchMock, auth, router };
 }
 
-function baseHandler(trend = makeTrend(501, { ideas: [makeIdea({ title: "未生成选题" }), completeIdea()] })): FetchHandler {
+function baseHandler(trend = makeTrend(501, { ideas: [makeIdea({ title: "选题一" }), makeIdea({ title: "选题二" })] })): FetchHandler {
   return (url, init) => {
     const method = String(init?.method || "GET");
     if (method === "GET" && url === "/api/brands?summary=1") {
@@ -68,7 +50,7 @@ describe("ideas card layout contract", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders complete publish copy on complete cards and an explicit incomplete state on skeleton cards", async () => {
+  it("keeps idea cards focused on visible topic fields without content-asset status or previews", async () => {
     const mounted = mountIdeas(baseHandler());
     wrapper = mounted.wrapper;
     await flushPromises();
@@ -77,20 +59,12 @@ describe("ideas card layout contract", () => {
     const cards = wrapper.findAll('[data-test="idea-card"]');
     expect(cards).toHaveLength(2);
 
-    const incomplete = cards[0]!.text();
-    // 骨架选题不再以“自动补齐”占位冒充正常完成态：明确标识数据不完整并提供重生成入口。
-    expect(cards[0]!.find('[data-test="idea-assets-incomplete"]').exists()).toBe(true);
-    expect(incomplete).toContain("缺少完整内容资产");
-    expect(incomplete).toContain("重新生成选题");
-    expect(incomplete).not.toContain("首次生成时自动补齐");
-
-    const complete = cards[1]!.text();
-    expect(complete).toContain("朋友圈标题：");
-    expect(complete).toContain("朋友圈文案：");
-    expect(complete).toContain("小红书标题：");
-    expect(complete).toContain("小红书文案：");
-    expect(complete).toContain("朋友圈标题A");
-    expect(complete).toContain("小红书文案A");
+    for (const card of cards) {
+      expect(card.find('[data-test="idea-assets-incomplete"]').exists()).toBe(false);
+      expect(card.text()).not.toContain("缺少完整内容资产");
+      expect(card.text()).not.toContain("朋友圈标题：");
+      expect(card.text()).not.toContain("小红书文案：");
+    }
   });
 
   it("keeps the four generation action buttons wired to their kinds", async () => {
@@ -115,8 +89,10 @@ describe("ideas card layout contract", () => {
     );
   });
 
-  it("never renders the legacy auto-fill placeholder as a normal state", () => {
+  it("does not render content-asset completeness UI on idea cards", () => {
     expect(IdeasViewSource).not.toContain("首次生成时自动补齐");
-    expect(IdeasViewSource).toContain('data-test="idea-assets-incomplete"');
+    expect(IdeasViewSource).not.toContain('data-test="idea-assets-incomplete"');
+    expect(IdeasViewSource).not.toContain("朋友圈标题：");
+    expect(IdeasViewSource).not.toContain("小红书文案：");
   });
 });

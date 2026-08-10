@@ -15,7 +15,7 @@ import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { regenerateTrendIdeas, updateTrendIdea } from "@/features/trends/api/insightsApi";
 import { useInsightsStore } from "@/features/trends/stores/insights";
 import { useUnauthorizedHandler } from "@/features/trends/composables/useUnauthorizedHandler";
-import type { InsightsBrand, TrendIdea } from "@/features/trends/model/types";
+import type { InsightsBrand } from "@/features/trends/model/types";
 import {
   IMAGE_ASPECT_RATIOS,
   MAX_SELECTED_PRODUCT_IMAGES,
@@ -97,12 +97,14 @@ function ideaKey(index: number): string {
 }
 
 function settingsFor(index: number): IdeaCreativeSettings {
+  void settingsVersion.value;
   return getIdeaCreativeSettings(ideaKey(index));
 }
 
 function patchSettings(index: number, patch: Partial<IdeaCreativeSettings>): void {
   const key = ideaKey(index);
   saveIdeaCreativeSettings(key, { ...getIdeaCreativeSettings(key), ...patch });
+  settingsVersion.value += 1;
 }
 
 function formatFileSize(bytes: number): string {
@@ -287,7 +289,6 @@ function updateCreativeSetting(
 
 function selectRatio(index: number, ratio: string): void {
   patchSettings(index, { aspectRatioSelection: ratio });
-  settingsVersion.value += 1;
 }
 
 /** 旧版 app.js getAspectRatioShapeStyle：按比例绘制图形按钮的形状。 */
@@ -606,20 +607,6 @@ async function saveIdea(index: number): Promise<void> {
   }
 }
 
-// --- 内容资产预览（旧版 hasCompleteIdeaContentAssets / renderIdeaContentAssets）---
-
-function hasCompleteIdeaContentAssets(idea: TrendIdea): boolean {
-  const assets = idea?.contentAssets || {};
-  const slides = assets.xhsCarousel?.slides;
-  return Boolean(
-    assets.moments?.caption &&
-      assets.xhsCarousel?.publishTitle &&
-      Array.isArray(slides) &&
-      slides.length === 4 &&
-      assets.wechatLongImage?.intro,
-  );
-}
-
 // 内容选题内直接承接生成：打开对话框并写入一次性 action 票据（URL query）。
 function openGeneration(ideaIndex: number, action: GenerationAction): void {
   const currentBrand = brand.value;
@@ -803,36 +790,6 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
             <div><strong>面向人群：</strong>{{ idea.audience }}</div>
             <div><strong>开头钩子：</strong>{{ idea.hook }}</div>
 
-            <template v-if="hasCompleteIdeaContentAssets(idea)">
-              <div class="idea-asset-preview">
-                <div><strong>朋友圈标题：</strong>{{ idea.contentAssets.moments?.title }}</div>
-                <div><strong>朋友圈文案：</strong>{{ idea.contentAssets.moments?.caption }}</div>
-                <div>
-                  <strong>小红书标题：</strong
-                  >{{ idea.contentAssets.xhsCarousel?.publishTitle || idea.contentAssets.xhsCarousel?.title }}
-                </div>
-                <div>
-                  <strong>小红书文案：</strong
-                  >{{ idea.contentAssets.xhsCarousel?.publishCaption || idea.contentAssets.xhsCarousel?.caption }}
-                </div>
-              </div>
-            </template>
-            <div v-else class="idea-assets-incomplete" data-test="idea-assets-incomplete" role="alert">
-              <p>
-                该选题缺少完整内容资产（朋友圈 / 小红书 / 公众号文案），可能来自旧版骨架数据，无法直接用于生图。
-                请重新生成趋势或选题后获得完整文案。
-              </p>
-              <button
-                type="button"
-                class="secondary-btn small-btn"
-                :data-test="`idea-regenerate-assets-${index}`"
-                :disabled="regenerating"
-                @click="handleRegenerate"
-              >
-                {{ regenerating ? "生成中..." : "重新生成选题（1 积分）" }}
-              </button>
-            </div>
-
             <!-- 品牌 Logo 开关 -->
             <div class="idea-logo-control" :data-test="`idea-logo-control-${index}`">
               <label class="idea-logo-check">
@@ -848,9 +805,11 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
               <div class="idea-logo-meta">
                 <span :data-test="`idea-logo-id-${index}`">
                   {{
-                    brand.logo
-                      ? formatImageName(brand.logo.originalName || logoLabel, 38)
-                      : `未上传${isPersonal ? "头像" : " Logo"}`
+                    !brand.logo
+                      ? `未上传${isPersonal ? "头像" : " Logo"}`
+                      : settingsFor(index).useBrandLogo
+                        ? formatImageName(brand.logo.originalName || logoLabel, 38)
+                        : `本次不使用${isPersonal ? "头像" : " Logo"}`
                   }}
                 </span>
                 <label class="idea-inline-upload">
@@ -1339,36 +1298,6 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   font-size: 15px;
 }
 
-.idea-asset-preview {
-  border: 1px dashed var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-}
-
-.idea-asset-preview.is-incomplete {
-  color: var(--color-text-secondary);
-}
-
-.idea-assets-incomplete {
-  display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid rgba(180, 35, 24, 0.18);
-  border-radius: var(--radius-md);
-  background: #fff1f1;
-  color: #8c2b22;
-  font-size: 0.86rem;
-  line-height: 1.65;
-}
-
-.idea-assets-incomplete p {
-  margin: 0;
-}
-
 .idea-tag-list {
   display: flex;
   flex-wrap: wrap;
@@ -1642,21 +1571,6 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 
 .idea-title-row {
   gap: 12px;
-}
-
-.idea-asset-preview {
-  gap: 8px;
-  padding: 12px;
-  border-color: var(--workspace-border);
-  border-radius: var(--workspace-radius-sm);
-  background: #faf7f5;
-  line-height: 1.65;
-}
-
-.idea-asset-preview.is-incomplete {
-  border-color: rgba(202, 130, 21, 0.22);
-  background: #fff8eb;
-  color: #8a6d1d;
 }
 
 .idea-actions {

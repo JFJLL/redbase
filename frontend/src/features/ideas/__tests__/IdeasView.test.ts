@@ -95,12 +95,10 @@ describe("IdeasView", () => {
     expect(cards[0].text()).toContain("面向人群：一线城市上班族");
     expect(cards[0].text()).toContain("开头钩子：工位上的第一口秋天");
     expect(cards[0].text()).toContain("#咖啡日常");
-    // 骨架选题（contentAssets 缺失）不再显示“首次生成时自动补齐”占位：
-    // 明确标识数据不完整并提供重新生成入口。
-    expect(cards[0].find('[data-test="idea-assets-incomplete"]').exists()).toBe(true);
-    expect(cards[0].text()).toContain("缺少完整内容资产");
-    expect(cards[0].find('[data-test="idea-regenerate-assets-0"]').exists()).toBe(true);
-    expect(cards[0].text()).not.toContain("首次生成时自动补齐");
+    expect(cards[0].find('[data-test="idea-assets-incomplete"]').exists()).toBe(false);
+    expect(cards[0].text()).not.toContain("缺少完整内容资产");
+    expect(cards[0].text()).not.toContain("朋友圈标题：");
+    expect(cards[0].text()).not.toContain("小红书文案：");
   });
 
   it("regenerates ideas with the custom prompt and applies trend + credits from the response", async () => {
@@ -276,7 +274,8 @@ describe("IdeasView", () => {
     const card = wrapper.findAll('[data-test="idea-card"]')[0];
     const logoControl = card.find('[data-test="idea-logo-control-0"]');
     expect(logoControl.text()).toContain("使用品牌 Logo");
-    expect(logoControl.text()).toContain("9c953d46-ce43");
+    expect(logoControl.text()).toContain("本次不使用 Logo");
+    expect(logoControl.text()).not.toContain("9c953d46-ce43");
     expect(logoControl.text()).toContain("更换 Logo");
 
     const product = card.find('[data-test="idea-product-upload-0"]');
@@ -460,5 +459,29 @@ describe("IdeasView", () => {
     expect(body.logoName).toBe("新品牌logo.png");
     expect(String(body.logoDataUrl)).toMatch(/^data:/);
     expect(wrapper.find('[data-test="idea-logo-id-0"]').text()).toContain("新品牌logo.png");
+  });
+
+  it("shows the stored logo filename only when this idea enables logo usage", async () => {
+    const existingLogo = makeLogo({ originalName: "已上传品牌logo.png" });
+    const mounted = mountIdeas((url, init) => {
+      const method = String(init?.method || "GET");
+      if (method === "GET" && url === "/api/brands/7") {
+        return jsonResponse(200, {
+          brand: makeBrandDetail([makeTrend(501)], { logo: existingLogo }),
+        });
+      }
+      return baseHandler()(url, init);
+    });
+    wrapper = mounted.wrapper;
+    await flushPromises();
+    await flushPromises();
+
+    const checkbox = wrapper.find('[data-test="idea-use-brand-logo-0"]');
+    await checkbox.setValue(false);
+    expect(wrapper.find('[data-test="idea-logo-id-0"]').text()).toBe("本次不使用 Logo");
+    expect(wrapper.find('[data-test="idea-logo-id-0"]').text()).not.toContain("已上传品牌logo.png");
+
+    await checkbox.setValue(true);
+    expect(wrapper.find('[data-test="idea-logo-id-0"]').text()).toContain("已上传品牌logo.png");
   });
 });

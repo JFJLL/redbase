@@ -535,6 +535,25 @@ test("idea regeneration user prompts include freshness and risk boundaries", () 
   assert.match(prompt, /不要输出“旧话题复燃”“长尾稳定”“品牌可用但非热点”/);
   assert.match(prompt, /不能声称已核验正文、真实销量、医学结论或站外排名/);
   assert.match(prompt, /不得输出诊断、治疗、用药建议、功效承诺或煽动性立场/);
-  assert.match(prompt, /不要批量使用“评论区分享一下”“评论区聊聊”“你怎么看”/);
+  assert.doesNotMatch(prompt, /本次不要输出 contentAssets/);
+  assert.match(prompt, /contentAssets\.moments\.caption/);
+  assert.match(prompt, /contentAssets\.xhsCarousel\.publishCaption/);
+  assert.match(prompt, /不要所有文案都以提问或评论区 CTA 收尾/);
   assert.match(prompt, /减少敏感风险/);
+
+  const freeFormPrompt = buildIdeaRegenerationUserPrompt(
+    brand,
+    {
+      title: "儿童护理热点",
+      category: "大健康",
+      summary: "围绕近期家长关注的日常护理内容。",
+      reason: "品牌可从合规科普角度进入。",
+    },
+    "减少敏感风险",
+    { includeContentAssets: false },
+  );
+  assert.match(freeFormPrompt, /本次不要输出 contentAssets/);
+  assert.doesNotMatch(freeFormPrompt, /contentAssets\.moments\.caption/);
+  assert.doesNotMatch(freeFormPrompt, /contentAssets\.xhsCarousel\.publishCaption/);
+  assert.match(freeFormPrompt, /不要所有文案都以提问或评论区 CTA 收尾/);
 });

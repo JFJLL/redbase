@@ -271,6 +271,8 @@ test("freeForm prompts switch to creative mode without evidence anchors", () => 
   assert.match(systemPrompt, /创意槽位/);
   assert.match(systemPrompt, /自评分/);
   assert.match(systemPrompt, /TREND_SELF_SCORE_MIN|70/);
+  assert.match(systemPrompt, /本次不要输出 contentAssets/);
+  assert.doesNotMatch(systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
   assert.doesNotMatch(systemPrompt, /必须先从对应来源标题中逐字保留/);
   assert.doesNotMatch(systemPrompt, /网页事实片段/);
 
@@ -281,6 +283,8 @@ test("freeForm prompts switch to creative mode without evidence anchors", () => 
   );
   assert.match(userPrompt, /创意假设模式/);
   assert.match(userPrompt, /创意槽位计划/);
+  assert.match(userPrompt, /不要输出 contentAssets/);
+  assert.doesNotMatch(userPrompt, /每条 idea 必须同步生成完整 contentAssets/);
   assert.doesNotMatch(userPrompt, /如果搜索结果不足/);
   assert.doesNotMatch(userPrompt, /AnySearch\/Pgy 证据为准/);
 });

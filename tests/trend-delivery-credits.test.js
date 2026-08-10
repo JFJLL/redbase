@@ -11,6 +11,11 @@ const { insertBrand, findBrandByOwner } = require("../src/server/db/repositories
 const { handleTrendRoutes } = require("../src/server/api/trend-routes");
 const { generateAiTrendSet } = require("../src/server/ai/trend-service");
 const { clearAnySearchCache } = require("../src/server/integrations/anysearch");
+const {
+  findTrendAnalysisRequest,
+  reserveTrendAnalysisRequest,
+  failTrendAnalysisRequest,
+} = require("../src/server/db/repositories/trend-analysis-repository");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -207,6 +212,155 @@ test("a real no-source failure charges nothing and leaves the brand unchanged", 
   assert.equal(findUserById(1).credits, before);
   const brand = findBrandByOwner(40, 1);
   assert.ok(!(brand.trends || []).some((bucket) => bucket.key === "news"));
+});
+
+test("an eight-item model batch is rejected before persistence or charging", async () => {
+  const beforeCredits = findUserById(1).credits;
+  const beforeBrand = findBrandByOwner(40, 1);
+  const beforeAnalysisCount = beforeBrand.analyses.length;
+  const beforeTrafficTitles = (beforeBrand.trends || [])
+    .find((bucket) => bucket.key === "traffic")
+    ?.items.map((item) => item.title) || [];
+  const shortBatch = makeGeneratedBuckets();
+  shortBatch[0].items = shortBatch[0].items.slice(0, 8);
+  const res = createRes();
+
+  await handleTrendRoutes(
+    {
+      appConfig: { security: { assetSigningSecret: "test-secret" } },
+      async generateAiTrendSet() {
+        return shortBatch;
+      },
+    },
+    createJsonReq(
+      "/api/brands/40/analyses",
+      { requestId: "delivery-short-batch-1", bucketKey: "traffic" },
+      "redbase_session=delivery-credit-token",
+    ),
+    res,
+    "/api/brands/40/analyses",
+  );
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.error, /实际 8 条/);
+  assert.match(res.body.error, /未保存也未扣积分/);
+  assert.equal(findUserById(1).credits, beforeCredits);
+  assert.equal(findTrendAnalysisRequest({
+    requestId: "delivery-short-batch-1",
+    userId: 1,
+    brandId: 40,
+    bucketKey: "traffic",
+  })?.status, "failed");
+  const afterBrand = findBrandByOwner(40, 1);
+  assert.equal(afterBrand.analyses.length, beforeAnalysisCount);
+  assert.deepEqual(
+    (afterBrand.trends || []).find((bucket) => bucket.key === "traffic")?.items.map((item) => item.title) || [],
+    beforeTrafficTitles,
+  );
+});
+
+test("extra, duplicate, and oversized buckets are rejected before persistence or charging", async () => {
+  const scenarios = [
+    {
+      name: "extra-bucket",
+      build() {
+        const result = makeGeneratedBuckets();
+        result.push({ key: "news", title: "额外趋势", description: "不应交付", items: [result[0].items[0]] });
+        return result;
+      },
+    },
+    {
+      name: "duplicate-bucket",
+      build() {
+        const result = makeGeneratedBuckets();
+        result.push({ ...result[0], items: result[0].items.slice(0, 8) });
+        return result;
+      },
+    },
+    {
+      name: "oversized-bucket",
+      build() {
+        const result = makeGeneratedBuckets();
+        result[0].items.push({ ...result[0].items[0], id: 8999, title: "第十一条异常趋势" });
+        return result;
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const requestId = `delivery-${scenario.name}-1`;
+    const beforeCredits = findUserById(1).credits;
+    const beforeBrand = findBrandByOwner(40, 1);
+    const beforeAnalysisCount = beforeBrand.analyses.length;
+    const res = createRes();
+    await handleTrendRoutes(
+      {
+        appConfig: { security: { assetSigningSecret: "test-secret" } },
+        async generateAiTrendSet() {
+          return scenario.build();
+        },
+      },
+      createJsonReq(
+        "/api/brands/40/analyses",
+        { requestId, bucketKey: "traffic" },
+        "redbase_session=delivery-credit-token",
+      ),
+      res,
+      "/api/brands/40/analyses",
+    );
+
+    assert.equal(res.statusCode, 400, scenario.name);
+    assert.match(res.body.error, /未保存也未扣积分/, scenario.name);
+    assert.equal(findUserById(1).credits, beforeCredits, scenario.name);
+    assert.equal(findBrandByOwner(40, 1).analyses.length, beforeAnalysisCount, scenario.name);
+    assert.equal(findTrendAnalysisRequest({ requestId, userId: 1, brandId: 40, bucketKey: "traffic" })?.status, "failed", scenario.name);
+  }
+});
+
+test("analysis id allocation failure releases the reservation immediately", async () => {
+  const beforeCredits = findUserById(1).credits;
+  const requestId = "delivery-allocation-failed-1";
+  const res = createRes();
+  await handleTrendRoutes(
+    {
+      appConfig: { security: { assetSigningSecret: "test-secret" } },
+      allocateAnalysisAndTrendBase() {
+        throw new Error("allocator unavailable");
+      },
+      async generateAiTrendSet() {
+        assert.fail("model must not run when id allocation fails");
+      },
+    },
+    createJsonReq(
+      "/api/brands/40/analyses",
+      { requestId, bucketKey: "crowd" },
+      "redbase_session=delivery-credit-token",
+    ),
+    res,
+    "/api/brands/40/analyses",
+  );
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(findUserById(1).credits, beforeCredits);
+  assert.equal(findTrendAnalysisRequest({ requestId, userId: 1, brandId: 40, bucketKey: "crowd" })?.status, "failed");
+
+  const followupRequestId = "delivery-allocation-followup-1";
+  const followup = reserveTrendAnalysisRequest({
+    requestId: followupRequestId,
+    userId: 1,
+    brandId: 40,
+    bucketKey: "crowd",
+    creditCost: 1,
+  });
+  assert.equal(followup.status, "reserved");
+  assert.equal(followup.existing, false);
+  failTrendAnalysisRequest({
+    requestId: followupRequestId,
+    userId: 1,
+    brandId: 40,
+    bucketKey: "crowd",
+    error: "test cleanup",
+  });
 });
 
 test("the persisted analysis record keeps the delivered snapshot for the degraded batch", async () => {

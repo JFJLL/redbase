@@ -65,6 +65,7 @@ const {
   generateAiTrendSet,
   regenerateTrendIdeas,
   ensureTrendIdeaContentAssets,
+  isIdeaContentAssetsComplete,
 } = require("../src/server/ai/trend-service");
 const {
   findUnsupportedHardClaims,
@@ -2375,9 +2376,10 @@ test("retries unsafe medicine copy in regenerated ideas and lazy content assets"
     industry: "儿童家庭用药信息",
     product: "儿童感冒药",
   };
-  const makeIdeas = (unsafe = false) => ["路线A", "路线B"].map((label) => {
+  const makeIdeas = (unsafe = false, includeAssets = false) => ["路线A", "路线B"].map((label) => {
     const idea = generatedIdeaFixture(label);
-    if (unsafe) idea.contentAssets.moments.caption = "一天三次，每次半包";
+    if (unsafe) idea.hook = "一天三次，每次半包";
+    if (!includeAssets) idea.contentAssets = {};
     return idea;
   });
   const trend = {
@@ -2391,7 +2393,7 @@ test("retries unsafe medicine copy in regenerated ideas and lazy content assets"
   };
   let regenerationCalls = 0;
   const regenerated = await regenerateTrendIdeas(
-    { textProvider: { apiStyle: "openai" } },
+    { trendAnalysis: { freeForm: true }, textProvider: { apiStyle: "openai" } },
     medicineBrand,
     trend,
     "",
@@ -2401,13 +2403,61 @@ test("retries unsafe medicine copy in regenerated ideas and lazy content assets"
         assert.equal(request.timeoutMs, 80000);
         assert.equal(request.maxAttempts, 1);
         assert.equal(request.stream, false);
+        assert.match(request.systemPrompt, /本次不要输出 contentAssets/);
+        assert.doesNotMatch(request.systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
+        assert.match(request.userPrompt, /本次不要输出 contentAssets/);
+        assert.doesNotMatch(request.userPrompt, /contentAssets\.moments\.caption/);
+        assert.doesNotMatch(request.userPrompt, /contentAssets\.xhsCarousel\.publishCaption/);
         if (regenerationCalls === 2) assert.match(request.userPrompt, /删除剂量、服药时机/);
-        return { ideas: makeIdeas(regenerationCalls === 1) };
+        return { ideas: makeIdeas(regenerationCalls === 1, regenerationCalls === 2) };
       },
     },
   );
   assert.equal(regenerationCalls, 2);
   assert.doesNotMatch(JSON.stringify(regenerated.ideas), /一天三次/);
+  // 即使模型越界返回完整资产，重新生成接口也必须剥离，保持首次生图按需生成。
+  assert.ok(regenerated.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0));
+
+  let inlineReferenceCalls = 0;
+  await regenerateTrendIdeas(
+    { trendAnalysis: { freeForm: true }, textProvider: { apiStyle: "openai" } },
+    medicineBrand,
+    trend,
+    "",
+    {
+      textModelImpl: async (_config, request) => {
+        inlineReferenceCalls += 1;
+        if (inlineReferenceCalls === 2) {
+          assert.match(request.userPrompt, /也不要输出 contentAssets/);
+          assert.doesNotMatch(request.userPrompt, /全部内容资产必须改成自然语言/);
+        }
+        const ideas = makeIdeas(false);
+        if (inlineReferenceCalls === 1) ideas[0].hook = "S1 说明这个选题值得关注";
+        return { ideas };
+      },
+    },
+  );
+  assert.equal(inlineReferenceCalls, 2);
+
+  let evidenceModeCalls = 0;
+  const evidenceRegenerated = await regenerateTrendIdeas(
+    { trendAnalysis: { freeForm: false }, textProvider: { apiStyle: "openai" } },
+    medicineBrand,
+    trend,
+    "",
+    {
+      textModelImpl: async (_config, request) => {
+        evidenceModeCalls += 1;
+        assert.match(request.systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
+        assert.doesNotMatch(request.systemPrompt, /本次不要输出 contentAssets/);
+        assert.match(request.userPrompt, /contentAssets\.moments\.caption/);
+        assert.match(request.userPrompt, /contentAssets\.xhsCarousel\.publishCaption/);
+        return { ideas: makeIdeas(false, true) };
+      },
+    },
+  );
+  assert.equal(evidenceModeCalls, 1);
+  assert.ok(evidenceRegenerated.ideas.every((idea) => isIdeaContentAssetsComplete(idea)));
 
   let enrichmentCalls = 0;
   const enriched = await ensureTrendIdeaContentAssets(
@@ -2422,7 +2472,9 @@ test("retries unsafe medicine copy in regenerated ideas and lazy content assets"
         assert.equal(request.maxAttempts, 1);
         assert.equal(request.stream, false);
         if (enrichmentCalls === 2) assert.match(request.userPrompt, /删除剂量、服药时机/);
-        return { contentAssets: makeIdeas(enrichmentCalls === 1)[0].contentAssets };
+        const fullIdea = generatedIdeaFixture("按需补齐");
+        if (enrichmentCalls === 1) fullIdea.contentAssets.moments.caption = "一天三次，每次半包";
+        return { contentAssets: fullIdea.contentAssets };
       },
     },
   );

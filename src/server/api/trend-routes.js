@@ -215,15 +215,37 @@ async function handleTrendRoutes(context, req, res, pathname) {
       json(res, 402, { error: `积分不足，本次操作需要 ${CREDIT_COSTS.analysis} 积分，当前剩余 ${current} 积分。` });
       return true;
     }
-    const { analysisId, trendBase } = allocateAnalysisAndTrendBase();
+    const allocateTrendIds = context.allocateAnalysisAndTrendBase || allocateAnalysisAndTrendBase;
+    let analysisId = 0;
+    let trendBase = 0;
     let generatedTrends = [];
     try {
+      ({ analysisId, trendBase } = allocateTrendIds());
       generatedTrends = await generateAiTrendSet(brand, trendBase, {
         bucketKey: selectedBucket.key,
         xhsCategoryPath,
         userId: user.id,
         analysisId,
       });
+      const generatedBuckets = Array.isArray(generatedTrends) ? generatedTrends : [];
+      const generatedBucket = generatedBuckets[0];
+      const generatedCount = generatedBuckets.reduce(
+        (sum, bucket) => sum + (Array.isArray(bucket?.items) ? bucket.items.length : 0),
+        0,
+      );
+      if (
+        generatedBuckets.length !== 1
+        || normalizeTrendBucketKey(generatedBucket?.key) !== selectedBucket.key
+        || !Array.isArray(generatedBucket?.items)
+        || generatedBucket.items.length !== 10
+        || generatedCount !== 10
+      ) {
+        const error = new Error(
+          `模型未返回完整的 10 条趋势（实际 ${generatedCount} 条），本次结果未保存也未扣积分。`,
+        );
+        error.code = "TREND_MODEL_VALIDATION_FAILED";
+        throw error;
+      }
       // analysisWarnings is a non-enumerable marker on the generated buckets;
       // degraded-but-delivered results stay a success (saved + charged once).
       const analysisWarnings = Array.isArray(generatedTrends.analysisWarnings)

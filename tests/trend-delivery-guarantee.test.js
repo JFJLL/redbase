@@ -255,25 +255,114 @@ test("a first-call transport failure with evidence fails without saving", async 
   assert.equal(modelCalls, 1);
 });
 
-test("freeForm delivers a partial batch when the model cannot produce ten trends", async () => {
+test("freeForm rejects a partial batch when the model cannot produce ten trends", async () => {
   clearAnySearchCache();
-  const result = await generateAiTrendSet({
+  let modelCalls = 0;
+  await assert.rejects(generateAiTrendSet({
     trendAnalysis: { freeForm: true },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7900, {
     bucketKey: "traffic",
-    textModelImpl: async () => {
+    textModelImpl: async (_config, request) => {
+      modelCalls += 1;
+      if (modelCalls === 2) {
+        assert.match(request.systemPrompt, /本次不要输出 contentAssets/);
+        assert.match(request.userPrompt, /本次不要输出 contentAssets/);
+        assert.doesNotMatch(request.systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
+        assert.doesNotMatch(request.userPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
+      }
       const batch = generatedTrendBatch("部分批", { bucketKey: "traffic" });
+      for (const item of batch.trendBuckets[0].items) {
+        item.ideas = item.ideas.map(({ contentAssets: _contentAssets, ...idea }) => idea);
+      }
       return { trendBuckets: [{ key: "traffic", items: batch.trendBuckets[0].items.slice(0, 8) }] };
     },
     maxAiCalls: 2,
-  });
-  assert.equal(result[0].items.length, 8);
+  }), { code: "TREND_AI_CALL_BUDGET_EXCEEDED" });
+  assert.equal(modelCalls, 2);
 });
 
-test("freeForm partial delivery never keeps skeleton items without two complete ideas", async () => {
+test("freeForm strips model-provided content assets from ten complete visible ideas", async () => {
   clearAnySearchCache();
+  let modelCalls = 0;
   const result = await generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7902, {
+    bucketKey: "traffic",
+    textModelImpl: async (_config, request) => {
+      modelCalls += 1;
+      assert.match(request.systemPrompt, /本次不要输出 contentAssets/);
+      assert.doesNotMatch(request.systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
+      const batch = generatedTrendBatch("轻量批", { bucketKey: "traffic" });
+      const distinctTitles = [
+        "租房小桌测量与灯位清单",
+        "搬家灯具折叠收纳记录",
+        "居家办公任务分区补光",
+        "视频会议镜头层次调整",
+        "夜间阅读位置测试方法",
+        "家庭共享空间复位流程",
+        "宿舍床边取物照明日记",
+        "手账拍摄阴影排查步骤",
+        "墙角窗边取电路线规划",
+        "线材灯位共同整理顺序",
+      ];
+      for (const [index, item] of batch.trendBuckets[0].items.entries()) {
+        item.title = distinctTitles[index];
+      }
+      return batch;
+    },
+    maxAiCalls: 2,
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  // 即使模型越界返回完整资产，freeForm 也只持久化外显字段。
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.length === 2 && item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0)));
+});
+
+test("freeForm accepts ten complete visible ideas when the model omits content assets", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  const result = await generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7903, {
+    bucketKey: "traffic",
+    textModelImpl: async () => {
+      modelCalls += 1;
+      const batch = generatedTrendBatch("无资产轻量批", { bucketKey: "traffic" });
+      const titles = [
+        "租房小桌测量与灯位清单",
+        "搬家灯具折叠收纳记录",
+        "居家办公任务分区补光",
+        "视频会议镜头层次调整",
+        "夜间阅读位置测试方法",
+        "家庭共享空间复位流程",
+        "宿舍床边取物照明日记",
+        "手账拍摄阴影排查步骤",
+        "墙角窗边取电路线规划",
+        "线材灯位共同整理顺序",
+      ];
+      for (const [index, item] of batch.trendBuckets[0].items.entries()) {
+        item.title = titles[index];
+        item.ideas = item.ideas.map(({ contentAssets: _contentAssets, ...idea }) => idea);
+      }
+      return batch;
+    },
+    maxAiCalls: 2,
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.length === 2 && item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0)));
+});
+
+test("freeForm rejects a short batch containing skeleton items", async () => {
+  clearAnySearchCache();
+  await assert.rejects(generateAiTrendSet({
     trendAnalysis: { freeForm: true },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7905, {
@@ -281,14 +370,15 @@ test("freeForm partial delivery never keeps skeleton items without two complete 
     textModelImpl: async () => {
       const batch = generatedTrendBatch("骨架批", { bucketKey: "traffic" });
       const items = batch.trendBuckets[0].items;
-      // 6 条完整 + 2 条骨架（无 ideas），部分交付必须只保留完整条目。
+      for (const item of items) {
+        item.ideas = item.ideas.map(({ contentAssets: _contentAssets, ...idea }) => idea);
+      }
+      // 6 条完整 + 2 条骨架（无 ideas）不能被当作成功交付。
       const skeletons = items.slice(6, 8).map((item) => ({ ...item, ideas: [] }));
       return { trendBuckets: [{ key: "traffic", items: [...items.slice(0, 6), ...skeletons] }] };
     },
     maxAiCalls: 2,
-  });
-  assert.equal(result[0].items.length, 6);
-  assert.ok(result[0].items.every((trend) => trend.ideas.length === 2));
+  }), { code: "TREND_AI_CALL_BUDGET_EXCEEDED" });
 });
 
 test("freeForm soft-filters low self-scores instead of failing the batch", async () => {
