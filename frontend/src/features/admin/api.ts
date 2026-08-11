@@ -39,6 +39,12 @@ export interface AdminBrandRow {
   industry?: string;
   audience?: string;
   description?: string;
+  product?: string;
+  goal?: string;
+  knowledgeBase?: string;
+  assetTags?: string[];
+  logoName?: string;
+  hasLogo?: boolean;
   analysisCount?: number;
   trendCount?: number;
   createdAt?: string;
