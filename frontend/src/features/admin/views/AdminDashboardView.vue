@@ -21,6 +21,8 @@ import {
 const auth = useAuthStore();
 const scope = useAbortScope();
 
+const LOGO_SRC = "/assets/redbase-logo.png";
+
 const overview = ref<AdminOverview | null>(null);
 const currentAdmin = ref<{ id?: number | string; name?: string } | null>(null);
 const loadError = ref("");
@@ -251,282 +253,409 @@ async function handleLogout() {
   window.location.href = "/app/login";
 }
 
+function scrollToSection(sectionId: string): void {
+  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 onMounted(() => {
   loadOverview();
 });
 </script>
 
 <template>
-  <div class="admin-dashboard">
-    <header class="admin-header">
+  <div class="admin-shell">
+    <aside class="admin-sidebar">
       <div>
-        <h1>RedBase 管理后台</h1>
-        <p class="admin-subtitle">{{ currentAdmin?.name || "管理员" }}</p>
+        <img class="admin-logo" :src="LOGO_SRC" alt="RedBase" />
+        <nav class="admin-nav">
+          <a href="#overview" @click.prevent="scrollToSection('overview')">总览</a>
+          <a href="#users" @click.prevent="scrollToSection('users')">用户管理</a>
+          <a href="#brands" @click.prevent="scrollToSection('brands')">品牌档案</a>
+          <a href="#usage" @click.prevent="scrollToSection('usage')">消耗流水</a>
+          <a href="#generations" @click.prevent="scrollToSection('generations')">生成内容</a>
+        </nav>
       </div>
-      <div class="admin-header-actions">
-        <button type="button" class="secondary-btn" :disabled="loading" @click="loadOverview">刷新数据</button>
-        <button type="button" class="secondary-btn" @click="handleLogout">退出登录</button>
+      <div class="admin-user-box">
+        <div id="adminUserName">{{ currentAdmin?.name || "管理员" }}</div>
+        <button class="ghost-btn" type="button" @click="handleLogout">退出后台</button>
       </div>
-    </header>
+    </aside>
 
-    <p v-if="loadError" class="admin-error" data-test="admin-error">{{ loadError }}</p>
-
-    <template v-if="overview">
-      <section class="admin-stats" data-test="admin-stats">
-        <article v-for="[label, value] in statsCards" :key="label" class="stat-card">
-          <div class="stat-label">{{ label }}</div>
-          <div class="stat-value">{{ formatNumber(value) }}</div>
-        </article>
-      </section>
-
-      <section class="admin-panel">
-        <header class="panel-header">
-          <h2>积分调整</h2>
-        </header>
-        <form class="credit-form" data-test="credit-form" @submit.prevent="submitCreditForm">
-          <div class="credit-user-picker">
-            <input
-              v-model="creditUserSearchQuery"
-              type="text"
-              placeholder="搜索用户姓名或手机号"
-              data-test="credit-user-search"
-              @input="onCreditSearchInput"
-              @focus="creditUserPickerOpen = true"
-              @keydown="onCreditSearchKeydown"
-            />
-            <ul v-if="creditUserPickerOpen && creditUserMatches.length" class="credit-user-options">
-              <li v-for="user in creditUserMatches" :key="user.id">
-                <button type="button" :data-credit-user-id="user.id" @click="selectCreditUser(user.id)">
-                  {{ user.name || "-" }} · {{ user.phone || "" }}
-                </button>
-              </li>
-            </ul>
-          </div>
-          <input
-            v-model="creditAmount"
-            type="number"
-            min="1"
-            placeholder="加额度数量"
-            data-test="credit-amount"
-            required
-          />
-          <input v-model="creditNote" type="text" placeholder="备注（可选）" data-test="credit-note" />
-          <button type="submit" class="primary-btn">加额度</button>
-          <span v-if="selectedCreditUser" class="credit-selected">
-            已选择：{{ selectedCreditUser.name }} · {{ selectedCreditUser.phone }}
-          </span>
-        </form>
-      </section>
-
-      <section class="admin-panel">
-        <header class="panel-header">
-          <h2>用户列表</h2>
-          <div class="panel-tools">
-            <input
-              v-model="userSearchQuery"
-              type="search"
-              placeholder="搜索姓名或手机号"
-              data-test="user-search"
-            />
-            <span v-if="normalizeSearchText(userSearchQuery)" class="panel-summary">
-              {{ formatNumber(visibleUsers.length) }} / {{ formatNumber(users.length) }}
-            </span>
-          </div>
-        </header>
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>用户</th>
-              <th>类型</th>
-              <th>当前额度</th>
-              <th>已消耗</th>
-              <th>已发放</th>
-              <th>生成次数</th>
-              <th>品牌数</th>
-              <th>最近活跃</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody data-test="admin-user-rows">
-            <tr v-for="user in visibleUsers" :key="user.id" data-test="admin-user-row">
-              <td>
-                <div class="strong">{{ user.name }}</div>
-                <div class="muted">{{ user.phone }}</div>
-              </td>
-              <td>
-                <span class="badge">{{ accountTypeLabel(user) }}</span>
-                <div v-if="user.department" class="muted">{{ user.department }}</div>
-              </td>
-              <td class="strong">{{ formatNumber(user.currentCredits) }}</td>
-              <td class="token-negative">{{ formatNumber(user.consumedTokens) }}</td>
-              <td class="token-positive">{{ formatNumber(user.grantedTokens) }}</td>
-              <td>{{ formatNumber(user.generationCount) }}</td>
-              <td>{{ formatNumber(user.brandCount) }}</td>
-              <td>{{ formatDate(user.lastActiveAt || user.createdAt) }}</td>
-              <td>
-                <button type="button" class="danger-btn" data-test="delete-user" @click="removeUser(user.id)">删除</button>
-              </td>
-            </tr>
-            <tr v-if="!visibleUsers.length">
-              <td colspan="9" class="muted">没有匹配的用户。</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section class="admin-panel">
-        <header class="panel-header">
-          <h2>品牌档案</h2>
-          <select v-model="brandUserId">
-            <option value="all">全部用户</option>
-            <option v-for="user in users" :key="user.id" :value="String(user.id)">
-              {{ user.name }} · {{ user.phone }}
-            </option>
-          </select>
-        </header>
-        <div class="brand-list">
-          <article v-for="brand in visibleBrands" :key="brand.id" class="brand-card">
-            <h3>{{ brand.name }}</h3>
-            <p class="muted">{{ brand.industry }} · {{ brand.audience }}</p>
-            <p v-if="brand.description" class="brand-description">{{ brand.description }}</p>
-            <p class="muted">
-              所属：{{ brand.user?.name || "-" }} {{ brand.user?.phone || "" }} · 分析 {{ formatNumber(brand.analysisCount) }} 次 ·
-              趋势 {{ formatNumber(brand.trendCount) }} 条 · {{ formatDate(brand.createdAt) }}
-            </p>
-          </article>
-          <p v-if="!visibleBrands.length" class="muted">暂无品牌档案。</p>
+    <main class="admin-main">
+      <header class="admin-topbar" id="overview">
+        <div>
+          <h1>RedBase 管理后台</h1>
+          <p>集中查看用户额度、使用额度消耗和内容生成记录。</p>
         </div>
-      </section>
+        <button type="button" class="secondary-btn" :disabled="loading" @click="loadOverview">刷新数据</button>
+      </header>
 
-      <section class="admin-panel">
-        <header class="panel-header">
-          <h2>额度流水</h2>
-          <select v-model="usageUserId">
-            <option value="all">全部用户</option>
-            <option v-for="user in users" :key="user.id" :value="String(user.id)">
-              {{ user.name }} · {{ user.phone }}
-            </option>
-          </select>
-        </header>
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>用户</th>
-              <th>动作</th>
-              <th>额度变化</th>
-              <th>关联内容</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="event in visibleUsageEvents" :key="event.id">
-              <td>{{ formatDate(event.createdAt) }}</td>
-              <td>
-                <div class="strong">{{ event.userName || "-" }}</div>
-                <div class="muted">{{ event.userPhone || "" }}</div>
-              </td>
-              <td>
-                {{ event.actionLabel || event.actionType }}
-                <div v-if="event.adminUserName" class="muted">操作人：{{ event.adminUserName }}</div>
-              </td>
-              <td :class="Number(event.tokenDelta || 0) < 0 ? 'token-negative' : 'token-positive'">
-                {{ formatNumber(event.tokenDelta) }}
-              </td>
-              <td class="muted">{{ event.brandName || "" }} {{ event.ideaTitle || event.summary || "" }}</td>
-            </tr>
-            <tr v-if="!visibleUsageEvents.length">
-              <td colspan="5" class="muted">暂无额度流水。</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
+      <p v-if="loadError" class="admin-error" data-test="admin-error">{{ loadError }}</p>
 
-      <section class="admin-panel">
-        <header class="panel-header">
-          <h2>生成内容</h2>
-          <select v-model="generationUserId">
-            <option value="all">全部用户</option>
-            <option v-for="user in users" :key="user.id" :value="String(user.id)">
-              {{ user.name }} · {{ user.phone }}
-            </option>
-          </select>
-        </header>
-        <div class="generation-list">
-          <article v-for="item in visibleGenerations" :key="item.id" class="generation-card">
-            <img v-if="getGenerationPreview(item)" :src="getGenerationPreview(item)" alt="" loading="lazy" decoding="async" />
-            <div class="generation-card-body">
-              <h3>{{ item.cardTitle || item.ideaTitle || "生成内容" }}</h3>
-              <p class="muted">
-                {{ item.user?.name || "-" }} {{ item.user?.phone || "" }} · {{ item.channelLabel || item.type }} ·
-                {{ formatDate(item.createdAt) }} · 消耗 {{ formatNumber(item.tokenCost) }}
-              </p>
-              <div class="generation-card-actions">
-                <button type="button" class="secondary-btn" @click="generationModalItem = item">详情</button>
-                <button type="button" class="danger-btn" @click="removeGeneration(item.id)">删除</button>
+      <template v-if="overview">
+        <section class="stats-grid" id="adminStats" data-test="admin-stats">
+          <article v-for="[label, value] in statsCards" :key="label" class="stat-card">
+            <div class="stat-label">{{ label }}</div>
+            <div class="stat-value">{{ formatNumber(value) }}</div>
+          </article>
+        </section>
+
+        <section class="admin-panel" id="users">
+          <div class="panel-head">
+            <div>
+              <h2>用户管理</h2>
+              <p>查看每个用户当前额度、总消耗使用额度、生成次数，并手动加额度。</p>
+            </div>
+            <div class="panel-actions">
+              <input
+                v-model="userSearchQuery"
+                class="compact-search"
+                type="search"
+                placeholder="搜索手机号或昵称"
+                autocomplete="off"
+                aria-label="搜索手机号或昵称"
+                data-test="user-search"
+              />
+              <span v-if="normalizeSearchText(userSearchQuery)" class="search-result-pill">
+                {{ formatNumber(visibleUsers.length) }} / {{ formatNumber(users.length) }}
+              </span>
+            </div>
+          </div>
+
+          <form class="credit-form" data-test="credit-form" @submit.prevent="submitCreditForm">
+            <div class="credit-user-field">
+              <label class="field-label" for="creditUserSearchInput">搜索用户</label>
+              <div class="user-picker">
+                <input
+                  id="creditUserSearchInput"
+                  v-model="creditUserSearchQuery"
+                  type="search"
+                  placeholder="输入手机号或昵称"
+                  autocomplete="off"
+                  aria-controls="creditUserOptions"
+                  aria-expanded="false"
+                  data-test="credit-user-search"
+                  @input="onCreditSearchInput"
+                  @focus="creditUserPickerOpen = true"
+                  @keydown="onCreditSearchKeydown"
+                />
+                <div
+                  v-if="creditUserPickerOpen && creditUserMatches.length"
+                  class="user-picker-options"
+                  id="creditUserOptions"
+                >
+                  <button
+                    v-for="user in creditUserMatches"
+                    :key="user.id"
+                    type="button"
+                    class="user-picker-option"
+                    :data-credit-user-id="user.id"
+                    @click="selectCreditUser(user.id)"
+                  >
+                    <strong>{{ user.name || "-" }}</strong>
+                    <span>{{ user.phone || "" }}</span>
+                  </button>
+                </div>
+                <div v-if="selectedCreditUser" class="user-picker-selected" id="creditUserSelected">
+                  {{ selectedCreditUser.name }} · {{ selectedCreditUser.phone }}
+                </div>
               </div>
             </div>
-          </article>
-          <p v-if="!visibleGenerations.length" class="muted">暂无生成内容。</p>
-        </div>
-      </section>
-    </template>
+            <label>
+              <span>增加额度</span>
+              <input
+                v-model="creditAmount"
+                type="number"
+                min="1"
+                step="1"
+                placeholder="例如 100"
+                data-test="credit-amount"
+                required
+              />
+            </label>
+            <label>
+              <span>备注</span>
+              <input v-model="creditNote" placeholder="例如：线下充值 / 活动赠送" data-test="credit-note" />
+            </label>
+            <button class="primary-btn" type="submit">确认加额度</button>
+          </form>
 
-    <div v-if="generationModalItem" class="admin-modal" @click.self="generationModalItem = null">
-      <div class="admin-modal-body">
-        <header class="admin-modal-header">
-          <h3>{{ generationModalItem.cardTitle || generationModalItem.ideaTitle || "生成内容详情" }}</h3>
-          <button type="button" class="secondary-btn" @click="generationModalItem = null">关闭</button>
-        </header>
-        <p class="muted">
-          {{ generationModalItem.user?.name || "-" }} {{ generationModalItem.user?.phone || "" }} ·
-          {{ generationModalItem.channelLabel || generationModalItem.type }} · {{ formatDate(generationModalItem.createdAt) }}
-        </p>
-        <p v-if="generationModalItem.brandName" class="muted">品牌：{{ generationModalItem.brandName }}</p>
-        <p v-if="generationModalItem.trendTitle" class="muted">选题：{{ generationModalItem.trendTitle }}</p>
-        <p v-if="generationModalItem.summary">{{ generationModalItem.summary }}</p>
-        <img
-          v-if="getGenerationPreview(generationModalItem)"
-          :src="getGenerationPreview(generationModalItem)"
-          alt=""
-          class="admin-modal-image"
-        />
-        <button type="button" class="danger-btn" @click="removeGeneration(generationModalItem.id)">删除这条生成内容</button>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>用户</th>
+                  <th>账号类型</th>
+                  <th>当前额度</th>
+                  <th>总消耗使用额度</th>
+                  <th>已加额度</th>
+                  <th>生成次数</th>
+                  <th>品牌数</th>
+                  <th>最近活跃</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody data-test="admin-user-rows">
+                <tr v-for="user in visibleUsers" :key="user.id" data-test="admin-user-row">
+                  <td>
+                    <div class="strong">{{ user.name }}</div>
+                    <div class="muted">{{ user.phone }}</div>
+                  </td>
+                  <td>
+                    <span class="badge">{{ accountTypeLabel(user) }}</span>
+                    <div v-if="user.department" class="muted">{{ user.department }}</div>
+                  </td>
+                  <td class="strong">{{ formatNumber(user.currentCredits) }}</td>
+                  <td class="token-negative">{{ formatNumber(user.consumedTokens) }}</td>
+                  <td class="token-positive">{{ formatNumber(user.grantedTokens) }}</td>
+                  <td>{{ formatNumber(user.generationCount) }}</td>
+                  <td>{{ formatNumber(user.brandCount) }}</td>
+                  <td>{{ formatDate(user.lastActiveAt || user.createdAt) }}</td>
+                  <td>
+                    <button type="button" class="danger-btn small-action" data-test="delete-user" @click="removeUser(user.id)">
+                      删除
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="!visibleUsers.length">
+                  <td colspan="9" class="muted">没有匹配的用户。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="brands">
+          <div class="panel-head">
+            <div>
+              <h2>品牌档案</h2>
+              <p>查看各个用户创建的品牌档案完整内容，包括品牌介绍、产品介绍、资料库、运营目标和 Logo 状态。</p>
+            </div>
+            <select v-model="brandUserId" class="compact-select">
+              <option value="all">全部用户</option>
+              <option v-for="user in users" :key="user.id" :value="String(user.id)">
+                {{ user.name }} · {{ user.phone }}
+              </option>
+            </select>
+          </div>
+          <div class="admin-brand-list">
+            <article v-for="brand in visibleBrands" :key="brand.id" class="admin-brand-card">
+              <div class="admin-brand-head">
+                <div>
+                  <h3>{{ brand.name }}</h3>
+                  <p class="muted">{{ brand.industry }} · {{ brand.audience }}</p>
+                </div>
+                <span class="badge">分析 {{ formatNumber(brand.analysisCount) }} 次 · 趋势 {{ formatNumber(brand.trendCount) }} 条</span>
+              </div>
+              <p v-if="brand.description" class="brand-description">{{ brand.description }}</p>
+              <p class="muted">
+                所属：{{ brand.user?.name || "-" }} {{ brand.user?.phone || "" }} · {{ formatDate(brand.createdAt) }}
+              </p>
+            </article>
+            <p v-if="!visibleBrands.length" class="muted">暂无品牌档案。</p>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="usage">
+          <div class="panel-head">
+            <div>
+              <h2>消耗流水</h2>
+              <p>记录每一次扣额度和管理员加额度操作。</p>
+            </div>
+            <select v-model="usageUserId" class="compact-select">
+              <option value="all">全部用户</option>
+              <option v-for="user in users" :key="user.id" :value="String(user.id)">
+                {{ user.name }} · {{ user.phone }}
+              </option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>用户</th>
+                  <th>动作</th>
+                  <th>使用额度</th>
+                  <th>关联内容</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="event in visibleUsageEvents" :key="event.id">
+                  <td>{{ formatDate(event.createdAt) }}</td>
+                  <td>
+                    <div class="strong">{{ event.userName || "-" }}</div>
+                    <div class="muted">{{ event.userPhone || "" }}</div>
+                  </td>
+                  <td>
+                    {{ event.actionLabel || event.actionType }}
+                    <div v-if="event.adminUserName" class="muted">操作人：{{ event.adminUserName }}</div>
+                  </td>
+                  <td :class="Number(event.tokenDelta || 0) < 0 ? 'token-negative' : 'token-positive'">
+                    {{ formatNumber(event.tokenDelta) }}
+                  </td>
+                  <td class="muted">{{ event.brandName || "" }} {{ event.ideaTitle || event.summary || "" }}</td>
+                </tr>
+                <tr v-if="!visibleUsageEvents.length">
+                  <td colspan="5" class="muted">暂无额度流水。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="generations">
+          <div class="panel-head">
+            <div>
+              <h2>生成内容</h2>
+              <p>查看每个用户生成了什么内容、对应品牌趋势和每次生成消耗。</p>
+            </div>
+            <select v-model="generationUserId" class="compact-select">
+              <option value="all">全部用户</option>
+              <option v-for="user in users" :key="user.id" :value="String(user.id)">
+                {{ user.name }} · {{ user.phone }}
+              </option>
+            </select>
+          </div>
+          <div class="generation-list">
+            <article v-for="item in visibleGenerations" :key="item.id" class="generation-card">
+              <div class="generation-preview">
+                <img v-if="getGenerationPreview(item)" :src="getGenerationPreview(item)" alt="" loading="lazy" decoding="async" />
+              </div>
+              <div class="generation-card-body">
+                <h3 class="generation-title">{{ item.cardTitle || item.ideaTitle || "生成内容" }}</h3>
+                <p class="generation-meta">
+                  <span class="badge">{{ item.channelLabel || item.type }}</span>
+                  <span class="muted">{{ item.user?.name || "-" }} {{ item.user?.phone || "" }}</span>
+                  <span class="muted">{{ formatDate(item.createdAt) }} · 消耗 {{ formatNumber(item.tokenCost) }}</span>
+                </p>
+                <div class="generation-actions">
+                  <button type="button" class="secondary-btn small-action" @click="generationModalItem = item">详情</button>
+                  <button type="button" class="danger-btn small-action" @click="removeGeneration(item.id)">删除</button>
+                </div>
+              </div>
+            </article>
+            <p v-if="!visibleGenerations.length" class="muted">暂无生成内容。</p>
+          </div>
+        </section>
+      </template>
+    </main>
+
+    <div v-if="generationModalItem" class="modal-mask is-open" @click.self="generationModalItem = null">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">生成内容详情</div>
+            <h2>{{ generationModalItem.cardTitle || generationModalItem.ideaTitle || "内容详情" }}</h2>
+          </div>
+          <button class="modal-close" type="button" @click="generationModalItem = null">×</button>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-block">
+            <h3>基本信息</h3>
+            <p>
+              {{ generationModalItem.user?.name || "-" }} {{ generationModalItem.user?.phone || "" }} ·
+              {{ generationModalItem.channelLabel || generationModalItem.type }} ·
+              {{ formatDate(generationModalItem.createdAt) }}
+            </p>
+            <p v-if="generationModalItem.brandName">品牌：{{ generationModalItem.brandName }}</p>
+            <p v-if="generationModalItem.trendTitle">选题：{{ generationModalItem.trendTitle }}</p>
+            <p v-if="generationModalItem.summary">{{ generationModalItem.summary }}</p>
+          </div>
+          <div v-if="getGenerationPreview(generationModalItem)" class="detail-block">
+            <h3>预览</h3>
+            <img :src="getGenerationPreview(generationModalItem)" alt="" class="detail-main-image" />
+          </div>
+        </div>
+        <div class="generation-actions">
+          <button type="button" class="danger-btn" @click="removeGeneration(generationModalItem.id)">删除这条生成内容</button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
+
 <style scoped>
-.admin-dashboard {
+/* 管理后台：与旧版 legacy 界面一致的左侧栏布局。 */
+.admin-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.admin-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 24px;
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.admin-header {
-  display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  padding: 26px 18px;
+  border-right: 1px solid var(--color-border);
+  background: #fbf8f6;
 }
 
-.admin-header h1 {
-  margin: 0;
-  font-size: 22px;
+.admin-logo {
+  display: block;
+  width: 218px;
+  height: auto;
+  margin-bottom: 22px;
 }
 
-.admin-subtitle {
-  margin: 4px 0 0;
-  color: var(--color-text-secondary);
-  font-size: 13px;
+.admin-nav {
+  display: grid;
+  gap: 6px;
 }
 
-.admin-header-actions {
+.admin-nav a {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 4px;
+  color: #4b4244;
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.admin-nav a:hover {
+  background: #f6e4df;
+  color: #b63b3b;
+}
+
+.admin-user-box {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.admin-main {
+  min-width: 0;
+  padding: 34px 34px 56px;
+}
+
+.admin-topbar,
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.admin-topbar h1 {
+  margin: 0;
+  font-size: 2.1rem;
+  letter-spacing: -0.04em;
+}
+
+.admin-topbar p,
+.panel-head p {
+  margin: 8px 0 0;
+  color: var(--color-text-secondary);
+  line-height: 1.7;
 }
 
 .admin-error {
@@ -534,80 +663,197 @@ onMounted(() => {
   font-size: 14px;
 }
 
-.admin-stats {
+.stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.stat-card,
+.admin-panel,
+.generation-card,
+.detail-block {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
 }
 
 .stat-card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 14px;
-  background: var(--color-surface);
+  padding: 18px;
 }
 
 .stat-label {
-  font-size: 12px;
   color: var(--color-text-secondary);
+  font-weight: 700;
 }
 
 .stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  margin-top: 4px;
+  margin-top: 8px;
+  font-size: 1.8rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
 }
 
 .admin-panel {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  margin-top: 18px;
+  padding: 22px;
 }
 
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.panel-header h2 {
+.admin-panel h2 {
   margin: 0;
-  font-size: 16px;
+  letter-spacing: -0.04em;
 }
 
-.panel-tools {
+.panel-actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.compact-search {
+  width: min(280px, 100%);
+  min-height: 44px;
+  background: var(--color-bg);
+}
+
+.search-result-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.credit-form {
+  display: grid;
+  grid-template-columns: 1.3fr 0.8fr 1.4fr auto;
+  align-items: end;
+  gap: 14px;
+  margin: 20px 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.credit-user-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.field-label {
+  font-weight: 800;
+}
+
+.user-picker {
+  position: relative;
+  display: grid;
   gap: 8px;
 }
 
-.panel-summary {
-  font-size: 12px;
-  color: var(--color-text-secondary);
+.user-picker-options {
+  position: absolute;
+  top: 48px;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 4px;
+  max-height: 268px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  box-shadow: 0 16px 32px rgba(58, 38, 38, 0.12);
 }
 
-.admin-table {
+.user-picker-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: #332c2e;
+  text-align: left;
+}
+
+.user-picker-option:hover,
+.user-picker-option:focus-visible {
+  background: var(--color-bg);
+  outline: none;
+}
+
+.user-picker-option strong {
+  font-size: 0.96rem;
+}
+
+.user-picker-selected {
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid rgba(216, 68, 68, 0.16);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: #4b4244;
+  font-size: 0.82rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-select {
+  width: min(260px, 100%);
+}
+
+.table-wrap {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  min-width: 900px;
 }
 
-.admin-table th,
-.admin-table td {
+th,
+td {
+  padding: 13px 14px;
   border-bottom: 1px solid var(--color-border);
-  padding: 8px;
   text-align: left;
   vertical-align: top;
 }
 
-.strong {
-  font-weight: 600;
+th {
+  background: var(--color-bg);
+  color: #3a3032;
+  font-size: 0.86rem;
+}
+
+td {
+  color: #332c2e;
+}
+
+tr:last-child td {
+  border-bottom: 0;
 }
 
 .muted {
@@ -615,194 +861,236 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.badge {
-  display: inline-block;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 12px;
+.strong {
+  font-weight: 900;
 }
 
 .token-negative {
-  color: #c0392b;
+  color: var(--color-danger);
+  font-weight: 900;
 }
 
 .token-positive {
-  color: #1e824c;
+  color: var(--color-success);
+  font-weight: 900;
 }
 
-.secondary-btn {
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #f6e4df;
+  color: #a63737;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.admin-brand-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.admin-brand-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
   border: 1px solid var(--color-border);
+  border-radius: 8px;
   background: var(--color-surface);
-  border-radius: var(--radius-md);
-  padding: 6px 12px;
-  font-size: 13px;
-  cursor: pointer;
 }
 
-.danger-btn {
-  border: 1px solid #c0392b;
-  color: #c0392b;
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  padding: 4px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.primary-btn {
-  background: var(--color-brand);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-md);
-  padding: 8px 16px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.credit-form {
+.admin-brand-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
   align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.credit-form input,
-.panel-tools input,
-.panel-header select {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
-  font-size: 13px;
-}
-
-.credit-user-picker {
-  position: relative;
-}
-
-.credit-user-options {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  margin: 4px 0 0;
-  padding: 4px;
-  list-style: none;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  max-height: 220px;
-  overflow: auto;
-}
-
-.credit-user-options button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: none;
-  padding: 6px 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.credit-user-options button:hover {
-  background: var(--color-bg);
-}
-
-.credit-selected {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  align-self: center;
-}
-
-.brand-list,
-.generation-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.brand-card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 12px;
-}
-
-.brand-card h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
+.admin-brand-head h3 {
+  margin: 0 0 6px;
+  font-size: 1.18rem;
 }
 
 .brand-description {
-  font-size: 13px;
-  margin: 4px 0;
+  margin: 0;
+  color: #5f5557;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.generation-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
 }
 
 .generation-card {
-  display: flex;
-  gap: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 12px;
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
 }
 
-.generation-card img {
-  width: 96px;
-  height: 96px;
+.generation-preview {
+  width: 128px;
+  aspect-ratio: 3 / 4;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.generation-preview img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  display: block;
 }
 
-.generation-card-body h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
+.generation-title {
+  margin: 0 0 8px;
+  font-size: 1.08rem;
+  line-height: 1.35;
 }
 
-.generation-card-actions {
+.generation-meta {
   display: flex;
   gap: 8px;
-  margin-top: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 
-.admin-modal {
+.generation-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 100;
+  padding: 28px;
+  background: rgba(34, 24, 24, 0.16);
+  backdrop-filter: blur(6px);
 }
 
-.admin-modal-body {
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  padding: 20px;
-  max-width: 640px;
-  max-height: 90vh;
+.modal-panel {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 56px);
   overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
 }
 
-.admin-modal-header {
+.modal-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  gap: 18px;
+  margin-bottom: 18px;
 }
 
-.admin-modal-header h3 {
-  margin: 0;
-  font-size: 16px;
+.modal-kicker {
+  color: #bb3f3f;
+  font-weight: 900;
+  margin-bottom: 6px;
 }
 
-.admin-modal-image {
-  max-width: 100%;
-  border-radius: var(--radius-md);
+.modal-close {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  font-size: 1.3rem;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.detail-block {
+  padding: 16px;
+  background: var(--color-bg);
+}
+
+.detail-block h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.detail-block p {
+  color: #4b4244;
+  line-height: 1.75;
+}
+
+.detail-main-image {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  display: block;
+}
+
+@media (max-width: 1180px) {
+  .admin-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: static;
+    height: auto;
+    gap: 18px;
+  }
+
+  .stats-grid,
+  .generation-list,
+  .detail-grid,
+  .credit-form {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-topbar,
+  .panel-head,
+  .panel-actions {
+    display: grid;
+  }
+
+  .panel-actions {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+
+  .compact-search {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-main,
+  .admin-sidebar {
+    padding: 20px;
+  }
+
+  .generation-card {
+    grid-template-columns: 1fr;
+  }
+
+  .generation-preview {
+    width: 100%;
+    max-height: 300px;
+  }
 }
 </style>
