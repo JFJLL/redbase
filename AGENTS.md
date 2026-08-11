@@ -34,12 +34,15 @@ npm run smoke:api
 
 ## Verification contract
 
-- `verification-policy.json` defines change risk and required verification lanes.
+- `verification-policy.json` is the risk-routing authority; `scripts/verify-change.ps1` is the deterministic execution authority.
+- Change scope is merge-base against `changeScope.baseRef` (origin/master); uncommitted, committed, deleted, renamed, and untracked files all count.
 - After any runtime behavior change, run `$verify-change` or `pwsh -NoProfile -File scripts/verify-change.ps1`.
-- Completion requires `.verification/receipt.json` with `status: pass` and a fingerprint matching the current diff.
-- Do not skip failing tests, weaken assertions, or edit the receipt by hand.
+- Completion requires `.verification/receipt.json` with `schemaVersion: 2`, `status: pass`, and a `changeSetHash` matching the current change set (policy hash, runner hash, and evidence artifact hashes are bound to the receipt).
+- Do not skip failing tests, weaken assertions, hand-edit the receipt, or fabricate evidence.
+- Risk can only escalate: `-RiskFloor` may raise the computed risk, never lower it.
+- `agent-review` runs only when the plan requires it. Reviewers must be fresh-context and read-only; high/critical findings must be resolved before pass.
 - Kimi WebBridge is the browser acceptance gate. Reproducible defects become unit/API/domain/data regressions when practical; UI-only defects become named reusable Kimi cases.
-- Independent reviewers provide evidence and reproduction; the same reviewer does not approve its own fix.
+- When WebBridge is unavailable, record the lane as blocked and keep verification failed.
 - R3 work includes production-like smoke and rollback/recovery checks before release.
 
 ### Canonical commands

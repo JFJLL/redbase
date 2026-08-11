@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "changeSetHash": "",
+  "reviewRounds": 1,
+  "reviewer": {
+    "sessionId": "",
+    "freshContext": true,
+    "implementedFix": false
+  },
+  "axes": [
+    {
+      "axis": "standards",
+      "input": "repository standards, AGENTS.md, security and reliability invariants",
+      "report": ""
+    },
+    {
+      "axis": "spec",
+      "input": "original task/spec text",
+      "report": ""
+    }
+  ],
+  "dimensions": [],
+  "findings": [],
+  "decisionLedger": [],
+  "verdict": "pending"
+}

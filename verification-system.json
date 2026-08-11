@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "starterVersion": "2.0.0",
+  "policyVersion": 2,
+  "installedFiles": [
+    "verification-policy.json",
+    "scripts/verify-change.ps1",
+    "scripts/kimi-browser.ps1",
+    "templates/kimi-browser-qa.md",
+    "templates/agent-review.json"
+  ]
+}
