@@ -49,6 +49,18 @@ export function fetchOrder(outTradeNo: string, signal?: AbortSignal): Promise<{ 
   return apiFetch<{ order: PaymentOrder }>(`/api/payments/orders/${encodeURIComponent(outTradeNo)}`, { signal });
 }
 
+export function fetchPayLink(outTradeNo: string): Promise<CreateOrderResponse> {
+  return apiFetch<CreateOrderResponse>(`/api/payments/alipay/orders/${encodeURIComponent(outTradeNo)}/pay-link`, {
+    method: "POST",
+  });
+}
+
+export function checkPaymentStatus(outTradeNo: string): Promise<{ order: PaymentOrder }> {
+  return apiFetch<{ order: PaymentOrder }>(`/api/payments/alipay/orders/${encodeURIComponent(outTradeNo)}/check`, {
+    method: "POST",
+  });
+}
+
 export function closeOrder(outTradeNo: string): Promise<{ order: PaymentOrder }> {
   return apiFetch<{ order: PaymentOrder }>(`/api/payments/alipay/orders/${encodeURIComponent(outTradeNo)}/close`, {
     method: "POST",

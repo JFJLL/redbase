@@ -473,6 +473,129 @@ test("fake settle page settles through the same notify path", async () => {
   assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "paid");
 });
 
+test("owned pending orders can refresh their pay link and actively reconcile payment status", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const orderRes = await createOrder("redbase_session=token-a", `idem-active-check-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+
+  const payLink = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/pay-link`, {
+    cookie: "redbase_session=token-a",
+    body: {},
+  });
+  assert.equal(payLink.statusCode, 200);
+  assert.match(JSON.parse(payLink.body).payUrl, /^http/);
+
+  const foreignPayLink = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/pay-link`, {
+    cookie: "redbase_session=token-b",
+    body: {},
+  });
+  assert.equal(foreignPayLink.statusCode, 404);
+
+  const foreignCheck = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
+    cookie: "redbase_session=token-b",
+    body: {},
+  });
+  assert.equal(foreignCheck.statusCode, 404);
+
+  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: `CHECK${Date.now()}`, totalAmount: "0.01" });
+  const creditsBefore = Number(findUserByPhone("13900000001").credits);
+  const checked = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
+    cookie: "redbase_session=token-a",
+    body: {},
+  });
+
+  assert.equal(checked.statusCode, 200);
+  assert.equal(JSON.parse(checked.body).order.status, "paid");
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+
+  const checkedAgain = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
+    cookie: "redbase_session=token-a",
+    body: {},
+  });
+  assert.equal(checkedAgain.statusCode, 200);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+});
+
+test("P0: paid-on-close rejects missing identity or a wrong amount", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const originalCloseTrade = gateway.closeTrade.bind(gateway);
+  const runCase = async (suffix, closeResult) => {
+    const orderRes = await createOrder("redbase_session=token-a", `idem-close-unsafe-${suffix}-${Date.now()}`);
+    const order = JSON.parse(orderRes.body).order;
+    gateway.closeTrade = async () => closeResult(order);
+    const creditsBefore = Number(findUserByPhone("13900000001").credits);
+    const closeRes = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/close`, {
+      cookie: "redbase_session=token-a",
+      body: {},
+    });
+    assert.equal(closeRes.statusCode, 502);
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
+    assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore);
+  };
+  try {
+    await runCase("amount", (order) => ({
+      alreadyPaid: true,
+      outTradeNo: order.outTradeNo,
+      tradeNo: `BADAMOUNT${Date.now()}`,
+      totalAmount: "9.99",
+    }));
+    await runCase("identity", () => ({ alreadyPaid: true, tradeNo: "", totalAmount: "0.01" }));
+  } finally {
+    gateway.closeTrade = originalCloseTrade;
+  }
+});
+
+test("active reconciliation rejects a same-amount response for a different order", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const orderRes = await createOrder("redbase_session=token-a", `idem-active-mismatch-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+  const originalQueryOrder = gateway.queryOrder.bind(gateway);
+  gateway.queryOrder = async () => ({
+    data: {
+      out_trade_no: "redbase_different_order",
+      trade_no: `MISMATCH${Date.now()}`,
+      trade_status: "TRADE_SUCCESS",
+      total_amount: "0.01",
+    },
+  });
+  const creditsBefore = Number(findUserByPhone("13900000001").credits);
+  try {
+    const checked = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
+      cookie: "redbase_session=token-a",
+      body: {},
+    });
+    assert.equal(checked.statusCode, 502);
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
+    assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore);
+  } finally {
+    gateway.queryOrder = originalQueryOrder;
+  }
+});
+
+test("active reconciliation reports provider amount and status anomalies", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const originalQueryOrder = gateway.queryOrder.bind(gateway);
+  const runCase = async (suffix, data) => {
+    const orderRes = await createOrder("redbase_session=token-a", `idem-active-anomaly-${suffix}-${Date.now()}`);
+    const order = JSON.parse(orderRes.body).order;
+    gateway.queryOrder = async () => ({ data: { out_trade_no: order.outTradeNo, ...data } });
+    const creditsBefore = Number(findUserByPhone("13900000001").credits);
+    const checked = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
+      cookie: "redbase_session=token-a",
+      body: {},
+    });
+    assert.equal(checked.statusCode, 502);
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
+    assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore);
+  };
+  try {
+    await runCase("amount", { trade_no: `AMOUNT${Date.now()}`, trade_status: "TRADE_SUCCESS", total_amount: "9.99" });
+    await runCase("status", { trade_no: `STATUS${Date.now()}`, trade_status: "TRADE_SUSPICIOUS", total_amount: "0.01" });
+  } finally {
+    gateway.queryOrder = originalQueryOrder;
+  }
+});
+
 test("processAlipayNotify returns failure for unknown trade status", () => {
   const gateway = getAlipayProvider(appConfig);
   const result = processAlipayNotify({

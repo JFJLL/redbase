@@ -5,6 +5,7 @@ const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
 const { getAlipayProvider } = require("../integrations/alipay");
 const { fenToYuanString } = require("../billing/money");
+const { reconcileOne } = require("../billing/reconcile-orders");
 const {
   insertPaymentOrder,
   updatePaymentOrderStatus,
@@ -287,6 +288,71 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     return true;
   }
 
+  if (req.method === "POST" && pathname.startsWith("/api/payments/alipay/orders/") && pathname.endsWith("/pay-link")) {
+    const user = requireSqlAuth(req, res, scope);
+    if (!user) return true;
+    const outTradeNo = decodeURIComponent(pathname.slice("/api/payments/alipay/orders/".length, -"/pay-link".length));
+    const order = findPaymentOrderByOutTradeNo(outTradeNo);
+    if (!order || order.userId !== user.id) {
+      json(res, 404, { error: "订单不存在" });
+      return true;
+    }
+    if (!isOrderPayable(order)) {
+      badRequest(res, "当前订单不能继续支付");
+      return true;
+    }
+    const gateway = getAlipayProvider(appConfig);
+    if (!gateway) {
+      json(res, 503, { error: "充值服务未配置" });
+      return true;
+    }
+    const payUrl = gateway.createPayUrl({
+      outTradeNo: order.outTradeNo,
+      subject: `RedBase ${order.planName}`,
+      totalAmount: fenToYuanString(order.amountFen),
+      returnUrl: appConfig?.alipay?.returnUrl || "",
+      notifyUrl: appConfig?.alipay?.notifyUrl || "",
+    });
+    json(res, 200, { order: sanitizeOrder(order), payUrl });
+    return true;
+  }
+
+  if (req.method === "POST" && pathname.startsWith("/api/payments/alipay/orders/") && pathname.endsWith("/check")) {
+    const user = requireSqlAuth(req, res, scope);
+    if (!user) return true;
+    const outTradeNo = decodeURIComponent(pathname.slice("/api/payments/alipay/orders/".length, -"/check".length));
+    let order = findPaymentOrderByOutTradeNo(outTradeNo);
+    if (!order || order.userId !== user.id) {
+      json(res, 404, { error: "订单不存在" });
+      return true;
+    }
+    if (isOrderPayable(order)) {
+      const gateway = getAlipayProvider(appConfig);
+      if (!gateway) {
+        json(res, 503, { error: "充值服务未配置" });
+        return true;
+      }
+      try {
+        const outcome = await reconcileOne(order, gateway, { nowIso: new Date().toISOString() });
+        if (outcome === "failed" || outcome === "unknown" || outcome === "audit") {
+          console.warn("[alipay] active order check returned an unsafe outcome", { outTradeNo, outcome });
+          json(res, 502, { error: "支付状态异常，请稍后重试或联系客服" });
+          return true;
+        }
+      } catch (error) {
+        console.warn("[alipay] active order check failed", {
+          outTradeNo,
+          error: String(error?.message || error),
+        });
+        json(res, 502, { error: "支付状态查询失败，请稍后重试" });
+        return true;
+      }
+      order = findPaymentOrderByOutTradeNo(outTradeNo);
+    }
+    json(res, 200, { order: sanitizeOrder(order) });
+    return true;
+  }
+
   if (req.method === "POST" && pathname.startsWith("/api/payments/alipay/orders/") && pathname.endsWith("/close")) {
     const user = requireSqlAuth(req, res, scope);
     if (!user) return true;
@@ -317,10 +383,21 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
     if (closeResult?.alreadyPaid) {
+      const identityMismatch =
+        String(closeResult.outTradeNo || "") !== String(outTradeNo) ||
+        !closeResult.tradeNo ||
+        String(closeResult.totalAmount || "") !== fenToYuanString(existing.amountFen) ||
+        (closeResult.appId && gateway.appId && String(closeResult.appId) !== String(gateway.appId)) ||
+        (closeResult.sellerId && gateway.sellerId && String(closeResult.sellerId) !== String(gateway.sellerId));
+      if (identityMismatch) {
+        console.warn("[alipay] paid-on-close identity mismatch", { outTradeNo });
+        json(res, 502, { error: "订单支付状态异常，请稍后重试或联系客服" });
+        return true;
+      }
       const nowIso = new Date().toISOString();
       const settled = settlePaidPaymentOrder({
         outTradeNo,
-        tradeNo: String(closeResult.tradeNo || `FAKE${Date.now()}`),
+        tradeNo: String(closeResult.tradeNo),
         nowIso,
       });
       json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
@@ -379,3 +456,7 @@ module.exports = {
   sanitizeOrder,
   createOutTradeNo,
 };
+
+function isOrderPayable(order) {
+  return order?.status === "created" || order?.status === "pending";
+}

@@ -56,8 +56,11 @@ function parseCloseTradeResult(data) {
     return {
       alreadyPaid: true,
       tradeStatus,
+      outTradeNo: String(source.out_trade_no ?? source.outTradeNo ?? ""),
       tradeNo: String(source.trade_no ?? source.tradeNo ?? ""),
       totalAmount: String(source.total_amount ?? source.totalAmount ?? ""),
+      appId: String(source.app_id ?? source.appId ?? ""),
+      sellerId: String(source.seller_id ?? source.sellerId ?? ""),
     };
   }
   if (tradeStatus === "TRADE_CLOSED") {
@@ -112,8 +115,11 @@ class FakeAlipayProvider {
       return {
         alreadyPaid: true,
         tradeStatus: existing.tradeStatus,
+        outTradeNo: String(existing.outTradeNo || outTradeNo || ""),
         tradeNo: String(existing.tradeNo || ""),
         totalAmount: String(existing.totalAmount || ""),
+        appId: String(existing.appId || this.appId || ""),
+        sellerId: String(existing.sellerId || this.sellerId || ""),
       };
     }
     this.payments.set(String(outTradeNo || ""), {
