@@ -80,6 +80,9 @@ describe("RechargeView", () => {
   });
 
   it("creates an Alipay order and reveals the pay link plus fake settle actions in test mode", async () => {
+    const qrDataUrl = "data:image/png;base64,cXItY29kZQ==";
+    const qrcode = await import("qrcode");
+    vi.spyOn(qrcode.default, "toDataURL").mockImplementation(async () => qrDataUrl);
     const fetchMock = stubFetch({
       "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: true }),
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
@@ -107,6 +110,8 @@ describe("RechargeView", () => {
       "https://pay.example/?out_trade_no=redbase_order123",
     );
     expect(wrapper.find("[data-test=payment-screen]").exists()).toBe(true);
+    await flushPromises();
+    expect(wrapper.find("[data-test=payment-qrcode]").attributes("src")).toBe(qrDataUrl);
   });
 
   it("renders the paid status for settled orders", async () => {
@@ -158,6 +163,26 @@ describe("RechargeView", () => {
 
     expect(router.currentRoute.value.query.view).toBe("detail");
     expect(wrapper.find("[data-test=paid-order-detail]").exists()).toBe(true);
+  });
+
+  it("clears payment errors after returning to the recharge center", async () => {
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
+      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
+        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123" }),
+      "POST /api/payments/alipay/orders/redbase_order123/check": () =>
+        jsonResponse(502, { error: "支付状态查询失败，请稍后重试" }),
+    });
+    const { wrapper } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
+    await wrapper.find("[data-test=check-payment-status]").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("[role=alert]").exists()).toBe(true);
+    await wrapper.find(".billing-back").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("[role=alert]").exists()).toBe(false);
+    expect(wrapper.find(".billing-safe-note").exists()).toBe(false);
   });
 
   it("highlights the business plan selected from the account center", async () => {

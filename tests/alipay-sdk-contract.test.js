@@ -28,21 +28,27 @@ function makeRealProvider() {
 
 test("queryOrder normalizes the SDK camelCase response to the wire contract", async () => {
   const provider = makeRealProvider();
+  let receivedMethod = "";
+  let receivedParams = null;
   provider.sdk = {
-    curl: async () => ({
-      data: {
-        outTradeNo: "redbase_query_camel_1",
-        tradeNo: "CAMEL_TRADE_NO",
-        tradeStatus: "TRADE_SUCCESS",
-        totalAmount: "0.01",
-      },
+    exec: async (method, params) => {
+      receivedMethod = method;
+      receivedParams = params;
+      return {
+      outTradeNo: "redbase_query_camel_1",
+      tradeNo: "CAMEL_TRADE_NO",
+      tradeStatus: "TRADE_SUCCESS",
+      totalAmount: "0.01",
       responseHttpStatus: 200,
       traceId: "trace-camel",
-    }),
+      };
+    },
   };
 
   const result = await provider.queryOrder("redbase_query_camel_1");
 
+  assert.equal(receivedMethod, "alipay.trade.query");
+  assert.deepEqual(receivedParams, { bizContent: { out_trade_no: "redbase_query_camel_1" } });
   assert.equal(result.data.out_trade_no, "redbase_query_camel_1");
   assert.equal(result.data.trade_no, "CAMEL_TRADE_NO");
   assert.equal(result.data.trade_status, "TRADE_SUCCESS");
@@ -130,13 +136,11 @@ test("P3: an expired order paid in the real camelCase SDK shape is settled by re
 
   const provider = makeRealProvider();
   provider.sdk = {
-    curl: async () => ({
-      data: {
-        outTradeNo: "redbase_real_camel_expired_paid",
-        tradeNo: "REAL_CAMEL_PAID",
-        tradeStatus: "TRADE_SUCCESS",
-        totalAmount: "0.01",
-      },
+    exec: async () => ({
+      outTradeNo: "redbase_real_camel_expired_paid",
+      tradeNo: "REAL_CAMEL_PAID",
+      tradeStatus: "TRADE_SUCCESS",
+      totalAmount: "0.01",
       responseHttpStatus: 200,
       traceId: "trace-real",
     }),

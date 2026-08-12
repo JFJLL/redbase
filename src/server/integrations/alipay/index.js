@@ -216,10 +216,14 @@ class RealAlipayProvider {
   }
 
   async queryOrder(outTradeNo) {
-    const result = await this.getSdk().curl("POST", "/v3/alipay/trade/query", {
-      body: { out_trade_no: outTradeNo },
+    const result = await this.getSdk().exec("alipay.trade.query", {
+      bizContent: { out_trade_no: outTradeNo },
     });
-    return { ...result, data: normalizeAlipayQueryData(result?.data) };
+    return {
+      data: normalizeAlipayQueryData(result || {}),
+      responseHttpStatus: result?.responseHttpStatus || 200,
+      traceId: result?.traceId || "",
+    };
   }
 
   async closeTrade(outTradeNo) {

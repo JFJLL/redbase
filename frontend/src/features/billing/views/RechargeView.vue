@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import QRCode from "qrcode";
 import {
   checkPaymentStatus,
   closeOrder,
@@ -20,6 +21,7 @@ const plans = ref<RechargePlan[]>([]);
 const orders = ref<PaymentOrder[]>([]);
 const activeOrder = ref<PaymentOrder | null>(null);
 const payUrl = ref("");
+const payQrCode = ref("");
 const fakeSettle = ref(false);
 const loadingPlans = ref(true);
 const loadingOrders = ref(false);
@@ -55,6 +57,11 @@ onMounted(async () => {
 });
 
 watch(() => `${activeView.value}:${routeOrderNo.value}`, loadRouteOrder);
+watch(payUrl, async (value) => {
+  payQrCode.value = value
+    ? await QRCode.toDataURL(value, { width: 248, margin: 1, errorCorrectionLevel: "M", color: { dark: "#111827", light: "#ffffff" } })
+    : "";
+});
 
 onBeforeUnmount(stopPolling);
 
@@ -92,7 +99,9 @@ async function loadRouteOrder(): Promise<void> {
   stopPolling();
   activeOrder.value = null;
   payUrl.value = "";
+  payQrCode.value = "";
   statusMessage.value = "";
+  errorMessage.value = "";
   checkingStatus.value = false;
   closingOrderNo.value = "";
   if (!requestedOrderNo || (requestedView !== "pay" && requestedView !== "detail")) return;
@@ -234,7 +243,9 @@ async function backToBilling(): Promise<void> {
   stopPolling();
   activeOrder.value = null;
   payUrl.value = "";
+  payQrCode.value = "";
   statusMessage.value = "";
+  errorMessage.value = "";
   await router.push({ name: "billing" });
 }
 
@@ -289,7 +300,6 @@ function formatDate(value: string): string {
         <header class="payment-brandbar">
           <span class="alipay-mark">支</span>
           <div><strong>支付宝</strong><small>ALIPAY</small></div>
-          <span class="payment-secure">安全收银台</span>
         </header>
         <div class="payment-grid">
           <div class="payment-summary">
@@ -302,8 +312,9 @@ function formatDate(value: string): string {
             <p>将在新窗口打开支付宝电脑网站。完成支付后，请返回本页检测支付状态。</p>
           </div>
           <div class="payment-check-panel">
-            <div class="payment-visual" aria-hidden="true"><span>支</span></div>
-            <strong>请在支付宝完成付款</strong>
+            <img v-if="payQrCode" class="payment-qrcode" :src="payQrCode" alt="支付宝付款二维码" data-test="payment-qrcode" />
+            <div v-else class="payment-qr-loading" role="status">正在生成付款二维码...</div>
+            <strong>请使用支付宝扫码付款</strong>
             <small>系统同时接收支付宝异步通知；你也可以主动检测。</small>
             <button type="button" class="payment-check" :disabled="checkingStatus" data-test="check-payment-status" @click="handleCheckPayment">
               {{ checkingStatus ? "检测中..." : "↻ 检测支付状态" }}
@@ -324,7 +335,7 @@ function formatDate(value: string): string {
         <div class="paid-check">✓</div>
         <h1>支付完成</h1>
         <p>订单已支付并完成积分入账</p>
-        <button type="button" class="primary-btn" @click="backToBilling">返回充值中心</button>
+        <button type="button" class="success-return-btn" @click="backToBilling">返回充值中心</button>
       </section>
 
       <div class="order-detail-layout" :class="{ 'order-detail-layout--paid': isPaidDetail }">
@@ -356,7 +367,6 @@ function formatDate(value: string): string {
     <template v-else>
       <div class="billing-head">
         <div><span class="billing-kicker">Credits</span><h1 class="billing-title">积分充值</h1><p class="billing-subtitle">选择适合你的积分套餐，通过支付宝安全支付，到账后立即可用。</p></div>
-        <div class="billing-safe-note"><span>✓</span><div><strong>安全支付</strong><small>服务端验签 · 幂等入账</small></div></div>
       </div>
 
       <div v-if="loadingPlans" class="billing-loading" role="status">正在加载套餐...</div>
@@ -389,17 +399,16 @@ function formatDate(value: string): string {
 .billing-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:4px 0 8px}
 .billing-kicker{display:block;margin-bottom:6px;color:var(--workspace-brand);font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
 .billing-title{margin:0;font-family:var(--workspace-font-heading);font-size:2rem;letter-spacing:-.04em}.billing-subtitle{margin:9px 0 0;color:var(--workspace-text-muted);font-size:14px;line-height:1.7}
-.billing-safe-note{display:flex;align-items:center;gap:10px;padding:12px 16px;border:1px solid rgba(216,68,68,.12);border-radius:12px;background:#fff}.billing-safe-note>span{display:grid;width:32px;height:32px;place-items:center;border-radius:50%;background:#eaf7ef;color:#18864b;font-weight:900}.billing-safe-note div{display:grid;gap:2px}.billing-safe-note small{color:var(--workspace-text-muted)}
 .billing-alert{margin:0 0 16px;padding:12px 15px;border:1px solid #f0d9a4;border-radius:10px;background:#fffaf0;color:#805a13}.billing-alert--error{border-color:#f4c8c8;background:#fff5f5;color:#a43b3b}
 .billing-loading,.billing-empty{margin-top:24px;padding:48px;border:1px solid var(--workspace-border);border-radius:14px;background:#fff;text-align:center}
 .billing-plans-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,320px));gap:18px;margin-top:28px}.billing-plan-card{position:relative;padding:24px;border:1px solid var(--workspace-border);border-radius:16px;background:#fff;box-shadow:0 8px 28px rgba(91,67,67,.05);transition:.18s ease}.billing-plan-card:hover,.billing-plan-card--selected{border-color:rgba(216,68,68,.42);box-shadow:0 14px 32px rgba(138,68,68,.1);transform:translateY(-2px)}
 .billing-plan-selected{position:absolute;top:16px;right:16px;padding:5px 9px;border-radius:999px;background:#fff0ed;color:var(--workspace-brand);font-size:11px;font-weight:800}.billing-plan-icon{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:#f7e8e4;color:var(--workspace-brand);font-weight:900}.billing-plan-card h2{margin:18px 0 0;font-size:18px}.billing-plan-credits{margin:10px 0 0;color:var(--workspace-brand-ink)}.billing-plan-credits strong{font-size:22px}.billing-plan-price{margin:14px 0 20px;font-size:26px;font-weight:800;letter-spacing:-.03em}.billing-plan-price span{margin-right:2px;font-size:15px}.billing-plan-action{width:100%;min-height:42px;border-radius:10px}
 .billing-orders{margin-top:52px}.billing-orders-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px}.billing-orders-head h2{margin:0;font-size:22px}.billing-refresh{min-height:38px;padding:0 14px;border:1px solid var(--workspace-border);border-radius:9px;background:#fff;color:var(--workspace-text);font:inherit;font-weight:700;cursor:pointer}
 .billing-table-wrap{width:100%;overflow:auto;border:1px solid var(--workspace-border);border-radius:14px;background:#fff}.billing-table{width:100%;min-width:900px;border-collapse:collapse}.billing-table th,.billing-table td{padding:15px 18px;border-bottom:1px solid #eee8e6;text-align:left;vertical-align:middle}.billing-table th{background:#faf7f5;color:#766d6f;font-size:12px;font-weight:800}.billing-table tbody tr:last-child td{border-bottom:0}.billing-table td{font-size:13px}.billing-table td:nth-child(2){display:grid;gap:3px}.billing-table td small{color:var(--workspace-text-muted)}.order-link,.text-action{padding:0;border:0;background:transparent;color:var(--workspace-brand-ink);font:inherit;font-weight:700;cursor:pointer}.status-dot{display:inline-flex;align-items:center;gap:7px}.status-dot:before{width:7px;height:7px;border-radius:50%;background:#9b9395;content:""}.status-dot[data-tone="pending"]:before{background:#e14e4e}.status-dot[data-tone="success"]:before{background:#24a565}.table-actions{display:flex;align-items:center;gap:12px;white-space:nowrap}.text-action--muted{color:#8e8587}.table-actions a{color:var(--workspace-brand-ink);font-weight:700;text-decoration:none}.billing-orders-empty{padding:32px;border:1px dashed var(--workspace-border);border-radius:12px;color:var(--workspace-text-muted);text-align:center}
-.payment-screen{overflow:hidden;border:1px solid #d9e0ec;border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(45,62,95,.12)}.payment-brandbar{display:flex;align-items:center;gap:13px;padding:20px 28px;background:linear-gradient(120deg,#3184f5,#1863d4);color:#fff}.alipay-mark{display:grid;width:52px;height:52px;place-items:center;border-radius:12px;background:#fff;color:#1684df;font-size:30px;font-weight:900}.payment-brandbar div{display:grid}.payment-brandbar strong{font-size:24px}.payment-brandbar small{font-size:11px;font-weight:800}.payment-secure{margin-left:auto;opacity:.82}.payment-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.8fr)}.payment-summary,.payment-check-panel{min-height:360px;padding:38px}.payment-summary{border-right:1px solid #e3e7ef}.payment-eyebrow{color:#8290a5;font-size:13px}.payment-amount{display:block;margin:8px 0 26px;font-size:40px;letter-spacing:-.04em}.payment-amount small{font-size:18px}.payment-actions{display:flex;gap:12px}.payment-primary,.payment-secondary,.payment-check{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;font:inherit;font-weight:800;cursor:pointer}.payment-primary{background:#1672df;color:#fff;text-decoration:none}.payment-secondary,.payment-check{border:1px solid #dce2ec;background:#f8faff;color:#253044}.payment-summary p{max-width:480px;margin-top:30px;color:#657086;line-height:1.7}.payment-check-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.payment-visual{display:grid;width:136px;height:136px;place-items:center;margin-bottom:20px;border-radius:28px;background:linear-gradient(145deg,#eaf5ff,#cde7ff);box-shadow:inset 0 0 0 12px #f8fbff}.payment-visual span{display:grid;width:84px;height:84px;place-items:center;border-radius:20px;background:#1684df;color:#fff;font-size:52px;font-weight:900}.payment-check-panel>strong{font-size:20px}.payment-check-panel>small{margin:9px 0 20px;color:#7c8799}.payment-meta{display:grid;grid-template-columns:.7fr 1fr .7fr 2fr;gap:18px;padding:18px 28px;border-top:1px solid #e3e7ef;background:#fbfcff}.payment-meta span{display:grid;gap:4px}.payment-meta small{color:#8792a4}.payment-meta b{overflow-wrap:anywhere}
-.paid-success{display:flex;flex-direction:column;align-items:center;padding:48px 24px;margin-bottom:20px;border:1px solid var(--workspace-border);border-radius:16px;background:#fff;text-align:center}.paid-check{display:grid;width:86px;height:86px;place-items:center;border-radius:50%;background:#2fb61e;color:#fff;font-size:52px;font-weight:900}.paid-success h1{margin:20px 0 4px}.paid-success p{margin:0 0 22px;color:var(--workspace-text-muted)}
+.payment-screen{overflow:hidden;border:1px solid #d9e0ec;border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(45,62,95,.12)}.payment-brandbar{display:flex;align-items:center;gap:13px;padding:20px 28px;background:linear-gradient(120deg,#3184f5,#1863d4);color:#fff}.alipay-mark{display:grid;width:52px;height:52px;place-items:center;border-radius:12px;background:#fff;color:#1684df;font-size:30px;font-weight:900}.payment-brandbar div{display:grid}.payment-brandbar strong{font-size:24px}.payment-brandbar small{font-size:11px;font-weight:800}.payment-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.8fr)}.payment-summary,.payment-check-panel{min-height:360px;padding:38px}.payment-summary{border-right:1px solid #e3e7ef}.payment-eyebrow{color:#8290a5;font-size:13px}.payment-amount{display:block;margin:8px 0 26px;font-size:40px;letter-spacing:-.04em}.payment-amount small{font-size:18px}.payment-actions{display:flex;gap:12px}.payment-primary,.payment-secondary,.payment-check{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;font:inherit;font-weight:800;cursor:pointer}.payment-primary{background:#1672df;color:#fff;text-decoration:none}.payment-secondary,.payment-check{border:1px solid #dce2ec;background:#f8faff;color:#253044}.payment-summary p{max-width:480px;margin-top:30px;color:#657086;line-height:1.7}.payment-check-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.payment-qrcode{width:248px;max-width:100%;height:auto;margin-bottom:18px;border:10px solid #fff;border-radius:12px;box-shadow:0 10px 30px rgba(36,71,118,.12)}.payment-qr-loading{display:grid;width:248px;max-width:100%;min-height:248px;place-items:center;margin-bottom:18px;border-radius:12px;background:#f5f8fc;color:#7c8799}.payment-check-panel>strong{font-size:20px}.payment-check-panel>small{margin:9px 0 20px;color:#7c8799}.payment-meta{display:grid;grid-template-columns:.7fr 1fr .7fr 2fr;gap:18px;padding:18px 28px;border-top:1px solid #e3e7ef;background:#fbfcff}.payment-meta span{display:grid;gap:4px}.payment-meta small{color:#8792a4}.payment-meta b{overflow-wrap:anywhere}
+.paid-success{display:flex;flex-direction:column;align-items:center;padding:48px 24px;margin-bottom:20px;border:1px solid var(--workspace-border);border-radius:16px;background:#fff;text-align:center}.paid-check{display:grid;width:86px;height:86px;place-items:center;border-radius:50%;background:#2fb61e;color:#fff;font-size:52px;font-weight:900}.paid-success h1{margin:20px 0 4px}.paid-success p{margin:0 0 22px;color:var(--workspace-text-muted)}.success-return-btn{min-height:42px;padding:0 20px;border:1px solid rgba(216,68,68,.18);border-radius:10px;background:#d84444;color:#fff;font:inherit;font-weight:800;box-shadow:0 8px 20px rgba(216,68,68,.18);cursor:pointer}.success-return-btn:hover{background:#c83b3b;transform:translateY(-1px)}
 .order-detail-layout{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(320px,.8fr);gap:20px}.order-detail-layout--paid{grid-template-columns:1fr}.order-detail-main{display:grid;gap:16px}.detail-card{padding:24px;border:1px solid var(--workspace-border);border-radius:14px;background:#fff}.detail-card h2,.detail-checkout h2{margin:0 0 22px;font-size:18px}.detail-card-head{display:flex;align-items:center;justify-content:space-between}.detail-card dl{display:grid;grid-template-columns:150px 1fr;gap:12px;margin:0}.detail-card dt{color:#92909a}.detail-card dd{margin:0;overflow-wrap:anywhere}.danger-btn{padding:8px 14px;border:0;border-radius:999px;background:#d84444;color:#fff;font:inherit;font-weight:700;cursor:pointer}.detail-payment-method{display:grid;gap:10px}.alipay-inline{display:flex;align-items:center;gap:10px}.alipay-inline b{display:grid;width:34px;height:34px;place-items:center;border-radius:8px;background:#1684df;color:#fff}.detail-checkout{align-self:start;padding:24px;border-radius:14px;background:#222c3b;color:#fff}.detail-checkout>div{display:flex;justify-content:space-between;margin-bottom:38px}.detail-checkout>small{color:#94a0b2}.detail-checkout>strong{display:block;margin:6px 0 18px;font-size:30px}.checkout-btn{width:100%;min-height:42px;border:0;border-radius:8px;background:#1672df;color:#fff;font:inherit;font-weight:800;cursor:pointer}
 .detail-checkout{min-width:0;overflow:hidden}.detail-checkout>div{gap:12px}.detail-checkout>div span{min-width:0;overflow-wrap:anywhere}.detail-total{display:flex!important;flex-wrap:wrap;align-items:baseline;gap:0 8px;font-size:clamp(24px,7vw,30px)!important}.detail-total small{font-size:.55em}.checkout-btn{padding:0 12px;white-space:normal}
-@media(max-width:900px){.billing-head{display:grid}.billing-safe-note{width:fit-content}.billing-plans-grid{grid-template-columns:1fr}.payment-grid,.order-detail-layout{grid-template-columns:1fr}.payment-summary{border-right:0;border-bottom:1px solid #e3e7ef}.payment-meta{grid-template-columns:1fr 1fr}.detail-checkout{order:-1}}
+@media(max-width:900px){.billing-head{display:grid}.billing-plans-grid{grid-template-columns:1fr}.payment-grid,.order-detail-layout{grid-template-columns:1fr}.payment-summary{border-right:0;border-bottom:1px solid #e3e7ef}.payment-meta{grid-template-columns:1fr 1fr}.detail-checkout{order:-1}}
 @media(max-width:600px){.payment-summary,.payment-check-panel{min-height:auto;padding:26px 20px}.payment-actions{display:grid}.payment-meta{grid-template-columns:1fr}.detail-card{padding:19px}.detail-card dl{grid-template-columns:1fr;gap:5px}.detail-card dd{margin-bottom:10px}.billing-table-wrap{border-radius:10px}}
 </style>
