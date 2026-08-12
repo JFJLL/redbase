@@ -55,6 +55,49 @@ test("queryOrder normalizes the SDK camelCase response to the wire contract", as
   assert.equal(result.data.total_amount, "0.01");
 });
 
+test("createQrCode returns the official Alipay precreate QR payload", async () => {
+  const provider = makeRealProvider();
+  let receivedMethod = "";
+  let receivedParams = null;
+  provider.sdk = {
+    exec: async (method, params) => {
+      receivedMethod = method;
+      receivedParams = params;
+      return { code: "10000", qrCode: "https://qr.alipay.com/official-code" };
+    },
+  };
+
+  const qrCode = await provider.createQrCode({
+    outTradeNo: "redbase_precreate_1",
+    subject: "RedBase 单月版",
+    totalAmount: "3500.00",
+    notifyUrl: "https://api.red-magic.cn/api/payments/alipay/notify",
+  });
+
+  assert.equal(receivedMethod, "alipay.trade.precreate");
+  assert.deepEqual(receivedParams, {
+    notify_url: "https://api.red-magic.cn/api/payments/alipay/notify",
+    bizContent: {
+      out_trade_no: "redbase_precreate_1",
+      subject: "RedBase 单月版",
+      total_amount: "3500.00",
+    },
+  });
+  assert.equal(qrCode, "https://qr.alipay.com/official-code");
+});
+
+test("createQrCode rejects a failed or empty precreate response", async () => {
+  const provider = makeRealProvider();
+  provider.sdk = {
+    exec: async () => ({ code: "40004", subMsg: "商户未开通当面付" }),
+  };
+
+  await assert.rejects(
+    () => provider.createQrCode({ outTradeNo: "redbase_precreate_error", subject: "套餐", totalAmount: "0.01" }),
+    /支付宝扫码支付创建失败：商户未开通当面付/,
+  );
+});
+
 test("V3 close success response with only out_trade_no/trade_no is accepted as closed", async () => {
   const provider = makeRealProvider();
   provider.sdk = {

@@ -28,6 +28,8 @@ export interface RechargePlansResponse {
 export interface CreateOrderResponse {
   order: PaymentOrder;
   payUrl: string;
+  qrCode: string;
+  qrCodeError?: string;
 }
 
 export function fetchRechargePlans(signal?: AbortSignal): Promise<RechargePlansResponse> {

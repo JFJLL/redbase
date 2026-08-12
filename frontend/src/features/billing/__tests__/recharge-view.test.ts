@@ -88,9 +88,9 @@ describe("RechargeView", () => {
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
       "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
       "POST /api/payments/alipay/orders": () =>
-        jsonResponse(201, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123" }),
+        jsonResponse(201, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
       "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
-        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123" }),
+        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
     });
     const { wrapper, router } = await mountView();
 
@@ -112,6 +112,8 @@ describe("RechargeView", () => {
     expect(wrapper.find("[data-test=payment-screen]").exists()).toBe(true);
     await flushPromises();
     expect(wrapper.find("[data-test=payment-qrcode]").attributes("src")).toBe(qrDataUrl);
+    expect(qrcode.default.toDataURL).toHaveBeenCalledWith("https://qr.alipay.test/redbase_order123", expect.any(Object));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/pay-link"))).toHaveLength(0);
   });
 
   it("renders the paid status for settled orders", async () => {
@@ -148,7 +150,7 @@ describe("RechargeView", () => {
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
       "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: currentOrder }),
       "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
-        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123" }),
+        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
       "POST /api/payments/alipay/orders/redbase_order123/check": () => {
         currentOrder = paidOrder;
         return jsonResponse(200, { order: paidOrder });
@@ -165,13 +167,56 @@ describe("RechargeView", () => {
     expect(wrapper.find("[data-test=paid-order-detail]").exists()).toBe(true);
   });
 
+  it("shows the PC payment fallback when Alipay precreate is unavailable", async () => {
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
+      "POST /api/payments/alipay/orders": () => jsonResponse(201, {
+        order: PENDING_ORDER,
+        payUrl: "https://pay.example/redbase_order123",
+        qrCode: "",
+        qrCodeError: "支付宝扫码支付暂不可用，请点击“打开支付宝付款”完成支付。",
+      }),
+    });
+    const { wrapper } = await mountView();
+
+    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test=payment-qrcode]").exists()).toBe(false);
+    expect(wrapper.find(".payment-qr-error").text()).toContain("扫码支付暂不可用");
+    expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe("https://pay.example/redbase_order123");
+  });
+
+  it("allows only one order creation while a request is in flight", async () => {
+    const secondPlan = { id: "p2", name: "套餐二", credits: 20, amountYuan: "0.02" };
+    let resolveCreate: ((response: Response) => void) | undefined;
+    const pendingCreate = new Promise<Response>((resolve) => { resolveCreate = resolve; });
+    const fetchMock = stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN, secondPlan], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
+      "POST /api/payments/alipay/orders": () => pendingCreate as unknown as Response,
+    });
+    const { wrapper } = await mountView();
+    const buttons = wrapper.findAll("[data-test=recharge-plan] button");
+
+    await buttons[0].trigger("click");
+    await buttons[1].trigger("click");
+
+    expect(buttons.every((button) => button.attributes("disabled") !== undefined)).toBe(true);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/payments/alipay/orders")).toHaveLength(1);
+    resolveCreate?.(jsonResponse(500, { error: "结束测试请求" }));
+    await flushPromises();
+  });
+
   it("clears payment errors after returning to the recharge center", async () => {
     stubFetch({
       "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
       "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
       "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
-        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123" }),
+        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
       "POST /api/payments/alipay/orders/redbase_order123/check": () =>
         jsonResponse(502, { error: "支付状态查询失败，请稍后重试" }),
     });
@@ -220,13 +265,13 @@ describe("RechargeView", () => {
       "GET /api/payments/orders/redbase_order456": () => jsonResponse(200, { order: orderB }),
       "POST /api/payments/alipay/orders/redbase_order123/pay-link": () => orderALink as unknown as Response,
       "POST /api/payments/alipay/orders/redbase_order456/pay-link": () =>
-        jsonResponse(200, { order: orderB, payUrl: "https://pay.example/order-b" }),
+        jsonResponse(200, { order: orderB, payUrl: "https://pay.example/order-b", qrCode: "https://qr.alipay.test/order-b" }),
     });
 
     const { wrapper, router } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
     await router.push("/billing?view=pay&outTradeNo=redbase_order456");
     await flushPromises();
-    resolveOrderALink?.(jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/order-a" }));
+    resolveOrderALink?.(jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/order-a", qrCode: "https://qr.alipay.test/order-a" }));
     await flushPromises();
 
     expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_order456");

@@ -41,6 +41,24 @@ function sanitizeOrder(order) {
   };
 }
 
+async function createPaymentAccess({ gateway, outTradeNo, subject, totalAmount, returnUrl, notifyUrl }) {
+  const payUrl = gateway.createPayUrl({ outTradeNo, subject, totalAmount, returnUrl, notifyUrl });
+  try {
+    const qrCode = await gateway.createQrCode({ outTradeNo, subject, totalAmount, notifyUrl });
+    return { payUrl, qrCode, qrCodeError: "" };
+  } catch (error) {
+    console.warn("[alipay] precreate failed", {
+      outTradeNo,
+      error: String(error?.message || error),
+    });
+    return {
+      payUrl,
+      qrCode: "",
+      qrCodeError: "支付宝扫码支付暂不可用，请点击“打开支付宝付款”完成支付。",
+    };
+  }
+}
+
 function collectRawBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -197,14 +215,15 @@ async function handlePaymentRoutes(context, req, res, pathname) {
 
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
-      const payUrl = gateway.createPayUrl({
+      const paymentAccess = await createPaymentAccess({
+        gateway,
         outTradeNo: existing.outTradeNo,
         subject: `RedBase ${existing.planName}`,
         totalAmount: fenToYuanString(existing.amountFen),
         returnUrl: appConfig?.alipay?.returnUrl || "",
         notifyUrl: appConfig?.alipay?.notifyUrl || "",
       });
-      json(res, 200, { order: sanitizeOrder(existing), payUrl });
+      json(res, 200, { order: sanitizeOrder(existing), ...paymentAccess });
       return true;
     }
 
@@ -220,7 +239,8 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       nowIso,
       expiresAtIso,
     });
-    const payUrl = gateway.createPayUrl({
+    const paymentAccess = await createPaymentAccess({
+      gateway,
       outTradeNo,
       subject: `RedBase ${plan.name}`,
       totalAmount: fenToYuanString(plan.amountFen),
@@ -228,7 +248,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       notifyUrl: appConfig?.alipay?.notifyUrl || "",
     });
     updatePaymentOrderStatus({ outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(outTradeNo)), payUrl });
+    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(outTradeNo)), ...paymentAccess });
     return true;
   }
 
@@ -306,14 +326,15 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 503, { error: "充值服务未配置" });
       return true;
     }
-    const payUrl = gateway.createPayUrl({
+    const paymentAccess = await createPaymentAccess({
+      gateway,
       outTradeNo: order.outTradeNo,
       subject: `RedBase ${order.planName}`,
       totalAmount: fenToYuanString(order.amountFen),
       returnUrl: appConfig?.alipay?.returnUrl || "",
       notifyUrl: appConfig?.alipay?.notifyUrl || "",
     });
-    json(res, 200, { order: sanitizeOrder(order), payUrl });
+    json(res, 200, { order: sanitizeOrder(order), ...paymentAccess });
     return true;
   }
 

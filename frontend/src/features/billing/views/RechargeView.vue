@@ -11,6 +11,7 @@ import {
   fetchOrders,
   fetchPayLink,
   fetchRechargePlans,
+  type CreateOrderResponse,
   type PaymentOrder,
   type RechargePlan,
 } from "../api";
@@ -21,6 +22,8 @@ const plans = ref<RechargePlan[]>([]);
 const orders = ref<PaymentOrder[]>([]);
 const activeOrder = ref<PaymentOrder | null>(null);
 const payUrl = ref("");
+const qrCodeContent = ref("");
+const qrCodeError = ref("");
 const payQrCode = ref("");
 const fakeSettle = ref(false);
 const loadingPlans = ref(true);
@@ -36,6 +39,8 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let routeLoadVersion = 0;
 let checkRequestVersion = 0;
 let closeRequestVersion = 0;
+let qrRenderVersion = 0;
+let pendingPaymentAccess: CreateOrderResponse | null = null;
 
 const selectedPlanId = computed(() => (typeof route.query.plan === "string" ? route.query.plan : ""));
 const activeView = computed(() => (typeof route.query.view === "string" ? route.query.view : "list"));
@@ -57,10 +62,12 @@ onMounted(async () => {
 });
 
 watch(() => `${activeView.value}:${routeOrderNo.value}`, loadRouteOrder);
-watch(payUrl, async (value) => {
-  payQrCode.value = value
+watch(qrCodeContent, async (value) => {
+  const renderVersion = ++qrRenderVersion;
+  const rendered = value
     ? await QRCode.toDataURL(value, { width: 248, margin: 1, errorCorrectionLevel: "M", color: { dark: "#111827", light: "#ffffff" } })
     : "";
+  if (renderVersion === qrRenderVersion) payQrCode.value = rendered;
 });
 
 onBeforeUnmount(stopPolling);
@@ -99,6 +106,8 @@ async function loadRouteOrder(): Promise<void> {
   stopPolling();
   activeOrder.value = null;
   payUrl.value = "";
+  qrCodeContent.value = "";
+  qrCodeError.value = "";
   payQrCode.value = "";
   statusMessage.value = "";
   errorMessage.value = "";
@@ -112,9 +121,15 @@ async function loadRouteOrder(): Promise<void> {
     if (!isCurrentRouteLoad(loadVersion, requestedView, requestedOrderNo)) return;
     activeOrder.value = data.order;
     if (requestedView === "pay" && isOpenOrder(data.order)) {
-      const payData = await fetchPayLink(data.order.outTradeNo);
+      const cachedPaymentAccess = pendingPaymentAccess?.order.outTradeNo === data.order.outTradeNo
+        ? pendingPaymentAccess
+        : null;
+      pendingPaymentAccess = null;
+      const payData = cachedPaymentAccess || await fetchPayLink(data.order.outTradeNo);
       if (!isCurrentRouteLoad(loadVersion, requestedView, requestedOrderNo)) return;
       payUrl.value = payData.payUrl;
+      qrCodeContent.value = payData.qrCode;
+      qrCodeError.value = payData.qrCodeError || "";
       startPolling(data.order.outTradeNo);
     }
   } catch (error) {
@@ -129,6 +144,7 @@ function isCurrentRouteLoad(version: number, view: string, outTradeNo: string): 
 }
 
 async function handleCreateOrder(plan: RechargePlan): Promise<void> {
+  if (creatingPlanId.value) return;
   creatingPlanId.value = plan.id;
   errorMessage.value = "";
   statusMessage.value = "";
@@ -136,10 +152,9 @@ async function handleCreateOrder(plan: RechargePlan): Promise<void> {
     const idempotencyKey = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `order-${Date.now()}`;
     const data = await createAlipayOrder(plan.id, idempotencyKey);
     activeOrder.value = data.order;
-    payUrl.value = data.payUrl;
+    pendingPaymentAccess = data;
     await loadOrders();
     await router.push({ name: "billing", query: { view: "pay", outTradeNo: data.order.outTradeNo } });
-    startPolling(data.order.outTradeNo);
   } catch (error) {
     setError(error);
   } finally {
@@ -243,6 +258,8 @@ async function backToBilling(): Promise<void> {
   stopPolling();
   activeOrder.value = null;
   payUrl.value = "";
+  qrCodeContent.value = "";
+  qrCodeError.value = "";
   payQrCode.value = "";
   statusMessage.value = "";
   errorMessage.value = "";
@@ -313,8 +330,8 @@ function formatDate(value: string): string {
           </div>
           <div class="payment-check-panel">
             <img v-if="payQrCode" class="payment-qrcode" :src="payQrCode" alt="支付宝付款二维码" data-test="payment-qrcode" />
-            <div v-else class="payment-qr-loading" role="status">正在生成付款二维码...</div>
-            <strong>请使用支付宝扫码付款</strong>
+            <div v-else class="payment-qr-loading" :class="{ 'payment-qr-error': qrCodeError }" role="status">{{ qrCodeError || "正在生成付款二维码..." }}</div>
+            <strong>{{ qrCodeError ? "请使用支付宝网页付款" : "请使用支付宝扫码付款" }}</strong>
             <small>系统同时接收支付宝异步通知；你也可以主动检测。</small>
             <button type="button" class="payment-check" :disabled="checkingStatus" data-test="check-payment-status" @click="handleCheckPayment">
               {{ checkingStatus ? "检测中..." : "↻ 检测支付状态" }}
@@ -352,7 +369,7 @@ function formatDate(value: string): string {
             <dl><dt>订单号</dt><dd>{{ activeOrder.outTradeNo }}</dd><dt>创建时间</dt><dd>{{ formatDate(activeOrder.createdAt) }}</dd><template v-if="activeOrder.paidAt"><dt>支付时间</dt><dd>{{ formatDate(activeOrder.paidAt) }}</dd></template></dl>
           </section>
           <section v-if="isOpenOrder(activeOrder)" class="detail-card detail-payment-method">
-            <h2>支付方式</h2><span class="alipay-inline"><b>支</b> 支付宝电脑网站支付</span>
+            <h2>支付方式</h2><span class="alipay-inline"><b>支</b> 支付宝支付</span>
           </section>
         </div>
         <aside v-if="isOpenOrder(activeOrder)" class="detail-checkout">
@@ -376,7 +393,7 @@ function formatDate(value: string): string {
           <span v-if="plan.id === selectedPlanId" class="billing-plan-selected" data-test="selected-plan-label">推荐选择</span>
           <div class="billing-plan-icon">{{ plan.id.includes("annual") ? "年" : "月" }}</div>
           <h2>{{ plan.name }}</h2><p class="billing-plan-credits"><strong>{{ plan.credits }}</strong> 积分</p><p class="billing-plan-price"><span>¥</span>{{ plan.amountYuan }}</p>
-          <button type="button" class="primary-btn billing-plan-action" :disabled="creatingPlanId === plan.id" @click="handleCreateOrder(plan)">{{ creatingPlanId === plan.id ? "正在创建订单..." : "立即充值" }}</button>
+          <button type="button" class="primary-btn billing-plan-action" :disabled="Boolean(creatingPlanId)" @click="handleCreateOrder(plan)">{{ creatingPlanId === plan.id ? "正在创建订单..." : "立即充值" }}</button>
         </article>
       </div>
 
@@ -405,7 +422,8 @@ function formatDate(value: string): string {
 .billing-plan-selected{position:absolute;top:16px;right:16px;padding:5px 9px;border-radius:999px;background:#fff0ed;color:var(--workspace-brand);font-size:11px;font-weight:800}.billing-plan-icon{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:#f7e8e4;color:var(--workspace-brand);font-weight:900}.billing-plan-card h2{margin:18px 0 0;font-size:18px}.billing-plan-credits{margin:10px 0 0;color:var(--workspace-brand-ink)}.billing-plan-credits strong{font-size:22px}.billing-plan-price{margin:14px 0 20px;font-size:26px;font-weight:800;letter-spacing:-.03em}.billing-plan-price span{margin-right:2px;font-size:15px}.billing-plan-action{width:100%;min-height:42px;border-radius:10px}
 .billing-orders{margin-top:52px}.billing-orders-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px}.billing-orders-head h2{margin:0;font-size:22px}.billing-refresh{min-height:38px;padding:0 14px;border:1px solid var(--workspace-border);border-radius:9px;background:#fff;color:var(--workspace-text);font:inherit;font-weight:700;cursor:pointer}
 .billing-table-wrap{width:100%;overflow:auto;border:1px solid var(--workspace-border);border-radius:14px;background:#fff}.billing-table{width:100%;min-width:900px;border-collapse:collapse}.billing-table th,.billing-table td{padding:15px 18px;border-bottom:1px solid #eee8e6;text-align:left;vertical-align:middle}.billing-table th{background:#faf7f5;color:#766d6f;font-size:12px;font-weight:800}.billing-table tbody tr:last-child td{border-bottom:0}.billing-table td{font-size:13px}.billing-table td:nth-child(2){display:grid;gap:3px}.billing-table td small{color:var(--workspace-text-muted)}.order-link,.text-action{padding:0;border:0;background:transparent;color:var(--workspace-brand-ink);font:inherit;font-weight:700;cursor:pointer}.status-dot{display:inline-flex;align-items:center;gap:7px}.status-dot:before{width:7px;height:7px;border-radius:50%;background:#9b9395;content:""}.status-dot[data-tone="pending"]:before{background:#e14e4e}.status-dot[data-tone="success"]:before{background:#24a565}.table-actions{display:flex;align-items:center;gap:12px;white-space:nowrap}.text-action--muted{color:#8e8587}.table-actions a{color:var(--workspace-brand-ink);font-weight:700;text-decoration:none}.billing-orders-empty{padding:32px;border:1px dashed var(--workspace-border);border-radius:12px;color:var(--workspace-text-muted);text-align:center}
-.payment-screen{overflow:hidden;border:1px solid #d9e0ec;border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(45,62,95,.12)}.payment-brandbar{display:flex;align-items:center;gap:13px;padding:20px 28px;background:linear-gradient(120deg,#3184f5,#1863d4);color:#fff}.alipay-mark{display:grid;width:52px;height:52px;place-items:center;border-radius:12px;background:#fff;color:#1684df;font-size:30px;font-weight:900}.payment-brandbar div{display:grid}.payment-brandbar strong{font-size:24px}.payment-brandbar small{font-size:11px;font-weight:800}.payment-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.8fr)}.payment-summary,.payment-check-panel{min-height:360px;padding:38px}.payment-summary{border-right:1px solid #e3e7ef}.payment-eyebrow{color:#8290a5;font-size:13px}.payment-amount{display:block;margin:8px 0 26px;font-size:40px;letter-spacing:-.04em}.payment-amount small{font-size:18px}.payment-actions{display:flex;gap:12px}.payment-primary,.payment-secondary,.payment-check{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;font:inherit;font-weight:800;cursor:pointer}.payment-primary{background:#1672df;color:#fff;text-decoration:none}.payment-secondary,.payment-check{border:1px solid #dce2ec;background:#f8faff;color:#253044}.payment-summary p{max-width:480px;margin-top:30px;color:#657086;line-height:1.7}.payment-check-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.payment-qrcode{width:248px;max-width:100%;height:auto;margin-bottom:18px;border:10px solid #fff;border-radius:12px;box-shadow:0 10px 30px rgba(36,71,118,.12)}.payment-qr-loading{display:grid;width:248px;max-width:100%;min-height:248px;place-items:center;margin-bottom:18px;border-radius:12px;background:#f5f8fc;color:#7c8799}.payment-check-panel>strong{font-size:20px}.payment-check-panel>small{margin:9px 0 20px;color:#7c8799}.payment-meta{display:grid;grid-template-columns:.7fr 1fr .7fr 2fr;gap:18px;padding:18px 28px;border-top:1px solid #e3e7ef;background:#fbfcff}.payment-meta span{display:grid;gap:4px}.payment-meta small{color:#8792a4}.payment-meta b{overflow-wrap:anywhere}
+  .payment-screen{overflow:hidden;border:1px solid #d9e0ec;border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(45,62,95,.12)}.payment-brandbar{display:flex;align-items:center;gap:13px;padding:20px 28px;background:linear-gradient(120deg,#3184f5,#1863d4);color:#fff}.alipay-mark{display:grid;width:52px;height:52px;place-items:center;border-radius:12px;background:#fff;color:#1684df;font-size:30px;font-weight:900}.payment-brandbar div{display:grid}.payment-brandbar strong{font-size:24px}.payment-brandbar small{font-size:11px;font-weight:800}.payment-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.8fr)}.payment-summary,.payment-check-panel{min-height:360px;padding:38px}.payment-summary{border-right:1px solid #e3e7ef}.payment-eyebrow{color:#8290a5;font-size:13px}.payment-amount{display:block;margin:8px 0 26px;font-size:40px;letter-spacing:-.04em}.payment-amount small{font-size:18px}.payment-actions{display:flex;gap:12px}.payment-primary,.payment-secondary,.payment-check{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;font:inherit;font-weight:800;cursor:pointer}.payment-primary{background:#1672df;color:#fff;text-decoration:none}.payment-secondary,.payment-check{border:1px solid #dce2ec;background:#f8faff;color:#253044}.payment-summary p{max-width:480px;margin-top:30px;color:#657086;line-height:1.7}.payment-check-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.payment-qrcode{width:248px;max-width:100%;height:auto;margin-bottom:18px;border:10px solid #fff;border-radius:12px;box-shadow:0 10px 30px rgba(36,71,118,.12)}.payment-qr-loading{display:grid;width:248px;max-width:100%;min-height:248px;place-items:center;margin-bottom:18px;border-radius:12px;background:#f5f8fc;color:#7c8799}.payment-check-panel>strong{font-size:20px}.payment-check-panel>small{margin:9px 0 20px;color:#7c8799}.payment-meta{display:grid;grid-template-columns:.7fr 1fr .7fr 2fr;gap:18px;padding:18px 28px;border-top:1px solid #e3e7ef;background:#fbfcff}.payment-meta span{display:grid;gap:4px}.payment-meta small{color:#8792a4}.payment-meta b{overflow-wrap:anywhere}
+  .payment-qr-error{padding:20px;border:1px solid #f2c8c8;background:#fff6f6;color:#a43b3b;line-height:1.6}
 .paid-success{display:flex;flex-direction:column;align-items:center;padding:48px 24px;margin-bottom:20px;border:1px solid var(--workspace-border);border-radius:16px;background:#fff;text-align:center}.paid-check{display:grid;width:86px;height:86px;place-items:center;border-radius:50%;background:#2fb61e;color:#fff;font-size:52px;font-weight:900}.paid-success h1{margin:20px 0 4px}.paid-success p{margin:0 0 22px;color:var(--workspace-text-muted)}.success-return-btn{min-height:42px;padding:0 20px;border:1px solid rgba(216,68,68,.18);border-radius:10px;background:#d84444;color:#fff;font:inherit;font-weight:800;box-shadow:0 8px 20px rgba(216,68,68,.18);cursor:pointer}.success-return-btn:hover{background:#c83b3b;transform:translateY(-1px)}
 .order-detail-layout{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(320px,.8fr);gap:20px}.order-detail-layout--paid{grid-template-columns:1fr}.order-detail-main{display:grid;gap:16px}.detail-card{padding:24px;border:1px solid var(--workspace-border);border-radius:14px;background:#fff}.detail-card h2,.detail-checkout h2{margin:0 0 22px;font-size:18px}.detail-card-head{display:flex;align-items:center;justify-content:space-between}.detail-card dl{display:grid;grid-template-columns:150px 1fr;gap:12px;margin:0}.detail-card dt{color:#92909a}.detail-card dd{margin:0;overflow-wrap:anywhere}.danger-btn{padding:8px 14px;border:0;border-radius:999px;background:#d84444;color:#fff;font:inherit;font-weight:700;cursor:pointer}.detail-payment-method{display:grid;gap:10px}.alipay-inline{display:flex;align-items:center;gap:10px}.alipay-inline b{display:grid;width:34px;height:34px;place-items:center;border-radius:8px;background:#1684df;color:#fff}.detail-checkout{align-self:start;padding:24px;border-radius:14px;background:#222c3b;color:#fff}.detail-checkout>div{display:flex;justify-content:space-between;margin-bottom:38px}.detail-checkout>small{color:#94a0b2}.detail-checkout>strong{display:block;margin:6px 0 18px;font-size:30px}.checkout-btn{width:100%;min-height:42px;border:0;border-radius:8px;background:#1672df;color:#fff;font:inherit;font-weight:800;cursor:pointer}
 .detail-checkout{min-width:0;overflow:hidden}.detail-checkout>div{gap:12px}.detail-checkout>div span{min-width:0;overflow-wrap:anywhere}.detail-total{display:flex!important;flex-wrap:wrap;align-items:baseline;gap:0 8px;font-size:clamp(24px,7vw,30px)!important}.detail-total small{font-size:.55em}.checkout-btn{padding:0 12px;white-space:normal}

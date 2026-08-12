@@ -90,6 +90,10 @@ class FakeAlipayProvider {
     return `${origin}/api/payments/fake/alipay/pay?out_trade_no=${encodeURIComponent(outTradeNo)}`;
   }
 
+  async createQrCode({ outTradeNo }) {
+    return `https://qr.alipay.test/${encodeURIComponent(outTradeNo)}`;
+  }
+
   verifyNotify(params) {
     return safeTimingEqual(signFakeParams(params), params?.sign);
   }
@@ -209,6 +213,23 @@ class RealAlipayProvider {
       returnUrl,
       notifyUrl,
     });
+  }
+
+  async createQrCode({ outTradeNo, subject, totalAmount, notifyUrl }) {
+    const result = await this.getSdk().exec("alipay.trade.precreate", {
+      notify_url: notifyUrl,
+      bizContent: {
+        out_trade_no: outTradeNo,
+        subject,
+        total_amount: totalAmount,
+      },
+    });
+    const qrCode = String(result?.qr_code ?? result?.qrCode ?? "").trim();
+    if (String(result?.code || "10000") !== "10000" || !qrCode) {
+      const detail = String(result?.sub_msg || result?.subMsg || result?.msg || result?.code || "unknown");
+      throw new Error(`支付宝扫码支付创建失败：${detail}`);
+    }
+    return qrCode;
   }
 
   verifyNotify(params) {

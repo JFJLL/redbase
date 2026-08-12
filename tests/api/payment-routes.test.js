@@ -205,6 +205,8 @@ test("create order is idempotent and rejects unconfigured plans", async () => {
   const firstBody = JSON.parse(first.body);
   assert.equal(firstBody.order.status, "pending");
   assert.match(firstBody.payUrl, /^http/);
+  assert.equal(firstBody.qrCode, `https://qr.alipay.test/${firstBody.order.outTradeNo}`);
+  assert.equal(firstBody.qrCodeError, "");
   assert.equal(firstBody.order.amountYuan, "0.01");
 
   const replay = await createOrder("redbase_session=token-a", "idem-same-key-001");
@@ -216,6 +218,22 @@ test("create order is idempotent and rejects unconfigured plans", async () => {
     body: { planId: "nope", idempotencyKey: "idem-missing-plan" },
   });
   assert.equal(missingPlan.statusCode, 400);
+});
+
+test("precreate failure preserves the PC pay link and returns a clear QR fallback", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const originalCreateQrCode = gateway.createQrCode;
+  gateway.createQrCode = async () => { throw new Error("当前调用IP不在可信名单中"); };
+  try {
+    const response = await createOrder("redbase_session=token-a", `idem-precreate-fallback-${Date.now()}`);
+    assert.equal(response.statusCode, 201);
+    const body = JSON.parse(response.body);
+    assert.match(body.payUrl, /^http/);
+    assert.equal(body.qrCode, "");
+    assert.match(body.qrCodeError, /扫码支付暂不可用/);
+  } finally {
+    gateway.createQrCode = originalCreateQrCode;
+  }
 });
 
 test("rollback mode blocks new orders but keeps notify processing", async () => {
@@ -483,7 +501,9 @@ test("owned pending orders can refresh their pay link and actively reconcile pay
     body: {},
   });
   assert.equal(payLink.statusCode, 200);
-  assert.match(JSON.parse(payLink.body).payUrl, /^http/);
+  const payLinkBody = JSON.parse(payLink.body);
+  assert.match(payLinkBody.payUrl, /^http/);
+  assert.equal(payLinkBody.qrCode, `https://qr.alipay.test/${order.outTradeNo}`);
 
   const foreignPayLink = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/pay-link`, {
     cookie: "redbase_session=token-b",
