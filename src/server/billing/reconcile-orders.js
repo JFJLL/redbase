@@ -19,7 +19,24 @@ async function reconcileOne(order, gateway, options = {}) {
   const result = await gateway.queryOrder(order.outTradeNo);
   const data = result?.data || {};
   const tradeStatus = String(data.trade_status || "");
-  if (tradeStatus === "TRADE_SUCCESS" || tradeStatus === "TRADE_FINISHED") {
+  const isPaidAtProvider = tradeStatus === "TRADE_SUCCESS" || tradeStatus === "TRADE_FINISHED";
+  const responseAppId = String(data.app_id ?? data.appId ?? "");
+  const responseSellerId = String(data.seller_id ?? data.sellerId ?? "");
+  if (
+    (data.out_trade_no && String(data.out_trade_no) !== String(order.outTradeNo)) ||
+    (isPaidAtProvider && String(data.out_trade_no || "") !== String(order.outTradeNo)) ||
+    (responseAppId && gateway.appId && responseAppId !== String(gateway.appId)) ||
+    (responseSellerId && gateway.sellerId && responseSellerId !== String(gateway.sellerId))
+  ) {
+    console.warn("[reconcile] provider identity mismatch", {
+      outTradeNo: order.outTradeNo,
+      actualOutTradeNo: String(data.out_trade_no || ""),
+      appIdMatched: !responseAppId || !gateway.appId || responseAppId === String(gateway.appId),
+      sellerIdMatched: !responseSellerId || !gateway.sellerId || responseSellerId === String(gateway.sellerId),
+    });
+    return "failed";
+  }
+  if (isPaidAtProvider) {
     const expectedAmount = fenToYuanString(order.amountFen);
     if (String(data.total_amount || "") !== expectedAmount) {
       console.warn("[reconcile] amount mismatch", {

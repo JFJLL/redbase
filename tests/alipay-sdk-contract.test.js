@@ -87,8 +87,11 @@ test("closeTrade detects an already-paid transaction from camelCase status", asy
     curl: async () => ({
       data: {
         tradeStatus: "TRADE_SUCCESS",
+        outTradeNo: "redbase_close_paid",
         tradeNo: "ALREADY_PAID_CAMEL",
         totalAmount: "0.01",
+        appId: "app-camel",
+        sellerId: "seller-camel",
       },
       responseHttpStatus: 200,
       traceId: "trace-paid",
@@ -98,8 +101,11 @@ test("closeTrade detects an already-paid transaction from camelCase status", asy
   const result = await provider.closeTrade("redbase_close_paid");
 
   assert.equal(result.alreadyPaid, true);
+  assert.equal(result.outTradeNo, "redbase_close_paid");
   assert.equal(result.tradeNo, "ALREADY_PAID_CAMEL");
   assert.equal(result.totalAmount, "0.01");
+  assert.equal(result.appId, "app-camel");
+  assert.equal(result.sellerId, "seller-camel");
 });
 
 test("P3: an expired order paid in the real camelCase SDK shape is settled by reconciliation", async () => {

@@ -23,6 +23,7 @@ const templateTs = fs.readFileSync(path.join(root, "frontend", "src", "landing",
 const mainTs = fs.readFileSync(path.join(root, "frontend", "src", "landing", "main.ts"), "utf8");
 const landingCss = fs.readFileSync(path.join(root, "frontend", "src", "landing", "landing.css"), "utf8");
 const landingHtml = fs.readFileSync(path.join(root, "frontend", "index.html"), "utf8");
+const fallbackHtml = fs.readFileSync(path.join(root, "public", "index.html"), "utf8");
 
 test("commercial landing page preserves the required product story and sections", () => {
   assert.match(templateTs, /让品牌每天都知道[\s\S]*什么内容值得做/);
@@ -43,6 +44,16 @@ test("landing calls to action stay connected to the real application flows", () 
   assert.match(mainTs, /function bindLandingExperience\(/);
   assert.match(mainTs, /bindLandingExperience\(page\);/);
   assert.match(mainTs, /redirectAuthenticatedUser/);
+});
+
+test("built-source and tracked fallback agree on one-time business-plan credits", () => {
+  for (const source of [templateTs, fallbackHtml]) {
+    assert.match(source, /一次到账 1000 积分/);
+    assert.match(source, /一次到账 12000 积分/);
+    assert.doesNotMatch(source, /积分到期自动刷新|不会结转至下个月|每月 1000 积分/);
+  }
+  assert.match(fallbackHtml, /href="\/app\/billing\?plan=business-monthly"/);
+  assert.match(fallbackHtml, /href="\/app\/billing\?plan=business-annual"/);
 });
 
 test("landing media is local and desktop layout prevents horizontal overflow", () => {

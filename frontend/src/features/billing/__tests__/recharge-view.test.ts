@@ -60,8 +60,8 @@ describe("RechargeView", () => {
     vi.restoreAllMocks();
   });
 
-  async function mountView() {
-    const router = makeRouter();
+  async function mountView(initialPath = "/billing") {
+    const router = makeRouter(initialPath);
     await router.isReady();
     const wrapper = mount(RechargeView, { global: { plugins: [pinia, router] } });
     await flushPromises();
@@ -86,8 +86,10 @@ describe("RechargeView", () => {
       "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
       "POST /api/payments/alipay/orders": () =>
         jsonResponse(201, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123" }),
+      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
+        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123" }),
     });
-    const { wrapper } = await mountView();
+    const { wrapper, router } = await mountView();
 
     expect(wrapper.findAll("[data-test=recharge-plan]")).toHaveLength(1);
     expect(wrapper.findAll("[data-test=fake-settle-link]")).toHaveLength(1);
@@ -99,10 +101,12 @@ describe("RechargeView", () => {
     const body = JSON.parse(String((createCall![1] as RequestInit).body));
     expect(body.planId).toBe("p1");
     expect(String(body.idempotencyKey).length).toBeGreaterThanOrEqual(8);
+    expect(router.currentRoute.value.query.view).toBe("pay");
+    expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_order123");
     expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe(
       "https://pay.example/?out_trade_no=redbase_order123",
     );
-    expect(wrapper.find("[data-test=payment-order]").exists()).toBe(true);
+    expect(wrapper.find("[data-test=payment-screen]").exists()).toBe(true);
   });
 
   it("renders the paid status for settled orders", async () => {
@@ -113,7 +117,95 @@ describe("RechargeView", () => {
     });
     const { wrapper } = await mountView();
 
-    expect(wrapper.find("[data-test=payment-order] .billing-order-status").text()).toBe("已支付");
+    expect(wrapper.find("[data-test=payment-order] .status-dot").text()).toBe("已支付");
     expect(wrapper.findAll("[data-test=fake-settle-link]")).toHaveLength(0);
+  });
+
+  it("updates a list row immediately after cancelling a pending order", async () => {
+    const closedOrder = { ...PENDING_ORDER, status: "closed" };
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "POST /api/payments/alipay/orders/redbase_order123/close": () => jsonResponse(200, { order: closedOrder }),
+    });
+    const { wrapper } = await mountView();
+    await wrapper.find(".text-action--muted").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("[data-test=payment-order] .status-dot").text()).toBe("已关闭");
+    expect(wrapper.find(".text-action--muted").exists()).toBe(false);
+  });
+
+  it("checks provider status from the payment screen and renders the paid detail state", async () => {
+    const paidOrder = { ...PENDING_ORDER, status: "paid", paidAt: "2026-08-04T00:01:00.000Z" };
+    let currentOrder = PENDING_ORDER;
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: currentOrder }),
+      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
+        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123" }),
+      "POST /api/payments/alipay/orders/redbase_order123/check": () => {
+        currentOrder = paidOrder;
+        return jsonResponse(200, { order: paidOrder });
+      },
+    });
+
+    const { wrapper, router } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
+    expect(wrapper.find("[data-test=payment-screen]").exists()).toBe(true);
+
+    await wrapper.find("[data-test=check-payment-status]").trigger("click");
+    await flushPromises();
+
+    expect(router.currentRoute.value.query.view).toBe("detail");
+    expect(wrapper.find("[data-test=paid-order-detail]").exists()).toBe(true);
+  });
+
+  it("highlights the business plan selected from the account center", async () => {
+    const monthlyPlan = {
+      id: "business-monthly",
+      name: "单月版",
+      credits: 1000,
+      amountYuan: "3500.00",
+    };
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN, monthlyPlan], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
+    });
+
+    const { wrapper, router } = await mountView("/billing?plan=business-monthly");
+    const selected = wrapper.find('[data-plan-id="business-monthly"]');
+
+    expect(selected.classes()).toContain("billing-plan-card--selected");
+    expect(selected.find("[data-test=selected-plan-label]").text()).toBe("推荐选择");
+
+    await router.push("/billing?plan=p1");
+    await flushPromises();
+    expect(wrapper.find('[data-plan-id="p1"]').classes()).toContain("billing-plan-card--selected");
+    expect(wrapper.find('[data-plan-id="business-monthly"]').classes()).not.toContain("billing-plan-card--selected");
+  });
+
+  it("discards a stale payment-link response after switching to another order", async () => {
+    const orderB = { ...PENDING_ORDER, outTradeNo: "redbase_order456", planName: "套餐 B" };
+    let resolveOrderALink: ((response: Response) => void) | undefined;
+    const orderALink = new Promise<Response>((resolve) => { resolveOrderALink = resolve; });
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER, orderB] }),
+      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
+      "GET /api/payments/orders/redbase_order456": () => jsonResponse(200, { order: orderB }),
+      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () => orderALink as unknown as Response,
+      "POST /api/payments/alipay/orders/redbase_order456/pay-link": () =>
+        jsonResponse(200, { order: orderB, payUrl: "https://pay.example/order-b" }),
+    });
+
+    const { wrapper, router } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
+    await router.push("/billing?view=pay&outTradeNo=redbase_order456");
+    await flushPromises();
+    resolveOrderALink?.(jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/order-a" }));
+    await flushPromises();
+
+    expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_order456");
+    expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe("https://pay.example/order-b");
+    expect(wrapper.text()).toContain("套餐 B");
   });
 });

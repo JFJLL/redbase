@@ -138,6 +138,30 @@ describe("legacy workspace visual shell", () => {
     expect(wrapper.find(".account-modal-panel").exists()).toBe(true);
   });
 
+  it("routes business plan choices to the matching recharge plan", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            plans: [{ id: "business-monthly", name: "单月版", credits: 1000, amountYuan: "3500.00" }],
+            fakeSettle: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const { wrapper, router } = await mountWorkspace(false);
+
+    await wrapper.find(".workspace-user").trigger("click");
+    await wrapper.find('[data-test="business-plan-monthly"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".account-modal-panel").exists()).toBe(false);
+    expect(router.currentRoute.value.name).toBe("billing");
+    expect(router.currentRoute.value.query.plan).toBe("business-monthly");
+  });
+
   it("logs out through the auth store and returns to login", async () => {
     const { wrapper, router } = await mountWorkspace();
     const auth = useAuthStore();
