@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
   createAlipayOrder,
@@ -13,6 +13,7 @@ import {
 } from "../api";
 
 const route = useRoute();
+const selectedPlanId = computed(() => (typeof route.query.plan === "string" ? route.query.plan : ""));
 const plans = ref<RechargePlan[]>([]);
 const orders = ref<PaymentOrder[]>([]);
 const fakeSettle = ref(false);
@@ -152,7 +153,15 @@ function isOpenOrder(order: PaymentOrder): boolean {
     </div>
 
     <div v-else class="billing-plans-grid">
-      <article v-for="plan in plans" :key="plan.id" class="billing-plan-card" data-test="recharge-plan">
+      <article
+        v-for="plan in plans"
+        :key="plan.id"
+        class="billing-plan-card"
+        :class="{ 'billing-plan-card--selected': plan.id === selectedPlanId }"
+        :data-plan-id="plan.id"
+        data-test="recharge-plan"
+      >
+        <span v-if="plan.id === selectedPlanId" class="billing-plan-selected" data-test="selected-plan-label">已选择</span>
         <h2 class="billing-plan-name">{{ plan.name }}</h2>
         <p class="billing-plan-credits">{{ plan.credits }} 积分</p>
         <p class="billing-plan-price">¥{{ plan.amountYuan }}</p>
@@ -262,10 +271,28 @@ function isOpenOrder(order: PaymentOrder): boolean {
 }
 
 .billing-plan-card {
+  position: relative;
   padding: 20px;
   border: 1px solid var(--workspace-border);
   border-radius: var(--workspace-radius);
   background: var(--workspace-surface);
+}
+
+.billing-plan-card--selected {
+  border-color: var(--workspace-brand);
+  box-shadow: 0 10px 24px rgba(216, 68, 68, 0.12);
+}
+
+.billing-plan-selected {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #fff0ed;
+  color: var(--workspace-brand);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .billing-plan-name {

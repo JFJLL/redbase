@@ -60,8 +60,8 @@ describe("RechargeView", () => {
     vi.restoreAllMocks();
   });
 
-  async function mountView() {
-    const router = makeRouter();
+  async function mountView(initialPath = "/billing") {
+    const router = makeRouter(initialPath);
     await router.isReady();
     const wrapper = mount(RechargeView, { global: { plugins: [pinia, router] } });
     await flushPromises();
@@ -115,5 +115,29 @@ describe("RechargeView", () => {
 
     expect(wrapper.find("[data-test=payment-order] .billing-order-status").text()).toBe("已支付");
     expect(wrapper.findAll("[data-test=fake-settle-link]")).toHaveLength(0);
+  });
+
+  it("highlights the business plan selected from the account center", async () => {
+    const monthlyPlan = {
+      id: "business-monthly",
+      name: "单月版",
+      credits: 1000,
+      amountYuan: "3500.00",
+    };
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN, monthlyPlan], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
+    });
+
+    const { wrapper, router } = await mountView("/billing?plan=business-monthly");
+    const selected = wrapper.find('[data-plan-id="business-monthly"]');
+
+    expect(selected.classes()).toContain("billing-plan-card--selected");
+    expect(selected.find("[data-test=selected-plan-label]").text()).toBe("已选择");
+
+    await router.push("/billing?plan=p1");
+    await flushPromises();
+    expect(wrapper.find('[data-plan-id="p1"]').classes()).toContain("billing-plan-card--selected");
+    expect(wrapper.find('[data-plan-id="business-monthly"]').classes()).not.toContain("billing-plan-card--selected");
   });
 });

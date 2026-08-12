@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
-import { fetchRechargePlans } from "@/features/billing/api";
+import { fetchRechargePlans, type RechargePlan } from "@/features/billing/api";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 import RecoveredJobBanner from "@/features/generation/components/RecoveredJobBanner.vue";
 
@@ -13,7 +13,11 @@ const auth = useAuthStore();
 const recovery = useImageJobRecovery();
 const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
-const billingAvailable = ref(false);
+const rechargePlans = ref<RechargePlan[]>([]);
+const billingAvailable = computed(() => rechargePlans.value.length > 0);
+const businessPlans = computed(() =>
+  rechargePlans.value.filter((plan) => plan.id === "business-monthly" || plan.id === "business-annual"),
+);
 
 const navItems = [
   { name: "home", icon: "首", label: "首页" },
@@ -48,10 +52,10 @@ onMounted(() => {
   if (auth.isLoggedIn) recovery.start();
   fetchRechargePlans()
     .then((data) => {
-      billingAvailable.value = data.plans.length > 0;
+      rechargePlans.value = data.plans;
     })
     .catch(() => {
-      billingAvailable.value = false;
+      rechargePlans.value = [];
     });
 });
 
@@ -90,6 +94,28 @@ function openAccountCenter(): void {
 
 function closeAccountCenter(): void {
   accountCenterOpen.value = false;
+}
+
+async function selectBusinessPlan(planId: "business-monthly" | "business-annual"): Promise<void> {
+  closeAccountCenter();
+  await router.push({ name: "billing", query: { plan: planId } });
+}
+
+function businessPlanDescription(planId: string): string {
+  return planId === "business-annual" ? "年付更优惠" : "按月灵活接入";
+}
+
+function formatPlanAmount(amountYuan: string): string {
+  const amount = Number(amountYuan);
+  const fractionDigits = Number.isInteger(amount) ? 0 : 2;
+  return Number.isFinite(amount)
+    ? new Intl.NumberFormat("zh-CN", {
+        style: "currency",
+        currency: "CNY",
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits,
+      }).format(amount)
+    : `¥${amountYuan}`;
 }
 
 function handleDocumentKeydown(event: KeyboardEvent): void {
@@ -208,20 +234,25 @@ async function handleLogout() {
         <section class="account-business-plan" aria-label="定制专属增长方案">
           <h3>定制专属增长方案</h3>
           <div class="business-price-grid account-business-price-grid" aria-label="RedBase 企业报价">
-            <div class="business-price-item">
-              <span>单月版</span>
-              <strong>¥3,500</strong>
-              <small>按月灵活接入</small>
-              <small>每月 1000 积分</small>
-            </div>
-            <div class="business-price-item">
-              <span>包年版</span>
-              <strong>¥35,000</strong>
-              <small>年付更优惠</small>
-              <small>每月 1000 积分</small>
-            </div>
+            <button
+              v-for="plan in businessPlans"
+              :key="plan.id"
+              type="button"
+              class="business-price-item account-business-plan-action"
+              :data-test="`business-plan-${plan.id === 'business-annual' ? 'annual' : 'monthly'}`"
+              @click="selectBusinessPlan(plan.id as 'business-monthly' | 'business-annual')"
+            >
+              <span>{{ plan.name }}</span>
+              <strong>{{ formatPlanAmount(plan.amountYuan) }}</strong>
+              <small>{{ businessPlanDescription(plan.id) }}</small>
+              <small>一次到账 {{ plan.credits }} 积分</small>
+              <b>选择{{ plan.name }}</b>
+            </button>
           </div>
-          <p class="business-credit-note account-business-credit-note">两个版本均为每月 1000 积分；积分到期自动刷新，不会结转至下个月。</p>
+          <p v-if="businessPlans.length === 0" class="business-credit-note account-business-credit-note">
+            在线购买套餐暂未开放，请联系专属客服。
+          </p>
+          <p class="business-credit-note account-business-credit-note">购买后积分一次到账；付款前会在充值页再次确认套餐和金额。</p>
           <p class="account-business-contact">联系专属客服获取优惠价格</p>
           <a v-if="auth.isAdmin" class="account-admin-link" href="/admin/">进入管理后台</a>
         </section>

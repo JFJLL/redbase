@@ -501,6 +501,28 @@
   background: var(--workspace-surface-soft);
 }
 
+.workspace-layout .account-business-plan-action {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.workspace-layout .account-business-plan-action:hover,
+.workspace-layout .account-business-plan-action:focus-visible {
+  border-color: rgba(216, 68, 68, 0.42);
+  box-shadow: 0 8px 18px rgba(126, 55, 55, 0.1);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.workspace-layout .account-business-plan-action b {
+  margin-top: 5px;
+  color: var(--workspace-brand);
+  font-size: 0.78rem;
+}
+
 .workspace-layout .business-price-item span {
   color: #6b6265;
   font-size: 0.85rem;
