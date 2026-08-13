@@ -39,6 +39,34 @@ function normalizeAlipayQueryData(data) {
   };
 }
 
+function isAlipayTradeNotExistError(error) {
+  const source = error || {};
+  const responseData = source.response?.data || source.data || {};
+  const details = [
+    source.code,
+    source.subCode,
+    source.sub_code,
+    source.subMsg,
+    source.sub_msg,
+    source.msg,
+    source.message,
+    responseData.code,
+    responseData.subCode,
+    responseData.sub_code,
+    responseData.subMsg,
+    responseData.sub_msg,
+    responseData.msg,
+  ].map((value) => String(value || "")).join(" ");
+  return /ACQ\.TRADE_NOT_EXIST|交易不存在/i.test(details);
+}
+
+function alipayTradeNotExistError(error) {
+  const normalized = new Error("支付宝交易不存在");
+  normalized.code = "ALIPAY_TRADE_NOT_EXIST";
+  normalized.cause = error;
+  return normalized;
+}
+
 // V3 alipay.trade.close success returns only out_trade_no/trade_no (no
 // trade_status, no code=10000). Error responses carry code/sub_code/msg.
 function parseCloseTradeResult(data) {
@@ -237,20 +265,42 @@ class RealAlipayProvider {
   }
 
   async queryOrder(outTradeNo) {
-    const result = await this.getSdk().exec("alipay.trade.query", {
-      bizContent: { out_trade_no: outTradeNo },
-    });
+    let result;
+    try {
+      result = await this.getSdk().exec("alipay.trade.query", {
+        bizContent: { out_trade_no: outTradeNo },
+      });
+    } catch (error) {
+      if (isAlipayTradeNotExistError(error)) {
+        return { data: {}, notFound: true, responseHttpStatus: 200, traceId: String(error?.traceId || "") };
+      }
+      throw error;
+    }
+    if (isAlipayTradeNotExistError(result)) {
+      return { data: {}, notFound: true, responseHttpStatus: 200, traceId: String(result?.traceId || "") };
+    }
+    if (result?.code && String(result.code) !== "10000") {
+      throw new Error(`支付宝查询订单失败：${String(result.subMsg || result.sub_msg || result.msg || result.code)}`);
+    }
     return {
       data: normalizeAlipayQueryData(result || {}),
+      notFound: false,
       responseHttpStatus: result?.responseHttpStatus || 200,
       traceId: result?.traceId || "",
     };
   }
 
   async closeTrade(outTradeNo) {
-    const result = await this.getSdk().curl("POST", "/v3/alipay/trade/close", {
-      body: { out_trade_no: outTradeNo },
-    });
+    let result;
+    try {
+      result = await this.getSdk().curl("POST", "/v3/alipay/trade/close", {
+        body: { out_trade_no: outTradeNo },
+      });
+    } catch (error) {
+      if (isAlipayTradeNotExistError(error)) throw alipayTradeNotExistError(error);
+      throw error;
+    }
+    if (isAlipayTradeNotExistError(result?.data)) throw alipayTradeNotExistError(result?.data);
     return parseCloseTradeResult(result?.data);
   }
 }
@@ -286,6 +336,7 @@ module.exports = {
   RealAlipayProvider,
   normalizeAlipayQueryData,
   parseCloseTradeResult,
+  isAlipayTradeNotExistError,
   createAlipayProvider,
   getAlipayProvider,
   isFakeAllowed,

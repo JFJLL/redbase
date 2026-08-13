@@ -16,7 +16,7 @@ async function reconcileOne(order, gateway, options = {}) {
   const nowIso = String(options.nowIso || new Date().toISOString());
   const dryRun = Boolean(options.dryRun);
 
-  const result = await gateway.queryOrder(order.outTradeNo);
+  const result = options.queryResult || await gateway.queryOrder(order.outTradeNo);
   const data = result?.data || {};
   const tradeStatus = String(data.trade_status || "");
   const isPaidAtProvider = tradeStatus === "TRADE_SUCCESS" || tradeStatus === "TRADE_FINISHED";

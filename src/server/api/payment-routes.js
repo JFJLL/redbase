@@ -396,6 +396,53 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     try {
       closeResult = await gateway.closeTrade(outTradeNo);
     } catch (error) {
+      if (error?.code === "ALIPAY_TRADE_NOT_EXIST") {
+        let queryResult;
+        try {
+          queryResult = await gateway.queryOrder(outTradeNo);
+        } catch (queryError) {
+          console.warn("[alipay] close missing-trade confirmation failed", {
+            outTradeNo,
+            error: String(queryError?.message || queryError),
+          });
+          json(res, 502, { error: "关闭订单前确认支付状态失败，请稍后重试" });
+          return true;
+        }
+        if (queryResult?.notFound === true) {
+          const nowIso = new Date().toISOString();
+          const closed = closePaymentOrder({ userId: user.id, outTradeNo, nowIso });
+          const finalOrder = closed || findPaymentOrderByOutTradeNo(outTradeNo);
+          json(res, 200, { order: sanitizeOrder(finalOrder), providerTradeNotFound: true });
+          return true;
+        }
+        const tradeStatus = String(queryResult?.data?.trade_status || "");
+        if (tradeStatus === "TRADE_SUCCESS" || tradeStatus === "TRADE_FINISHED") {
+          let outcome;
+          try {
+            outcome = await reconcileOne(existing, gateway, {
+              nowIso: new Date().toISOString(),
+              queryResult,
+            });
+          } catch (reconcileError) {
+            console.warn("[alipay] close missing-trade reconciliation failed", {
+              outTradeNo,
+              error: String(reconcileError?.message || reconcileError),
+            });
+            json(res, 502, { error: "关闭订单前确认支付状态失败，请稍后重试" });
+            return true;
+          }
+          const currentOrder = findPaymentOrderByOutTradeNo(outTradeNo);
+          if (outcome === "paid") {
+            json(res, 200, { order: sanitizeOrder(currentOrder), reconciledOnClose: true });
+            return true;
+          }
+          json(res, 502, { error: "订单支付状态异常，请稍后重试或联系客服" });
+          return true;
+        }
+        const currentOrder = findPaymentOrderByOutTradeNo(outTradeNo);
+        json(res, 409, { error: "支付宝交易状态已变化，请刷新后重试", order: sanitizeOrder(currentOrder) });
+        return true;
+      }
       console.warn("[alipay] close failed", {
         outTradeNo,
         error: String(error?.message || error),

@@ -55,6 +55,20 @@ test("queryOrder normalizes the SDK camelCase response to the wire contract", as
   assert.equal(result.data.total_amount, "0.01");
 });
 
+test("queryOrder identifies an Alipay trade-not-exist response", async () => {
+  const provider = makeRealProvider();
+  provider.sdk = {
+    exec: async () => {
+      throw new Error("交易不存在 (traceId: query-not-found)");
+    },
+  };
+
+  const result = await provider.queryOrder("redbase_missing_query");
+
+  assert.equal(result.notFound, true);
+  assert.deepEqual(result.data, {});
+});
+
 test("createQrCode returns the official Alipay precreate QR payload", async () => {
   const provider = makeRealProvider();
   let receivedMethod = "";
@@ -118,7 +132,7 @@ test("closeTrade still rejects explicit error responses", async () => {
   const provider = makeRealProvider();
   provider.sdk = {
     curl: async () => ({
-      data: { code: "40004", sub_msg: "交易不存在" },
+      data: { code: "40004", sub_msg: "业务处理失败" },
       responseHttpStatus: 200,
       traceId: "trace-error",
     }),
@@ -127,6 +141,36 @@ test("closeTrade still rejects explicit error responses", async () => {
   await assert.rejects(
     () => provider.closeTrade("redbase_close_error"),
     /关闭订单失败/,
+  );
+});
+
+test("closeTrade classifies a resolved trade-not-exist response for safe confirmation", async () => {
+  const provider = makeRealProvider();
+  provider.sdk = {
+    curl: async () => ({
+      data: { code: "40004", sub_msg: "交易不存在" },
+      responseHttpStatus: 200,
+      traceId: "trace-resolved-not-found",
+    }),
+  };
+
+  await assert.rejects(
+    () => provider.closeTrade("redbase_resolved_missing_close"),
+    (error) => error?.code === "ALIPAY_TRADE_NOT_EXIST",
+  );
+});
+
+test("closeTrade classifies Alipay trade-not-exist errors for safe confirmation", async () => {
+  const provider = makeRealProvider();
+  provider.sdk = {
+    curl: async () => {
+      throw new Error("交易不存在 (traceId: close-not-found)");
+    },
+  };
+
+  await assert.rejects(
+    () => provider.closeTrade("redbase_missing_close"),
+    (error) => error?.code === "ALIPAY_TRADE_NOT_EXIST",
   );
 });
 

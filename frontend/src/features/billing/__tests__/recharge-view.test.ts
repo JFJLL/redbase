@@ -142,6 +142,56 @@ describe("RechargeView", () => {
     expect(wrapper.find(".text-action--muted").exists()).toBe(false);
   });
 
+  it("keeps concurrent cancellation results isolated per order", async () => {
+    const secondOrder = { ...PENDING_ORDER, id: 2, outTradeNo: "redbase_order456", planName: "套餐二" };
+    const closedFirst = { ...PENDING_ORDER, status: "closed" };
+    const closedSecond = { ...secondOrder, status: "closed" };
+    let resolveFirst: ((response: Response) => void) | undefined;
+    let resolveSecond: ((response: Response) => void) | undefined;
+    const firstClose = new Promise<Response>((resolve) => { resolveFirst = resolve; });
+    const secondClose = new Promise<Response>((resolve) => { resolveSecond = resolve; });
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER, secondOrder] }),
+      "POST /api/payments/alipay/orders/redbase_order123/close": () => firstClose as unknown as Response,
+      "POST /api/payments/alipay/orders/redbase_order456/close": () => secondClose as unknown as Response,
+    });
+    const { wrapper } = await mountView();
+    const cancelButtons = wrapper.findAll(".text-action--muted");
+
+    await cancelButtons[0].trigger("click");
+    await cancelButtons[1].trigger("click");
+    expect(wrapper.text()).toContain("取消中...");
+
+    resolveSecond?.(jsonResponse(200, { order: closedSecond }));
+    await flushPromises();
+    resolveFirst?.(jsonResponse(200, { order: closedFirst }));
+    await flushPromises();
+
+    const rows = wrapper.findAll("[data-test=payment-order]");
+    expect(rows[0].find(".status-dot").text()).toBe("已关闭");
+    expect(rows[1].find(".status-dot").text()).toBe("已关闭");
+  });
+
+  it("shows concurrent cancellation errors beside their own orders", async () => {
+    const secondOrder = { ...PENDING_ORDER, id: 2, outTradeNo: "redbase_order456", planName: "套餐二" };
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER, secondOrder] }),
+      "POST /api/payments/alipay/orders/redbase_order123/close": () => jsonResponse(502, { error: "订单一关闭失败" }),
+      "POST /api/payments/alipay/orders/redbase_order456/close": () => jsonResponse(502, { error: "订单二关闭失败" }),
+    });
+    const { wrapper } = await mountView();
+    const cancelButtons = wrapper.findAll(".text-action--muted");
+
+    await Promise.all([cancelButtons[0].trigger("click"), cancelButtons[1].trigger("click")]);
+    await flushPromises();
+
+    const rows = wrapper.findAll("[data-test=payment-order]");
+    expect(rows[0].find("[role=alert]").text()).toBe("订单一关闭失败");
+    expect(rows[1].find("[role=alert]").text()).toBe("订单二关闭失败");
+  });
+
   it("checks provider status from the payment screen and renders the paid detail state", async () => {
     const paidOrder = { ...PENDING_ORDER, status: "paid", paidAt: "2026-08-04T00:01:00.000Z" };
     let currentOrder = PENDING_ORDER;

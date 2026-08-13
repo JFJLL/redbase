@@ -482,6 +482,88 @@ test("P0: closing without a gateway refuses locally instead of silently closing"
   assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
 });
 
+test("a provider-missing trade closes locally only after a confirming query", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const orderRes = await createOrder("redbase_session=token-a", `idem-close-missing-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+  const originalCloseTrade = gateway.closeTrade;
+  const originalQueryOrder = gateway.queryOrder;
+  gateway.closeTrade = async () => {
+    throw Object.assign(new Error("支付宝交易不存在"), { code: "ALIPAY_TRADE_NOT_EXIST" });
+  };
+  gateway.queryOrder = async () => ({ data: {}, notFound: true, responseHttpStatus: 200 });
+  try {
+    const response = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/close`, {
+      cookie: "redbase_session=token-a",
+      body: {},
+    });
+    const body = JSON.parse(response.body);
+    assert.equal(response.statusCode, 200);
+    assert.equal(body.providerTradeNotFound, true);
+    assert.equal(body.order.status, "closed");
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "closed");
+  } finally {
+    gateway.closeTrade = originalCloseTrade;
+    gateway.queryOrder = originalQueryOrder;
+  }
+});
+
+test("a missing-trade close remains pending when the confirmation query finds a live trade", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const orderRes = await createOrder("redbase_session=token-a", `idem-close-live-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+  const originalCloseTrade = gateway.closeTrade;
+  const originalQueryOrder = gateway.queryOrder;
+  gateway.closeTrade = async () => {
+    throw Object.assign(new Error("支付宝交易不存在"), { code: "ALIPAY_TRADE_NOT_EXIST" });
+  };
+  gateway.queryOrder = async () => ({
+    data: {
+      out_trade_no: order.outTradeNo,
+      trade_status: "WAIT_BUYER_PAY",
+      total_amount: "0.01",
+    },
+    notFound: false,
+  });
+  try {
+    const response = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/close`, {
+      cookie: "redbase_session=token-a",
+      body: {},
+    });
+    assert.equal(response.statusCode, 409);
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
+  } finally {
+    gateway.closeTrade = originalCloseTrade;
+    gateway.queryOrder = originalQueryOrder;
+  }
+});
+
+test("a missing-trade close does not locally close an already closed provider trade", async () => {
+  const gateway = getAlipayProvider(appConfig);
+  const orderRes = await createOrder("redbase_session=token-a", `idem-close-provider-closed-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+  const originalCloseTrade = gateway.closeTrade;
+  const originalQueryOrder = gateway.queryOrder;
+  gateway.closeTrade = async () => {
+    throw Object.assign(new Error("支付宝交易不存在"), { code: "ALIPAY_TRADE_NOT_EXIST" });
+  };
+  gateway.queryOrder = async () => ({
+    data: { out_trade_no: order.outTradeNo, trade_status: "TRADE_CLOSED", total_amount: "0.01" },
+    notFound: false,
+  });
+  try {
+    const response = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/close`, {
+      cookie: "redbase_session=token-a",
+      body: {},
+    });
+    assert.equal(response.statusCode, 409);
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
+  } finally {
+    gateway.closeTrade = originalCloseTrade;
+    gateway.queryOrder = originalQueryOrder;
+  }
+});
+
 test("fake settle page settles through the same notify path", async () => {
   const orderRes = await createOrder("redbase_session=token-a", `idem-fake-settle-${Date.now()}`);
   const order = JSON.parse(orderRes.body).order;
