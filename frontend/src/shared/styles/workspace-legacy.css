@@ -473,10 +473,103 @@
   overflow-wrap: anywhere;
 }
 
+.workspace-layout .account-credit-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid rgba(216, 68, 68, 0.18);
+  border-radius: var(--workspace-radius);
+  background: linear-gradient(135deg, #fff7f5, #fff);
+  box-shadow: 0 12px 28px rgba(126, 55, 55, 0.07);
+}
+
+.workspace-layout .account-credit-balance {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+}
+
+.workspace-layout .account-credit-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--workspace-brand);
+  color: #fff;
+  font-weight: 800;
+}
+
+.workspace-layout .account-credit-balance > div {
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-layout .account-credit-balance span,
+.workspace-layout .account-credit-balance small {
+  color: var(--workspace-text-muted);
+}
+
+.workspace-layout .account-credit-balance strong {
+  color: var(--workspace-text);
+  font-family: var(--workspace-font-heading);
+  font-size: 1.8rem;
+  line-height: 1.1;
+}
+
+.workspace-layout .account-credit-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-layout .account-credit-actions button {
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.workspace-layout .account-credit-primary {
+  border: 1px solid var(--workspace-brand);
+  background: var(--workspace-brand);
+  color: #fff;
+}
+
+.workspace-layout .account-credit-secondary {
+  border: 1px solid rgba(216, 68, 68, 0.2);
+  background: #fff;
+  color: var(--workspace-brand-ink);
+}
+
+.workspace-layout .account-credit-actions button:hover,
+.workspace-layout .account-credit-actions button:focus-visible {
+  transform: translateY(-1px);
+  outline: none;
+  box-shadow: 0 7px 16px rgba(126, 55, 55, 0.12);
+}
+
 .workspace-layout .account-business-plan {
   display: grid;
   gap: 12px;
   margin-top: 18px;
+}
+
+@media (max-width: 560px) {
+  .workspace-layout .account-credit-card {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-layout .account-credit-actions {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .workspace-layout .account-business-plan h3 {

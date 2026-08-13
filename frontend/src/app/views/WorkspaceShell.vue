@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
+import { INSUFFICIENT_CREDITS_EVENT } from "@/shared/api/client";
 import { fetchRechargePlans, type RechargePlan } from "@/features/billing/api";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 import RecoveredJobBanner from "@/features/generation/components/RecoveredJobBanner.vue";
@@ -13,8 +14,8 @@ const auth = useAuthStore();
 const recovery = useImageJobRecovery();
 const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
+const insufficientCreditsMessage = ref("");
 const rechargePlans = ref<RechargePlan[]>([]);
-const billingAvailable = computed(() => rechargePlans.value.length > 0);
 const businessPlans = computed(() =>
   rechargePlans.value.filter((plan) => plan.id === "business-monthly" || plan.id === "business-annual"),
 );
@@ -27,12 +28,7 @@ const navItems = [
   { name: "ideas", icon: "选", label: "内容选题" },
   { name: "excellent", icon: "优", label: "优秀内容" },
   { name: "history", icon: "历", label: "历史生成" },
-  { name: "billing", icon: "充", label: "积分充值" },
 ] as const;
-
-const visibleNavItems = computed(() =>
-  navItems.filter((item) => item.name !== "billing" || billingAvailable.value),
-);
 
 const displayName = computed(() => String(auth.user?.nickname || auth.user?.name || auth.user?.phone || "RedBase User"));
 const displayPhone = computed(() => String(auth.user?.phone || ""));
@@ -49,6 +45,7 @@ const accountExpiry = computed(() => getAccountPackageExpiry(accountUser.value))
 onMounted(() => {
   sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
   document.addEventListener("keydown", handleDocumentKeydown);
+  window.addEventListener(INSUFFICIENT_CREDITS_EVENT, handleInsufficientCredits as EventListener);
   if (auth.isLoggedIn) recovery.start();
   fetchRechargePlans()
     .then((data) => {
@@ -78,6 +75,7 @@ watch(
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleDocumentKeydown);
+  window.removeEventListener(INSUFFICIENT_CREDITS_EVENT, handleInsufficientCredits as EventListener);
 });
 
 watch(sidebarCollapsed, (collapsed) => {
@@ -94,6 +92,21 @@ function openAccountCenter(): void {
 
 function closeAccountCenter(): void {
   accountCenterOpen.value = false;
+}
+
+async function goToBilling(target: "plans" | "orders" = "plans"): Promise<void> {
+  closeAccountCenter();
+  insufficientCreditsMessage.value = "";
+  await router.push({ name: "billing", hash: target === "orders" ? "#billing-orders" : "" });
+  if (target === "orders") {
+    await nextTick();
+    document.getElementById("billing-orders")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }
+}
+
+function handleInsufficientCredits(event: Event): void {
+  const detail = (event as CustomEvent<{ message?: string }>).detail;
+  insufficientCreditsMessage.value = String(detail?.message || "当前积分不足，请先充值后再继续。");
 }
 
 async function selectBusinessPlan(planId: "business-monthly" | "business-annual"): Promise<void> {
@@ -140,7 +153,7 @@ async function handleLogout() {
         </RouterLink>
         <nav class="workspace-nav" aria-label="工作台导航">
           <RouterLink
-            v-for="item in visibleNavItems"
+            v-for="item in navItems"
             :key="item.name"
             :to="{ name: item.name }"
             class="sidebar-item"
@@ -166,35 +179,36 @@ async function handleLogout() {
           <span class="sidebar-toggle-label">{{ sidebarCollapsed ? "展开侧边栏" : "收起侧边栏" }}</span>
         </button>
 
-        <a
-          v-if="auth.isAdmin"
-          class="workspace-user"
-          href="/admin/"
-          title="进入管理后台"
-        >
-          <span class="user-avatar">{{ avatarText }}</span>
-          <span class="user-details">
-            <strong class="user-name">{{ displayName }}</strong>
-            <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
-            <span v-if="displayCredits !== null" class="user-credits credit-pill">{{ displayCredits }} 积分</span>
-          </span>
-        </a>
-        <div
-          v-else
-          class="workspace-user"
-          role="button"
-          tabindex="0"
-          aria-haspopup="dialog"
-          @click="openAccountCenter"
-          @keydown.enter="openAccountCenter"
-          @keydown.space.prevent="openAccountCenter"
-        >
-          <span class="user-avatar">{{ avatarText }}</span>
-          <span class="user-details">
-            <strong class="user-name">{{ displayName }}</strong>
-            <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
-            <span v-if="displayCredits !== null" class="user-credits credit-pill">{{ displayCredits }} 积分</span>
-          </span>
+        <div class="workspace-user">
+          <a v-if="auth.isAdmin" class="workspace-user-profile" href="/admin/" title="进入管理后台">
+            <span class="user-avatar">{{ avatarText }}</span>
+            <span class="user-details">
+              <strong class="user-name">{{ displayName }}</strong>
+              <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
+            </span>
+          </a>
+          <button
+            v-else
+            type="button"
+            class="workspace-user-profile"
+            aria-haspopup="dialog"
+            @click="openAccountCenter"
+          >
+            <span class="user-avatar">{{ avatarText }}</span>
+            <span class="user-details">
+              <strong class="user-name">{{ displayName }}</strong>
+              <span v-if="displayPhone" class="user-phone">{{ displayPhone }}</span>
+            </span>
+          </button>
+          <button
+            v-if="displayCredits !== null"
+            type="button"
+            class="user-credits credit-pill"
+            aria-label="查看积分充值"
+            @click="goToBilling()"
+          >
+            {{ displayCredits }} 积分
+          </button>
         </div>
 
         <button type="button" class="workspace-logout" @click="handleLogout">退出登录</button>
@@ -202,6 +216,14 @@ async function handleLogout() {
     </aside>
     <main class="workspace-main">
       <RecoveredJobBanner />
+      <aside v-if="insufficientCreditsMessage" class="credit-shortage-toast" role="alert" data-test="insufficient-credits-toast">
+        <div>
+          <strong>积分不足</strong>
+          <span>{{ insufficientCreditsMessage }}</span>
+        </div>
+        <button type="button" class="credit-shortage-action" @click="goToBilling()">立即充值</button>
+        <button type="button" class="credit-shortage-close" aria-label="关闭积分不足提示" @click="insufficientCreditsMessage = ''">×</button>
+      </aside>
       <RouterView />
     </main>
 
@@ -230,6 +252,21 @@ async function handleLogout() {
             <strong>{{ accountPackage }}</strong>
           </div>
         </div>
+
+        <section class="account-credit-card" aria-label="积分账户">
+          <div class="account-credit-balance">
+            <span class="account-credit-icon" aria-hidden="true">充</span>
+            <div>
+              <span>当前积分</span>
+              <strong>{{ displayCredits === null ? "-" : displayCredits }}</strong>
+              <small>用于趋势分析、内容生成和图片生成</small>
+            </div>
+          </div>
+          <div class="account-credit-actions">
+            <button type="button" class="account-credit-primary" data-test="account-recharge" @click="goToBilling()">立即充值</button>
+            <button type="button" class="account-credit-secondary" data-test="account-orders" @click="goToBilling('orders')">查看充值订单</button>
+          </div>
+        </section>
 
         <section class="account-business-plan" aria-label="定制专属增长方案">
           <h3>定制专属增长方案</h3>
@@ -467,20 +504,36 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 14px;
-  padding: 10px 8px;
+  gap: 8px;
+  padding: 6px 4px;
   border: 0;
   border-radius: var(--workspace-radius);
   background: transparent;
   color: inherit;
   text-align: left;
   text-decoration: none;
+}
+
+.workspace-user-profile {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--workspace-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
   cursor: pointer;
   transition: background 180ms ease;
 }
 
-.workspace-user:hover,
-.workspace-user:focus-visible {
+.workspace-user-profile:hover,
+.workspace-user-profile:focus-visible {
   background: rgba(216, 68, 68, 0.06);
   outline: none;
 }
@@ -528,12 +581,76 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 }
 
 .user-credits {
+  flex: 0 0 auto;
   padding: 2px 7px;
+  border: 1px solid rgba(216, 68, 68, 0.08);
   border-radius: 999px;
   background: #fff0ed;
   color: #db4b4e;
+  font-family: inherit;
   font-size: 11px;
   font-weight: 700;
+  cursor: pointer;
+}
+
+.user-credits:hover,
+.user-credits:focus-visible {
+  border-color: rgba(216, 68, 68, 0.34);
+  background: #ffe7e3;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.1);
+}
+
+.credit-shortage-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(440px, calc(100vw - 32px));
+  padding: 14px 48px 14px 16px;
+  border: 1px solid rgba(216, 68, 68, 0.2);
+  border-radius: var(--workspace-radius);
+  background: #fff5f3;
+  box-shadow: 0 12px 28px rgba(126, 55, 55, 0.08);
+  color: #6d3438;
+}
+
+.credit-shortage-toast > div {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.credit-shortage-toast strong { color: #b83a3d; }
+.credit-shortage-toast span { font-size: 13px; line-height: 1.5; }
+
+.credit-shortage-action,
+.credit-shortage-close {
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.credit-shortage-action {
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--workspace-brand);
+  color: #fff;
+  font-weight: 800;
+}
+
+.credit-shortage-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: transparent;
+  color: #9a777a;
+  font-size: 20px;
 }
 
 .workspace-logout {
@@ -586,6 +703,7 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 .sidebar-collapsed .sidebar-item-label,
 .sidebar-collapsed .sidebar-toggle-label,
 .sidebar-collapsed .user-details,
+.sidebar-collapsed .user-credits,
 .sidebar-collapsed .workspace-logout {
   display: none;
 }
@@ -641,6 +759,7 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   .sidebar-item-label,
   .sidebar-toggle-label,
   .user-details,
+  .user-credits,
   .workspace-logout {
     display: none;
   }
@@ -666,6 +785,11 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   .workspace-user {
     justify-content: center;
     padding: 0;
+  }
+
+  .credit-shortage-toast {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .workspace-main {
@@ -704,6 +828,7 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   .sidebar-item-label,
   .sidebar-toggle-label,
   .user-details,
+  .user-credits,
   .workspace-logout {
     display: none;
   }

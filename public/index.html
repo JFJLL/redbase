@@ -447,6 +447,7 @@
               <div class="user-email" id="userPhone">未登录</div>
             </div>
           </button>
+          <a class="sidebar-credit-link" id="sidebarCreditLink" href="/app/billing" aria-label="查看积分充值">- 积分</a>
           <button class="logout-btn" id="logoutButton" type="button">退出登录</button>
         </div>
       </aside>
@@ -709,6 +710,17 @@
             <strong id="accountCenterPackage">未开通</strong>
           </div>
         </div>
+
+        <section class="account-credit-card" aria-label="积分账户">
+          <div class="account-credit-balance">
+            <span class="account-credit-icon" aria-hidden="true">充</span>
+            <div><span>当前积分</span><strong id="accountCenterCredits">-</strong><small>用于趋势分析、内容生成和图片生成</small></div>
+          </div>
+          <div class="account-credit-actions">
+            <a class="account-credit-primary" href="/app/billing">立即充值</a>
+            <a class="account-credit-secondary" href="/app/billing#billing-orders">查看充值订单</a>
+          </div>
+        </section>
 
         <section class="account-business-plan" aria-label="定制专属增长方案">
           <h3>定制专属增长方案</h3>

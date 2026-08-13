@@ -529,13 +529,31 @@ function renderAccountCenter() {
   const account = document.getElementById("accountCenterAccount");
   const expiry = document.getElementById("accountCenterExpiry");
   const packageName = document.getElementById("accountCenterPackage");
+  const credits = document.getElementById("accountCenterCredits");
+  const sidebarCredits = document.getElementById("sidebarCreditLink");
   const user = state.currentUser;
   if (!account || !expiry || !packageName) return;
 
   account.textContent = firstTextValue(user?.phone, user?.name) || "-";
   expiry.textContent = getAccountPackageExpiry(user);
   packageName.textContent = getAccountPackageName(user);
+  const creditText = Number.isFinite(Number(user?.credits)) ? `${Number(user.credits)}` : "-";
+  if (credits) credits.textContent = creditText;
+  if (sidebarCredits) sidebarCredits.textContent = `${creditText} 积分`;
 }
+
+function showRechargeToast(message) {
+  document.querySelectorAll(".credit-shortage-toast").forEach((item) => item.remove());
+  const notice = document.createElement("div");
+  notice.className = "credit-shortage-toast";
+  notice.setAttribute("role", "alert");
+  notice.innerHTML = `<span>${escapeHtml(message || "当前积分不足，请先充值后再继续。")}</span><a href="/app/billing">立即充值</a>`;
+  document.body.appendChild(notice);
+}
+
+window.addEventListener("redbase:insufficient-credits", (event) => {
+  showRechargeToast(event.detail?.message);
+});
 
 function getAccountPackageName(user) {
   const subscription = user?.subscription || {};
@@ -4575,7 +4593,7 @@ async function generateXhsCarouselForContext({
         const remainingSlideCount = pack.slides.filter((slide) => !hasXhsCarouselSlideImage(slide) && !slide.isGenerating && !slide.isQueued).length;
         if (remainingSlideCount === 0) return;
         if (Number(state.currentUser?.credits || 0) < remainingSlideCount) {
-          alert(`积分不足，一键生成剩余 ${remainingSlideCount} 张需要 ${remainingSlideCount} 积分，当前剩余 ${Number(state.currentUser?.credits || 0)} 积分。`);
+          showRechargeToast(`积分不足，一键生成剩余 ${remainingSlideCount} 张需要 ${remainingSlideCount} 积分，当前剩余 ${Number(state.currentUser?.credits || 0)} 积分。`);
           return;
         }
         flags.isGeneratingAll = true;

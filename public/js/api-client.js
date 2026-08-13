@@ -37,6 +37,9 @@ async function requestWithContext(url, options, requestContext) {
     }
     const error = new Error(payload.error || "Request failed");
     error.status = response.status;
+    if (response.status === 402) {
+      window.dispatchEvent(new CustomEvent("redbase:insufficient-credits", { detail: { message: error.message } }));
+    }
     throw error;
   }
   return payload;

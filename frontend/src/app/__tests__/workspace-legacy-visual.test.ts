@@ -8,6 +8,7 @@ import IdeaGenerationDialogSource from "@/features/generation/components/IdeaGen
 import IdeasViewSource from "@/features/ideas/views/IdeasView.vue?raw";
 import ExcellentViewSource from "@/features/excellent/views/ExcellentView.vue?raw";
 import { useAuthStore } from "@/shared/stores/auth";
+import { INSUFFICIENT_CREDITS_EVENT } from "@/shared/api/client";
 
 const RouteStub = { template: "<div />" };
 
@@ -104,8 +105,8 @@ describe("legacy workspace visual shell", () => {
       "/excellent",
       "/history",
     ]);
-    expect(wrapper.find("a.workspace-user").attributes("href")).toBe("/admin/");
-    expect(wrapper.find("a.workspace-user").attributes("title")).toBe("进入管理后台");
+    expect(wrapper.find("a.workspace-user-profile").attributes("href")).toBe("/admin/");
+    expect(wrapper.find("a.workspace-user-profile").attributes("title")).toBe("进入管理后台");
   });
 
   it("persists and restores the legacy sidebar collapse state", async () => {
@@ -126,7 +127,7 @@ describe("legacy workspace visual shell", () => {
   it("keeps the administrator entry as a direct navigation link", async () => {
     const { wrapper } = await mountWorkspace();
 
-    const adminLink = wrapper.find("a.workspace-user");
+    const adminLink = wrapper.find("a.workspace-user-profile");
     expect(adminLink.attributes("href")).toBe("/admin/");
     expect(adminLink.attributes("title")).toBe("进入管理后台");
   });
@@ -134,8 +135,38 @@ describe("legacy workspace visual shell", () => {
   it("opens the account center with Space for keyboard users", async () => {
     const { wrapper } = await mountWorkspace(false);
 
-    await wrapper.find(".workspace-user").trigger("keydown", { key: " ", code: "Space" });
+    await wrapper.find("button.workspace-user-profile").trigger("click");
     expect(wrapper.find(".account-modal-panel").exists()).toBe(true);
+  });
+
+  it("routes the clickable credit balance to the recharge page", async () => {
+    const { wrapper, router } = await mountWorkspace(false);
+
+    await wrapper.find(".user-credits").trigger("click");
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("billing");
+    expect(wrapper.find(".account-modal-panel").exists()).toBe(false);
+  });
+
+  it("shows the balance in account center and routes both recharge actions", async () => {
+    const { wrapper, router } = await mountWorkspace(false);
+
+    await wrapper.find("button.workspace-user-profile").trigger("click");
+    expect(wrapper.find(".account-credit-balance strong").text()).toBe("6");
+    await wrapper.find('[data-test="account-orders"]').trigger("click");
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("billing");
+    expect(router.currentRoute.value.hash).toBe("#billing-orders");
+    expect(wrapper.find(".account-modal-panel").exists()).toBe(false);
+
+    await router.push("/home");
+    await wrapper.find("button.workspace-user-profile").trigger("click");
+    await wrapper.find('[data-test="account-recharge"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe("billing");
+    expect(router.currentRoute.value.hash).toBe("");
   });
 
   it("routes business plan choices to the matching recharge plan", async () => {
@@ -153,7 +184,7 @@ describe("legacy workspace visual shell", () => {
     );
     const { wrapper, router } = await mountWorkspace(false);
 
-    await wrapper.find(".workspace-user").trigger("click");
+    await wrapper.find("button.workspace-user-profile").trigger("click");
     await wrapper.find('[data-test="business-plan-monthly"]').trigger("click");
     await flushPromises();
 
@@ -202,13 +233,11 @@ describe("legacy workspace visual shell", () => {
     expect(ExcellentViewSource).toContain('data-test="remix-submit"');
   });
 
-  it("hides the recharge navigation when the backend returns no plans", async () => {
+  it("keeps recharge out of the sidebar regardless of plan availability", async () => {
     const { wrapper } = await mountWorkspace();
     const labels = wrapper.findAll(".workspace-nav .sidebar-item-label").map((link) => link.text());
     expect(labels).not.toContain("积分充值");
-  });
 
-  it("shows the recharge navigation when the backend returns plans", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -221,8 +250,24 @@ describe("legacy workspace visual shell", () => {
         );
       }),
     );
-    const { wrapper } = await mountWorkspace();
-    const labels = wrapper.findAll(".workspace-nav .sidebar-item-label").map((link) => link.text());
-    expect(labels).toContain("积分充值");
+    const withPlans = await mountWorkspace();
+    const labelsWithPlans = withPlans.wrapper.findAll(".workspace-nav .sidebar-item-label").map((link) => link.text());
+    expect(labelsWithPlans).not.toContain("积分充值");
+  });
+
+  it("offers an immediate recharge action after any 402 credit failure", async () => {
+    const { wrapper, router } = await mountWorkspace(false);
+
+    window.dispatchEvent(
+      new CustomEvent(INSUFFICIENT_CREDITS_EVENT, { detail: { message: "积分不足，本次操作需要 1 积分。" } }),
+    );
+    await flushPromises();
+
+    const toast = wrapper.find('[data-test="insufficient-credits-toast"]');
+    expect(toast.text()).toContain("积分不足，本次操作需要 1 积分。");
+    await toast.find(".credit-shortage-action").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe("billing");
+    expect(wrapper.find('[data-test="insufficient-credits-toast"]').exists()).toBe(false);
   });
 });

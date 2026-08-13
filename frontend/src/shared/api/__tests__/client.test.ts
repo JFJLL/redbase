@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiFetch, isAbortError, isUnauthorized } from "@/shared/api/client";
+import {
+  ApiError,
+  apiFetch,
+  INSUFFICIENT_CREDITS_EVENT,
+  isAbortError,
+  isUnauthorized,
+} from "@/shared/api/client";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -55,6 +61,38 @@ describe("apiFetch", () => {
     expect((error as ApiError).status).toBe(401);
     expect((error as ApiError).message).toBe("登录状态已失效");
     expect(isUnauthorized(error)).toBe(true);
+  });
+
+  it("emits an insufficient-credit event with the backend message for 402 responses", async () => {
+    const listener = vi.fn();
+    window.addEventListener(INSUFFICIENT_CREDITS_EVENT, listener);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(402, { error: "积分不足，请立即充值" })));
+
+    try {
+      await apiFetch("/api/generate").catch(() => undefined);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0]?.[0]).toBeInstanceOf(CustomEvent);
+      expect((listener.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+        message: "积分不足，请立即充值",
+      });
+    } finally {
+      window.removeEventListener(INSUFFICIENT_CREDITS_EVENT, listener);
+    }
+  });
+
+  it("does not emit an insufficient-credit event for other API errors", async () => {
+    const listener = vi.fn();
+    window.addEventListener(INSUFFICIENT_CREDITS_EVENT, listener);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(400, { error: "请求参数无效" })));
+
+    try {
+      await apiFetch("/api/generate").catch(() => undefined);
+
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(INSUFFICIENT_CREDITS_EVENT, listener);
+    }
   });
 
   it("recognizes abort errors so views can swallow cancelled requests", () => {

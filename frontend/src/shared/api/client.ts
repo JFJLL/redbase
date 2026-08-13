@@ -1,5 +1,12 @@
 import type { ApiErrorBody } from "@/shared/types/api";
 
+/** Emitted globally when an API request is rejected because the user has no credits left. */
+export const INSUFFICIENT_CREDITS_EVENT = "redbase:insufficient-credits";
+
+export interface InsufficientCreditsEventDetail {
+  message: string;
+}
+
 /** Error thrown for non-2xx API responses. `message` carries the backend
  *  error text verbatim so views can surface the original copy. */
 export class ApiError extends Error {
@@ -36,6 +43,15 @@ function buildUrl(path: string, query?: ApiRequestOptions["query"]): string {
   return encoded ? `${path}${path.includes("?") ? "&" : "?"}${encoded}` : path;
 }
 
+function notifyInsufficientCredits(message: string): void {
+  if (typeof window === "undefined" || typeof window.CustomEvent !== "function") return;
+  window.dispatchEvent(
+    new window.CustomEvent<InsufficientCreditsEventDetail>(INSUFFICIENT_CREDITS_EVENT, {
+      detail: { message },
+    }),
+  );
+}
+
 /** Fetch wrapper for backend JSON APIs. Cookies ride along via same-origin
  *  credentials; API paths and semantics must match the legacy frontend. */
 export async function apiFetch<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
@@ -60,7 +76,9 @@ export async function apiFetch<T>(path: string, options: ApiRequestOptions = {})
   const parsed = isJson ? await response.json().catch(() => null) : null;
 
   if (!response.ok) {
-    throw new ApiError(response.status, parsed as ApiErrorBody | null, `请求失败（${response.status}）`);
+    const error = new ApiError(response.status, parsed as ApiErrorBody | null, `请求失败（${response.status}）`);
+    if (error.status === 402) notifyInsufficientCredits(error.message);
+    throw error;
   }
   return parsed as T;
 }
