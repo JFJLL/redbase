@@ -12,6 +12,18 @@ const DB_FILE = process.env.REDBASE_DB_FILE || path.join(DATA_DIR, "redbase.sqli
 const CONFIG_FILE = path.join(ROOT, "config.local.json");
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3013);
+const KEYSTONE_IMAGE_GENERATIONS_URL = "https://keystonehk.ai/v1/images/generations";
+const KEYSTONE_IMAGE_EDITS_URL = "https://keystonehk.ai/v1/images/edits";
+const KEYSTONE_IMAGE_MODEL = "gpt-image-2";
+const WAVESPEED_IMAGE_DEFAULTS = Object.freeze({
+  baseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
+  editBaseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
+  uploadBaseUrl: "https://api.wavespeed.ai/api/v3/media/upload/binary",
+  queryBaseUrl: "",
+  model: KEYSTONE_IMAGE_MODEL,
+  resolution: "2k",
+  quality: "medium",
+});
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -69,15 +81,15 @@ const DEFAULT_APP_CONFIG = {
     maxCacheEntries: 100,
   },
   imageProvider: {
-    provider: "wavespeed",
-    baseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
-    editBaseUrl: "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
-    uploadBaseUrl: "https://api.wavespeed.ai/api/v3/media/upload/binary",
+    provider: "keystone",
+    baseUrl: KEYSTONE_IMAGE_GENERATIONS_URL,
+    editBaseUrl: KEYSTONE_IMAGE_EDITS_URL,
+    uploadBaseUrl: "",
     queryBaseUrl: "",
-    model: "gpt-image-2",
+    model: KEYSTONE_IMAGE_MODEL,
     apiKey: "",
     aspectRatio: "3:4",
-    resolution: "2k",
+    resolution: "auto",
     quality: "medium",
     imageCount: 1,
     sendTextResolution: true,
@@ -361,6 +373,32 @@ function parseRechargePlans(envValue, localValue) {
     .filter(Boolean);
 }
 
+function isLegacyImageProviderUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  try {
+    const hostname = new URL(raw).hostname.toLowerCase().replace(/\.$/, "");
+    return (
+      hostname === "runninghub.ai" ||
+      hostname.endsWith(".runninghub.ai") ||
+      hostname === "api.wavespeed.ai" ||
+      hostname.endsWith(".wavespeed.ai")
+    );
+  } catch (_error) {
+    return /(?:^|[./])(?:runninghub|wavespeed)\.ai(?:$|[./])/i.test(raw);
+  }
+}
+
+function normalizeImageProviderName(value) {
+  return String(value || "").trim().toLowerCase() === "wavespeed" ? "wavespeed" : "keystone";
+}
+
+function chooseImageProviderUrl(envValue, localValue, fallback, legacyConfig) {
+  const configured = String(envValue || localValue || "").trim();
+  if (!configured || (legacyConfig && isLegacyImageProviderUrl(configured))) return fallback;
+  return configured;
+}
+
 function loadAppConfig() {
   let localConfig = {};
 
@@ -389,8 +427,67 @@ function loadAppConfig() {
       merged.pgy?.cookieFile ||
       merged.pgy?.ossAccessKeyId,
   );
-  const imageProviderName = String(process.env.IMAGE_PROVIDER || merged.imageProvider.provider || "wavespeed").trim().toLowerCase();
+  const rawImageProviderName = String(process.env.IMAGE_PROVIDER || merged.imageProvider.provider || "keystone").trim().toLowerCase();
+  const imageProviderName = normalizeImageProviderName(rawImageProviderName);
+  const legacyImageProviderConfig = rawImageProviderName === "runninghub" || [
+    process.env.IMAGE_BASE_URL,
+    process.env.IMAGE_EDIT_BASE_URL,
+    process.env.IMAGE_UPLOAD_BASE_URL,
+    process.env.IMAGE_QUERY_BASE_URL,
+    merged.imageProvider?.baseUrl,
+    merged.imageProvider?.editBaseUrl,
+    merged.imageProvider?.uploadBaseUrl,
+    merged.imageProvider?.queryBaseUrl,
+  ].some(isLegacyImageProviderUrl);
+  const imageDefaults = imageProviderName === "wavespeed"
+    ? WAVESPEED_IMAGE_DEFAULTS
+    : {
+        baseUrl: KEYSTONE_IMAGE_GENERATIONS_URL,
+        editBaseUrl: KEYSTONE_IMAGE_EDITS_URL,
+        uploadBaseUrl: "",
+        queryBaseUrl: "",
+        model: KEYSTONE_IMAGE_MODEL,
+        resolution: "auto",
+        quality: "medium",
+      };
   const imageProviderApiKey = String(process.env.IMAGE_API_KEY || merged.imageProvider.apiKey || "").trim();
+  const imageBaseUrl = chooseImageProviderUrl(
+    process.env.IMAGE_BASE_URL,
+    legacyImageProviderConfig ? "" : merged.imageProvider.baseUrl,
+    imageDefaults.baseUrl,
+    legacyImageProviderConfig,
+  );
+  const imageEditBaseUrl = chooseImageProviderUrl(
+    process.env.IMAGE_EDIT_BASE_URL,
+    legacyImageProviderConfig ? "" : merged.imageProvider.editBaseUrl,
+    imageDefaults.editBaseUrl,
+    legacyImageProviderConfig,
+  );
+  const imageUploadBaseUrl = imageProviderName === "keystone"
+    ? ""
+    : chooseImageProviderUrl(
+        process.env.IMAGE_UPLOAD_BASE_URL,
+        legacyImageProviderConfig ? "" : merged.imageProvider.uploadBaseUrl,
+        imageDefaults.uploadBaseUrl,
+        legacyImageProviderConfig,
+      );
+  const imageQueryBaseUrl = imageProviderName === "keystone"
+    ? ""
+    : chooseImageProviderUrl(
+        process.env.IMAGE_QUERY_BASE_URL,
+        legacyImageProviderConfig ? "" : merged.imageProvider.queryBaseUrl,
+        imageDefaults.queryBaseUrl,
+        legacyImageProviderConfig,
+      );
+  const imageModel = String(
+    process.env.IMAGE_MODEL || (legacyImageProviderConfig ? "" : merged.imageProvider.model) || imageDefaults.model,
+  ).trim();
+  const imageResolution = String(
+    process.env.IMAGE_RESOLUTION || (legacyImageProviderConfig ? "" : merged.imageProvider.resolution) || imageDefaults.resolution,
+  ).trim();
+  const imageQuality = String(
+    process.env.IMAGE_QUALITY || (legacyImageProviderConfig ? "" : merged.imageProvider.quality) || imageDefaults.quality,
+  ).trim();
   const useImageProviderApiKey = parseBooleanConfig(
     process.env.TEXT_USE_IMAGE_PROVIDER_API_KEY,
     parseBooleanConfig(merged.textProvider?.useImageProviderApiKey, false),
@@ -503,15 +600,15 @@ function loadAppConfig() {
     },
     imageProvider: {
       provider: imageProviderName,
-      baseUrl: String(process.env.IMAGE_BASE_URL || merged.imageProvider.baseUrl || "").trim(),
-      editBaseUrl: String(process.env.IMAGE_EDIT_BASE_URL || merged.imageProvider.editBaseUrl || "").trim(),
-      uploadBaseUrl: String(process.env.IMAGE_UPLOAD_BASE_URL || merged.imageProvider.uploadBaseUrl || "").trim(),
-      queryBaseUrl: String(process.env.IMAGE_QUERY_BASE_URL || merged.imageProvider.queryBaseUrl || "").trim(),
-      model: String(process.env.IMAGE_MODEL || (imageProviderName === "wavespeed" ? merged.imageProvider.model : "")).trim(),
+      baseUrl: imageBaseUrl,
+      editBaseUrl: imageEditBaseUrl,
+      uploadBaseUrl: imageUploadBaseUrl,
+      queryBaseUrl: imageQueryBaseUrl,
+      model: imageModel,
       apiKey: imageProviderApiKey,
       aspectRatio: String(process.env.IMAGE_ASPECT_RATIO || merged.imageProvider.aspectRatio || "3:4").trim(),
-      resolution: String(process.env.IMAGE_RESOLUTION || merged.imageProvider.resolution || "2k").trim(),
-      quality: String(process.env.IMAGE_QUALITY || merged.imageProvider.quality || "medium").trim(),
+      resolution: imageResolution,
+      quality: imageQuality,
       imageCount: Number(process.env.IMAGE_COUNT || merged.imageProvider.imageCount || 1),
       sendTextResolution: parseBooleanConfig(
         process.env.IMAGE_SEND_TEXT_RESOLUTION,

@@ -202,7 +202,7 @@ function normalizeStore(input) {
     id: String(item.id || ""),
     ownerUserId: Number(item.ownerUserId),
     status: String(item.status || "pending"),
-    provider: String(item.provider || "wavespeed"),
+    provider: String(item.provider || "keystone"),
     providerMode: String(item.providerMode || ""),
     providerResultUrl: String(item.providerResultUrl || ""),
     model: String(item.model || ""),

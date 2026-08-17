@@ -84,7 +84,7 @@ function createJob(job) {
     String(job.id),
     Number(job.ownerUserId || 0),
     status,
-    job.provider || "wavespeed",
+    job.provider || "keystone",
     job.providerMode || "",
     job.providerResultUrl || "",
     job.model || "",
@@ -143,7 +143,7 @@ function updateJob(job) {
   `).run(
     Number(job.ownerUserId != null ? job.ownerUserId : existing.ownerUserId || 0),
     status,
-    job.provider || existing.provider || "wavespeed",
+    job.provider || existing.provider || "keystone",
     job.providerMode != null ? job.providerMode : existing.providerMode || "",
     job.providerResultUrl != null ? job.providerResultUrl : existing.providerResultUrl || "",
     job.model != null ? job.model : existing.model || "",

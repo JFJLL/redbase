@@ -1,5 +1,6 @@
 const { randomId, assertConfigured, withRetries } = require("../utils");
 const { fetchJson } = require("./text-provider");
+const { fetchRemoteImageBytes } = require("../assets/image-store");
 const {
   buildImagePrompt,
   resolveImagePromptContext,
@@ -21,6 +22,10 @@ const {
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
 const IMAGE_JOB_TIMEOUT_ERROR = "timeout";
+const IMAGE_PROVIDER_MAX_RESPONSE_BYTES = 80 * 1024 * 1024;
+const IMAGE_PROVIDER_REFERENCE_MAX_BYTES = 10 * 1024 * 1024;
+const KEYSTONE_DEFAULT_MODEL = "gpt-image-2";
+const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 let recoveryAttempted = false;
 
@@ -72,31 +77,188 @@ function extractWavespeedOutput(payload) {
 }
 
 function getImageProviderName(provider) {
-  return String(provider?.provider || "wavespeed").trim().toLowerCase() === "runninghub" ? "runninghub" : "wavespeed";
+  return String(provider?.provider || "keystone").trim().toLowerCase() === "wavespeed" ? "wavespeed" : "keystone";
 }
 
-function extractRunningHubOutput(payload) {
-  const results = Array.isArray(payload?.results) ? payload.results : [];
-  return results.find((item) => item?.url)?.url || "";
-}
-
-function normalizeRunningHubError(payload) {
-  if (payload?.errorMessage) return String(payload.errorMessage);
-  if (payload?.failedReason && Object.keys(payload.failedReason).length) return truncateLogValue(payload.failedReason, 1000);
-  if (payload?.errorCode) return String(payload.errorCode);
+function normalizeImageReference(value) {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  if (/^https?:\/\//i.test(text) || /^data:image\//i.test(text)) return text;
   return "";
 }
 
+function normalizeKeystoneBase64(value, mimeType = "image/png") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^data:image\//i.test(text)) return text;
+  const normalizedMimeType = SUPPORTED_IMAGE_MIME_TYPES.has(String(mimeType || "").toLowerCase())
+    ? String(mimeType).toLowerCase()
+    : "image/png";
+  return `data:${normalizedMimeType};base64,${text}`;
+}
+
+function extractKeystoneOutput(payload) {
+  const data = payload?.data;
+  const entries = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
+  const first = entries.find((item) => item && typeof item === "object") || {};
+  const direct = normalizeImageReference(first.url || first.image_url || first.imageUrl || first.image);
+  if (direct) return direct;
+  const topLevelDirect = normalizeImageReference(payload?.url || payload?.image_url || payload?.imageUrl);
+  if (topLevelDirect) return topLevelDirect;
+  return normalizeKeystoneBase64(
+    first.b64_json || first.b64Json || payload?.b64_json || payload?.b64Json,
+    first.mime_type || first.mimeType || payload?.mime_type || payload?.mimeType,
+  );
+}
+
+function normalizeKeystoneError(payload) {
+  const value = payload?.error?.message || payload?.error || payload?.message || "";
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") return truncateLogValue(value, 1000);
+  return String(value);
+}
+
+function normalizeKeystoneSize(aspectRatio, resolution) {
+  const configured = String(resolution || "").trim().toLowerCase();
+  if (["1024x1024", "1024x1536", "1536x1024", "auto"].includes(configured) && configured !== "auto") {
+    return configured;
+  }
+
+  const match = String(aspectRatio || "").trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (!match) return "1024x1536";
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "1024x1536";
+  if (Math.abs(width - height) / Math.max(width, height) < 0.05) return "1024x1024";
+  return width > height ? "1536x1024" : "1024x1536";
+}
+
+function normalizeKeystoneQuality(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["low", "medium", "high", "auto"].includes(normalized) ? normalized : "auto";
+}
+
+function normalizeImageCount(value) {
+  const count = Number(value);
+  if (!Number.isFinite(count)) return 1;
+  return Math.max(1, Math.min(10, Math.floor(count)));
+}
+
+function buildKeystoneImageRequest(provider, { prompt, aspectRatio }) {
+  const body = {
+    model: String(provider?.model || KEYSTONE_DEFAULT_MODEL).trim() || KEYSTONE_DEFAULT_MODEL,
+    prompt: String(prompt || ""),
+    size: normalizeKeystoneSize(aspectRatio, provider?.resolution),
+    n: normalizeImageCount(provider?.imageCount),
+  };
+  if (provider?.sendQuality !== false) {
+    body.quality = normalizeKeystoneQuality(provider?.quality);
+  }
+  return body;
+}
+
+function normalizeImageProviderError(payload) {
+  return normalizeKeystoneError(payload);
+}
+
+function redactImageProviderText(value) {
+  return String(value || "")
+    .replace(/\b(?:as_sk_|sk-)[a-z0-9_-]+\b/gi, "[redacted]")
+    .replace(/\b(authorization)\s*[:=]\s*(?:bearer\s+)?[^\s,;"'}]+/gi, "$1=[redacted]")
+    .replace(/\b(api[_-]?key|x-api-key|token)\s*[:=]\s*[^\s,;"'}]+/gi, "$1=[redacted]");
+}
+
+function redactImageProviderPayload(value) {
+  try {
+    return JSON.parse(redactImageProviderText(JSON.stringify(value)));
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function readImageProviderResponseText(response) {
+  const declaredLength = Number(response?.headers?.get?.("content-length") || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > IMAGE_PROVIDER_MAX_RESPONSE_BYTES) {
+    throw new Error("图片服务响应超过 80MB 限制。");
+  }
+  if (!response?.body?.getReader) {
+    const raw = await response.text();
+    if (Buffer.byteLength(raw) > IMAGE_PROVIDER_MAX_RESPONSE_BYTES) {
+      throw new Error("图片服务响应超过 80MB 限制。");
+    }
+    return raw;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value || []);
+      totalBytes += chunk.length;
+      if (totalBytes > IMAGE_PROVIDER_MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error("图片服务响应超过 80MB 限制。");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+async function fetchImageProviderJson(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutMs = Number(options.timeoutMs || IMAGE_JOB_HTTP_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: options.method || "GET",
+      headers: options.headers || {},
+      body: options.body,
+      signal: controller.signal,
+    });
+    const raw = await readImageProviderResponseText(response);
+    let payload = null;
+    try {
+      payload = raw ? JSON.parse(raw) : null;
+    } catch (_error) {
+      payload = null;
+    }
+    if (!response.ok) {
+      const error = new Error(normalizeImageProviderError(payload) || redactImageProviderText(raw) || `HTTP ${response.status}`);
+      error.statusCode = response.status;
+      error.url = url;
+      error.rawBody = redactImageProviderText(raw);
+      error.payload = redactImageProviderPayload(payload);
+      error.retryable = false;
+      throw error;
+    }
+    if (!payload || typeof payload !== "object") {
+      const error = new Error("图片服务返回的不是 JSON 数据。");
+      error.retryable = false;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(`Request timeout: ${url}`);
+      timeoutError.code = "ETIMEDOUT";
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = [] }) {
-  if (getImageProviderName(provider) === "runninghub") {
-    const includeResolution = imageUrls.length > 0 || provider.sendTextResolution !== false;
-    return {
-      prompt,
-      ...(imageUrls.length ? { imageUrls } : {}),
-      aspectRatio,
-      ...(includeResolution && provider.resolution ? { resolution: provider.resolution } : {}),
-      ...(provider.sendQuality !== false && provider.quality ? { quality: provider.quality } : {}),
-    };
+  if (getImageProviderName(provider) === "keystone") {
+    return buildKeystoneImageRequest(provider, { prompt, aspectRatio });
   }
 
   return {
@@ -111,13 +273,12 @@ function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = 
 }
 
 function parseImageProviderResult(provider, payload) {
-  if (getImageProviderName(provider) === "runninghub") {
-    const status = String(payload?.status || "").toUpperCase();
-    const imageUrl = extractRunningHubOutput(payload);
-    const error = normalizeRunningHubError(payload);
+  if (getImageProviderName(provider) === "keystone") {
+    const imageUrl = extractKeystoneOutput(payload);
+    const error = normalizeKeystoneError(payload);
     return {
       imageUrl,
-      status: imageUrl || status === "SUCCESS" ? "completed" : status === "FAILED" || error ? "failed" : "pending",
+      status: imageUrl ? "completed" : error ? "failed" : "pending",
       error,
     };
   }
@@ -134,10 +295,10 @@ function parseImageProviderResult(provider, payload) {
 
 function parseImageProviderSubmission(provider, payload) {
   const parsed = parseImageProviderResult(provider, payload);
-  if (getImageProviderName(provider) === "runninghub") {
+  if (getImageProviderName(provider) === "keystone") {
     return {
-      taskId: String(payload?.taskId || ""),
-      resultUrl: String(provider.queryBaseUrl || ""),
+      taskId: "",
+      resultUrl: "",
       ...parsed,
     };
   }
@@ -153,9 +314,10 @@ function validateImageProviderSubmission(provider, submission) {
     throw new Error(submission.error || "图片生成失败。");
   }
   if (submission.imageUrl) return submission;
-  const missingResultUrl = !submission.resultUrl;
-  const missingRunningHubTaskId = getImageProviderName(provider) === "runninghub" && !submission.taskId;
-  if (missingResultUrl || missingRunningHubTaskId) {
+  if (getImageProviderName(provider) === "keystone") {
+    throw new Error("Keystone 图片服务未返回图片数据。");
+  }
+  if (!submission.resultUrl) {
     throw new Error("图片服务未返回可轮询的任务地址。");
   }
   return submission;
@@ -216,27 +378,23 @@ function buildImageJobLogContext(job) {
 }
 
 async function fetchImageProviderResultOnce(provider, job, headers) {
-  const runningHub = getImageProviderName(provider) === "runninghub";
-  const taskId = String(job.metadata?.providerTaskId || "");
-  if (runningHub) assertConfigured(taskId, "RunningHub 图片任务 ID");
-  const options = runningHub
-    ? { method: "POST", headers, body: JSON.stringify({ taskId }), timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS }
-    : { headers, timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS };
+  if (getImageProviderName(provider) === "keystone") {
+    return {
+      payload: null,
+      imageUrl: "",
+      status: "failed",
+      error: "Keystone 图片任务没有同步返回图片数据。",
+      summary: { provider: "keystone", status: "missing-image-data" },
+    };
+  }
+
+  const options = { headers, timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS };
   const payload = await withRetries(() => fetchJson(job.providerResultUrl, options), { retries: 2, delayMs: 1500 });
   const parsed = parseImageProviderResult(provider, payload);
   return {
     payload,
     ...parsed,
-    summary:
-      runningHub
-        ? {
-            upstreamId: payload?.taskId || taskId,
-            status: payload?.status || "",
-            error: parsed.error,
-            outputCount: Array.isArray(payload?.results) ? payload.results.length : 0,
-            usage: payload?.usage || null,
-          }
-        : summarizeWavespeedPayload(payload),
+    summary: summarizeWavespeedPayload(payload),
   };
 }
 
@@ -360,19 +518,41 @@ async function createImageJob(
     styleImages,
     profileType: brand?.profileType,
   });
+  const providerName = getImageProviderName(provider);
+  const isKeystone = providerName === "keystone";
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${provider.apiKey}`,
   };
-  const uploadedProductUrls = referenceImages.length ? await Promise.all(referenceImages.map((image) => uploadProductImage(provider, image))) : [];
-  const uploadedLogoUrls = logoImages.length ? await Promise.all(logoImages.map((image) => uploadProductImage(provider, image))) : [];
-  const uploadedStyleUrls = styleImages.length ? await Promise.all(styleImages.map((image) => uploadProductImage(provider, image))) : [];
-  const uploadedSourceUrls = localSourceImages.length ? await Promise.all(localSourceImages.map((image) => uploadProductImage(provider, image))) : [];
+  const keystoneReferenceInputs = isKeystone
+    ? [
+        ...sourceUrls.map((url, index) => ({ url, name: `source-${index + 1}.png` })),
+        ...localSourceImages,
+        ...referenceImages,
+        ...logoImages,
+        ...styleImages,
+      ]
+    : [];
+  const uploadedProductUrls = !isKeystone && referenceImages.length
+    ? await Promise.all(referenceImages.map((image) => uploadProductImage(provider, image)))
+    : [];
+  const uploadedLogoUrls = !isKeystone && logoImages.length
+    ? await Promise.all(logoImages.map((image) => uploadProductImage(provider, image)))
+    : [];
+  const uploadedStyleUrls = !isKeystone && styleImages.length
+    ? await Promise.all(styleImages.map((image) => uploadProductImage(provider, image)))
+    : [];
+  const uploadedSourceUrls = !isKeystone && localSourceImages.length
+    ? await Promise.all(localSourceImages.map((image) => uploadProductImage(provider, image)))
+    : [];
   const uploadedImageUrls = [...uploadedProductUrls, ...uploadedLogoUrls, ...uploadedStyleUrls];
   const editImageUrls = [...sourceUrls, ...uploadedSourceUrls, ...uploadedImageUrls];
-  const useEditModel = editImageUrls.length > 0;
+  const useEditModel = isKeystone ? keystoneReferenceInputs.length > 0 : editImageUrls.length > 0;
   const endpoint = useEditModel ? provider.editBaseUrl || provider.baseUrl : provider.baseUrl;
   const outputAspectRatio = aspectRatio || metadata.aspectRatio || provider.aspectRatio;
+  const keystoneReferences = isKeystone && useEditModel
+    ? await resolveKeystoneReferenceImages(keystoneReferenceInputs)
+    : [];
   const body = buildImageProviderRequest(provider, {
     prompt: metadata.prompt,
     aspectRatio: outputAspectRatio,
@@ -396,22 +576,39 @@ async function createImageJob(
     sourceImageCount: sourceUrls.length + localSourceImages.length,
     uploadedReferenceUrls: uploadedImageUrls.map(summarizeUrl),
     uploadedSourceUrls: uploadedSourceUrls.map(summarizeUrl),
+    multipartReferenceCount: keystoneReferences.length,
     promptLength: String(metadata.prompt || "").length,
     promptPreview: truncateLogValue(metadata.prompt || "", 300),
-    bodyImageCount: editImageUrls.length,
+    bodyImageCount: isKeystone ? keystoneReferences.length : editImageUrls.length,
   });
 
   const requestStartedAt = Date.now();
   let initial = null;
   try {
     initial = await withRetries(
-      () =>
-        fetchJson(endpoint, {
+      () => {
+        if (isKeystone && useEditModel) {
+          return fetchKeystoneImageEdit(provider, endpoint, {
+            prompt: metadata.prompt,
+            aspectRatio: outputAspectRatio,
+            references: keystoneReferences,
+          });
+        }
+        if (isKeystone) {
+          return fetchImageProviderJson(endpoint, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS,
+          });
+        }
+        return fetchJson(endpoint, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
           timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS,
-        }),
+        });
+      },
       { retries: 3, delayMs: 2000 },
     );
   } catch (error) {
@@ -505,11 +702,11 @@ async function createImageJob(
     status: imageUrl ? "completed" : "pending",
     createdAt,
     evaluationStartedAt: requestStartedAt,
-    provider: getImageProviderName(provider),
+    provider: providerName,
     providerMode: useEditModel ? "edit" : "text-to-image",
     providerResultUrl: submission.resultUrl,
     providerHeaders: headers,
-    model: provider.model,
+    model: provider.model || KEYSTONE_DEFAULT_MODEL,
     metadata: {
       ...metadata,
       brandId: brand?.id ?? metadata.brandId ?? null,
@@ -517,7 +714,7 @@ async function createImageJob(
       industry: brand?.industry || metadata.industry || "",
       providerTaskId: submission.taskId,
       aspectRatio: outputAspectRatio,
-      sourceImageUrls: [...sourceUrls, ...uploadedSourceUrls],
+      sourceImageUrls: isKeystone ? sourceUrls : [...sourceUrls, ...uploadedSourceUrls],
       referenceImageName: referenceImages[0]?.name || "",
       referenceImageNames: referenceImages.map((image) => image.name || "").filter(Boolean),
       referenceImageUrl: uploadedImageUrls[0] || "",
@@ -675,10 +872,104 @@ function parseDataUrl(dataUrl) {
   if (!match) {
     throw new Error("产品图格式无效，请重新上传图片。");
   }
+  const mimeType = String(match[1] || "").toLowerCase();
+  if (!SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
+    throw new Error("图片格式不受当前图片服务支持，请使用 PNG、JPG、WEBP 或 GIF。");
+  }
   return {
-    mimeType: match[1],
+    mimeType,
     buffer: Buffer.from(match[2], "base64"),
   };
+}
+
+function sanitizeImageFileName(value, fallback = "reference-image.png") {
+  const name = String(value || fallback)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .trim();
+  return (name || fallback).slice(0, 120);
+}
+
+function imageExtensionForMimeType(mimeType) {
+  return {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+  }[String(mimeType || "").toLowerCase()] || "png";
+}
+
+function imageFileNameFromUrl(url, index, mimeType) {
+  try {
+    const pathname = new URL(String(url || "")).pathname;
+    const lastSegment = pathname.split("/").filter(Boolean).pop();
+    if (lastSegment && /\.[a-z0-9]{2,5}$/i.test(lastSegment)) {
+      return sanitizeImageFileName(lastSegment, `reference-${index + 1}.${imageExtensionForMimeType(mimeType)}`);
+    }
+  } catch (_error) {
+    // Use a deterministic safe name below.
+  }
+  return `reference-${index + 1}.${imageExtensionForMimeType(mimeType)}`;
+}
+
+async function resolveKeystoneReferenceImage(input, index) {
+  if (input?.dataUrl) {
+    const parsed = parseDataUrl(input.dataUrl);
+    if (parsed.buffer.length > IMAGE_PROVIDER_REFERENCE_MAX_BYTES) {
+      throw new Error("参考图超过 10MB 限制，请压缩后重试。");
+    }
+    return {
+      ...parsed,
+      fileName: sanitizeImageFileName(input.name || input.fileName, `reference-${index + 1}.${imageExtensionForMimeType(parsed.mimeType)}`),
+    };
+  }
+
+  const url = String(input?.url || "").trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("参考图地址无效，请重新选择图片。");
+  }
+  const downloaded = await fetchRemoteImageBytes(url, { maxBytes: IMAGE_PROVIDER_REFERENCE_MAX_BYTES });
+  return {
+    buffer: downloaded.buffer,
+    mimeType: downloaded.mimeType,
+    fileName: imageFileNameFromUrl(url, index, downloaded.mimeType),
+  };
+}
+
+async function resolveKeystoneReferenceImages(inputs) {
+  return Promise.all(inputs.map((input, index) => resolveKeystoneReferenceImage(input, index)));
+}
+
+function buildKeystoneEditFormData(provider, { prompt, aspectRatio, references = [] }) {
+  if (!references.length) {
+    throw new Error("图片编辑至少需要一张参考图。");
+  }
+  const body = buildKeystoneImageRequest(provider, { prompt, aspectRatio });
+  const formData = new FormData();
+  formData.append("model", body.model);
+  formData.append("prompt", body.prompt);
+  formData.append("size", body.size);
+  if (body.quality) formData.append("quality", body.quality);
+  formData.append("n", String(body.n));
+
+  const fieldName = references.length === 1 ? "image" : "image[]";
+  for (const reference of references) {
+    formData.append(
+      fieldName,
+      new Blob([reference.buffer], { type: reference.mimeType }),
+      sanitizeImageFileName(reference.fileName),
+    );
+  }
+  return formData;
+}
+
+async function fetchKeystoneImageEdit(provider, endpoint, options) {
+  const formData = buildKeystoneEditFormData(provider, options);
+  return fetchImageProviderJson(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${provider.apiKey}` },
+    body: formData,
+    timeoutMs: IMAGE_JOB_HTTP_TIMEOUT_MS,
+  });
 }
 
 function withImageReferencePrompt(metadata, { productImages, logoImages, styleImages, profileType }) {
@@ -858,6 +1149,7 @@ module.exports = {
   buildImageJobResponse,
   getImageJobProviderHeaders,
   buildImageProviderRequest,
+  buildKeystoneEditFormData,
   parseImageProviderSubmission,
   parseImageProviderResult,
   validateImageProviderSubmission,

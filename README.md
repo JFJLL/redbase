@@ -84,12 +84,12 @@ ANYSEARCH_API_KEYS=<key-1>,<key-2>
 - `searchProvider.dailyQueryLimit`：每个 Key 按批次内子查询计数的每日硬上限，默认 `950`；两个 Key 合计上限 `1900`。超时和 5xx 重试也按一次外发搜索计数，避免项目记录低于供应商实际消耗
 - `searchProvider.dailyUsageFile`：每日用量状态文件，默认 `data/anysearch-usage.json`；重启服务后仍会延续当日计数
 - `searchProvider.maxCacheEntries`：进程内证据缓存最多保留的查询组数，默认 `100`；过期条目会主动清理
-- `imageProvider.baseUrl`：图片生成接口地址
-- `imageProvider.editBaseUrl`：图片编辑接口地址
-- `imageProvider.uploadBaseUrl`：图片上传接口地址
+- `imageProvider.provider`：图片服务商，默认 `keystone`；仍可显式使用兼容的 `wavespeed`
+- `imageProvider.baseUrl` / `imageProvider.editBaseUrl`：Keystone 默认使用 OpenAI 兼容的 `/v1/images/generations` 和 `/v1/images/edits`
 - `imageProvider.model`：图片模型名，默认 `gpt-image-2`
-- `imageProvider.apiKey`：图片模型 API Key
-- `imageProvider.aspectRatio`、`imageProvider.resolution`、`imageProvider.quality`、`imageProvider.imageCount`：图片参数
+- `imageProvider.apiKey`：图片模型 API Key；真实 Key 请放在未提交的 `config.local.json` 或 `IMAGE_API_KEY`
+- `imageProvider.aspectRatio`、`imageProvider.resolution`、`imageProvider.quality`、`imageProvider.imageCount`：图片参数；Keystone 会把应用比例转换为 `1024x1024`、`1024x1536` 或 `1536x1024`
+- Keystone 文生图使用 JSON，带参考图/改图使用 multipart `image` / `image[]`，不再需要 `uploadBaseUrl` 或异步查询地址；接口返回 `url` 或 `b64_json` 均可落本地资产
 - `admin.phones`：管理员手机号，多个放在数组中
 - `feishu.enabled`：是否启用飞书企业登录；配置了飞书凭据时默认启用
 - `feishu.apps`：飞书应用列表；每个企业自建应用一项

@@ -167,6 +167,31 @@ test("generation persistence failure keeps the upstream URL and records persistE
   assert.equal(JSON.stringify(target).includes("objectKey"), false);
 });
 
+test("base64 image results are persisted as local generated assets", async () => {
+  const dataUrl = `data:image/png;base64,${PNG_BUFFER.toString("base64")}`;
+  const target = { imageUrl: dataUrl, previewUrl: dataUrl };
+  let savedInput = null;
+  const result = await persistGeneratedImageReference({
+    ownerUserId: 1,
+    generationId: 2,
+    target,
+    remoteUrl: dataUrl,
+    variant: "main",
+    localUrl: "/api/generated-images/2/file",
+    storage: {
+      save: async (input) => {
+        savedInput = input;
+        return { provider: "local", storedPath: "uploads/generated-images/users/1/main.png", mimeType: input.mimeType };
+      },
+    },
+  });
+  assert.equal(result.provider, "local");
+  assert.deepEqual(savedInput.buffer, PNG_BUFFER);
+  assert.equal(savedInput.mimeType, "image/png");
+  assert.equal(target.imageUrl, "/api/generated-images/2/file");
+  assert.equal(target.previewUrl, "/api/generated-images/2/file");
+});
+
 test("database failure after upload deletes only assets created by that persistence attempt", async () => {
   const generation = {
     id: 42,

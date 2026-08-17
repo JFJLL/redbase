@@ -32,7 +32,7 @@ const PGY_IMAGE_USER_AGENT =
  * Only the exact xiaohongshu.com / xhscdn.com apex hosts and their subdomains
  * (ci.xiaohongshu.com, pgy.xiaohongshu.com, edith.xiaohongshu.com,
  * sns-img-qc.xhscdn.com, ...) qualify. Every other public host — Tencent COS
- * (*.myqcloud.com), RunningHub, example.com, or arbitrary domains — never
+ * (*.myqcloud.com), arbitrary third-party domains, or example.com — never
  * receives the cookie, including after a redirect to another domain.
  */
 function isPgyCookieDomain(host) {
@@ -526,6 +526,10 @@ function isRemoteImageUrl(value) {
   return /^https?:\/\//i.test(String(value || "").trim());
 }
 
+function isDataImageUrl(value) {
+  return /^data:image\/(?:png|jpeg|webp|gif);base64,/i.test(String(value || "").trim());
+}
+
 function buildGeneratedImageUrl(generationId) {
   return `/api/generated-images/${generationId}/file`;
 }
@@ -600,7 +604,7 @@ async function persistGeneratedImageReference({
     return target.localImage;
   }
   const sourceUrl = String(remoteUrl || "").trim();
-  if (!isRemoteImageUrl(sourceUrl)) return null;
+  if (!isRemoteImageUrl(sourceUrl) && !isDataImageUrl(sourceUrl)) return null;
 
   let asset = null;
   try {
@@ -617,10 +621,15 @@ async function persistGeneratedImageReference({
       errorCode: String(error?.code || "ASSET_PERSIST_FAILED"),
       status: Number(error?.status || error?.statusCode || 0) || undefined,
     });
-    const safeSourceUrl = redactSensitiveUrlQuery(sourceUrl);
+    const safeSourceUrl = isRemoteImageUrl(sourceUrl) ? redactSensitiveUrlQuery(sourceUrl) : "";
     removeGeneratedTargetUpstreamUrls(target);
-    target.imageUrl = safeSourceUrl;
-    target.previewUrl = safeSourceUrl;
+    if (safeSourceUrl) {
+      target.imageUrl = safeSourceUrl;
+      target.previewUrl = safeSourceUrl;
+    } else {
+      delete target.imageUrl;
+      delete target.previewUrl;
+    }
     target.persistError = persistError;
     return null;
   }
@@ -795,6 +804,14 @@ async function saveGeneratedImageFromRemote(
 }
 
 async function downloadRemoteGeneratedImage(imageUrl) {
+  if (isDataImageUrl(imageUrl)) {
+    const parsed = parseProductImageDataUrl(imageUrl);
+    if (parsed.buffer.length > MAX_GENERATED_IMAGE_BYTES) {
+      throw new Error(`生成图片超过本地保存上限：${formatBytes(parsed.buffer.length)}`);
+    }
+    return parsed;
+  }
+
   let currentUrl = String(imageUrl || "").trim();
   for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMAGE_REDIRECTS; redirectCount += 1) {
     const safeTarget = await assertSafeRemoteImageUrl(currentUrl);
@@ -1079,6 +1096,7 @@ module.exports = {
   recoverStagedBrandLogoDeletions,
   recoverStagedProductImageDeletions,
   isRemoteImageUrl,
+  isDataImageUrl,
   assertSafeRemoteImageUrl,
   createPinnedImageLookup,
   requestPinnedRemoteImage,

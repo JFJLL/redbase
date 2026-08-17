@@ -140,7 +140,7 @@ function formatImageServiceError(error) {
     message.includes("timeout") ||
     message.includes("Client network socket disconnected")
   ) {
-    return "图片服务连接失败，请稍后重试；如果连续失败，请检查服务器到 WaveSpeed 图片接口的网络连接。";
+    return "图片服务连接失败，请稍后重试；如果连续失败，请检查服务器到已配置图片接口的网络连接。";
   }
   return message;
 }

@@ -39,13 +39,15 @@
     "maxCacheEntries": 100
   },
   "imageProvider": {
-    "baseUrl": "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
-    "editBaseUrl": "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/edit",
-    "uploadBaseUrl": "https://api.wavespeed.ai/api/v3/media/upload/binary",
+    "provider": "keystone",
+    "baseUrl": "https://keystonehk.ai/v1/images/generations",
+    "editBaseUrl": "https://keystonehk.ai/v1/images/edits",
+    "uploadBaseUrl": "",
+    "queryBaseUrl": "",
     "model": "gpt-image-2",
     "apiKey": "",
     "aspectRatio": "3:4",
-    "resolution": "2k",
+    "resolution": "auto",
     "quality": "medium",
     "imageCount": 1
   },

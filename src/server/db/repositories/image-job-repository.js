@@ -108,7 +108,7 @@ function upsertImageJob(ownerUserId, job) {
     job.id,
     Number(ownerUserId),
     job.status || "pending",
-    job.provider || "wavespeed",
+    job.provider || "keystone",
     job.providerMode || "",
     job.providerResultUrl || "",
     job.model || "",
