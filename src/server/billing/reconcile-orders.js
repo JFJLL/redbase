@@ -22,11 +22,13 @@ async function reconcileOne(order, gateway, options = {}) {
   const isPaidAtProvider = tradeStatus === "TRADE_SUCCESS" || tradeStatus === "TRADE_FINISHED";
   const responseAppId = String(data.app_id ?? data.appId ?? "");
   const responseSellerId = String(data.seller_id ?? data.sellerId ?? "");
+  const responseMchId = String(data.mchid ?? data.mchId ?? "");
   if (
     (data.out_trade_no && String(data.out_trade_no) !== String(order.outTradeNo)) ||
     (isPaidAtProvider && String(data.out_trade_no || "") !== String(order.outTradeNo)) ||
     (responseAppId && gateway.appId && responseAppId !== String(gateway.appId)) ||
-    (responseSellerId && gateway.sellerId && responseSellerId !== String(gateway.sellerId))
+    (responseSellerId && gateway.sellerId && responseSellerId !== String(gateway.sellerId)) ||
+    (responseMchId && gateway.mchId && responseMchId !== String(gateway.mchId))
   ) {
     console.warn("[reconcile] provider identity mismatch", {
       outTradeNo: order.outTradeNo,
@@ -89,7 +91,7 @@ async function reconcileOne(order, gateway, options = {}) {
   return "unknown";
 }
 
-async function reconcileOrders({ gateway, limit = 100, dryRun = false, nowIso }) {
+async function reconcileOrders({ gateway, gateways = {}, limit = 100, dryRun = false, nowIso }) {
   const orders = findOpenPaymentOrdersForReconcile({ limit });
   const summary = {
     ok: true,
@@ -104,8 +106,14 @@ async function reconcileOrders({ gateway, limit = 100, dryRun = false, nowIso })
     audit: 0,
   };
   for (const order of orders) {
+    const orderProvider = order.provider || "alipay";
+    const activeGateway = gateways[orderProvider] || gateway;
+    if (!activeGateway) {
+      summary.unknown = Number(summary.unknown || 0) + 1;
+      continue;
+    }
     try {
-      const outcome = await reconcileOne(order, gateway, { dryRun, nowIso });
+      const outcome = await reconcileOne(order, activeGateway, { dryRun, nowIso });
       summary[outcome] = Number(summary[outcome] || 0) + 1;
     } catch (error) {
       summary.failed = Number(summary.failed || 0) + 1;

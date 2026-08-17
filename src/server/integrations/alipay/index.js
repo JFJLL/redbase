@@ -57,7 +57,7 @@ function isAlipayTradeNotExistError(error) {
     responseData.sub_msg,
     responseData.msg,
   ].map((value) => String(value || "")).join(" ");
-  return /ACQ\.TRADE_NOT_EXIST|交易不存在/i.test(details);
+  return /ACQ\.TRADE_NOT_EXIST|TRADE_NOT_EXIST|ACQ\.TRADE_HAS_CLOSE|ACQ\.TRADE_STATUS_ERROR|交易不存在|交易已关闭/i.test(details);
 }
 
 function alipayTradeNotExistError(error) {
@@ -219,11 +219,13 @@ class RealAlipayProvider {
   getSdk() {
     if (this.sdk) return this.sdk;
     const { AlipaySdk } = require("alipay-sdk");
+    const rawGateway = String(this.config.gateway || "https://openapi.alipay.com").trim();
+    const gateway = rawGateway.replace(/\/gateway\.do\/?$/i, "").replace(/\/+$/, "") || "https://openapi.alipay.com";
     this.sdk = new AlipaySdk({
       appId: this.config.appId,
       privateKey: this.config.privateKey,
       alipayPublicKey: this.config.alipayPublicKey,
-      gateway: this.config.gateway || "https://openapi.alipay.com",
+      gateway,
       timeout: Number(this.config.timeoutMs || 5000),
       keyType: this.config.keyType || "PKCS8",
     });

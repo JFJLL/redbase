@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
@@ -31,6 +31,27 @@ const loading = ref(false);
 
 const brandUserId = ref("all");
 const usageUserId = ref("all");
+type UsageDateRange = "7d" | "today" | "yesterday" | "30d" | "365d" | "all" | "custom";
+type UsageTypeFilter = "all" | "debit" | "credit";
+const usageDateRange = ref<UsageDateRange>("7d");
+const usageTypeFilter = ref<UsageTypeFilter>("all");
+const usageDatePickerOpen = ref(false);
+const usageDatePickerRoot = ref<HTMLElement | null>(null);
+const usageDatePickerTrigger = ref<HTMLButtonElement | null>(null);
+const usageDatePickerMenu = ref<HTMLElement | null>(null);
+const usageCustomStart = ref("");
+const usageCustomEnd = ref("");
+const usageAppliedCustomStart = ref("");
+const usageAppliedCustomEnd = ref("");
+const usageTypePickerOpen = ref(false);
+const usageTypePickerRoot = ref<HTMLElement | null>(null);
+const usageTypePickerTrigger = ref<HTMLButtonElement | null>(null);
+const usageTypePickerMenu = ref<HTMLElement | null>(null);
+const usageUserPickerOpen = ref(false);
+const usageUserPickerRoot = ref<HTMLElement | null>(null);
+const usageUserPickerTrigger = ref<HTMLButtonElement | null>(null);
+const usageUserPickerMenu = ref<HTMLElement | null>(null);
+const usageUserSearchQuery = ref("");
 const generationUserId = ref("all");
 const userSearchQuery = ref("");
 const creditUserSearchQuery = ref("");
@@ -71,6 +92,46 @@ const selectedCreditUser = computed(
   () => users.value.find((user) => String(user.id) === String(selectedCreditUserId.value)) || null,
 );
 
+const usageDateRangeOptions = [
+  { value: "7d", label: "近7天" },
+  { value: "today", label: "今天" },
+  { value: "yesterday", label: "昨天" },
+  { value: "30d", label: "近30天" },
+  { value: "365d", label: "近365天" },
+] as const;
+const usageTypeOptions = [
+  { value: "all", label: "全部流水" },
+  { value: "debit", label: "积分消耗" },
+  { value: "credit", label: "积分增加" },
+] as const;
+
+const usageDateRangeLabel = computed(() => {
+  if (usageDateRange.value === "custom" && usageAppliedCustomStart.value && usageAppliedCustomEnd.value) {
+    return `${usageAppliedCustomStart.value} 至 ${usageAppliedCustomEnd.value}`;
+  }
+  return usageDateRangeOptions.find((option) => option.value === usageDateRange.value)?.label || "近7天";
+});
+
+const usageTypeFilterLabel = computed(
+  () => usageTypeOptions.find((option) => option.value === usageTypeFilter.value)?.label || "全部流水",
+);
+
+const usageUserMatches = computed(() => users.value.filter((user) => matchesUserQuery(user, usageUserSearchQuery.value)));
+
+const usageUserFilterLabel = computed(() => {
+  if (usageUserId.value === "all") return "全部用户";
+  const user = users.value.find((item) => String(item.id) === String(usageUserId.value));
+  return user ? `${user.name || "未命名用户"} · ${user.phone || "无手机号"}` : "全部用户";
+});
+
+const usageCustomRangeInvalid = computed(
+  () => Boolean(usageCustomStart.value && usageCustomEnd.value && usageCustomStart.value > usageCustomEnd.value),
+);
+
+const usageCustomRangeReady = computed(
+  () => Boolean(usageCustomStart.value && usageCustomEnd.value && !usageCustomRangeInvalid.value),
+);
+
 const statsCards = computed(() => {
   const stats = overview.value?.stats || {};
   return [
@@ -90,9 +151,159 @@ const visibleBrands = computed(() => {
 
 const visibleUsageEvents = computed(() => {
   const events = overview.value?.usageEvents || [];
-  if (usageUserId.value === "all") return events;
-  return events.filter((event) => String(event.userId) === String(usageUserId.value));
+  const { start, end } = getUsageDateBounds(
+    usageDateRange.value,
+    new Date(),
+    usageAppliedCustomStart.value,
+    usageAppliedCustomEnd.value,
+  );
+  return events.filter((event) => {
+    if (usageUserId.value !== "all" && String(event.userId) !== String(usageUserId.value)) return false;
+    const delta = getUsageCreditDelta(event.tokenDelta);
+    if (usageTypeFilter.value === "debit" && delta >= 0) return false;
+    if (usageTypeFilter.value === "credit" && delta <= 0) return false;
+    if (usageDateRange.value !== "all" && (start == null || end == null)) return false;
+    if (start == null || end == null) return true;
+    const createdAt = Date.parse(String(event.createdAt || ""));
+    return Number.isFinite(createdAt) && createdAt >= start && createdAt < end;
+  });
 });
+
+function getUsageCreditDelta(value: unknown): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function formatUsageCreditDelta(value: unknown): string {
+  const delta = getUsageCreditDelta(value);
+  return delta > 0 ? `+${formatNumber(delta)}` : formatNumber(delta);
+}
+
+function parseUsageDateInput(value: string, endExclusive = false): number | null {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  if (![year, month, day].every(Number.isInteger)) return null;
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  if (endExclusive) date.setDate(date.getDate() + 1);
+  return date.getTime();
+}
+
+function getUsageDateBounds(
+  range: UsageDateRange,
+  now = new Date(),
+  customStart = "",
+  customEnd = "",
+): { start: number | null; end: number | null } {
+  if (range === "all") return { start: null, end: null };
+  if (range === "custom") {
+    return {
+      start: parseUsageDateInput(customStart),
+      end: parseUsageDateInput(customEnd, true),
+    };
+  }
+
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const end = range === "yesterday" ? todayStart.getTime() : now.getTime();
+  const days = range === "today"
+    ? 0
+    : range === "yesterday"
+      ? 1
+      : range === "30d"
+        ? 29
+        : range === "365d"
+          ? 364
+          : 6;
+  const startDate = new Date(todayStart);
+  startDate.setDate(startDate.getDate() - days);
+  return { start: startDate.getTime(), end };
+}
+
+function selectUsageDateRange(range: Exclude<UsageDateRange, "custom">): void {
+  usageDateRange.value = range;
+  closeUsageDatePicker();
+}
+
+function toggleUsageDatePicker(): void {
+  const willOpen = !usageDatePickerOpen.value;
+  usageDatePickerOpen.value = willOpen;
+  usageTypePickerOpen.value = false;
+  usageUserPickerOpen.value = false;
+  if (willOpen) {
+    void nextTick(() => usageDatePickerMenu.value?.querySelector<HTMLElement>("button, input")?.focus());
+  } else {
+    void nextTick(() => usageDatePickerTrigger.value?.focus());
+  }
+}
+
+function selectUsageTypeFilter(value: UsageTypeFilter): void {
+  usageTypeFilter.value = value;
+  closeUsageTypePicker();
+}
+
+function toggleUsageTypePicker(): void {
+  const willOpen = !usageTypePickerOpen.value;
+  usageTypePickerOpen.value = willOpen;
+  usageDatePickerOpen.value = false;
+  usageUserPickerOpen.value = false;
+  if (willOpen) {
+    void nextTick(() => usageTypePickerMenu.value?.querySelector<HTMLElement>("button, input")?.focus());
+  } else {
+    void nextTick(() => usageTypePickerTrigger.value?.focus());
+  }
+}
+
+function selectUsageUserFilter(userId: string): void {
+  usageUserId.value = userId;
+  usageUserSearchQuery.value = "";
+  closeUsageUserPicker();
+}
+
+function toggleUsageUserPicker(): void {
+  const willOpen = !usageUserPickerOpen.value;
+  usageUserPickerOpen.value = willOpen;
+  if (willOpen) usageUserSearchQuery.value = "";
+  usageDatePickerOpen.value = false;
+  usageTypePickerOpen.value = false;
+  if (willOpen) {
+    void nextTick(() => usageUserPickerMenu.value?.querySelector<HTMLElement>("button, input")?.focus());
+  } else {
+    void nextTick(() => usageUserPickerTrigger.value?.focus());
+  }
+}
+
+function closeUsageDatePicker(): void {
+  if (!usageDatePickerOpen.value) return;
+  usageDatePickerOpen.value = false;
+  void nextTick(() => usageDatePickerTrigger.value?.focus());
+}
+
+function closeUsageTypePicker(): void {
+  if (!usageTypePickerOpen.value) return;
+  usageTypePickerOpen.value = false;
+  void nextTick(() => usageTypePickerTrigger.value?.focus());
+}
+
+function closeUsageUserPicker(): void {
+  if (!usageUserPickerOpen.value) return;
+  usageUserPickerOpen.value = false;
+  void nextTick(() => usageUserPickerTrigger.value?.focus());
+}
+
+function applyUsageCustomRange(): void {
+  if (!usageCustomRangeReady.value) return;
+  usageAppliedCustomStart.value = usageCustomStart.value;
+  usageAppliedCustomEnd.value = usageCustomEnd.value;
+  usageDateRange.value = "custom";
+  closeUsageDatePicker();
+}
+
+function closeUsagePickersOnDocumentClick(event: MouseEvent): void {
+  const target = event.target as Node;
+  if (!usageDatePickerRoot.value?.contains(target)) usageDatePickerOpen.value = false;
+  if (!usageTypePickerRoot.value?.contains(target)) usageTypePickerOpen.value = false;
+  if (!usageUserPickerRoot.value?.contains(target)) usageUserPickerOpen.value = false;
+}
 
 const visibleGenerations = computed(() => {
   const generations = overview.value?.generations || [];
@@ -261,6 +472,11 @@ function scrollToSection(sectionId: string): void {
 
 onMounted(() => {
   loadOverview();
+  document.addEventListener("click", closeUsagePickersOnDocumentClick);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", closeUsagePickersOnDocumentClick);
 });
 </script>
 
@@ -504,12 +720,197 @@ onMounted(() => {
               <h2>消耗流水</h2>
               <p>记录每一次扣额度和管理员加额度操作。</p>
             </div>
-            <select v-model="usageUserId" class="compact-select">
-              <option value="all">全部用户</option>
-              <option v-for="user in users" :key="user.id" :value="String(user.id)">
-                {{ user.name }} · {{ user.phone }}
-              </option>
-            </select>
+            <div class="usage-filters" data-test="usage-filters" aria-label="消耗流水筛选">
+              <div class="usage-filter">
+                <span id="usage-date-filter-label">时间</span>
+                <div
+                  ref="usageDatePickerRoot"
+                  class="usage-date-picker"
+                  @keydown.esc="closeUsageDatePicker"
+                >
+                  <button
+                    type="button"
+                    class="usage-range-trigger"
+                    ref="usageDatePickerTrigger"
+                    data-test="usage-date-filter"
+                    aria-label="流水时间范围"
+                    aria-haspopup="dialog"
+                    aria-controls="usage-date-menu"
+                    :aria-expanded="usageDatePickerOpen"
+                    @click.stop="toggleUsageDatePicker"
+                  >
+                    <span>{{ usageDateRangeLabel }}</span>
+                    <span class="usage-range-chevron" aria-hidden="true">⌄</span>
+                  </button>
+                  <div
+                    v-if="usageDatePickerOpen"
+                    id="usage-date-menu"
+                    class="usage-date-menu"
+                    role="dialog"
+                    ref="usageDatePickerMenu"
+                    tabindex="-1"
+                    aria-label="流水时间范围设置"
+                    @click.stop
+                  >
+                    <div class="usage-date-quick-list">
+                      <button
+                        v-for="option in usageDateRangeOptions"
+                        :key="option.value"
+                        type="button"
+                        class="usage-date-quick"
+                        :data-range-option="option.value"
+                        :class="{ 'is-active': usageDateRange === option.value }"
+                        @click="selectUsageDateRange(option.value)"
+                      >
+                        {{ option.label }}
+                      </button>
+                      <button
+                        type="button"
+                        class="usage-date-quick"
+                        data-range-option="all"
+                        :class="{ 'is-active': usageDateRange === 'all' }"
+                        @click="selectUsageDateRange('all')"
+                      >
+                        全部时间
+                      </button>
+                    </div>
+                    <div class="usage-date-custom">
+                      <div class="usage-date-custom-title">自定义日期</div>
+                      <div class="usage-date-fields">
+                        <label class="usage-date-field">
+                          <span>开始日期</span>
+                          <input v-model="usageCustomStart" type="date" aria-label="开始日期" />
+                        </label>
+                        <label class="usage-date-field">
+                          <span>结束日期</span>
+                          <input v-model="usageCustomEnd" type="date" aria-label="结束日期" />
+                        </label>
+                      </div>
+                      <p v-if="usageCustomRangeInvalid" class="usage-date-error">结束日期不能早于开始日期。</p>
+                      <button
+                        type="button"
+                        class="primary-btn usage-date-apply"
+                        data-test="usage-date-apply"
+                        :disabled="!usageCustomRangeReady"
+                        @click="applyUsageCustomRange"
+                      >
+                        应用日期范围
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="usage-filter">
+                <span>流水类型</span>
+                <div
+                  ref="usageTypePickerRoot"
+                  class="usage-filter-picker"
+                  @keydown.esc="closeUsageTypePicker"
+                >
+                  <button
+                    type="button"
+                    class="usage-range-trigger usage-filter-trigger"
+                    ref="usageTypePickerTrigger"
+                    data-test="usage-type-filter"
+                    aria-label="流水类型"
+                    aria-haspopup="dialog"
+                    aria-controls="usage-type-menu"
+                    :aria-expanded="usageTypePickerOpen"
+                    @click.stop="toggleUsageTypePicker"
+                  >
+                    <span>{{ usageTypeFilterLabel }}</span>
+                    <span class="usage-range-chevron" aria-hidden="true">⌄</span>
+                  </button>
+                  <div
+                    v-if="usageTypePickerOpen"
+                    id="usage-type-menu"
+                    class="usage-filter-menu"
+                    role="dialog"
+                    aria-label="流水类型选项"
+                    ref="usageTypePickerMenu"
+                    tabindex="-1"
+                    @click.stop
+                  >
+                    <button
+                      v-for="option in usageTypeOptions"
+                      :key="option.value"
+                      type="button"
+                      class="usage-filter-option"
+                      :data-type-option="option.value"
+                      :class="{ 'is-active': usageTypeFilter === option.value }"
+                      @click="selectUsageTypeFilter(option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="usage-filter usage-user-filter">
+                <span>用户</span>
+                <div
+                  ref="usageUserPickerRoot"
+                  class="usage-filter-picker"
+                  @keydown.esc="closeUsageUserPicker"
+                >
+                  <button
+                    type="button"
+                    class="usage-range-trigger usage-filter-trigger"
+                    ref="usageUserPickerTrigger"
+                    data-test="usage-user-filter"
+                    aria-label="流水用户"
+                    aria-haspopup="dialog"
+                    aria-controls="usage-user-menu"
+                    :aria-expanded="usageUserPickerOpen"
+                    @click.stop="toggleUsageUserPicker"
+                  >
+                    <span>{{ usageUserFilterLabel }}</span>
+                    <span class="usage-range-chevron" aria-hidden="true">⌄</span>
+                  </button>
+                  <div
+                    v-if="usageUserPickerOpen"
+                    id="usage-user-menu"
+                    class="usage-filter-menu usage-user-menu"
+                    role="dialog"
+                    aria-label="流水用户筛选"
+                    ref="usageUserPickerMenu"
+                    tabindex="-1"
+                    @click.stop
+                  >
+                    <input
+                      v-model="usageUserSearchQuery"
+                      class="usage-user-search"
+                      type="search"
+                      placeholder="搜索手机号或昵称"
+                      autocomplete="off"
+                      aria-label="搜索流水用户"
+                      data-test="usage-user-search"
+                    />
+                    <button
+                      type="button"
+                      class="usage-filter-option"
+                      data-user-option="all"
+                      :class="{ 'is-active': usageUserId === 'all' }"
+                      @click="selectUsageUserFilter('all')"
+                    >
+                      全部用户
+                    </button>
+                    <button
+                      v-for="user in usageUserMatches"
+                      :key="user.id"
+                      type="button"
+                      class="usage-filter-option usage-user-option"
+                      :data-user-option="String(user.id)"
+                      :class="{ 'is-active': usageUserId === String(user.id) }"
+                      @click="selectUsageUserFilter(String(user.id))"
+                    >
+                      <strong>{{ user.name || "未命名用户" }}</strong>
+                      <span>{{ user.phone || "无手机号" }}</span>
+                    </button>
+                    <p v-if="!usageUserMatches.length" class="usage-user-empty">没有匹配的用户。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
@@ -518,12 +919,12 @@ onMounted(() => {
                   <th>时间</th>
                   <th>用户</th>
                   <th>动作</th>
-                  <th>使用额度</th>
+                  <th>额度变动</th>
                   <th>关联内容</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="event in visibleUsageEvents" :key="event.id">
+                <tr v-for="event in visibleUsageEvents" :key="event.id" data-test="usage-event-row">
                   <td>{{ formatDate(event.createdAt) }}</td>
                   <td>
                     <div class="strong">{{ event.userName || "-" }}</div>
@@ -533,13 +934,13 @@ onMounted(() => {
                     {{ event.actionLabel || event.actionType }}
                     <div v-if="event.adminUserName" class="muted">操作人：{{ event.adminUserName }}</div>
                   </td>
-                  <td :class="Number(event.tokenDelta || 0) < 0 ? 'token-negative' : 'token-positive'">
-                    {{ formatNumber(event.tokenDelta) }}
+                  <td :class="getUsageCreditDelta(event.tokenDelta) < 0 ? 'token-negative' : 'token-positive'">
+                    {{ formatUsageCreditDelta(event.tokenDelta) }}
                   </td>
                   <td class="muted">{{ event.brandName || "" }} {{ event.ideaTitle || event.summary || "" }}</td>
                 </tr>
                 <tr v-if="!visibleUsageEvents.length">
-                  <td colspan="5" class="muted">暂无额度流水。</td>
+                  <td colspan="5" class="muted">当前筛选条件下暂无额度流水。</td>
                 </tr>
               </tbody>
             </table>
@@ -976,6 +1377,258 @@ onMounted(() => {
   width: min(260px, 100%);
 }
 
+.usage-filters {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.usage-filter {
+  display: grid;
+  gap: 6px;
+  min-width: 136px;
+}
+
+.usage-filter > span {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.usage-date-picker {
+  position: relative;
+  min-width: 190px;
+}
+
+.usage-range-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.usage-range-trigger:hover,
+.usage-range-trigger[aria-expanded="true"] {
+  border-color: rgba(216, 68, 68, 0.55);
+}
+
+.usage-range-trigger[aria-expanded="true"] {
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.08);
+}
+
+.usage-range-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-range-chevron {
+  margin-left: 10px;
+  color: var(--color-text-secondary);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.usage-filter-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.usage-filter-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 40px));
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 16px 32px rgba(58, 38, 38, 0.14);
+}
+
+.usage-user-menu {
+  width: min(270px, calc(100vw - 40px));
+}
+
+.usage-filter-option {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.84rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.usage-filter-option:hover,
+.usage-filter-option.is-active {
+  border-color: rgba(216, 68, 68, 0.3);
+  background: #f6e4df;
+  color: #a63737;
+  font-weight: 800;
+}
+
+.usage-user-search {
+  width: 100%;
+  min-height: 38px;
+  margin-bottom: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.usage-user-search:focus {
+  border-color: rgba(216, 68, 68, 0.55);
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.08);
+}
+
+.usage-user-option {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.usage-user-option span {
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
+.usage-user-empty {
+  margin: 8px 9px;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.usage-date-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(334px, calc(100vw - 40px));
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 16px 32px rgba(58, 38, 38, 0.14);
+}
+
+.usage-date-quick-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.usage-date-quick {
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.usage-date-quick:hover,
+.usage-date-quick.is-active {
+  border-color: rgba(216, 68, 68, 0.3);
+  background: #f6e4df;
+  color: #a63737;
+  font-weight: 800;
+}
+
+.usage-date-custom {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.usage-date-custom-title {
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.usage-date-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.usage-date-field {
+  display: grid;
+  gap: 5px;
+}
+
+.usage-date-field > span {
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+}
+
+.usage-date-field input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--color-text);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.usage-date-field input:focus {
+  border-color: rgba(216, 68, 68, 0.55);
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.08);
+}
+
+.usage-date-error {
+  margin: 8px 0 0;
+  color: var(--color-danger);
+  font-size: 0.74rem;
+}
+
+.usage-date-apply {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 10px;
+}
+
+.usage-user-filter {
+  min-width: 236px;
+}
+
 .table-wrap {
   width: 100%;
   overflow: auto;
@@ -1270,6 +1923,21 @@ tr:last-child td {
     display: grid;
   }
 
+  .usage-filters {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .usage-filter,
+  .usage-user-filter {
+    min-width: 0;
+  }
+
+  .usage-date-picker {
+    min-width: 0;
+  }
+
   .panel-actions {
     justify-content: stretch;
     flex-wrap: wrap;
@@ -1297,6 +1965,10 @@ tr:last-child td {
   .generation-preview {
     width: 100%;
     max-height: 300px;
+  }
+
+  .usage-filters {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

@@ -71,8 +71,9 @@ ANYSEARCH_API_KEYS=<key-1>,<key-2>
 - `textProvider.anthropicBaseUrl`：Anthropic 兼容接口地址
 - `textProvider.apiKey`：文本模型 API Key
 - `textProvider.useImageProviderApiKey`：文本服务是否复用图片服务 API Key；当前 RunningHub 配置为 `true`
-- `textProvider.searchEnabled`：是否启用模型内置搜索；当前关闭，趋势证据改由 AnySearch 提供
-- `searchProvider.enabled`：是否启用 AnySearch；非小红书趋势维度启用后才会生成，来源不足时直接中止
+- `textProvider.searchEnabled`：是否启用模型内置搜索；趋势主流程默认显式关闭 `useSearch`，模型直生成模式不会调用 Google 内置搜索
+- `searchProvider.enabled`：是否启用 AnySearch；标准证据模式使用，模型直生成模式必须关闭
+- `trendAnalysis.freeForm`：模型直生成模式开关；开启后跳过 Pgy/AnySearch，模型输出校验失败直接失败，不使用本地证据槽位降级
 - `ANYSEARCH_API_KEYS`：推荐的多 Key 配置，写在项目根目录 `.env` 中并用逗号分隔；运行时按当日已用量最少的 Key 分流
 - `ANYSEARCH_API_KEY`：单 Key 兼容配置；`searchProvider.apiKey`、`apiKeyFile`、`apiKeyFiles` 仅保留给旧部署兼容
 - `searchProvider.domain` / `searchProvider.subDomain`：网页检索路由，默认 `general` / `general.general`
@@ -218,14 +219,6 @@ npm test
 npm run test:integration
 npm run eval:ai
 ```
-
-项目已接入风险路由验证系统。查看当前改动对应的验证计划：
-
-```powershell
-pwsh -NoProfile -File scripts/verify-change.ps1 -PlanOnly
-```
-
-Hook 与 CI 接入当前保持关闭；完成改动后由开发者主动运行验证脚本。
 
 运行中的本地服务可以执行无依赖 API 烟测：
 

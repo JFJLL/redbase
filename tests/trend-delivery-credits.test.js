@@ -371,7 +371,7 @@ test("the persisted analysis record keeps the delivered snapshot for the degrade
   assert.equal(snapshotBucket.items.length, 10);
 });
 
-test("a first-call transport failure with evidence fails without saving or charging", async () => {
+test("a first-call transport failure with evidence delivers lightweight trends and charges once", async () => {
   clearAnySearchCache();
   const before = findUserById(1).credits;
   const evidenceMarkdown = [
@@ -386,8 +386,9 @@ test("a first-call transport failure with evidence fails without saving or charg
   ].join("\n");
   let modelCalls = 0;
   // End-to-end through the real trend service: the main model dies at
-  // transport level on its only call. 完整 contentAssets 是硬门槛，证据槽位
-  // 兜底卡不能凭空生成真实发布文案，因此整批失败：不保存、不扣费。
+  // transport level on its only call. Evidence slots keep the trend page
+  // usable with lightweight ideas; complete content assets are generated when
+  // the user starts an image workflow.
   const context = {
     appConfig: { security: { assetSigningSecret: "test-secret" } },
     async generateAiTrendSet(brand, baseId, options) {
@@ -418,10 +419,12 @@ test("a first-call transport failure with evidence fails without saving or charg
     res,
     "/api/brands/40/analyses",
   );
-  assert.equal(res.statusCode, 400);
+  assert.equal(res.statusCode, 200);
   assert.equal(modelCalls, 1);
-  assert.match(res.body.error, /未保存也未扣积分/);
-  assert.equal(findUserById(1).credits, before);
-  const brand = findBrandByOwner(40, 1);
-  assert.ok(!(brand.trends || []).some((bucket) => bucket.key === "track"));
+  assert.equal(res.body.user.credits, before - 1);
+  assert.ok(res.body.warnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.equal(res.body.brand.trends.find((bucket) => bucket.key === "track").items.length, 10);
+  assert.equal(findUserById(1).credits, before - 1);
+  const brandAfter = findBrandByOwner(40, 1);
+  assert.equal(brandAfter.trends.find((bucket) => bucket.key === "track").items.length, 10);
 });

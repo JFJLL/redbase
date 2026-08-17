@@ -78,9 +78,8 @@ const TREND_FULL_MODEL_MAX_OUTPUT_TOKENS = 16384;
 // 创意模式只生成趋势与外显选题字段，不在趋势阶段生成完整发布资产。
 // 保留较宽输出上限以兼容不同品牌档案与 10 条完整趋势，实际输出会明显缩短。
 const TREND_FREEFORM_MAX_OUTPUT_TOKENS = 24576;
-// 创意模式多次尝试后仍凑不齐 10 条时，达到该数量就交付部分批次（优于整批失败）。
-// 创意模式下的软性校验（不阻断交付）：自评分是模型自评、reason/summary/ideas 相似
-// 在单一主题品牌（如益生菌）里难以完全避免，硬卡会导致整批失败。
+// 模型直生成模式下，低自评分和部分相似度问题不阻断完整批次；结构缺失、
+// 安全风险或无法返回 10 条时仍失败，不使用本地证据槽位补齐。
 const FREEFORM_SOFT_ISSUE_REASONS = new Set([
   "low-self-score",
   "near-duplicate-reason",
@@ -454,18 +453,14 @@ function buildTrendAnalysisSystemPrompt(bucketMeta = [TREND_BUCKET_META[0]], opt
     "reason 至少 36 个中文字符，首句必须自然写出与 title 相同的来源专名或独特短语，并说明具体话题/形式、可转成的运营机制和品牌参与方式；直接从专有话题、用户矛盾、内容机制或执行动作切入，禁止以‘来源、证据、报告、案例’开头，禁止套用‘内容上可转化为……品牌可……’的批量句式。",
     "十条 reason 至少使用五种明显不同的句法和论证顺序；相邻两条不能复用相同开头或‘话题/形式 + 可转化 + 品牌可’三段模板。证据边界通过克制措辞体现，不得把 S 编号、内部取证等级或校验规则写进用户可见文案。",
     "tags 必须是 3 到 5 个以 # 开头的字符串。",
-    "ideas 必须是 2 条，且都服务 content_direction；每条 idea 必须包含：title, summary, angle, brandFit, audience, hook, tags, contentAssets。",
-    buildIdeaDiversityPrompt(selectedBucketMeta),
-    buildRichIdeaRequirementsPrompt(),
-    "contentAssets 必须在本次同一个 JSON 里完整生成；这是内容选题页可展示、后续可生图的完整内容资产包，不只是生图 prompt。",
-    "两条 idea 的 contentAssets 必须分别沿用各自路线，不要复用同一套朋友圈文案、小红书文案、组图页标题或公众号导语。",
-    buildContentAssetsSchemaPrompt(),
+    "ideas 必须是 2 条，且都服务 content_direction；每条 idea 只包含：title, summary, angle, brandFit, audience, hook, tags。",
+    buildIdeaDiversityPrompt(selectedBucketMeta, { includeContentAssets: false }),
+    buildLeanIdeaRequirementsPrompt({ includeContentAssets: false }),
     buildTrendDeduplicationPrompt(trendCount),
     buildTrendFreshnessPrompt(),
     buildEvidenceBoundaryPrompt(),
     buildSensitiveRiskPrompt(),
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
-    buildLeanIdeaRequirementsPrompt(),
     "所有字段都用中文输出，允许品牌名保留原文。",
   ].join("\n");
 }
@@ -761,9 +756,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
   const strictLines = options.strict
     ? [
         `重要：必须返回 trendBuckets，且 ${formatBucketKeys(selectedBucketMeta)} ${selectedBucketMeta.length} 个当前 bucket 的 items 都不能为空。`,
-        freeForm
-          ? "每条 trend 必须有 2 条 idea，且每条 idea 的 title、summary、angle、brandFit、audience、hook、tags 必须完整；本次不要输出 contentAssets。"
-          : "每条 trend 必须有 2 条 idea，且每条 idea 必须包含完整 contentAssets（moments、xhsCarousel、wechatLongImage 三个对象）。",
+        "每条 trend 必须有 2 条 idea，且每条 idea 的 title、summary、angle、brandFit、audience、hook、tags 必须完整；本次不要输出 contentAssets。",
         freeForm
           ? "如果某个方向不够具体，请换成更具体的人群场景、用户矛盾或内容形式，不要输出残缺 JSON。"
           : "如果搜索结果不足，请降级为可验证的趋势方向，不要编造具体机构、日期、数据或 evidenceIds。",
@@ -815,9 +808,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     "6. 每条趋势必须填 market_change、consumer_shift、why_now、brand_opportunity、content_direction；缺一即无效。",
     "6.1 禁止“消费升级、年轻人关注健康、品质生活、用户越来越重视”等正确但无商业判断的空话。",
     "7. 选题要能直接给运营同学使用：两条 idea 都服务 content_direction，标题、角度、钩子要有小红书笔记感，避免空泛文案。",
-    freeForm
-      ? "7. 每条趋势固定生成 2 条 idea；本次只生成 title、summary、angle、brandFit、audience、hook、tags，不要输出 contentAssets；两条只能在本槽唯一机制内采用不同场景、叙事切口和执行步骤，每个字段用一两句说清。"
-      : "7. 每条趋势固定生成 2 条 idea，每条 idea 必须同步生成完整 contentAssets（moments、xhsCarousel、wechatLongImage），不能只返回选题骨架或同义改写；两条只能在本槽唯一机制内采用不同场景、叙事切口和执行步骤，每个字段用一两句说清。",
+    "7. 每条趋势固定生成 2 条 idea；本次只生成 title、summary、angle、brandFit、audience、hook、tags；本次不要输出 contentAssets；两条只能在本槽唯一机制内采用不同场景、叙事切口和执行步骤，每个字段用一两句说清。",
     isPersonal
       ? "8. 不要输出个人档案摘要字段，也不要补充本人未提供的身份、经历、结果、收入、客户案例、资质或产品功效。"
       : "8. 不要输出品牌摘要字段，也不要补充品牌档案没有依据的产品功能、认证、功效或适用人群。",
@@ -851,9 +842,7 @@ function buildTrendAnalysisUserPrompt(brand, options = {}, bucketMeta = [TREND_B
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
     ...(retryFeedback ? ["上一次输出未通过服务端校验，本次必须修正：", retryFeedback] : []),
     ...strictLines,
-    freeForm
-      ? "最终输出前自检：只返回一个 JSON 对象；每条 trend 字段完整、ideas 恰好 2 条且每条只包含完整外显选题字段；不要输出 contentAssets；不得缺少 category。"
-      : "最终输出前自检：只返回一个 JSON 对象；每条 trend 字段完整、ideas 恰好 2 条且每条包含完整 contentAssets（moments、xhsCarousel、wechatLongImage 三个对象）；不得缺少 category。",
+    "最终输出前自检：只返回一个 JSON 对象；每条 trend 字段完整、ideas 恰好 2 条且每条只包含完整外显选题字段；不要输出 contentAssets；不得缺少 category。",
     ...(anySearchEvidenceBlock
       ? ["S 编号只能出现在 evidenceIds 数组，任何 title、summary、reason、tags 或 ideas 字符串中都不得写 S1/S2 之类编号；用户可见文案也不得解释内部取证等级或校验规则；不得写来源未证明的热门、高频、收藏、互动、增长、引发分享或普遍性。"]
       : []),
@@ -1819,7 +1808,7 @@ function getTrendCopyQualityIssues(trendBuckets, validationNow = new Date()) {
 function getTrendGenerationIssues(trendBuckets, bucketMeta, anySearchEvidence, brand, pgyEvidence, validationNow = new Date(), options = {}) {
   const freeForm = Boolean(options.freeForm);
   return [
-    ...getTrendStructureIssues(trendBuckets, bucketMeta, { requireContentAssets: !freeForm }),
+    ...getTrendStructureIssues(trendBuckets, bucketMeta, { requireContentAssets: false }),
     ...getTrendQualityIssues(trendBuckets),
     ...getDuplicateTrendIssues(trendBuckets),
     ...(freeForm ? getFreeFormThemeClusterIssues(trendBuckets, brand) : []),
@@ -1995,7 +1984,7 @@ function buildTargetedTrendRepairSystemPrompt(bucketMeta, repairCount) {
     `tags 必须是 3-5 个以 # 开头的字符串；score 与三项自评分必须是 0-100 的整数，且 novelty_score、brand_fit_score、actionability_score 均 ≥ ${TREND_SELF_SCORE_MIN}。`,
     "score 是本批证据内的相对内容机会分；没有网页事实片段直接支持时最高 79 分，不得用虚构的热门、收藏、互动或搜索强度解释分数。",
     "reason 至少 36 个中文字符，必须按过去→现在→原因→品牌写清策略判断，并说明内容转化逻辑和证据边界；不能用‘活动有效、当前可复制、增加互动、该方向源于、缺乏热度数据、适合作为内容实验’等内部校验式句子敷衍。",
-    "ideas 必须是 2 条，每条必须包含 title、summary、angle、brandFit、audience、hook、tags、contentAssets；contentAssets 必须包含 moments、xhsCarousel、wechatLongImage 三个完整对象；idea.tags 也必须是 3-5 个；ideas 必须承接明确可执行的内容动作。",
+    "ideas 必须是 2 条，每条必须包含 title、summary、angle、brandFit、audience、hook、tags；idea.tags 也必须是 3-5 个；ideas 必须承接明确可执行的内容动作。",
     "重写后的趋势不得与已通过标题重复、互为前缀或只做同义改写。",
     `当前维度：${formatBucketTitles(selectedBucketMeta)}。`,
     buildTrendFreshnessPrompt(),
@@ -2007,8 +1996,7 @@ function buildTargetedTrendRepairSystemPrompt(bucketMeta, repairCount) {
     "traffic 维度遇到药品、疾病、用药或政策类来源时，分析对象必须是来源呈现出的内容形式、家长沟通矛盾或信息核验需求；不得把来源中的医学建议、药名/成分/剂量、机构发布、政策结论或数字改写成品牌可传播的事实。",
     "网页内容样本或社交讨论样本只能生成中性的内容形式观察或待验证讨论方向。即使来源标题写有机构、政策或权威结论，用户可见文案也不得断言该机构发布了什么、政策要求什么或医学上应当怎么做。",
     buildBucketSpecificHardeningPrompt(selectedBucketMeta),
-    buildLeanIdeaRequirementsPrompt(),
-    buildContentAssetsSchemaPrompt(),
+    buildLeanIdeaRequirementsPrompt({ includeContentAssets: false }),
     "食品、乳品和母婴话题没有品牌档案或可靠证据直接支持时，不得写营养功效、医生/专家推荐、适用年龄、宝宝安心食用、特定人群专用或绝对安全。",
   ].filter(Boolean).join("\n");
 }
@@ -2041,7 +2029,6 @@ function toLeanTrendRepairInput(trend) {
       audience: idea?.audience || "",
       hook: idea?.hook || "",
       tags: idea?.tags || [],
-      contentAssets: idea?.contentAssets || {},
     })),
   };
 }
@@ -3321,10 +3308,10 @@ function attachAnalysisWarnings(trendBuckets, warnings = []) {
 // Safety + structural issues only — the XHS/Pgy path skips business gates
 // (duplicates, self-scores, grounding, generic copy, intensity wording).
 function getXhsPgyDeliveryIssues(trendBuckets, brand) {
-  const structural = getTrendStructureIssues(trendBuckets, [TREND_BUCKET_META[0]])
+  const structural = getTrendStructureIssues(trendBuckets, [TREND_BUCKET_META[0]], { requireContentAssets: false })
     .filter((issue) => [
       "missing-trend-field", "missing-idea-field", "idea-count",
-      "missing-trend-tags", "missing-idea-tags", "missing-content-assets", "invalid-score",
+      "missing-trend-tags", "missing-idea-tags", "invalid-score",
     ].includes(issue.reason));
   return [
     ...structural,
@@ -3499,10 +3486,11 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     maxCalls: options.maxAiCalls ?? DEFAULT_BUDGETS.trend_analysis,
   });
   const startedAt = Date.now();
-  // 创意模式（freeForm）：跳过 Pgy/AnySearch 证据，直接由大模型基于品牌档案虚构生成。
+  // 模型直生成模式（freeForm）：跳过 Pgy/AnySearch 证据，直接由大模型
+  // 基于品牌档案生成内容方向；不把模型结果包装成已核验的实时热点。
   const freeForm = Boolean(options.freeForm ?? appConfig?.trendAnalysis?.freeForm);
   if (freeForm) {
-    console.warn("[trend-analysis] free-form creative mode enabled; skipping evidence sources", {
+    console.warn("[trend-analysis] model-only mode enabled; skipping external evidence", {
       brandId: brand.id,
       brandName: brand.name,
       bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
@@ -3559,7 +3547,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     if (freeForm) {
       analysisWarnings.push({
         code: "TREND_FREEFORM_MODE",
-        message: "创意模式：本批趋势与选题由 AI 基于品牌档案直接虚构生成，未绑定真实热点证据。",
+        message: "模型直生成模式：未调用 Pgy、AnySearch 或 Google 内置搜索；结果基于品牌档案与模型知识，不代表已核验的实时热点。",
       });
     }
     let effectiveAnySearchEvidence = anySearchEvidence;
@@ -3731,7 +3719,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         maxGenerationAttempts: TREND_GENERATION_ATTEMPTS,
         requestMode,
         expectedCount: repairPlan ? repairCount : TREND_ITEMS_PER_BUCKET,
-        evidenceProvider: anySearchEvidence ? "anysearch" : "pgy",
+        evidenceProvider: freeForm ? "model-only" : anySearchEvidence ? "anysearch" : "pgy",
         evidenceCount: effectiveAnySearchEvidence?.evidence?.length || pgyEvidence?.notes?.length || 0,
         userPromptLength: userPrompt.length,
         transportAttemptsAllowed,
@@ -3814,6 +3802,18 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           break;
         }
         if (generationAttempt >= 1) {
+          if (freeForm) {
+            // Model-only mode has no evidence source to degrade from. Keep the
+            // failure explicit so an invalid batch is never saved as a local card.
+            console.warn("[trend-analysis] model-only repair call failed; refusing local degradation", {
+              brandId: brand.id,
+              brandName: brand.name,
+              requestMode,
+              code: error?.code || "UNKNOWN",
+              message: String(error?.message || "unknown error").slice(0, 200),
+            });
+            break;
+          }
           // The repair call failed after a paid main generation: keep what we
           // have and let the local degrade path finish the batch with warnings.
           console.warn("[trend-analysis] repair model call failed; degrading locally", {
@@ -3875,15 +3875,17 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           { preserveIncomplete: true, maxItems: 30 },
         );
       }
-      if (freeForm) {
-        candidateBuckets = (candidateBuckets || []).map((bucket) => ({
-          ...bucket,
-          items: (bucket.items || []).map((trend) => ({
-            ...trend,
-            ideas: (trend.ideas || []).map((idea) => ({ ...idea, contentAssets: {} })),
-          })),
-        }));
-      }
+      // Trend generation is intentionally lightweight in every mode. If a
+      // model returns assets anyway, discard them so the trend response cannot
+      // balloon back into 20 full content packs. They are generated lazily by
+      // ensureTrendIdeaContentAssets when the user starts an image workflow.
+      candidateBuckets = (candidateBuckets || []).map((bucket) => ({
+        ...bucket,
+        items: (bucket.items || []).map((trend) => ({
+          ...trend,
+          ideas: (trend.ideas || []).map((idea) => ({ ...idea, contentAssets: {} })),
+        })),
+      }));
       if (anySearchEvidence) {
         const resolvedReferences = resolveInlineEvidenceReferences(candidateBuckets, effectiveAnySearchEvidence);
         candidateBuckets = resolvedReferences.trendBuckets;
@@ -3945,9 +3947,12 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             );
         if (!postAliasIssues.length) {
           const qualityFiltered = filterTrendsByQuality(userVisibleBuckets);
-          const qualityCountIssues = getTrendStructureIssues(qualityFiltered, selectedBucketMeta, {
-            requireContentAssets: !freeForm,
-          });
+          const qualityCountIssues = filterFreeFormSoftIssues(
+            getTrendStructureIssues(qualityFiltered, selectedBucketMeta, {
+              requireContentAssets: false,
+            }),
+            freeForm,
+          );
           if (qualityCountIssues.length) {
             validationIssues = [
               ...getTrendQualityIssues(userVisibleBuckets),
@@ -4044,7 +4049,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         // Required shape is attached on the error as partial + reason (and partialResult).
         throwBudgetExceeded(aiBudget);
       }
-      if (hasModelItems || canDegradeLocally) {
+      if (!freeForm && (hasModelItems || canDegradeLocally)) {
         // Delivery guarantee: search and model spend already happened, so keep
         // valid cards, patch/replace the bad ones locally, and fill the rest
         // from reranked evidence. Warnings mark every degraded position.
@@ -4077,6 +4082,13 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
             configurable: true,
           });
         }
+      } else if (freeForm && hasModelItems) {
+        console.warn("[trend-analysis] model-only output failed validation; refusing local degradation", {
+          brandId: brand.id,
+          brandName: brand.name,
+          bucketKeys: selectedBucketMeta.map((bucket) => bucket.key),
+          issueReasons: [...new Set((lastValidationIssues || []).map((issue) => issue.reason))].slice(0, 10),
+        });
       }
     }
 
@@ -4090,15 +4102,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       validationError.issues = lastValidationIssues;
       throw validationError;
     }
-    // 真实证据模式继续把完整发布资产作为交付硬门槛；创意模式在首次生图时
-    // 复用 ensureTrendIdeaContentAssets 按需生成，避免 20 个选题一次性超长输出。
-    const contentAssetIssues = freeForm ? [] : getContentAssetCompletenessIssues(trendBuckets);
-    if (contentAssetIssues.length) {
-      const validationError = new Error(`模型连续 ${modelTiming.modelRequests} 次未返回完整、可核验且互不重复的 10 条趋势，本次结果未保存也未扣积分。${formatTrendValidationFailureSummary(contentAssetIssues)}`);
-      validationError.code = "TREND_MODEL_VALIDATION_FAILED";
-      validationError.issues = contentAssetIssues;
-      throw validationError;
-    }
+    // Full content assets are generated on demand by the image routes. The
+    // trend response only persists the lightweight trend and idea fields.
     const budgetSnap = aiBudget.snapshot();
     const metrics = {
       searchDurationMs,
@@ -4240,8 +4245,10 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
 async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt, options = {}) {
   const systemPrompt = getSystemIdeaPrompt(brand, trend);
   const selectedBucket = resolveRequestedTrendBucket(trend.bucketKey || trend.bucketTitle || trend.category || "xhs");
-  const freeForm = Boolean(appConfig?.trendAnalysis?.freeForm);
-  const includeContentAssets = !freeForm;
+  // Regenerating an idea is still part of the lightweight trend stage. The
+  // complete moments/carousel/wechat assets are filled only when needed by a
+  // later image-generation request.
+  const includeContentAssets = false;
   const textModelImpl = options.textModelImpl || callTextModelJson;
   let lastError = null;
   let retryFeedback = "";
@@ -4267,13 +4274,11 @@ async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt, optio
       if (!ideas.length) throw new Error("文本模型未返回可用选题结果。");
       const normalizedIdeas = ideas.slice(0, 2).map((idea) => {
         const normalizedIdea = normalizeTrendIdea(idea);
-        return freeForm
-          ? {
-              ...normalizedIdea,
-              // 创意模式只持久化外显选题；即使模型越界返回资产，也留到首次生图再按需生成。
-              contentAssets: {},
-            }
-          : normalizedIdea;
+        return {
+          ...normalizedIdea,
+          // Keep regenerated ideas lightweight even if the model returns assets.
+          contentAssets: {},
+        };
       });
       if (
         !hasCompleteVisibleTrendIdeas({ ideas: normalizedIdeas })

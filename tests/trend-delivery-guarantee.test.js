@@ -9,6 +9,7 @@ const {
 const {
   generateAiTrendSet,
   buildAnySearchGenerationPlan,
+  getXhsPgyDeliveryIssues,
 } = require("../src/server/ai/trend-service");
 const { clearAnySearchCache } = require("../src/server/integrations/anysearch");
 
@@ -137,6 +138,19 @@ function generatedTrendBatch(prefix, options = {}) {
   };
 }
 
+test("XHS Pgy delivery accepts lean ideas without content assets", () => {
+  const buckets = generatedTrendBatch("轻量趋势", { bucketKey: "xhs" }).trendBuckets.map((bucket) => ({
+    ...bucket,
+    items: bucket.items.map((item) => ({
+      ...item,
+      ideas: item.ideas.map((idea) => ({ ...idea, contentAssets: {} })),
+    })),
+  }));
+
+  const issues = getXhsPgyDeliveryIssues(buckets, brand);
+  assert.doesNotMatch(JSON.stringify(issues), /missing-content-assets/);
+});
+
 function mixedCandidateFixture() {
   return [
     { id: "C1", title: "LightMate 折叠桌面灯用户口碑讨论", snippet: "用户讨论便携照明与桌面收纳。", sourceType: "web", trustLevel: "medium", trustScore: 3, queryIndex: 0, brandRelevant: true, trafficRelevant: true, url: "https://www.ce.cn/a", host: "ce.cn", publishedAt: "2026-07-16" },
@@ -233,10 +247,10 @@ test("a real but completely irrelevant candidate picked by the rerank model is d
   assert.ok(plan.evidence.every((item) => !/篮球|钢铁/.test(item.title)));
 });
 
-test("a first-call transport failure with evidence fails without saving", async () => {
+test("a first-call transport failure with evidence degrades to lightweight trends", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7800, {
@@ -248,11 +262,16 @@ test("a first-call transport failure with evidence fails without saving", async 
       error.code = "ETIMEDOUT";
       throw error;
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
-  // 完整 contentAssets 是硬门槛：本地证据槽位卡不能凭空生成真实发布文案，
-  // 一次传输失败即整批失败（不落库、不扣费），不再交付降级骨架。
+  // 趋势阶段只交付轻量趋势；模型失败时用证据槽位维持页面可用，
+  // 后续生图再按需补齐 contentAssets。
   assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
 test("freeForm rejects a partial batch when the model cannot produce ten trends", async () => {
@@ -360,6 +379,71 @@ test("freeForm accepts ten complete visible ideas when the model omits content a
     item.ideas.length === 2 && item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0)));
 });
 
+test("model-only mode skips AnySearch even when the provider is enabled", async () => {
+  clearAnySearchCache();
+  let searchCalls = 0;
+  let modelCalls = 0;
+  const distinctTitles = [
+    "租房小桌测量与灯位清单",
+    "搬家灯具折叠收纳记录",
+    "居家办公任务分区补光",
+    "视频会议镜头层次调整",
+    "夜间阅读位置测试方法",
+    "家庭共享空间复位流程",
+    "宿舍床边取物照明日记",
+    "手账拍摄阴影排查步骤",
+    "墙角窗边取电路线规划",
+    "线材灯位共同整理顺序",
+  ];
+  const result = await generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    searchProvider: { enabled: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7904, {
+    bucketKey: "traffic",
+    anySearchOptions: {
+      requestImpl: async () => {
+        searchCalls += 1;
+        throw new Error("AnySearch must not be called in model-only mode");
+      },
+    },
+    textModelImpl: async (_config, request) => {
+      modelCalls += 1;
+      assert.equal(request.useSearch, false);
+      const batch = generatedTrendBatch("模型直生成", { bucketKey: "traffic" });
+      for (const [index, item] of batch.trendBuckets[0].items.entries()) {
+        item.title = distinctTitles[index];
+      }
+      return batch;
+    },
+  });
+
+  assert.equal(searchCalls, 0);
+  assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.deepEqual(result.analysisWarnings, []);
+});
+
+test("model-only mode rejects invalid output instead of locally degrading it", async () => {
+  clearAnySearchCache();
+  let modelCalls = 0;
+  await assert.rejects(generateAiTrendSet({
+    trendAnalysis: { freeForm: true },
+    searchProvider: { enabled: true },
+    textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
+  }, brand, 7906, {
+    bucketKey: "traffic",
+    textModelImpl: async () => {
+      modelCalls += 1;
+      const batch = generatedTrendBatch("不合格模型输出", { bucketKey: "traffic" });
+      batch.trendBuckets[0].items[0].ideas[0].hook = "";
+      return batch;
+    },
+    maxAiCalls: 5,
+  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  assert.equal(modelCalls, 3);
+});
+
 test("freeForm rejects a short batch containing skeleton items", async () => {
   clearAnySearchCache();
   await assert.rejects(generateAiTrendSet({
@@ -390,6 +474,21 @@ test("freeForm soft-filters low self-scores instead of failing the batch", async
     bucketKey: "traffic",
     textModelImpl: async () => {
       const batch = generatedTrendBatch("软分批", { bucketKey: "traffic" });
+      const distinctTitles = [
+        "租房小桌测量与灯位清单",
+        "搬家灯具折叠收纳记录",
+        "居家办公任务分区补光",
+        "视频会议镜头层次调整",
+        "夜间阅读位置测试方法",
+        "家庭共享空间复位流程",
+        "宿舍床边取物照明日记",
+        "手账拍摄阴影排查步骤",
+        "墙角窗边取电路线规划",
+        "线材灯位共同整理顺序",
+      ];
+      for (const [index, item] of batch.trendBuckets[0].items.entries()) {
+        item.title = distinctTitles[index];
+      }
       batch.trendBuckets[0].items = batch.trendBuckets[0].items.map((item) => ({
         ...item,
         novelty_score: 65,
@@ -547,7 +646,7 @@ test("one duplicate card cannot sink the other nine", async () => {
   assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("a short xhs model batch fails instead of topping up with Pgy skeleton cards", async () => {
+test("a short xhs model batch tops up with lightweight Pgy cards", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -560,7 +659,7 @@ test("a short xhs model batch fails instead of topping up with Pgy skeleton card
       author: {},
     })),
   };
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7600, {
@@ -572,13 +671,18 @@ test("a short xhs model batch fails instead of topping up with Pgy skeleton card
       batch.trendBuckets[0].items = batch.trendBuckets[0].items.slice(0, 4);
       return batch;
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
-  // Pgy 兜底卡没有真实 contentAssets，补齐会静默交付骨架：按新契约整批失败。
+  // Pgy 补齐卡只负责趋势页的轻量字段；完整内容资产在用户生图时按需生成。
   assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_FALLBACK"));
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
-test("a fully unparsable xhs model response fails instead of Pgy skeleton cards", async () => {
+test("a fully unparsable xhs model response uses lightweight Pgy cards", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -591,7 +695,7 @@ test("a fully unparsable xhs model response fails instead of Pgy skeleton cards"
       author: {},
     })),
   };
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 7700, {
@@ -601,7 +705,12 @@ test("a fully unparsable xhs model response fails instead of Pgy skeleton cards"
       modelCalls += 1;
       return ["sorry", "no json"];
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
   assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_FALLBACK"));
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });

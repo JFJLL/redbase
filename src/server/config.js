@@ -147,6 +147,23 @@ const DEFAULT_APP_CONFIG = {
     keyType: "PKCS8",
     fakeAllowed: false,
   },
+  wxpay: {
+    enabled: false,
+    provider: "disabled",
+    appId: "",
+    mchId: "",
+    serialNo: "",
+    privateKey: "",
+    privateKeyFile: "",
+    apiV3Key: "",
+    publicKeyId: "",
+    publicKey: "",
+    publicKeyFile: "",
+    gateway: "https://api.mch.weixin.qq.com",
+    timeoutMs: 5000,
+    notifyUrl: "",
+    fakeAllowed: false,
+  },
   billing: {
     rechargePlans: [],
   },
@@ -165,7 +182,8 @@ const DEFAULT_APP_CONFIG = {
     ossAccessKeySecret: "",
   },
   trendAnalysis: {
-    // 创意模式：跳过 Pgy/AnySearch 证据，直接由大模型基于品牌档案虚构生成趋势与选题。
+    // 模型直生成模式：跳过 Pgy/AnySearch 证据，直接由大模型生成内容方向；
+    // 结果不代表已核验的实时热点，模型输出不合格时不走本地降级交付。
     freeForm: false,
   },
 };
@@ -298,6 +316,35 @@ function readEnvValueFile(filePath, keyName) {
   return lines.length === 1 && !raw.includes("=") ? raw : "";
 }
 
+function resolvePemContent(inlinePem, filePath, defaultType = "") {
+  const inline = String(inlinePem || "").trim();
+  let content = "";
+  if (inline.includes("-----BEGIN")) {
+    content = inline;
+  } else {
+    const targetPath = String(filePath || inline || "").trim();
+    if (targetPath) {
+      const resolvedPath = path.isAbsolute(targetPath) ? targetPath : path.resolve(ROOT, targetPath);
+      if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+        content = fs.readFileSync(resolvedPath, "utf8").trim();
+      }
+    }
+    if (!content && inline) {
+      content = inline;
+    }
+  }
+  if (!content) return "";
+  if (content.includes("-----BEGIN")) return content;
+  if (defaultType) {
+    const clean = content.replace(/\s+/g, "");
+    const chunks = clean.match(/.{1,64}/g);
+    if (chunks) {
+      return `-----BEGIN ${defaultType}-----\n${chunks.join("\n")}\n-----END ${defaultType}-----`;
+    }
+  }
+  return content;
+}
+
 function parseRechargePlans(envValue, localValue) {
   if (envValue) {
     try {
@@ -365,6 +412,17 @@ function loadAppConfig() {
   const anySearchApiKey = anySearchApiKeys[0] || "";
   const smsProviderName = String(process.env.SMS_PROVIDER || merged.sms?.provider || "disabled").trim().toLowerCase();
   const alipayProviderName = String(process.env.ALIPAY_PROVIDER || merged.alipay?.provider || "disabled").trim().toLowerCase();
+  const wxpayProviderName = String(process.env.WXPAY_PROVIDER || merged.wxpay?.provider || "disabled").trim().toLowerCase();
+  const wxpayPrivateKey = resolvePemContent(
+    process.env.WXPAY_PRIVATE_KEY || merged.wxpay?.privateKey,
+    process.env.WXPAY_PRIVATE_KEY_FILE || merged.wxpay?.privateKeyFile,
+    "PRIVATE KEY",
+  );
+  const wxpayPublicKey = resolvePemContent(
+    process.env.WXPAY_PUBLIC_KEY || merged.wxpay?.publicKey,
+    process.env.WXPAY_PUBLIC_KEY_FILE || merged.wxpay?.publicKeyFile,
+    "PUBLIC KEY",
+  );
   const rechargePlans = parseRechargePlans(process.env.RECHARGE_PLANS_JSON, merged.billing?.rechargePlans);
 
   return {
@@ -507,21 +565,38 @@ function loadAppConfig() {
       },
       fakeAllowed: parseBooleanConfig(process.env.SMS_FAKE_ALLOWED, parseBooleanConfig(merged.sms?.fakeAllowed, false)),
     },
-    alipay: {
-      enabled: parseBooleanConfig(process.env.ALIPAY_ENABLED, parseBooleanConfig(merged.alipay?.enabled, false)),
-      provider: alipayProviderName,
-      appId: String(process.env.ALIPAY_APP_ID || merged.alipay?.appId || "").trim(),
-      privateKey: String(process.env.ALIPAY_PRIVATE_KEY || merged.alipay?.privateKey || "").trim(),
-      alipayPublicKey: String(process.env.ALIPAY_PUBLIC_KEY || merged.alipay?.alipayPublicKey || "").trim(),
-      sellerId: String(process.env.ALIPAY_SELLER_ID || merged.alipay?.sellerId || "").trim(),
-      gateway: String(process.env.ALIPAY_GATEWAY || merged.alipay?.gateway || "https://openapi.alipay.com").trim(),
-      timeoutMs: Number(process.env.ALIPAY_TIMEOUT_MS || merged.alipay?.timeoutMs || 5000),
-      returnUrl: String(process.env.ALIPAY_RETURN_URL || merged.alipay?.returnUrl || "").trim(),
-      notifyUrl: String(process.env.ALIPAY_NOTIFY_URL || merged.alipay?.notifyUrl || "").trim(),
-      keyType: String(process.env.ALIPAY_KEY_TYPE || merged.alipay?.keyType || "PKCS8").trim().toUpperCase(),
-      fakeAllowed: parseBooleanConfig(process.env.ALIPAY_FAKE_ALLOWED, parseBooleanConfig(merged.alipay?.fakeAllowed, false)),
-    },
-    billing: {
+      alipay: {
+        enabled: parseBooleanConfig(process.env.ALIPAY_ENABLED, parseBooleanConfig(merged.alipay?.enabled, false)),
+        provider: alipayProviderName,
+        appId: String(process.env.ALIPAY_APP_ID || merged.alipay?.appId || "").trim(),
+        privateKey: String(process.env.ALIPAY_PRIVATE_KEY || merged.alipay?.privateKey || "").trim(),
+        alipayPublicKey: String(process.env.ALIPAY_PUBLIC_KEY || merged.alipay?.alipayPublicKey || "").trim(),
+        sellerId: String(process.env.ALIPAY_SELLER_ID || merged.alipay?.sellerId || "").trim(),
+        gateway: String(process.env.ALIPAY_GATEWAY || merged.alipay?.gateway || "https://openapi.alipay.com").trim(),
+        timeoutMs: Number(process.env.ALIPAY_TIMEOUT_MS || merged.alipay?.timeoutMs || 5000),
+        returnUrl: String(process.env.ALIPAY_RETURN_URL || merged.alipay?.returnUrl || "").trim(),
+        notifyUrl: String(process.env.ALIPAY_NOTIFY_URL || merged.alipay?.notifyUrl || "").trim(),
+        keyType: String(process.env.ALIPAY_KEY_TYPE || merged.alipay?.keyType || "PKCS8").trim().toUpperCase(),
+        fakeAllowed: parseBooleanConfig(process.env.ALIPAY_FAKE_ALLOWED, parseBooleanConfig(merged.alipay?.fakeAllowed, false)),
+      },
+      wxpay: {
+        enabled: parseBooleanConfig(process.env.WXPAY_ENABLED, parseBooleanConfig(merged.wxpay?.enabled, false)),
+        provider: wxpayProviderName,
+        appId: String(process.env.WXPAY_APP_ID || merged.wxpay?.appId || "").trim(),
+        mchId: String(process.env.WXPAY_MCH_ID || merged.wxpay?.mchId || "").trim(),
+        serialNo: String(process.env.WXPAY_SERIAL_NO || merged.wxpay?.serialNo || "").trim(),
+        privateKey: wxpayPrivateKey,
+        privateKeyFile: String(process.env.WXPAY_PRIVATE_KEY_FILE || merged.wxpay?.privateKeyFile || "").trim(),
+        apiV3Key: String(process.env.WXPAY_API_V3_KEY || merged.wxpay?.apiV3Key || "").trim(),
+        publicKeyId: String(process.env.WXPAY_PUBLIC_KEY_ID || merged.wxpay?.publicKeyId || "").trim(),
+        publicKey: wxpayPublicKey,
+        publicKeyFile: String(process.env.WXPAY_PUBLIC_KEY_FILE || merged.wxpay?.publicKeyFile || "").trim(),
+        gateway: String(process.env.WXPAY_GATEWAY || merged.wxpay?.gateway || "https://api.mch.weixin.qq.com").trim(),
+        timeoutMs: Number(process.env.WXPAY_TIMEOUT_MS || merged.wxpay?.timeoutMs || 5000),
+        notifyUrl: String(process.env.WXPAY_NOTIFY_URL || merged.wxpay?.notifyUrl || "").trim(),
+        fakeAllowed: parseBooleanConfig(process.env.WXPAY_FAKE_ALLOWED, parseBooleanConfig(merged.wxpay?.fakeAllowed, false)),
+      },
+      billing: {
       rechargePlans,
     },
     pgy: {

@@ -1461,7 +1461,7 @@ test("prunes expired evidence cache entries and enforces a size cap", async () =
   assert.equal(getAnySearchCacheSize(), 0);
 });
 
-test("generates ten AnySearch trends with complete content assets in one model call", async () => {
+test("generates ten AnySearch trends with lightweight ideas in one model call", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
   const prompts = [];
@@ -1500,9 +1500,8 @@ test("generates ten AnySearch trends with complete content assets in one model c
 
   assert.equal(modelCalls, 1);
   assert.doesNotMatch(prompts[0], /第 1\/2 批/);
-  assert.match(systemPrompts[0], /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
-  assert.doesNotMatch(systemPrompts[0], /不要输出 contentAssets/);
-  assert.match(prompts[0], /完整 contentAssets（moments、xhsCarousel、wechatLongImage）/);
+  assert.match(systemPrompts[0], /本次不要输出 contentAssets/);
+  assert.match(prompts[0], /本次不要输出 contentAssets/);
   assert.equal(result[0].items.length, 10);
   assert.deepEqual(result[0].items.map((item) => item.id), [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010]);
   assert.deepEqual(result[0].items.map((item) => item.score), [79, 78, 77, 76, 75, 74, 73, 72, 71, 70]);
@@ -1511,16 +1510,9 @@ test("generates ten AnySearch trends with complete content assets in one model c
   assert.ok(result[0].items.every((item) => item.evidence[0]?.provider === "anysearch"));
   assert.equal(result[0].items[0].evidence[0].url, "https://www.ce.cn/trend-a");
   assert.match(result[0].items[0].evidence[0].snippet, /舒适用光/);
-  assert.ok(
-    result[0].items.every((item) =>
-      item.ideas.every(
-        (idea) =>
-          idea.contentAssets?.moments?.caption &&
-          idea.contentAssets?.xhsCarousel?.slides?.length === 4 &&
-          idea.contentAssets?.wechatLongImage?.intro,
-      ),
-    ),
-  );
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
 test("delivers the single xhs model call and strips unsupported hard claims locally", async () => {
@@ -1563,7 +1555,7 @@ test("delivers the single xhs model call and strips unsupported hard claims loca
   assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("strips unsafe claims inside contentAssets without corrupting the asset pack", async () => {
+test("strips model-provided content assets from the lightweight trend response", async () => {
   let modelCalls = 0;
   const pgyEvidence = {
     categoryPath: "家居家装 / 家居用品",
@@ -1591,18 +1583,12 @@ test("strips unsafe claims inside contentAssets without corrupting the asset pac
 
   assert.equal(modelCalls, 1);
   assert.equal(result[0].items.length, 10);
-  // 违规文案被就地清理，但 contentAssets 结构保持完整（不破坏整包、不静默落骨架）。
+  // Trend analysis never persists the expensive asset pack; it is generated
+  // only when the user starts a corresponding image workflow.
   assert.doesNotMatch(JSON.stringify(result), /官方认证/);
-  assert.ok(
-    result[0].items.every((item) =>
-      item.ideas.every(
-        (idea) =>
-          idea.contentAssets?.moments?.caption &&
-          idea.contentAssets?.xhsCarousel?.slides?.length === 4 &&
-          idea.contentAssets?.wechatLongImage?.intro,
-      ),
-    ),
-  );
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
 test("delivers the single xhs model output without grounding business gates", async () => {
@@ -1916,10 +1902,10 @@ test("bounds repeatedly invalid focused repairs to two logical model calls", asy
   assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_DEGRADED"));
 });
 
-test("fails without saving when the first model call fails at transport level", async () => {
+test("degrades to evidence-backed lightweight trends when the first model call fails", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 5725, {
@@ -1929,11 +1915,16 @@ test("fails without saving when the first model call fails at transport level", 
       modelCalls += 1;
       throw new SyntaxError("Unexpected end of JSON input: truncated model response");
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
-  // 完整 contentAssets 是成功交付硬门槛：本地证据槽位卡无法凭空生成真实发布
-  // 文案，因此一次传输失败直接整批失败（不落库、不扣费），绝不交付骨架。
+  // Evidence-backed local cards keep the trend page usable, while the model
+  // failure is visible through the delivery warning.
   assert.equal(modelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_MODEL_UNAVAILABLE"));
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
 test("regenerates the full model batch when more than four cards are invalid", async () => {
@@ -2080,10 +2071,10 @@ test("returns ten trends when AnySearch has only one relevant evidence item", as
   assert.ok(result[0].items.every((item) => item.title.includes("稀疏证据趋势")));
 });
 
-test("fails without saving when the model output stays unparsable", async () => {
+test("degrades to evidence-backed lightweight trends when model output stays unparsable", async () => {
   clearAnySearchCache();
   let modelCalls = 0;
-  await assert.rejects(generateAiTrendSet({
+  const result = await generateAiTrendSet({
     searchProvider: { enabled: true, socialEnabled: true, minReliableEvidence: 1, urlCheckEnabled: false, cacheTtlMs: 0 },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   }, brand, 5900, {
@@ -2093,11 +2084,16 @@ test("fails without saving when the model output stays unparsable", async () => 
       modelCalls += 1;
       return ["sorry", "no json"];
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
-  // 两次有界尝试后仍无法解析：证据槽位兜底卡缺少完整 contentAssets，整批失败，
-  // 不落骨架、不扣费，保持既有失败语义。
+  // Two bounded attempts are still made; the final response is a lightweight
+  // evidence-backed fallback rather than a full content-asset package.
   assert.equal(modelCalls, 2);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result.analysisWarnings.some((warning) => warning.code === "TREND_ITEM_FALLBACK"));
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
 test("retries duplicate trends instead of rewriting model copy locally", async () => {
@@ -2297,7 +2293,7 @@ test("scans unsupported qualification claims in idea audiences and tags", async 
   assert.doesNotMatch(JSON.stringify(result), /孕妇专用|官方认证/);
 });
 
-test("rejects lean trend ideas without complete content assets", async () => {
+test("accepts lean trend ideas without content assets", async () => {
   clearAnySearchCache();
   let trendModelCalls = 0;
   const appConfig = {
@@ -2310,14 +2306,14 @@ test("rejects lean trend ideas without complete content assets", async () => {
     },
     textProvider: { apiStyle: "openai", maxOutputTokens: 32768 },
   };
-  await assert.rejects(generateAiTrendSet(appConfig, brand, 8000, {
+  const result = await generateAiTrendSet(appConfig, brand, 8000, {
     bucketKey: "traffic",
     anySearchOptions: { now: fixedNow, requestImpl: async () => markdownFixture() },
     textModelImpl: async (_config, request) => {
       trendModelCalls += 1;
-      // 新契约：趋势分析阶段直接要求完整 contentAssets，而不是骨架。
-      assert.match(request.systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
-      assert.doesNotMatch(request.systemPrompt, /不要输出 contentAssets/);
+      // 新契约：趋势分析阶段只生成轻量趋势与选题，资产在生图时补齐。
+      assert.match(request.systemPrompt, /本次不要输出 contentAssets/);
+      assert.match(request.userPrompt, /本次不要输出 contentAssets/);
       const prefix = `精简批次${trendModelCalls}`;
       const lean = generatedTrendBatch(`${prefix}趋势`, { bucketKey: "traffic" });
       lean.trendBuckets[0].items.forEach((item) => {
@@ -2325,10 +2321,13 @@ test("rejects lean trend ideas without complete content assets", async () => {
       });
       return lean;
     },
-  }), { code: "TREND_MODEL_VALIDATION_FAILED" });
+  });
 
-  // 两次有界尝试（整批重生）后仍无 contentAssets：整批失败，不落骨架。
-  assert.equal(trendModelCalls, 2);
+  assert.equal(trendModelCalls, 1);
+  assert.equal(result[0].items.length, 10);
+  assert.ok(result[0].items.every((item) =>
+    item.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0),
+  ));
 });
 
 test("fills skeleton idea content assets once and skips complete ideas", async () => {
@@ -2448,16 +2447,16 @@ test("retries unsafe medicine copy in regenerated ideas and lazy content assets"
     {
       textModelImpl: async (_config, request) => {
         evidenceModeCalls += 1;
-        assert.match(request.systemPrompt, /contentAssets 必须包含 moments、xhsCarousel、wechatLongImage/);
-        assert.doesNotMatch(request.systemPrompt, /本次不要输出 contentAssets/);
-        assert.match(request.userPrompt, /contentAssets\.moments\.caption/);
-        assert.match(request.userPrompt, /contentAssets\.xhsCarousel\.publishCaption/);
+        assert.match(request.systemPrompt, /本次不要输出 contentAssets/);
+        assert.match(request.userPrompt, /本次不要输出 contentAssets/);
+        assert.doesNotMatch(request.userPrompt, /contentAssets\.moments\.caption/);
+        assert.doesNotMatch(request.userPrompt, /contentAssets\.xhsCarousel\.publishCaption/);
         return { ideas: makeIdeas(false, true) };
       },
     },
   );
   assert.equal(evidenceModeCalls, 1);
-  assert.ok(evidenceRegenerated.ideas.every((idea) => isIdeaContentAssetsComplete(idea)));
+  assert.ok(evidenceRegenerated.ideas.every((idea) => Object.keys(idea.contentAssets || {}).length === 0));
 
   let enrichmentCalls = 0;
   const enriched = await ensureTrendIdeaContentAssets(

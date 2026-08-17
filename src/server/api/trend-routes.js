@@ -80,13 +80,9 @@ async function handleTrendRoutes(context, req, res, pathname) {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
 
-    if (appConfig?.trendAnalysis?.freeForm) {
-      // 创意模式不依赖小红书类目，直接返回空树，避免前端报"类目加载失败"。
-      json(res, 200, { root: "创意模式", items: [], freeForm: true });
-      return true;
-    }
-
     try {
+      // This is taxonomy metadata only; model-only trend generation still does
+      // not fetch Pgy hot notes or use the category tree as trend evidence.
       const categoryTree = await fetchPgyCategoryTree(appConfig);
       json(res, 200, categoryTree);
     } catch (error) {

@@ -280,6 +280,51 @@ test("calls an OpenAI-compatible chat completion and parses JSON content", async
   assert.ok(telemetry.some((event) => event.type === "complete" && event.statusCode === 200));
 });
 
+test("rejects a Google MAX_TOKENS response before parsing partial JSON", async (t) => {
+  let requestCount = 0;
+  const telemetry = [];
+  const server = http.createServer((_request, response) => {
+    requestCount += 1;
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      candidates: [{
+        finishReason: "MAX_TOKENS",
+        content: { parts: [{ text: '{"partial":true' }] },
+      }],
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  await assert.rejects(
+    callTextModelJson({
+      textProvider: {
+        apiStyle: "google",
+        model: "gemini-3.6-flash",
+        baseUrl: `http://127.0.0.1:${port}`,
+        apiKey: "fixture-key",
+      },
+    }, {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      maxAttempts: 1,
+      onTelemetry(event) {
+        telemetry.push(event);
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, "TEXT_MODEL_MAX_TOKENS");
+      assert.equal(error.finishReason, "MAX_TOKENS");
+      assert.equal(error.partial, true);
+      return true;
+    },
+  );
+
+  assert.equal(requestCount, 1);
+  assert.ok(telemetry.some((event) => event.type === "finish-reason" && event.finishReason === "MAX_TOKENS"));
+});
+
 test("shares one timeout budget across text-provider transport retries", async (t) => {
   let requestCount = 0;
   const server = http.createServer((_request, response) => {
@@ -441,6 +486,45 @@ test("streams long OpenAI-compatible JSON generations so active responses do not
     total_tokens: 16,
   });
   assert.ok(telemetry.some((event) => event.type === "complete"));
+});
+
+test("rejects a truncated OpenAI stream instead of parsing partial JSON", async (t) => {
+  let requestCount = 0;
+  const server = http.createServer((request, response) => {
+    requestCount += 1;
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end([
+        'data:{"choices":[{"delta":{"content":"{\\"partial\\":true"}}]}',
+        'data:{"choices":[{"delta":{},"finish_reason":"length"}]}',
+        "data:[DONE]",
+        "",
+      ].join("\n\n"));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  await assert.rejects(
+    callTextModelJson({
+      textProvider: {
+        apiStyle: "openai",
+        model: "fixture-model",
+        openaiBaseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: "fixture-key",
+      },
+    }, {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      maxAttempts: 1,
+      stream: true,
+    }),
+    { code: "TEXT_MODEL_MAX_TOKENS", finishReason: "length", partial: true },
+  );
+
+  assert.equal(requestCount, 1);
 });
 
 test("enforces the configured model timeout as a total wall-clock deadline", async (t) => {

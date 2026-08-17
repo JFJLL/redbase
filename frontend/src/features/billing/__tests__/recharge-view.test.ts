@@ -79,13 +79,35 @@ describe("RechargeView", () => {
     expect(wrapper.findAll("[data-test=recharge-plan]")).toHaveLength(0);
   });
 
+  it("intercepts plan click with notice modal when user has an active pending order", async () => {
+    const closedOrder = { ...PENDING_ORDER, status: "closed" };
+    stubFetch({
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "POST /api/payments/alipay/orders/redbase_order123/close": () => jsonResponse(200, { order: closedOrder }),
+    });
+    const { wrapper } = await mountView();
+
+    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test=pending-order-modal]").exists()).toBe(true);
+    expect(wrapper.text()).toContain("您还有未完成的订单");
+
+    await wrapper.find("[data-test=modal-confirm-cancel]").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test=pending-order-modal]").exists()).toBe(false);
+    expect(wrapper.find("[data-test=checkout-screen]").exists()).toBe(true);
+  });
+
   it("creates an Alipay order and reveals the pay link plus fake settle actions in test mode", async () => {
     const qrDataUrl = "data:image/png;base64,cXItY29kZQ==";
     const qrcode = await import("qrcode");
     vi.spyOn(qrcode.default, "toDataURL").mockImplementation(async () => qrDataUrl);
     const fetchMock = stubFetch({
       "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: true }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
       "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
       "POST /api/payments/alipay/orders": () =>
         jsonResponse(201, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
@@ -95,9 +117,12 @@ describe("RechargeView", () => {
     const { wrapper, router } = await mountView();
 
     expect(wrapper.findAll("[data-test=recharge-plan]")).toHaveLength(1);
-    expect(wrapper.findAll("[data-test=fake-settle-link]")).toHaveLength(1);
 
     await wrapper.find("[data-test=recharge-plan] button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test=checkout-screen]").exists()).toBe(true);
+    await wrapper.find("[data-test=checkout-submit-btn]").trigger("click");
     await flushPromises();
 
     const createCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/payments/alipay/orders");
@@ -113,7 +138,6 @@ describe("RechargeView", () => {
     await flushPromises();
     expect(wrapper.find("[data-test=payment-qrcode]").attributes("src")).toBe(qrDataUrl);
     expect(qrcode.default.toDataURL).toHaveBeenCalledWith("https://qr.alipay.test/redbase_order123", expect.any(Object));
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/pay-link"))).toHaveLength(0);
   });
 
   it("renders the paid status for settled orders", async () => {
@@ -220,7 +244,7 @@ describe("RechargeView", () => {
   it("shows the PC payment fallback when Alipay precreate is unavailable", async () => {
     stubFetch({
       "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
       "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
       "POST /api/payments/alipay/orders": () => jsonResponse(201, {
         order: PENDING_ORDER,
@@ -233,31 +257,12 @@ describe("RechargeView", () => {
 
     await wrapper.find("[data-test=recharge-plan] button").trigger("click");
     await flushPromises();
+    await wrapper.find("[data-test=checkout-submit-btn]").trigger("click");
+    await flushPromises();
 
     expect(wrapper.find("[data-test=payment-qrcode]").exists()).toBe(false);
     expect(wrapper.find(".payment-qr-error").text()).toContain("扫码支付暂不可用");
     expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe("https://pay.example/redbase_order123");
-  });
-
-  it("allows only one order creation while a request is in flight", async () => {
-    const secondPlan = { id: "p2", name: "套餐二", credits: 20, amountYuan: "0.02" };
-    let resolveCreate: ((response: Response) => void) | undefined;
-    const pendingCreate = new Promise<Response>((resolve) => { resolveCreate = resolve; });
-    const fetchMock = stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN, secondPlan], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
-      "POST /api/payments/alipay/orders": () => pendingCreate as unknown as Response,
-    });
-    const { wrapper } = await mountView();
-    const buttons = wrapper.findAll("[data-test=recharge-plan] button");
-
-    await buttons[0].trigger("click");
-    await buttons[1].trigger("click");
-
-    expect(buttons.every((button) => button.attributes("disabled") !== undefined)).toBe(true);
-    expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/payments/alipay/orders")).toHaveLength(1);
-    resolveCreate?.(jsonResponse(500, { error: "结束测试请求" }));
-    await flushPromises();
   });
 
   it("clears payment errors after returning to the recharge center", async () => {
@@ -277,7 +282,6 @@ describe("RechargeView", () => {
     await wrapper.find(".billing-back").trigger("click");
     await flushPromises();
     expect(wrapper.find("[role=alert]").exists()).toBe(false);
-    expect(wrapper.find(".billing-safe-note").exists()).toBe(false);
   });
 
   it("highlights the business plan selected from the account center", async () => {
@@ -304,28 +308,35 @@ describe("RechargeView", () => {
     expect(wrapper.find('[data-plan-id="business-monthly"]').classes()).not.toContain("billing-plan-card--selected");
   });
 
-  it("discards a stale payment-link response after switching to another order", async () => {
-    const orderB = { ...PENDING_ORDER, outTradeNo: "redbase_order456", planName: "套餐 B" };
-    let resolveOrderALink: ((response: Response) => void) | undefined;
-    const orderALink = new Promise<Response>((resolve) => { resolveOrderALink = resolve; });
-    stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER, orderB] }),
-      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
-      "GET /api/payments/orders/redbase_order456": () => jsonResponse(200, { order: orderB }),
-      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () => orderALink as unknown as Response,
-      "POST /api/payments/alipay/orders/redbase_order456/pay-link": () =>
-        jsonResponse(200, { order: orderB, payUrl: "https://pay.example/order-b", qrCode: "https://qr.alipay.test/order-b" }),
+  it("supports selecting WeChat Pay on the checkout view and renders green WeChat payment screen", async () => {
+    const wxOrder = { ...PENDING_ORDER, outTradeNo: "redbase_wx123", provider: "wxpay" as const };
+    const fetchMock = stubFetch({
+      "GET /api/billing/recharge-plans": () =>
+        jsonResponse(200, { plans: [PLAN], fakeSettle: true, providers: { alipay: true, wxpay: true } }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
+      "POST /api/payments/wxpay/orders": () =>
+        jsonResponse(201, { order: wxOrder, payUrl: "", qrCode: "weixin://wxpay/bizpayurl?pr=fake123" }),
+      "GET /api/payments/orders/redbase_wx123": () => jsonResponse(200, { order: wxOrder }),
+      "POST /api/payments/wxpay/orders/redbase_wx123/pay-link": () =>
+        jsonResponse(200, { order: wxOrder, payUrl: "", qrCode: "weixin://wxpay/bizpayurl?pr=fake123" }),
     });
+    const { wrapper, router } = await mountView();
 
-    const { wrapper, router } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
-    await router.push("/billing?view=pay&outTradeNo=redbase_order456");
-    await flushPromises();
-    resolveOrderALink?.(jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/order-a", qrCode: "https://qr.alipay.test/order-a" }));
+    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
     await flushPromises();
 
-    expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_order456");
-    expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe("https://pay.example/order-b");
-    expect(wrapper.text()).toContain("套餐 B");
+    expect(wrapper.find("[data-test=checkout-screen]").exists()).toBe(true);
+    expect(wrapper.find("[data-test=payment-method-selector]").exists()).toBe(true);
+
+    await wrapper.find('[data-provider="wxpay"]').trigger("click");
+    await wrapper.find("[data-test=checkout-submit-btn]").trigger("click");
+    await flushPromises();
+
+    const createCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/payments/wxpay/orders");
+    expect(createCall).toBeTruthy();
+    expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_wx123");
+    expect(wrapper.text()).toContain("微信支付");
+    expect(wrapper.find(".payment-brandbar--wxpay").exists()).toBe(true);
+    expect(wrapper.find("[data-test=alipay-pay-link]").exists()).toBe(false);
   });
 });

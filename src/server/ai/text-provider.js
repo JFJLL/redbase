@@ -296,9 +296,37 @@ function fetchJson(url, options = {}) {
   });
 }
 
+function isMaxTokensFinishReason(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s_-]+/g, "");
+  return new Set(["MAXTOKENS", "MAXOUTPUTTOKENS", "MAXOUTPUT", "LENGTH"]).has(normalized);
+}
+
+function createTextModelOutputTruncatedError(finishReason) {
+  const error = new Error(`Text model output was truncated before completion (${String(finishReason || "MAX_TOKENS")}).`);
+  error.code = "TEXT_MODEL_MAX_TOKENS";
+  error.finishReason = String(finishReason || "MAX_TOKENS");
+  // Retry at the logical generation layer; partial JSON must never be treated
+  // as a successful model result.
+  error.retryable = true;
+  error.partial = true;
+  return error;
+}
+
+function assertModelOutputNotTruncated(finishReason, onTelemetry) {
+  if (!finishReason) return;
+  onTelemetry?.({ type: "finish-reason", finishReason: String(finishReason) });
+  if (isMaxTokensFinishReason(finishReason)) {
+    throw createTextModelOutputTruncatedError(finishReason);
+  }
+}
+
 function extractTextFromOpenAIStream(raw, onTelemetry) {
   const parts = [];
   let completed = false;
+  let finishReason = "";
   for (const line of String(raw || "").split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) continue;
@@ -320,10 +348,13 @@ function extractTextFromOpenAIStream(raw, onTelemetry) {
     if (data?.usage && typeof onTelemetry === "function") {
       onTelemetry({ type: "usage", usage: data.usage });
     }
-    const content = data?.choices?.[0]?.delta?.content;
+    const choice = data?.choices?.[0];
+    if (choice?.finish_reason) finishReason = String(choice.finish_reason);
+    const content = choice?.delta?.content;
     if (typeof content === "string") parts.push(content);
   }
   if (!completed) throw new Error("OpenAI-compatible stream ended before [DONE].");
+  assertModelOutputNotTruncated(finishReason, onTelemetry);
   return parts.join("");
 }
 
@@ -415,7 +446,7 @@ function fetchOpenAIText(url, options = {}) {
             if (data?.usage) options.onTelemetry?.({ type: "usage", usage: data.usage });
             options.onTelemetry?.({ type: "complete", elapsedMs: Date.now() - startedAt, statusCode: response.statusCode });
           } catch (error) {
-            error.retryable = false;
+            if (error.retryable == null) error.retryable = false;
             rejectOnce(error);
           }
         });
@@ -606,6 +637,7 @@ async function callTextModelJson(appConfig, {
           ...getAttemptRequestOptions(),
         }),
     );
+    assertModelOutputNotTruncated(data?.candidates?.[0]?.finishReason, onTelemetry);
     return parseJsonFromModelText(extractTextFromGoogleResponse(data));
   }
 
@@ -629,6 +661,7 @@ async function callTextModelJson(appConfig, {
           ...getAttemptRequestOptions(),
         }),
     );
+    assertModelOutputNotTruncated(data?.stop_reason, onTelemetry);
     return parseJsonFromModelText(extractTextFromAnthropicResponse(data));
   }
 
@@ -694,6 +727,7 @@ async function callTextModelJson(appConfig, {
         ...getAttemptRequestOptions(),
       }),
   );
+  assertModelOutputNotTruncated(data?.choices?.[0]?.finish_reason, onTelemetry);
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
 }
 
@@ -772,6 +806,7 @@ async function callVisionModelJson(appConfig, {
     },
     buildRetryOptions({ retries, maxAttempts, delayMs }),
   );
+  assertModelOutputNotTruncated(data?.choices?.[0]?.finish_reason, onTelemetry);
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
 }
 

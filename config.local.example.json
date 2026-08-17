@@ -125,6 +125,23 @@
     "keyType": "PKCS8",
     "fakeAllowed": false
   },
+  "wxpay": {
+    "enabled": false,
+    "provider": "disabled",
+    "appId": "",
+    "mchId": "",
+    "serialNo": "",
+    "privateKey": "",
+    "privateKeyFile": "certs/apiclient_key.pem",
+    "apiV3Key": "",
+    "publicKeyId": "",
+    "publicKey": "",
+    "publicKeyFile": "certs/pub_key.pem",
+    "gateway": "https://api.mch.weixin.qq.com",
+    "timeoutMs": 5000,
+    "notifyUrl": "",
+    "fakeAllowed": false
+  },
   "billing": {
     "rechargePlans": [
       {

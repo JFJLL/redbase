@@ -53,6 +53,7 @@ type FetchCall = { url: string; init?: RequestInit };
 
 describe("AdminDashboardView", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -98,6 +99,93 @@ describe("AdminDashboardView", () => {
     const rows = wrapper.findAll('[data-test="admin-user-row"]');
     expect(rows).toHaveLength(1);
     expect(rows[0].text()).toContain("小美");
+  });
+
+  it("defaults usage to recent seven days and filters by type and user", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 17, 12, 0, 0));
+    const dateAtOffset = (days: number) => {
+      const date = new Date();
+      date.setDate(date.getDate() + days);
+      return date.toISOString();
+    };
+    const overview = {
+      ...OVERVIEW,
+      usageEvents: [
+        { id: 1, userId: 1, userName: "管理员", userPhone: "13800000001", tokenDelta: -2, createdAt: dateAtOffset(-2), actionLabel: "生成内容" },
+        { id: 2, userId: 2, userName: "小美", userPhone: "13900000002", tokenDelta: 30, createdAt: dateAtOffset(-1), actionLabel: "管理员加额度" },
+        { id: 3, userId: 1, userName: "管理员", userPhone: "13800000001", tokenDelta: 100, createdAt: dateAtOffset(-10), actionLabel: "管理员加额度" },
+        { id: 4, userId: 2, userName: "小美", userPhone: "13900000002", tokenDelta: -1, createdAt: dateAtOffset(-3), actionLabel: "生成内容" },
+      ],
+    };
+    const { wrapper } = await mountView((url) => {
+      if (url === "/api/admin/overview") return jsonResponse(200, overview);
+      return undefined;
+    });
+
+    expect(wrapper.find('[data-test="usage-date-filter"]').text()).toContain("近7天");
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(3);
+
+    await wrapper.find('[data-test="usage-type-filter"]').trigger("click");
+    await wrapper.find('[data-type-option="debit"]').trigger("click");
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-test="usage-event-row"]')[0].text()).toContain("-2");
+
+    await wrapper.find('[data-test="usage-type-filter"]').trigger("click");
+    await wrapper.find('[data-type-option="credit"]').trigger("click");
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(1);
+    expect(wrapper.find('[data-test="usage-event-row"]').text()).toContain("+30");
+
+    await wrapper.find('[data-test="usage-date-filter"]').trigger("click");
+    expect(wrapper.find('[data-range-option="30d"]').exists()).toBe(true);
+    await wrapper.find('[data-test="usage-date-filter"]').trigger("keydown", { key: "Escape" });
+    expect(wrapper.find('[data-range-option="30d"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="usage-date-filter"]').trigger("click");
+    document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-range-option="30d"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="usage-date-filter"]').trigger("click");
+    await wrapper.find('[data-range-option="30d"]').trigger("click");
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(2);
+
+    await wrapper.find('[data-test="usage-type-filter"]').trigger("click");
+    await wrapper.find('[data-type-option="all"]').trigger("click");
+    await wrapper.find('[data-test="usage-user-filter"]').trigger("click");
+    await wrapper.find('[data-test="usage-user-search"]').setValue("管理员");
+    expect(wrapper.find('[data-user-option="1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-user-option="2"]').exists()).toBe(false);
+    await wrapper.find('[data-user-option="1"]').trigger("click");
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(2);
+
+    const customStart = dateAtOffset(-5).slice(0, 10);
+    const customEnd = dateAtOffset(-2).slice(0, 10);
+    await wrapper.find('[data-test="usage-date-filter"]').trigger("click");
+    await wrapper.find('[aria-label="开始日期"]').setValue(customStart);
+    await wrapper.find('[aria-label="结束日期"]').setValue(customEnd);
+    await wrapper.find('[data-test="usage-date-apply"]').trigger("click");
+    expect(wrapper.find('[data-test="usage-date-filter"]').text()).toContain(`${customStart} 至 ${customEnd}`);
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(1);
+
+    await wrapper.find('[data-test="usage-date-filter"]').trigger("click");
+    await wrapper.find('[aria-label="开始日期"]').setValue("");
+    expect(wrapper.find('[data-test="usage-date-filter"]').text()).toContain(`${customStart} 至 ${customEnd}`);
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(1);
+    await wrapper.find('[aria-label="开始日期"]').setValue(customStart);
+    await wrapper.find('[aria-label="结束日期"]').setValue(dateAtOffset(-6).slice(0, 10));
+    expect(wrapper.find('.usage-date-error').text()).toContain("结束日期不能早于开始日期");
+    expect((wrapper.find('[data-test="usage-date-apply"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.findAll('[data-test="usage-event-row"]')).toHaveLength(1);
+  });
+
+  it("removes the usage picker document listener when unmounted", async () => {
+    const removeEventListenerSpy = vi.spyOn(document, "removeEventListener");
+    const { wrapper } = await mountView();
+
+    wrapper.unmount();
+
+    expect(removeEventListenerSpy).toHaveBeenCalledWith("click", expect.any(Function));
   });
 
   it("posts the credit adjustment body {amount, note} for the picked user", async () => {

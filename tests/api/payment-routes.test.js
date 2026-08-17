@@ -7,8 +7,9 @@ process.env.REDBASE_DB_FILE = ":memory:";
 
 const { openDatabase, getDbProxy } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
-const { handlePaymentRoutes, processAlipayNotify } = require("../../src/server/api/payment-routes");
+const { handlePaymentRoutes, processAlipayNotify, processWxpayNotify } = require("../../src/server/api/payment-routes");
 const { getAlipayProvider } = require("../../src/server/integrations/alipay");
+const { getWxpayProvider } = require("../../src/server/integrations/wxpay");
 const {
   insertUser,
   insertSession,
@@ -36,6 +37,19 @@ const appConfig = {
     alipayPublicKey: "",
     sellerId: "",
     returnUrl: "http://127.0.0.1:3013/app/billing",
+    notifyUrl: "",
+  },
+  wxpay: {
+    enabled: true,
+    provider: "fake",
+    fakeAllowed: true,
+    appId: "wx0000000000000000",
+    mchId: "1600000000",
+    serialNo: "0123456789ABCDEF0123456789ABCDEF01234567",
+    apiV3Key: "0123456789abcdef0123456789abcdef",
+    publicKeyId: "PUB_KEY_ID_00000000000000000000000000000001",
+    publicKey: "PUB_KEY",
+    privateKey: "PRIV_KEY",
     notifyUrl: "",
   },
   billing: {
@@ -128,6 +142,23 @@ async function createOrder(cookie = "redbase_session=token-a", idempotencyKey = 
   });
 }
 
+async function createWxOrder(cookie = "redbase_session=token-a", idempotencyKey = `wx-idem-${Date.now()}`) {
+  return await api("POST", "/api/payments/wxpay/orders", {
+    cookie,
+    body: { planId: "p1", idempotencyKey },
+  });
+}
+
+async function sendWxNotify(headers, rawBody) {
+  const req = Readable.from([Buffer.from(rawBody, "utf8")]);
+  req.method = "POST";
+  req.url = "/api/payments/wxpay/notify";
+  req.headers = { host: "localhost:3013", "content-type": "application/json", ...headers };
+  const res = createRes();
+  await handlePaymentRoutes({ appConfig }, req, res, "/api/payments/wxpay/notify");
+  return res;
+}
+
 function notifyParams(gateway, outTradeNo, overrides = {}) {
   const order = findPaymentOrderByOutTradeNo(outTradeNo);
   return gateway.buildNotifyParams({
@@ -157,6 +188,7 @@ test("P6: recharge plans are hidden when alipay is disabled", async () => {
   const disabledConfig = {
     ...appConfig,
     alipay: { ...appConfig.alipay, enabled: false },
+    wxpay: { ...appConfig.wxpay, enabled: false },
   };
   const res = createRes();
   await handlePaymentRoutes(
@@ -176,6 +208,7 @@ test("P6: recharge plans are hidden when the payment gateway is unavailable", as
   const noGatewayConfig = {
     ...appConfig,
     alipay: { ...appConfig.alipay, enabled: true, provider: "disabled", fakeAllowed: false },
+    wxpay: { ...appConfig.wxpay, enabled: true, provider: "disabled", fakeAllowed: false },
   };
   const res = createRes();
   await handlePaymentRoutes(
@@ -712,4 +745,76 @@ test("processAlipayNotify returns failure for unknown trade status", () => {
     nowIso: new Date().toISOString(),
   });
   assert.equal(result.ok, false);
+});
+
+test("creates a WeChat Pay order with native QR code and records provider=wxpay", async () => {
+  const res = await createWxOrder("redbase_session=token-a", `wx-order-${Date.now()}`);
+  assert.equal(res.statusCode, 201);
+  const body = JSON.parse(res.body);
+  assert.equal(body.order.status, "pending");
+  assert.equal(body.order.provider, "wxpay");
+  assert.equal(body.order.amountYuan, "0.01");
+  assert.match(body.qrCode, /^weixin:\/\/wxpay\/bizpayurl/);
+
+  const stored = findPaymentOrderByOutTradeNo(body.order.outTradeNo);
+  assert.equal(stored.provider, "wxpay");
+  assert.equal(stored.status, "pending");
+});
+
+test("WeChat Pay notification settles order, credits user, and produces idempotency across duplicates", async () => {
+  const gateway = getWxpayProvider(appConfig);
+  const orderRes = await createWxOrder("redbase_session=token-a", `wx-notify-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+  const creditsBefore = Number(findUserByPhone("13900000001").credits);
+
+  const payload = gateway.buildNotifyPayload({
+    outTradeNo: order.outTradeNo,
+    transactionId: `WXTRANS_${Date.now()}`,
+    amountFen: 1,
+    tradeState: "SUCCESS",
+  });
+
+  const firstRes = await sendWxNotify(payload.headers, payload.rawBody);
+  assert.equal(firstRes.statusCode, 200);
+  assert.deepEqual(JSON.parse(firstRes.body), { code: "SUCCESS", message: "成功" });
+
+  const secondRes = await sendWxNotify(payload.headers, payload.rawBody);
+  assert.equal(secondRes.statusCode, 200);
+  assert.deepEqual(JSON.parse(secondRes.body), { code: "SUCCESS", message: "成功" });
+
+  const stored = findPaymentOrderByOutTradeNo(order.outTradeNo);
+  assert.equal(stored.status, "paid");
+  assert.equal(stored.provider, "wxpay");
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+});
+
+test("WeChat Pay active check reconciles pending order and fake settle works", async () => {
+  const gateway = getWxpayProvider(appConfig);
+  const orderRes = await createWxOrder("redbase_session=token-a", `wx-check-${Date.now()}`);
+  const order = JSON.parse(orderRes.body).order;
+  const creditsBefore = Number(findUserByPhone("13900000001").credits);
+
+  gateway.settle({ outTradeNo: order.outTradeNo, transactionId: `WXCHECK_${Date.now()}`, amountFen: 1 });
+  const checkRes = await api("POST", `/api/payments/wxpay/orders/${order.outTradeNo}/check`, {
+    cookie: "redbase_session=token-a",
+    body: {},
+  });
+  assert.equal(checkRes.statusCode, 200);
+  assert.equal(JSON.parse(checkRes.body).order.status, "paid");
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+
+  const closable = await createWxOrder("redbase_session=token-a", `wx-close-${Date.now()}`);
+  const closableOrder = JSON.parse(closable.body).order;
+  const closeRes = await api("POST", `/api/payments/wxpay/orders/${closableOrder.outTradeNo}/close`, {
+    cookie: "redbase_session=token-a",
+    body: {},
+  });
+  assert.equal(closeRes.statusCode, 200);
+  assert.equal(JSON.parse(closeRes.body).order.status, "closed");
+
+  const settleOrderRes = await createWxOrder("redbase_session=token-a", `wx-fake-settle-${Date.now()}`);
+  const settleOrder = JSON.parse(settleOrderRes.body).order;
+  const fakeSettleRes = await api("GET", `/api/payments/fake/wxpay/settle?outTradeNo=${settleOrder.outTradeNo}`);
+  assert.equal(fakeSettleRes.statusCode, 200);
+  assert.equal(JSON.parse(fakeSettleRes.body).order.status, "paid");
 });
