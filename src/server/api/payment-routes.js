@@ -567,7 +567,9 @@ async function handlePaymentRoutes(context, req, res, pathname) {
           outTradeNo,
           error: String(error?.message || error),
         });
-        json(res, 502, { error: "支付状态查询失败，请稍后重试" });
+        const detail = String(error?.message || "");
+        const isExplicitError = detail.includes("IP") || detail.includes("支付宝");
+        json(res, 502, { error: isExplicitError ? detail : "支付状态查询失败，请稍后重试" });
         return true;
       }
       order = findPaymentOrderByOutTradeNo(outTradeNo);

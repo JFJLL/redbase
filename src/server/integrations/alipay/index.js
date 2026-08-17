@@ -219,13 +219,15 @@ class RealAlipayProvider {
   getSdk() {
     if (this.sdk) return this.sdk;
     const { AlipaySdk } = require("alipay-sdk");
-    const rawGateway = String(this.config.gateway || "https://openapi.alipay.com").trim();
-    const gateway = rawGateway.replace(/\/gateway\.do\/?$/i, "").replace(/\/+$/, "") || "https://openapi.alipay.com";
+    const rawGateway = String(this.config.gateway || "https://openapi.alipay.com/gateway.do").trim();
+    const gateway = rawGateway.endsWith("/gateway.do") ? rawGateway : `${rawGateway.replace(/\/+$/, "")}/gateway.do`;
+    const endpoint = rawGateway.replace(/\/gateway\.do\/?$/i, "").replace(/\/+$/, "") || "https://openapi.alipay.com";
     this.sdk = new AlipaySdk({
       appId: this.config.appId,
       privateKey: this.config.privateKey,
       alipayPublicKey: this.config.alipayPublicKey,
       gateway,
+      endpoint,
       timeout: Number(this.config.timeoutMs || 5000),
       keyType: this.config.keyType || "PKCS8",
     });
@@ -282,7 +284,11 @@ class RealAlipayProvider {
       return { data: {}, notFound: true, responseHttpStatus: 200, traceId: String(result?.traceId || "") };
     }
     if (result?.code && String(result.code) !== "10000") {
-      throw new Error(`支付宝查询订单失败：${String(result.subMsg || result.sub_msg || result.msg || result.code)}`);
+      const error = new Error(`支付宝查询订单失败：${String(result.subMsg || result.sub_msg || result.msg || result.code)}`);
+      error.subMsg = result.subMsg || result.sub_msg;
+      error.subCode = result.subCode || result.sub_code;
+      error.code = result.code;
+      throw error;
     }
     return {
       data: normalizeAlipayQueryData(result || {}),

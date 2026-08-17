@@ -669,7 +669,7 @@ function loadAppConfig() {
         privateKey: String(process.env.ALIPAY_PRIVATE_KEY || merged.alipay?.privateKey || "").trim(),
         alipayPublicKey: String(process.env.ALIPAY_PUBLIC_KEY || merged.alipay?.alipayPublicKey || "").trim(),
         sellerId: String(process.env.ALIPAY_SELLER_ID || merged.alipay?.sellerId || "").trim(),
-        gateway: String(process.env.ALIPAY_GATEWAY || merged.alipay?.gateway || "https://openapi.alipay.com").trim(),
+        gateway: String(process.env.ALIPAY_GATEWAY || merged.alipay?.gateway || "https://openapi.alipay.com/gateway.do").trim(),
         timeoutMs: Number(process.env.ALIPAY_TIMEOUT_MS || merged.alipay?.timeoutMs || 5000),
         returnUrl: String(process.env.ALIPAY_RETURN_URL || merged.alipay?.returnUrl || "").trim(),
         notifyUrl: String(process.env.ALIPAY_NOTIFY_URL || merged.alipay?.notifyUrl || "").trim(),
