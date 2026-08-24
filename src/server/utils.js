@@ -183,7 +183,7 @@ const SAFE_CLIENT_PAYLOAD_KEYS = new Set([
   "requestId", "videoScript", "creativeConcept", "totalDurationSec", "globalSubjectReference", "globalStyleReference", "globalContinuity",
   "audioDirection", "music", "ambience", "voiceStyle", "clips", "startSec", "endSec", "durationSec", "purpose", "referenceAssets",
   "subjectReference", "firstFrame", "lastFrame", "subjectAction", "cameraMovement", "environmentMotion", "lightingAndStyle", "audioPrompt",
-  "voiceover", "dialogue", "onScreenText", "transition", "continuity", "prompt", "stylePrompt", "videoDuration",
+  "voiceover", "dialogue", "onScreenText", "transition", "continuity", "stylePrompt", "videoDuration",
   "styleReferenceImageUsed", "styleReferenceImageCount", "styleReferenceImageName", "referenceImageUsed", "referenceImageCount",
 ].map((key) => key.toLowerCase()));
 
@@ -220,7 +220,7 @@ function sanitizePayloadForClient(value, parentKey = "") {
     Object.entries(value)
       .filter(([key]) => {
         const lowerKey = String(key).toLowerCase();
-        if (lowerKey === "prompt" && (parentKey === "clips" || parentKey === "slides")) return true;
+        if (lowerKey === "prompt" && parentKey === "clips") return true;
         return !isSensitivePayloadKey(key) && SAFE_CLIENT_PAYLOAD_KEYS.has(lowerKey);
       })
       .map(([key, child]) => {

@@ -291,7 +291,7 @@ describe("IdeasView", () => {
 
     const settings = card.find('[data-test="idea-creative-settings-0"]');
     expect(settings.text()).toContain("创作设置");
-    expect(settings.text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 比例：智能");
+    expect(settings.text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 脚本：智能推荐 · 比例：智能");
     expect(settings.text()).toContain("调整");
   });
 
@@ -406,11 +406,10 @@ describe("IdeasView", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 比例：智能");
+    expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 脚本：智能推荐 · 比例：智能");
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-style-0-change"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-style-0-option-editorial"]').trigger("click");
+    await wrapper.find('[data-test="idea-creative-style-0-option-editorial"] input').setValue(true);
     await flushPromises();
 
     // 比例网格选中态：智能＋具体比例按钮，选中 1:1。
@@ -425,7 +424,7 @@ describe("IdeasView", () => {
     await flushPromises();
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
-    expect(wrapper.find('[data-test="idea-creative-style-0-label"]').text()).toBe("杂志编辑感");
+    expect((wrapper.find('[data-test="idea-creative-style-0-option-editorial"] input').element as HTMLInputElement).checked).toBe(true);
   });
 
   it("replaces the brand logo through the per-idea logo control", async () => {

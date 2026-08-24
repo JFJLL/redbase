@@ -1,315 +1,195 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import type { CreativeOption } from "../api";
 
-const props = defineProps<{
+const props = withDefaults(
+  defineProps<{
   title: string;
+  hint?: string;
+  name: string;
   value: string;
   options: readonly CreativeOption[];
   testId?: string;
-}>();
+  }>(),
+  {
+    hint: "",
+    testId: "",
+  },
+);
 
 const emit = defineEmits<{
   (e: "update:value", value: string): void;
 }>();
 
-const isOpen = ref(false);
-
 const selectedOption = computed(() => {
   return props.options.find((opt) => opt.value === props.value) || props.options[0];
 });
 
-function openPicker() {
-  isOpen.value = true;
-}
-
-function closePicker() {
-  isOpen.value = false;
-}
-
 function selectOption(val: string) {
-  emit("update:value", val);
-  isOpen.value = false;
-}
-
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") {
-    closePicker();
+  if (val !== props.value) {
+    emit("update:value", val);
   }
 }
 </script>
 
 <template>
-  <div class="creative-option-picker" :data-test="testId" @keydown="handleKeydown">
-    <div class="picker-summary-card" :data-test="testId ? testId + '-summary' : undefined" @click="openPicker">
-      <div class="picker-summary-info">
-        <span class="picker-label">{{ title }}</span>
-        <strong class="picker-current-label" :data-test="testId ? testId + '-label' : undefined">
-          {{ selectedOption?.label || "智能推荐" }}
-        </strong>
-        <span class="picker-current-desc">
-          {{ selectedOption?.description || "" }}
-        </span>
+  <fieldset class="creative-option-picker" :data-test="testId">
+    <legend class="picker-legend">
+      <div class="picker-legend-header">
+        <span class="picker-title">{{ title }}</span>
+        <span v-if="hint" class="picker-hint">{{ hint }}</span>
       </div>
-      <button
-        type="button"
-        class="picker-change-btn"
-        :data-test="testId ? testId + '-change' : undefined"
-        :aria-expanded="isOpen"
-        @click.stop="openPicker"
+    </legend>
+
+    <div class="picker-options-grid">
+      <label
+        v-for="option in options"
+        :key="option.value"
+        class="picker-option-card"
+        :class="{ 'is-selected': option.value === value }"
+        :data-test="testId ? `${testId}-option-${option.value}` : undefined"
       >
-        更换
-      </button>
+        <input
+          type="radio"
+          :name="name"
+          :value="option.value"
+          :checked="option.value === value"
+          class="picker-radio-input"
+          @change="selectOption(option.value)"
+        />
+        <span class="picker-radio-dot" aria-hidden="true"></span>
+        <span class="picker-option-label">{{ option.label }}</span>
+      </label>
     </div>
 
-    <!-- 弹窗/浮层单选列表 -->
-    <div
-      v-if="isOpen"
-      class="picker-modal-backdrop"
-      :data-test="testId ? testId + '-modal' : undefined"
-      @click.self="closePicker"
-    >
-      <div class="picker-modal-content" role="dialog" aria-modal="true" :aria-label="title">
-        <header class="picker-modal-head">
-          <h3>选择{{ title }}</h3>
-          <button
-            type="button"
-            class="picker-modal-close"
-            :data-test="testId ? testId + '-modal-close' : undefined"
-            aria-label="关闭选择器"
-            @click="closePicker"
-          >
-            ×
-          </button>
-        </header>
-
-        <fieldset class="picker-fieldset">
-          <legend class="sr-only">{{ title }}</legend>
-          <label
-            v-for="option in options"
-            :key="option.value"
-            class="picker-option-row"
-            :class="{ 'is-selected': option.value === value }"
-            :data-test="testId ? testId + '-option-' + option.value : undefined"
-            @click.prevent="selectOption(option.value)"
-          >
-            <input
-              type="radio"
-              :name="(testId || 'creative') + '-radio'"
-              :value="option.value"
-              :checked="option.value === value"
-              class="picker-radio-input"
-              tabindex="-1"
-            />
-            <div class="picker-option-text">
-              <strong class="picker-option-title">{{ option.label }}</strong>
-              <span class="picker-option-desc">{{ option.description }}</span>
-            </div>
-          </label>
-        </fieldset>
-      </div>
+    <div class="picker-selected-desc" :data-test="testId ? `${testId}-desc` : undefined">
+      <span class="picker-desc-text">{{ selectedOption?.description || "" }}</span>
     </div>
-  </div>
+  </fieldset>
 </template>
 
 <style scoped>
 .creative-option-picker {
   display: flex;
   flex-direction: column;
-  position: relative;
-}
-
-.picker-summary-card {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  gap: 8px;
+  margin: 0;
   padding: 12px 14px;
-  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
-  border-radius: var(--workspace-radius-sm, 8px);
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.09));
+  border-radius: var(--workspace-radius-sm, 10px);
   background: var(--workspace-surface, #ffffff);
-  cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease;
-}
-
-.picker-summary-card:hover {
-  border-color: rgba(216, 68, 68, 0.3);
-  background: #fffdfc;
-}
-
-.picker-summary-info {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
   min-width: 0;
 }
 
-.picker-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--workspace-text-muted, #7c7074);
+.picker-legend {
+  padding: 0;
+  margin: 0 0 2px;
+  width: 100%;
 }
 
-.picker-current-label {
-  font-size: 13.5px;
+.picker-legend-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.picker-title {
+  font-size: 13px;
   font-weight: 700;
   color: var(--workspace-text, #31292b);
 }
 
-.picker-current-desc {
-  font-size: 12px;
+.picker-hint {
+  font-size: 11.5px;
   color: var(--workspace-text-muted, #7c7074);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 400;
 }
 
-.picker-change-btn {
+.picker-options-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.picker-option-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
   min-height: 32px;
-  padding: 0 12px;
   border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
   border-radius: var(--workspace-radius-sm, 6px);
-  background: #fff;
-  color: var(--workspace-text, #31292b);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
+  background: #ffffff;
   cursor: pointer;
-  flex-shrink: 0;
-  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
-.picker-change-btn:hover {
-  border-color: rgba(216, 68, 68, 0.28);
-  background: #fff8f7;
-  color: var(--workspace-brand, #d83b46);
-}
-
-.picker-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 120;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background: rgba(30, 20, 22, 0.45);
-  backdrop-filter: blur(2px);
-}
-
-.picker-modal-content {
-  width: min(540px, calc(100vw - 32px));
-  max-height: calc(100vh - 64px);
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--workspace-radius, 10px);
-  border: 1px solid var(--workspace-border, #eae5e3);
-  background: #fff;
-  color: var(--workspace-text, #31292b);
-  box-shadow: 0 16px 48px rgba(45, 25, 30, 0.18);
-  overflow: hidden;
-}
-
-.picker-modal-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--workspace-border, #eae5e3);
-}
-
-.picker-modal-head h3 {
-  margin: 0;
-  font-size: 1.15rem;
-  color: var(--workspace-text, #31292b);
-}
-
-.picker-modal-close {
-  border: none;
-  background: transparent;
-  color: var(--workspace-text-muted, #7c7074);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.picker-modal-close:hover {
-  background: #f4edea;
-  color: var(--workspace-brand, #d83b46);
-}
-
-.picker-fieldset {
-  margin: 0;
-  padding: 16px 20px 20px;
-  border: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  overflow-y: auto;
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  border: 0;
-}
-
-.picker-option-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.1));
-  border-radius: var(--workspace-radius-sm, 8px);
-  background: #fff;
-  cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease;
-}
-
-.picker-option-row:hover {
-  border-color: rgba(216, 68, 68, 0.3);
+.picker-option-card:hover {
+  border-color: rgba(216, 59, 70, 0.35);
   background: #fffdfc;
 }
 
-.picker-option-row.is-selected {
+.picker-option-card.is-selected {
   border-color: var(--workspace-brand, #d83b46);
   background: #fff5f3;
-  box-shadow: inset 0 0 0 1px rgba(216, 59, 70, 0.12);
+  color: var(--workspace-brand, #d83b46);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px rgba(216, 59, 70, 0.15);
 }
 
 .picker-radio-input {
-  margin-top: 3px;
-  cursor: pointer;
-  accent-color: var(--workspace-brand, #d83b46);
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  pointer-events: none;
 }
 
-.picker-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
+.picker-option-card:has(.picker-radio-input:focus-visible) {
+  outline: 2px solid var(--workspace-brand, #d83b46);
+  outline-offset: 1px;
 }
 
-.picker-option-title {
-  font-size: 13.5px;
-  color: var(--workspace-text, #31292b);
+.picker-radio-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--workspace-border, rgba(18, 16, 17, 0.25));
+  background: #ffffff;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.picker-option-row.is-selected .picker-option-title {
-  color: var(--workspace-brand, #d83b46);
-  font-weight: 700;
+.picker-option-card.is-selected .picker-radio-dot {
+  border-color: var(--workspace-brand, #d83b46);
+  background: var(--workspace-brand, #d83b46);
+  box-shadow: inset 0 0 0 2px #ffffff;
 }
 
-.picker-option-desc {
+.picker-option-label {
   font-size: 12px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.picker-selected-desc {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #fbf7f6;
+  font-size: 11.5px;
   color: var(--workspace-text-muted, #7c7074);
   line-height: 1.45;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
 }
 </style>

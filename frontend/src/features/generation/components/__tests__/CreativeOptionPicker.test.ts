@@ -4,90 +4,87 @@ import CreativeOptionPicker from "../CreativeOptionPicker.vue";
 import { XHS_CREATIVE_STYLE_OPTIONS } from "../../api";
 
 describe("CreativeOptionPicker", () => {
-  it("renders the summary card with title, current label and description", () => {
+  it("renders semantic fieldset with title, hint, and all options directly inline", () => {
     const wrapper = mount(CreativeOptionPicker, {
       props: {
-        title: "小红书视觉路线",
+        title: "小红书组图视觉",
+        hint: "仅影响「一键小红书组图」",
+        name: "test-xhs-style",
         value: "auto",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "picker-test",
       },
     });
 
-    expect(wrapper.find('[data-test="picker-test-summary"]').exists()).toBe(true);
-    expect(wrapper.text()).toContain("小红书视觉路线");
-    expect(wrapper.find('[data-test="picker-test-label"]').text()).toBe("智能匹配");
-    expect(wrapper.text()).toContain("根据选题内容自动选择更合适的视觉路线");
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(false);
+    const fieldset = wrapper.find("fieldset");
+    expect(fieldset.exists()).toBe(true);
+    expect(wrapper.find("legend").text()).toContain("小红书组图视觉");
+    expect(wrapper.find("legend").text()).toContain("仅影响「一键小红书组图」");
+
+    const optionCards = wrapper.findAll(".picker-option-card");
+    expect(optionCards.length).toBe(XHS_CREATIVE_STYLE_OPTIONS.length);
+    expect(wrapper.text()).toContain("智能匹配");
+    expect(wrapper.text()).toContain("杂志编辑感");
+
+    expect(wrapper.find(".picker-change-btn").exists()).toBe(false);
+    expect(wrapper.find(".picker-modal-backdrop").exists()).toBe(false);
+    expect(wrapper.find(".picker-modal-content").exists()).toBe(false);
   });
 
-  it("opens modal on change button click, renders radio options with semantic fieldset", async () => {
+  it("renders accessible radio inputs with no tabindex='-1' and correct checked state", () => {
     const wrapper = mount(CreativeOptionPicker, {
       props: {
-        title: "小红书视觉路线",
-        value: "auto",
+        title: "小红书组图视觉",
+        name: "test-xhs-style",
+        value: "editorial",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "picker-test",
       },
     });
 
-    await wrapper.find('[data-test="picker-test-change"]').trigger("click");
-
-    const modal = wrapper.find('[data-test="picker-test-modal"]');
-    expect(modal.exists()).toBe(true);
-
-    const fieldset = modal.find("fieldset");
-    expect(fieldset.exists()).toBe(true);
-    expect(fieldset.find("legend").text()).toBe("小红书视觉路线");
-
-    const radioInputs = modal.findAll('input[type="radio"]');
+    const radioInputs = wrapper.findAll('input[type="radio"]');
     expect(radioInputs.length).toBe(XHS_CREATIVE_STYLE_OPTIONS.length);
 
-    // auto is checked
-    const autoRadio = modal.find('[data-test="picker-test-option-auto"] input')
-      .element as HTMLInputElement;
-    expect(autoRadio.checked).toBe(true);
+    radioInputs.forEach((input) => {
+      expect(input.attributes("tabindex")).toBeUndefined();
+      expect(input.attributes("name")).toBe("test-xhs-style");
+    });
+
+    const editorialInput = wrapper.find('[data-test="picker-test-option-editorial"] input').element as HTMLInputElement;
+    expect(editorialInput.checked).toBe(true);
+
+    const autoInput = wrapper.find('[data-test="picker-test-option-auto"] input').element as HTMLInputElement;
+    expect(autoInput.checked).toBe(false);
   });
 
-  it("selects an option on click, emits update:value, and auto-closes the modal", async () => {
+  it("selects an option on click and emits update:value immediately", async () => {
     const wrapper = mount(CreativeOptionPicker, {
       props: {
-        title: "小红书视觉路线",
+        title: "小红书组图视觉",
+        name: "test-xhs-style",
         value: "auto",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "picker-test",
       },
     });
 
-    await wrapper.find('[data-test="picker-test-summary"]').trigger("click");
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(true);
-
-    await wrapper.find('[data-test="picker-test-option-editorial"]').trigger("click");
-
+    await wrapper.find('[data-test="picker-test-option-editorial"] input').setValue(true);
     expect(wrapper.emitted("update:value")).toEqual([["editorial"]]);
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(false);
   });
 
-  it("closes modal on close button click and Escape key", async () => {
+  it("displays the description of the currently selected option", () => {
     const wrapper = mount(CreativeOptionPicker, {
       props: {
-        title: "小红书视觉路线",
-        value: "auto",
+        title: "小红书组图视觉",
+        name: "test-xhs-style",
+        value: "editorial",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "picker-test",
       },
     });
 
-    // Close button
-    await wrapper.find('[data-test="picker-test-summary"]').trigger("click");
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(true);
-    await wrapper.find('[data-test="picker-test-modal-close"]').trigger("click");
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(false);
-
-    // Escape key
-    await wrapper.find('[data-test="picker-test-summary"]').trigger("click");
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(true);
-    await wrapper.trigger("keydown", { key: "Escape" });
-    expect(wrapper.find('[data-test="picker-test-modal"]').exists()).toBe(false);
+    const desc = wrapper.find('[data-test="picker-test-desc"]');
+    expect(desc.exists()).toBe(true);
+    expect(desc.text()).toContain("克制高级，适合审美与品牌内容");
   });
 });

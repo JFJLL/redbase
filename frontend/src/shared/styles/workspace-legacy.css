@@ -1036,11 +1036,11 @@
   border-top: 1px solid rgba(229, 72, 77, 0.09);
 }
 
-.workspace-layout .idea-creative-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 11px;
+.workspace-layout .idea-channel-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
 }
 
 .workspace-layout .idea-creative-field {
