@@ -737,9 +737,85 @@ async function callTextModelJson(appConfig, {
  * chat/completions style supports this; other styles fail fast so callers can
  * degrade to metadata-only analysis without blocking their flow.
  */
+const SUPPORTED_VISION_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+]);
+const MAX_VISION_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function normalizeVisionInputs({ images = [], imageUrls = [] }) {
+  const normalized = [];
+  const rawList = [
+    ...(Array.isArray(images) ? images : images ? [images] : []),
+    ...(Array.isArray(imageUrls) ? imageUrls : imageUrls ? [imageUrls] : []).map((url) =>
+      typeof url === "string" ? { url } : url,
+    ),
+  ];
+
+  for (const item of rawList) {
+    if (!item) continue;
+    let mimeType = String(item.mimeType || "").toLowerCase();
+    let dataBase64 = String(item.dataBase64 || item.data || "").trim();
+    let url = String(item.url || "").trim();
+
+    if (!dataBase64 && item.dataUrl) {
+      const match = String(item.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1].toLowerCase();
+        dataBase64 = match[2].trim();
+      }
+    } else if (!dataBase64 && url.startsWith("data:")) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1].toLowerCase();
+        dataBase64 = match[2].trim();
+      }
+    }
+
+    if (mimeType === "image/jpg") mimeType = "image/jpeg";
+
+    if (dataBase64) {
+      if (!mimeType) mimeType = "image/jpeg";
+      if (!SUPPORTED_VISION_MIME_TYPES.has(mimeType)) {
+        const error = new Error(`不支持的图片格式: ${mimeType}`);
+        error.code = "VISION_UNSUPPORTED_MIME";
+        error.retryable = false;
+        throw error;
+      }
+      const byteLength = Buffer.from(dataBase64, "base64").length;
+      if (byteLength > MAX_VISION_IMAGE_BYTES) {
+        const error = new Error("图片大小超过 10MB 限制，请压缩后重试。");
+        error.code = "VISION_IMAGE_TOO_LARGE";
+        error.retryable = false;
+        throw error;
+      }
+    } else if (!url || !/^https?:\/\//i.test(url)) {
+      continue;
+    }
+
+    normalized.push({
+      role: item.role || "product",
+      roleDescription: item.roleDescription || item.label || "",
+      mimeType: mimeType || "image/jpeg",
+      dataBase64,
+      url,
+      name: item.name || "",
+    });
+  }
+  return normalized;
+}
+
+/**
+ * Multimodal JSON call: supports Google generateContent format (with inlineData base64)
+ * and OpenAI-compatible chat/completions format (with image_url).
+ */
 async function callVisionModelJson(appConfig, {
   systemPrompt,
   userPrompt,
+  images = [],
   imageUrls = [],
   temperature = 0.2,
   timeoutMs,
@@ -749,30 +825,124 @@ async function callVisionModelJson(appConfig, {
   maxOutputTokens,
   maxResponseBytes,
   onTelemetry,
+  budget = null,
 }) {
   const provider = appConfig?.textProvider || {};
   assertConfigured(provider.apiKey, "文本模型 API Key");
-  if (provider.apiStyle === "google" || provider.apiStyle === "anthropic") {
-    const error = new Error("当前文本模型接入方式不支持图片输入。");
+
+  if (provider.apiStyle === "anthropic") {
+    const error = new Error("当前文本模型接入方式暂未配置图片输入。");
     error.code = "VISION_STYLE_UNSUPPORTED";
     error.retryable = false;
     throw error;
   }
-  const safeImageUrls = (Array.isArray(imageUrls) ? imageUrls : [])
-    .map((url) => String(url || "").trim())
-    .filter((url) => /^https?:\/\//i.test(url));
-  if (!safeImageUrls.length) {
-    const error = new Error("没有可用的参考图片地址。");
+
+  const normalizedImages = normalizeVisionInputs({ images, imageUrls });
+  if (!normalizedImages.length) {
+    const error = new Error("没有可用的参考图片。");
     error.code = "VISION_NO_IMAGES";
     error.retryable = false;
     throw error;
   }
+
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2;
   const outputTokenLimit = Number.isFinite(Number(maxOutputTokens))
     ? Number(maxOutputTokens)
     : Number.isFinite(Number(provider.maxOutputTokens))
       ? Number(provider.maxOutputTokens)
       : null;
+  const totalTimeoutMs = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Number(timeoutMs)) : null;
+  const requestDeadlineAt = totalTimeoutMs ? Date.now() + totalTimeoutMs : null;
+
+  const getAttemptRequestOptions = () => {
+    const remainingMs = requestDeadlineAt ? requestDeadlineAt - Date.now() : null;
+    if (remainingMs != null && remainingMs <= 0) {
+      const error = new Error("Vision provider request deadline exceeded.");
+      error.code = "ETIMEDOUT";
+      error.retryable = false;
+      throw error;
+    }
+    return {
+      timeoutMs: remainingMs == null ? undefined : Math.max(1, remainingMs),
+      maxResponseBytes: Number.isFinite(Number(maxResponseBytes)) ? Number(maxResponseBytes) : undefined,
+    };
+  };
+
+  const configuredAttempts = Number.isFinite(Number(maxAttempts))
+    ? Number(maxAttempts)
+    : (Number.isFinite(Number(retries)) ? Number(retries) : 3);
+  const retryOptions = buildRetryOptions({
+    retries,
+    maxAttempts: configuredAttempts,
+    delayMs,
+  });
+
+  const runWithRetries = (task) => withRetries((attempt) => {
+    if (budget && typeof budget.consume === "function") {
+      budget.consume();
+    }
+    onTelemetry?.({ type: "attempt", attempt });
+    return task(attempt);
+  }, retryOptions);
+
+  if (provider.apiStyle === "google") {
+    const parts = [{ text: userPrompt }];
+    for (const img of normalizedImages) {
+      if (img.roleDescription) {
+        parts.push({ text: img.roleDescription });
+      }
+      if (img.dataBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: img.mimeType,
+            data: img.dataBase64,
+          },
+        });
+      }
+    }
+
+    const requestBody = JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: "user", parts }],
+      generationConfig: {
+        temperature: modelTemperature,
+        responseMimeType: "application/json",
+        ...(outputTokenLimit ? { maxOutputTokens: outputTokenLimit } : {}),
+      },
+    });
+
+    const data = await runWithRetries(
+      () =>
+        fetchJsonNative(joinUrl(provider.baseUrl, `/v1beta/models/${encodeURIComponent(provider.model)}:generateContent`), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": provider.apiKey,
+          },
+          body: requestBody,
+          ...getAttemptRequestOptions(),
+        }),
+    );
+    assertModelOutputNotTruncated(data?.candidates?.[0]?.finishReason, onTelemetry);
+    return parseJsonFromModelText(extractTextFromGoogleResponse(data));
+  }
+
+  // OpenAI-compatible style
+  const userContent = [{ type: "text", text: userPrompt }];
+  for (const img of normalizedImages) {
+    if (img.roleDescription) {
+      userContent.push({ type: "text", text: img.roleDescription });
+    }
+    if (img.url && /^https?:\/\//i.test(img.url)) {
+      userContent.push({ type: "image_url", image_url: { url: img.url } });
+    } else if (img.dataBase64) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: `data:${img.mimeType};base64,${img.dataBase64}` },
+      });
+    }
+  }
+
   const requestBody = JSON.stringify({
     model: provider.model,
     temperature: modelTemperature,
@@ -780,19 +950,14 @@ async function callVisionModelJson(appConfig, {
     ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
     messages: [
       { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: userPrompt },
-          ...safeImageUrls.map((url) => ({ type: "image_url", image_url: { url } })),
-        ],
-      },
+      { role: "user", content: userContent },
     ],
   });
-  const data = await withRetries(
-    (attempt) => {
-      onTelemetry?.({ type: "attempt", attempt });
-      return fetchJson(joinUrl(provider.openaiBaseUrl, "/chat/completions"), {
+
+  const openAIUrl = joinUrl(provider.openaiBaseUrl, "/chat/completions");
+  const data = await runWithRetries(
+    () =>
+      fetchJson(openAIUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -800,11 +965,8 @@ async function callVisionModelJson(appConfig, {
         },
         body: requestBody,
         onTelemetry,
-        timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
-        maxResponseBytes: Number.isFinite(Number(maxResponseBytes)) ? Number(maxResponseBytes) : undefined,
-      });
-    },
-    buildRetryOptions({ retries, maxAttempts, delayMs }),
+        ...getAttemptRequestOptions(),
+      }),
   );
   assertModelOutputNotTruncated(data?.choices?.[0]?.finish_reason, onTelemetry);
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));

@@ -59,6 +59,7 @@ test("credit costs stay aligned with generation actions", () => {
   assert.equal(CREDIT_COSTS.xhsCarouselSlide, 1);
   assert.equal(CREDIT_COSTS.imageEdit, 1);
   assert.equal(CREDIT_COSTS.styleImage, 1);
+  assert.equal(CREDIT_COSTS.videoScript, 1);
 });
 
 test("hasEnoughCredits allows affordable actions", () => {
@@ -83,6 +84,7 @@ test("credit event cost falls back from explicit cost to negative delta", () => 
 test("generation token cost falls back by generation type", () => {
   assert.equal(getGenerationTokenCost({ type: "xhsCarousel" }, null), CREDIT_COSTS.xhsCarousel);
   assert.equal(getGenerationTokenCost({ type: "moments" }, null), CREDIT_COSTS.momentsImage);
+  assert.equal(getGenerationTokenCost({ type: "videoScript" }, null), CREDIT_COSTS.videoScript);
   assert.equal(getGenerationTokenCost({ type: "moments" }, { creditCost: 7 }), 7);
 });
 

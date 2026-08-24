@@ -8,6 +8,7 @@ const CREDIT_COSTS = {
   xhsCarouselSlide: 1,
   imageEdit: 1,
   styleImage: 1,
+  videoScript: 1,
   excellentContentDirection: 1,
   excellentFusionPlan: 1,
 };
@@ -32,7 +33,9 @@ function getCreditEventCost(event) {
 function getGenerationTokenCost(generation, event) {
   const eventCost = getCreditEventCost(event);
   if (eventCost > 0) return eventCost;
-  return generation.type === "xhsCarousel" ? CREDIT_COSTS.xhsCarousel : CREDIT_COSTS.momentsImage;
+  if (generation.type === "xhsCarousel") return CREDIT_COSTS.xhsCarousel;
+  if (generation.type === "videoScript") return CREDIT_COSTS.videoScript;
+  return CREDIT_COSTS.momentsImage;
 }
 module.exports = {
   CREDIT_COSTS,
