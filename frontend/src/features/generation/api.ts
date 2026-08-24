@@ -42,6 +42,15 @@ export const XHS_CREATIVE_STYLE_OPTIONS: readonly CreativeOption[] = Object.free
   { value: "minimal_brand", label: "极简品牌型", description: "单主体、统一品牌色与精致留白" },
 ]);
 
+
+export const VIDEO_DURATION_OPTIONS: readonly CreativeOption[] = Object.freeze([
+  { value: "auto", label: "智能推荐", description: "根据选题内容与创意复杂度自动确定时长（推荐 15s/30s）" },
+  { value: "15", label: "15 秒", description: "适合快速吸睛、单一亮点卡点与快节奏短视频" },
+  { value: "30", label: "30 秒", description: "标准黄金时长，适合完整故事线与产品核心场景展开" },
+  { value: "45", label: "45 秒", description: "适合多场景对比、深度干货与递进式叙事" },
+  { value: "60", label: "60 秒", description: "适合沉浸式大片感、多维度种草与完整情景剧" },
+]);
+
 export const WECHAT_TEMPLATE_OPTIONS: readonly CreativeOption[] = Object.freeze([
   { value: "auto", label: "智能配色", description: "根据文章主题自动匹配长图配色与结构" },
   { value: "editorial", label: "深度观点", description: "行业洞察、品牌观点与趋势解读" },
@@ -526,4 +535,81 @@ export async function pollImageJob(jobId: string, options: PollImageJobOptions =
     }
     await sleep(delayMs, options.signal);
   }
+}
+
+
+
+// —— AI Video Script Generation ——
+
+export interface VideoScriptClip {
+  index: number;
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  purpose: string;
+  referenceAssets?: Array<{ kind?: string; label?: string; description?: string }>;
+  subjectReference: string;
+  firstFrame: string;
+  lastFrame: string;
+  scene: string;
+  subjectAction: string;
+  cameraMovement: string;
+  environmentMotion: string;
+  lightingAndStyle: string;
+  audioPrompt: string;
+  voiceover?: string;
+  dialogue?: string;
+  onScreenText?: string;
+  transition?: string;
+  continuity?: string;
+  prompt: string;
+}
+
+export interface VideoScriptAudioDirection {
+  music: string;
+  ambience: string;
+  voiceStyle: string;
+}
+
+export interface VideoScript {
+  title: string;
+  creativeConcept: string;
+  totalDurationSec: number;
+  aspectRatio: string;
+  globalSubjectReference: string;
+  globalStyleReference: string;
+  globalContinuity: string;
+  audioDirection: VideoScriptAudioDirection;
+  clips: VideoScriptClip[];
+}
+
+export interface VideoScriptRequest {
+  requestId: string;
+  aspectRatioSelection?: string;
+  videoDuration?: string;
+  useBrandLogo?: boolean;
+  useProductImages?: boolean;
+  productImages?: ProductImageInput[];
+  styleReferenceImages?: Array<{ name?: string; dataUrl?: string }>;
+}
+
+export interface VideoScriptSubmitResult {
+  generation?: Record<string, unknown>;
+  videoScript?: VideoScript;
+  user?: SessionUser;
+  [key: string]: unknown;
+}
+
+export function submitVideoScript(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: VideoScriptRequest,
+  signal?: AbortSignal,
+): Promise<VideoScriptSubmitResult> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/video-script`, {
+    method: "POST",
+    body,
+    signal,
+  });
 }

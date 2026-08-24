@@ -21,6 +21,7 @@ import {
   MAX_SELECTED_PRODUCT_IMAGES,
   MAX_SELECTED_PRODUCT_IMAGE_BYTES,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  VIDEO_DURATION_OPTIONS,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
   deleteProductImage,
@@ -37,10 +38,12 @@ import {
   type IdeaCreativeSettings,
 } from "@/features/generation/ideaCreativeSettings";
 import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
+import IdeaVideoScriptDialog from "@/features/generation/components/IdeaVideoScriptDialog.vue";
+import IdeaCreativeSelect from "@/features/generation/components/IdeaCreativeSelect.vue";
 import type { IdeaProductLibrary } from "@/features/generation/composables/useIdeaGeneration";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 
-type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
+type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage" | "videoScript";
 
 interface IdeaDraft {
   title: string;
@@ -278,14 +281,7 @@ function toggleCreativeSettings(index: number): void {
   openCreativeSettings[index] = !openCreativeSettings[index];
 }
 
-function updateCreativeSetting(
-  index: number,
-  field: "visualStylePreset" | "wechatTemplate" | "aspectRatioSelection",
-  event: Event,
-): void {
-  const value = (event.target as HTMLSelectElement).value;
-  patchSettings(index, { [field]: value } as Partial<IdeaCreativeSettings>);
-}
+
 
 function selectRatio(index: number, ratio: string): void {
   patchSettings(index, { aspectRatioSelection: ratio });
@@ -309,8 +305,10 @@ function creativeSummary(index: number): string {
     XHS_CREATIVE_STYLE_OPTIONS.find((option) => option.value === settings.visualStylePreset)?.label || "智能匹配";
   const template =
     WECHAT_TEMPLATE_OPTIONS.find((option) => option.value === settings.wechatTemplate)?.label || "智能配色";
-  const ratio = settings.aspectRatioSelection === "smart" ? "智能比例" : settings.aspectRatioSelection;
-  return `${style} · ${template} · ${ratio}`;
+  const duration =
+    VIDEO_DURATION_OPTIONS.find((option) => option.value === (settings.videoDuration || "auto"))?.label || "智能推荐";
+  const ratio = settings.aspectRatioSelection === "smart" ? "智能" : settings.aspectRatioSelection;
+  return `小红书：${style} · 公众号：${template} · 脚本：${duration} · 比例：${ratio}`;
 }
 
 function openLibrary(index: number): void {
@@ -382,7 +380,7 @@ function parseIdeaIndex(value: unknown): number | null {
   return Number.isInteger(num) && num >= 0 ? num : null;
 }
 
-const GENERATION_ACTIONS: readonly GenerationAction[] = ["moments", "wechat", "xhsCarousel", "styleImage"];
+const GENERATION_ACTIONS: readonly GenerationAction[] = ["moments", "wechat", "xhsCarousel", "styleImage", "videoScript"];
 
 function parseAction(value: unknown): GenerationAction | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -902,7 +900,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                     <div class="idea-product-file" :class="{ 'has-file': Boolean(settingsFor(index).styleReference) }">
                       {{
                         settingsFor(index).styleReference
-                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于一键风格化图的色调和版式参考`
+                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于朋友圈、公众号长图和小红书组图的配色、光影、材质与版式参考，可与产品图同时使用`
                           : "未选择参考图"
                       }}
                     </div>
@@ -973,61 +971,68 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 </span>
               </button>
               <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
-                <div class="idea-creative-grid">
-                  <label class="idea-creative-field">
-                    <span>小红书视觉路线</span>
-                    <select
-                      :data-test="`idea-creative-style-${index}`"
-                      :value="settingsFor(index).visualStylePreset"
-                      @change="updateCreativeSetting(index, 'visualStylePreset', $event)"
-                    >
-                      <option v-for="option in XHS_CREATIVE_STYLE_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="idea-creative-field">
-                    <span>公众号长图模板</span>
-                    <select
-                      :data-test="`idea-creative-template-${index}`"
-                      :value="settingsFor(index).wechatTemplate"
-                      @change="updateCreativeSetting(index, 'wechatTemplate', $event)"
-                    >
-                      <option v-for="option in WECHAT_TEMPLATE_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
-                </div>
-                <div class="idea-creative-field idea-creative-ratio-field">
-                  <span>图片比例</span>
-                  <div class="idea-aspect-ratio-grid">
-                    <button
-                      v-for="ratio in ['smart', ...IMAGE_ASPECT_RATIOS]"
-                      :key="ratio"
-                      type="button"
-                      class="idea-aspect-ratio-option"
-                      :class="{ 'is-selected': settingsFor(index).aspectRatioSelection === ratio }"
-                      :data-test="`idea-ratio-${index}-${ratio}`"
-                      :aria-pressed="settingsFor(index).aspectRatioSelection === ratio"
-                      @click="selectRatio(index, ratio)"
-                    >
-                      <span class="idea-aspect-ratio-visual">
-                        <span v-if="ratio === 'smart'" class="aspect-smart-mark" aria-hidden="true"><i></i><i></i></span>
-                        <i v-else class="aspect-shape" :style="aspectRatioShapeStyle(ratio)" aria-hidden="true"></i>
-                      </span>
-                      <span>{{ ratio === "smart" ? "智能" : ratio }}</span>
-                    </button>
+                <div class="idea-creative-channel-section">
+                  <div class="idea-creative-section-heading">
+                    <strong>按生成类型单独设置</strong>
+                    <small>各项仅影响对应生成入口，互不叠加</small>
                   </div>
-                  <small class="idea-ratio-hint">
-                    {{
-                      settingsFor(index).aspectRatioSelection === "smart"
-                        ? "按图片类型自动匹配（公众号 9:21，其余 3:4）"
-                        : "四种生图使用统一比例"
-                    }}
-                  </small>
+                  <div class="idea-creative-grid">
+                    <IdeaCreativeSelect
+                      label="小红书组图 · 视觉路线"
+                      :model-value="settingsFor(index).visualStylePreset"
+                      :options="XHS_CREATIVE_STYLE_OPTIONS"
+                      :test-id="`idea-creative-style-${index}`"
+                      @update:model-value="patchSettings(index, { visualStylePreset: $event })"
+                    />
+                    <IdeaCreativeSelect
+                      label="公众号长图 · 版式模板"
+                      :model-value="settingsFor(index).wechatTemplate"
+                      :options="WECHAT_TEMPLATE_OPTIONS"
+                      :test-id="`idea-creative-template-${index}`"
+                      @update:model-value="patchSettings(index, { wechatTemplate: $event })"
+                    />
+                    <IdeaCreativeSelect
+                      label="视频脚本 · 时长"
+                      :model-value="settingsFor(index).videoDuration || 'auto'"
+                      :options="VIDEO_DURATION_OPTIONS"
+                      :test-id="`idea-creative-duration-${index}`"
+                      @update:model-value="patchSettings(index, { videoDuration: $event })"
+                    />
+                  </div>
                 </div>
-              </div>
+
+                <div class="idea-creative-field idea-creative-ratio-field">
+                  <div class="idea-creative-section-heading">
+                    <strong>图片通用设置</strong>
+                    <small>统一影响朋友圈、公众号长图和小红书组图</small>
+                  </div>
+                  <div class="idea-aspect-ratio-grid">
+                      <button
+                        v-for="ratio in ['smart', ...IMAGE_ASPECT_RATIOS]"
+                        :key="ratio"
+                        type="button"
+                        class="idea-aspect-ratio-option"
+                        :class="{ 'is-selected': settingsFor(index).aspectRatioSelection === ratio }"
+                        :data-test="`idea-ratio-${index}-${ratio}`"
+                        :aria-pressed="settingsFor(index).aspectRatioSelection === ratio"
+                        @click="selectRatio(index, ratio)"
+                      >
+                        <span class="idea-aspect-ratio-visual">
+                          <span v-if="ratio === 'smart'" class="aspect-smart-mark" aria-hidden="true"><i></i><i></i></span>
+                          <i v-else class="aspect-shape" :style="aspectRatioShapeStyle(ratio)" aria-hidden="true"></i>
+                        </span>
+                        <span>{{ ratio === "smart" ? "智能" : ratio }}</span>
+                      </button>
+                    </div>
+                    <small class="idea-ratio-hint">
+                      {{
+                        settingsFor(index).aspectRatioSelection === "smart"
+                          ? "按图片类型自动匹配（公众号 9:21，其余 3:4）"
+                          : "朋友圈、公众号长图和小红书组图使用统一比例"
+                      }}
+                    </small>
+                  </div>
+                </div>
             </section>
 
             <div class="idea-actions">
@@ -1061,10 +1066,10 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
               <button
                 class="secondary-btn small-btn cost-button"
                 type="button"
-                :data-test="`idea-generate-style-${index}`"
-                @click="openGeneration(index, 'styleImage')"
+                :data-test="`idea-generate-script-${index}`"
+                @click="openGeneration(index, 'videoScript')"
               >
-                <span>一键风格化图</span>
+                <span>一键生成脚本</span>
                 <small>1 积分</small>
               </button>
             </div>
@@ -1156,11 +1161,18 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
     </div>
 
     <!-- 内容选题内生成：进度、结果、失败与重试直接在此承接 -->
-    <IdeaGenerationDialog
-      v-if="activeGeneration"
-      :key="activeGeneration.ideaIndex"
+    <IdeaVideoScriptDialog
+      v-if="activeGeneration && activeGeneration.action === 'videoScript'"
+      :key="'script-' + activeGeneration.ideaIndex"
       :idea-index="activeGeneration.ideaIndex"
-      :action="activeGeneration.action"
+      :product-library="productLibraryProp"
+      @close="closeGeneration"
+    />
+    <IdeaGenerationDialog
+      v-else-if="activeGeneration"
+      :key="'image-' + activeGeneration.ideaIndex"
+      :idea-index="activeGeneration.ideaIndex"
+      :action="(activeGeneration.action as any)"
       :product-library="productLibraryProp"
       @close="closeGeneration"
     />
@@ -1453,6 +1465,10 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   box-shadow: none;
 }
 
+.idea-card {
+  overflow: visible;
+}
+
 .idea-context-card,
 .idea-prompt-card,
 .idea-card {
@@ -1556,11 +1572,14 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 .idea-cards {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--workspace-grid-gap);
+  align-items: start;
 }
 
 .idea-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+  min-height: 0;
   font-size: 0.92rem;
   line-height: 1.65;
 }
@@ -1600,14 +1619,76 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 }
 
 .idea-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .idea-tag {
+  display: inline-flex;
+  align-items: center;
+  height: auto;
   padding: 4px 10px;
   border-radius: var(--workspace-radius-sm);
   background: #f5f1ef;
   color: var(--workspace-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.idea-creative-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.idea-creative-channel-section {
+  display: grid;
+  gap: 12px;
+}
+
+.idea-creative-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.idea-creative-section-heading strong {
+  flex: 0 0 auto;
+  color: var(--workspace-text, #31292b);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.idea-creative-section-heading small {
+  min-width: 0;
+  color: #8a7c80;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.idea-creative-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.idea-creative-field span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--workspace-text, #31292b);
+}
+
+.idea-creative-ratio-field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px dashed rgba(99, 76, 82, 0.14);
 }
 
 .idea-edit-form {
@@ -1822,6 +1903,16 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 @media (max-width: 760px) {
   .idea-cards {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .idea-creative-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .idea-creative-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .idea-aspect-ratio-grid {

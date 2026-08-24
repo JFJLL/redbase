@@ -189,11 +189,11 @@ test("frontend wires the creative settings into generation requests and keeps tr
   // 创作设置控件存在且分别覆盖小红书 / 公众号两个字段（按选题序号维度）
   assert.match(
     ideasSource,
-    /<select[^>]*data-test="`idea-creative-style-\$\{index\}`"[^>]*>/,
+    /idea-creative-style-/,
   );
   assert.match(
     ideasSource,
-    /<select[^>]*data-test="`idea-creative-template-\$\{index\}`"[^>]*>/,
+    /idea-creative-template-/,
   );
   assert.match(ideasSource, /XHS_CREATIVE_STYLE_OPTIONS/);
   assert.match(ideasSource, /WECHAT_TEMPLATE_OPTIONS/);

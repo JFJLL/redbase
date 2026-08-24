@@ -5,6 +5,7 @@ import { useAuthStore } from "@/shared/stores/auth";
 import { INSUFFICIENT_CREDITS_EVENT } from "@/shared/api/client";
 import { fetchRechargePlans, type RechargePlan } from "@/features/billing/api";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
+import { useHistoryStore } from "@/features/history/stores/history";
 import RecoveredJobBanner from "@/features/generation/components/RecoveredJobBanner.vue";
 
 const SIDEBAR_COLLAPSED_KEY = "redbase.sidebarCollapsed";
@@ -12,6 +13,7 @@ const LOGO_SRC = "/assets/redbase-logo.png";
 const router = useRouter();
 const auth = useAuthStore();
 const recovery = useImageJobRecovery();
+const historyStore = useHistoryStore();
 const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
 const insufficientCreditsMessage = ref("");
@@ -46,7 +48,10 @@ onMounted(() => {
   sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
   document.addEventListener("keydown", handleDocumentKeydown);
   window.addEventListener(INSUFFICIENT_CREDITS_EVENT, handleInsufficientCredits as EventListener);
-  if (auth.isLoggedIn) recovery.start();
+  if (auth.isLoggedIn) {
+    recovery.start();
+    historyStore.ensureLoaded().catch(() => {});
+  }
   fetchRechargePlans()
     .then((data) => {
       rechargePlans.value = data.plans;

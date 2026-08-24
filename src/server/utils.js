@@ -180,6 +180,11 @@ const SAFE_CLIENT_PAYLOAD_KEYS = new Set([
   "sourceNoteId", "sourceTitle", "sourceBoard", "sourceCategoryPath", "sourceIndustryPath", "sourceImageCount", "sourceReadCount", "sourceEngagementCount",
   "readCount", "likeCount", "favoriteCount", "commentCount", "shareCount", "engagementCount",
   "useBrandLogo", "productImageIds", "productImages", "name", "url", "dataUrl", "originalName", "assetType", "lastUsedAt", "duplicate",
+  "requestId", "videoScript", "creativeConcept", "totalDurationSec", "globalSubjectReference", "globalStyleReference", "globalContinuity",
+  "audioDirection", "music", "ambience", "voiceStyle", "clips", "startSec", "endSec", "durationSec", "purpose", "referenceAssets",
+  "subjectReference", "firstFrame", "lastFrame", "subjectAction", "cameraMovement", "environmentMotion", "lightingAndStyle", "audioPrompt",
+  "voiceover", "dialogue", "onScreenText", "transition", "continuity", "stylePrompt", "videoDuration",
+  "styleReferenceImageUsed", "styleReferenceImageCount", "styleReferenceImageName", "referenceImageUsed", "referenceImageCount",
 ].map((key) => key.toLowerCase()));
 
 const SAFE_IMAGE_URL_QUERY_KEYS = new Set(["width", "height", "w", "h", "format", "quality", "q", "fit", "crop", "resize", "dpr"]);
@@ -213,7 +218,11 @@ function sanitizePayloadForClient(value, parentKey = "") {
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !isSensitivePayloadKey(key) && SAFE_CLIENT_PAYLOAD_KEYS.has(String(key).toLowerCase()))
+      .filter(([key]) => {
+        const lowerKey = String(key).toLowerCase();
+        if (lowerKey === "prompt" && parentKey === "clips") return true;
+        return !isSensitivePayloadKey(key) && SAFE_CLIENT_PAYLOAD_KEYS.has(lowerKey);
+      })
       .map(([key, child]) => {
         if (typeof child === "string" && /url$/i.test(key)) {
           return [key, redactSensitiveUrlQuery(child)];

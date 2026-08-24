@@ -12,6 +12,7 @@
 import { onAuthReset } from "@/shared/composables/useAbortScope";
 import {
   IMAGE_ASPECT_RATIOS,
+  VIDEO_DURATION_OPTIONS,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
 } from "./api";
@@ -26,6 +27,7 @@ export interface IdeaCreativeSettings {
   aspectRatioSelection: string;
   visualStylePreset: string;
   wechatTemplate: string;
+  videoDuration?: string;
   useBrandLogo: boolean;
   selectedProductIds: number[];
   /** 内容选题页「使用这些产品图生成图片」开关（旧版 productImages[key].useImage）。
@@ -54,6 +56,7 @@ function defaultSettings(): IdeaCreativeSettings {
     aspectRatioSelection: "smart",
     visualStylePreset: "auto",
     wechatTemplate: "auto",
+    videoDuration: "auto",
     useBrandLogo: false,
     selectedProductIds: [],
     useProductImages: true,
@@ -67,11 +70,13 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
     settings.aspectRatioSelection === "smart" || IMAGE_ASPECT_RATIOS.includes(settings.aspectRatioSelection);
   const validStyle = XHS_CREATIVE_STYLE_OPTIONS.some((option) => option.value === settings.visualStylePreset);
   const validTemplate = WECHAT_TEMPLATE_OPTIONS.some((option) => option.value === settings.wechatTemplate);
+  const validDuration = VIDEO_DURATION_OPTIONS.some((option) => option.value === settings.videoDuration);
   return {
     ...settings,
     aspectRatioSelection: validRatio ? settings.aspectRatioSelection : "smart",
     visualStylePreset: validStyle ? settings.visualStylePreset : "auto",
     wechatTemplate: validTemplate ? settings.wechatTemplate : "auto",
+    videoDuration: validDuration ? (settings.videoDuration || "auto") : "auto",
     selectedProductIds: Array.isArray(settings.selectedProductIds) ? [...settings.selectedProductIds] : [],
     useProductImages: settings.useProductImages !== false,
   };

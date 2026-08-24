@@ -415,10 +415,14 @@ describe("内容选题内生成（一次性票据 + 素材门控 + 失败恢复�
       const fetchMock = makeFlowFetch({
         "GET /api/product-images": () => jsonResponse(500, { error: "素材库暂时不可用" }),
       });
-      const { wrapper } = await mountIdeasWith(fetchMock);
-      const slug = action === "xhsCarousel" ? "xhs" : action === "styleImage" ? "style" : action;
-      await wrapper.find(`[data-test="idea-generate-${slug}-0"]`).trigger("click");
-      await flushPromises();
+      const { wrapper } = action === "styleImage"
+        ? await mountIdeasWith(fetchMock, { brandId: "7", trendId: "501", ideaIndex: "0", action: "styleImage" })
+        : await mountIdeasWith(fetchMock);
+      if (action !== "styleImage") {
+        const slug = action === "xhsCarousel" ? "xhs" : action;
+        await wrapper.find(`[data-test="idea-generate-${slug}-0"]`).trigger("click");
+        await flushPromises();
+      }
 
       const dialog = wrapper.find('[data-test="idea-generation-dialog"]');
       expect(dialog.exists()).toBe(true);
@@ -440,10 +444,14 @@ describe("内容选题内生成（一次性票据 + 素材门控 + 失败恢复�
       const fetchMock = makeFlowFetch({
         "GET /api/product-images": () => new Promise<Response>(() => {}) as unknown as Response,
       });
-      const { wrapper } = await mountIdeasWith(fetchMock);
-      const slug = action === "xhsCarousel" ? "xhs" : action === "styleImage" ? "style" : action;
-      await wrapper.find(`[data-test="idea-generate-${slug}-0"]`).trigger("click");
-      await flushPromises();
+      const { wrapper } = action === "styleImage"
+        ? await mountIdeasWith(fetchMock, { brandId: "7", trendId: "501", ideaIndex: "0", action: "styleImage" })
+        : await mountIdeasWith(fetchMock);
+      if (action !== "styleImage") {
+        const slug = action === "xhsCarousel" ? "xhs" : action;
+        await wrapper.find(`[data-test="idea-generate-${slug}-0"]`).trigger("click");
+        await flushPromises();
+      }
 
       const dialog = wrapper.find('[data-test="idea-generation-dialog"]');
       expect(dialog.exists()).toBe(true);

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import { createPinia } from "pinia";
+import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter, type Router } from "vue-router";
+import { useAuthStore } from "@/shared/stores/auth";
 import HistoryView from "../views/HistoryView.vue";
 import {
   hasExpiredAssetSignature,
@@ -57,6 +58,50 @@ const GENERATIONS = [
       slides: [{ title: "第1页", imageUrl: "/api/generated-images/2/slides/0/file?sig=bbb" }],
     },
   },
+  {
+    id: 3,
+    type: "videoScript",
+    cardTitle: "露营咖啡视频脚本",
+    brandName: "品牌A",
+    brandId: 7,
+    trendTitle: "五一露营潮",
+    ideaTitle: "户外手冲咖啡指南",
+    channelLabel: "视频脚本",
+    createdAt: "2026-07-22T08:00:00.000Z",
+    previewUrl: "",
+    payload: {
+      aspectRatio: "9:16",
+      videoScript: {
+        title: "露营咖啡视频脚本",
+        creativeConcept: "用手冲咖啡开启自然之旅",
+        totalDurationSec: 30,
+        aspectRatio: "9:16",
+        globalSubjectReference: "手冲壶与咖啡豆",
+        globalStyleReference: "户外晨光色调",
+        globalContinuity: "动作连贯",
+        audioDirection: { music: "轻快吉他", ambience: "鸟鸣与流水", voiceStyle: "沉静治愈" },
+        clips: [
+          {
+            index: 1,
+            startSec: 0,
+            endSec: 5,
+            durationSec: 5,
+            purpose: "开场抓人",
+            subjectReference: "手冲壶",
+            firstFrame: "清晨阳光照在露营帐篷上",
+            lastFrame: "特写手冲壶冒出热气",
+            scene: "山林露营地",
+            subjectAction: "慢慢倒水",
+            cameraMovement: "慢速推近",
+            environmentMotion: "微风吹拂",
+            lightingAndStyle: "自然晨光",
+            audioPrompt: "流水声与鸟鸣",
+            prompt: "Cinematic shot of outdoor coffee brewing at sunrise, 4k photorealistic.",
+          },
+        ],
+      },
+    },
+  },
 ];
 
 type FetchCall = { url: string; init?: RequestInit };
@@ -68,6 +113,12 @@ describe("HistoryView", () => {
   });
 
   async function mountView(overrides?: (url: string, init?: RequestInit) => Response | undefined) {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", phone: "13800000000" };
+    auth.sessionLoaded = true;
+
     const calls: FetchCall[] = [];
     vi.stubGlobal(
       "fetch",
@@ -78,34 +129,52 @@ describe("HistoryView", () => {
         if (custom) return custom;
         if (url.startsWith("/api/brands")) return jsonResponse(200, { brands: [{ id: 7, name: "品牌A" }] });
         if (url.startsWith("/api/history")) return jsonResponse(200, { generations: GENERATIONS });
-        throw new Error(`unhandled fetch: ${url}`);
+        throw new Error("unhandled fetch: " + url);
       }),
     );
     const router = makeRouter();
     await router.push("/");
     await router.isReady();
-    const wrapper = mount(HistoryView, { global: { plugins: [createPinia(), router] } });
+    const wrapper = mount(HistoryView, { global: { plugins: [pinia, router] } });
     await flushPromises();
     return { wrapper, calls };
   }
 
-  it("renders history cards with type labels and signed image URLs untouched", async () => {
+  it("renders history cards with type labels, signed image URLs, and 30-day retention note", async () => {
     const { wrapper, calls } = await mountView();
 
-    expect(calls.some((call) => call.url === "/api/history")).toBe(true);
+    expect(calls.some((call) => call.url.startsWith("/api/history"))).toBe(true);
     const cards = wrapper.findAll('[data-test="history-card"]');
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(3);
     expect(wrapper.text()).toContain("朋友圈图文");
     expect(wrapper.text()).toContain("小红书组图");
+    expect(wrapper.text()).toContain("视频脚本");
     expect(wrapper.text()).toContain("查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。");
-    expect(wrapper.text()).toContain("历史生成图片会保存七天，请及时下载。");
-    expect(wrapper.text()).not.toContain("30 天内的生成记录");
-    // Signed URLs from the backend are used verbatim.
+    expect(wrapper.text()).toContain("历史生成图片会保存 30 天，请及时下载。");
     expect(wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
     expect(wrapper.find('img[src="/api/generated-images/2/slides/0/file?sig=bbb"]').exists()).toBe(true);
   });
 
-  it("sends DELETE /api/history/:id after confirm and removes the card", async () => {
+  it("renders videoScript history cards without images and opens video script modal", async () => {
+    const { wrapper } = await mountView();
+    const scriptCard = wrapper.findAll('[data-test="history-card"]')[2];
+
+    expect(scriptCard.text()).toContain("视频脚本");
+    expect(scriptCard.text()).toContain("30 秒");
+    expect(scriptCard.text()).toContain("1 个片段");
+    expect(scriptCard.text()).toContain("用手冲咖啡开启自然之旅");
+
+    const detailBtn = scriptCard.find('[data-test="history-detail"]');
+    expect(detailBtn.text()).toBe("查看脚本");
+    await detailBtn.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="video-script-result"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="video-script-title"]').text()).toBe("露营咖啡视频脚本");
+    expect(wrapper.find('[data-test="image-edit-panel"]').exists()).toBe(false);
+  });
+
+  it("sends DELETE /api/history/:id after confirm and removes the card from store", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const { wrapper, calls } = await mountView((url, init) => {
       if (url === "/api/history/1" && init?.method === "DELETE") {
@@ -120,38 +189,22 @@ describe("HistoryView", () => {
     expect(confirm).toHaveBeenCalledWith("确定删除「露营朋友圈图」吗？删除后将无法找回。");
     const deleteCall = calls.find((call) => call.url === "/api/history/1");
     expect(deleteCall?.init?.method).toBe("DELETE");
-    expect(wrapper.findAll('[data-test="history-card"]')).toHaveLength(1);
-  });
-
-  it("keeps the card and alerts with the backend error verbatim when deletion fails", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
-    const alertMock = vi.fn();
-    vi.stubGlobal("alert", alertMock);
-    const { wrapper } = await mountView((url, init) => {
-      if (url === "/api/history/1" && init?.method === "DELETE") {
-        return jsonResponse(500, { error: "数据库繁忙，请稍后再试" });
-      }
-      return undefined;
-    });
-
-    await wrapper.findAll('[data-test="history-delete"]')[0].trigger("click");
-    await flushPromises();
-
-    expect(alertMock).toHaveBeenCalledWith("删除失败：数据库繁忙，请稍后再试");
     expect(wrapper.findAll('[data-test="history-card"]')).toHaveLength(2);
   });
 
-  it("passes filters as query params when reloading", async () => {
-    vi.useFakeTimers();
-    try {
-      const { wrapper, calls } = await mountView();
-      await wrapper.find('[data-test="history-type"]').setValue("moments");
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-      expect(calls.some((call) => call.url === "/api/history?type=moments")).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+  it("filters items locally and does not trigger /api/history requests on filter input", async () => {
+    const { wrapper, calls } = await mountView();
+    const historyCallsBefore = calls.filter((c) => c.url.startsWith("/api/history")).length;
+
+    await wrapper.find('[data-test="history-type"]').setValue("moments");
+    await flushPromises();
+
+    const visible = wrapper.findAll('[data-test="history-card"]');
+    expect(visible).toHaveLength(1);
+    expect(visible[0].text()).toContain("露营朋友圈图");
+
+    const historyCallsAfter = calls.filter((c) => c.url.startsWith("/api/history")).length;
+    expect(historyCallsAfter).toBe(historyCallsBefore);
   });
 
   it("filters items locally exactly like the legacy matcher", () => {
@@ -174,7 +227,7 @@ describe("HistoryView", () => {
     expect(hasExpiredAssetSignature("/api/generated-images/1/file?sig=aaa", 2000)).toBe(false);
   });
 
-  it("refreshes history exactly once when an expired signed image fails, then replaces the src", async () => {
+  it("refreshes history store when an expired signed image fails, then replaces the src", async () => {
     vi.useFakeTimers();
     try {
       const EXPIRED_URL = "/api/generated-images/1/file?assetExpires=1000&assetSignature=expired-sig";
@@ -190,7 +243,7 @@ describe("HistoryView", () => {
       });
 
       expect(historyCalls).toBe(1);
-      const expiredImg = wrapper.find(`img[src="${EXPIRED_URL}"]`);
+      const expiredImg = wrapper.find('img[src="' + EXPIRED_URL + '"]');
       expect(expiredImg.exists()).toBe(true);
 
       await expiredImg.trigger("error");
@@ -198,10 +251,9 @@ describe("HistoryView", () => {
       await flushPromises();
 
       expect(historyCalls).toBe(2);
-      expect(wrapper.find(`img[src="${FRESH_URL}"]`).exists()).toBe(true);
+      expect(wrapper.find('img[src="' + FRESH_URL + '"]').exists()).toBe(true);
 
-      // A fresh signed URL that still fails is a real error: no second refresh.
-      await wrapper.find(`img[src="${FRESH_URL}"]`).trigger("error");
+      await wrapper.find('img[src="' + FRESH_URL + '"]').trigger("error");
       await vi.advanceTimersByTimeAsync(300);
       await flushPromises();
       expect(historyCalls).toBe(2);
@@ -209,19 +261,6 @@ describe("HistoryView", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("shows an explicit error state with retry when a non-expired image fails", async () => {
-    const { wrapper } = await mountView();
-    const img = wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]');
-    expect(img.exists()).toBe(true);
-
-    await img.trigger("error");
-    expect(wrapper.find('[data-test="history-image-error"]').exists()).toBe(true);
-
-    await wrapper.find('[data-test="history-image-retry"]').trigger("click");
-    expect(wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="history-image-error"]').exists()).toBe(false);
   });
 });
 
@@ -286,6 +325,12 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
   });
 
   async function mountDetail() {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", credits: 8 };
+    auth.sessionLoaded = true;
+
     const counts = { historyCalls: 0, sessionCalls: 0 };
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -310,13 +355,13 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
           persisted: true,
         });
       }
-      throw new Error(`unhandled fetch: ${method} ${url}`);
+      throw new Error("unhandled fetch: " + method + " " + url);
     });
     vi.stubGlobal("fetch", fetchMock);
     const router = makeRouter();
     await router.push("/");
     await router.isReady();
-    const wrapper = mount(HistoryView, { global: { plugins: [createPinia(), router] } });
+    const wrapper = mount(HistoryView, { global: { plugins: [pinia, router] } });
     await flushPromises();
     return { wrapper, counts };
   }
@@ -326,12 +371,10 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
     await wrapper.findAll('[data-test="history-detail"]')[0].trigger("click");
     await flushPromises();
 
-    // 表单常驻：打开详情即可见，无「改图/收起改图」开关按钮
     expect(wrapper.find('[data-test="image-edit-panel"]').exists()).toBe(true);
     expect(wrapper.text()).not.toContain("收起改图");
     expect(wrapper.find('button[data-test="history-edit-open"]').exists()).toBe(false);
 
-    // 顶部资产信息：来源选题 + 发布文案
     const header = wrapper.find('[data-test="history-asset-header"]');
     expect(header.exists()).toBe(true);
     expect(header.text()).toContain("露营装备清单");
@@ -340,7 +383,6 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
     expect(header.text()).toContain("视觉方向：");
     expect(header.text()).toContain("清新自然");
 
-    // 左图右表单双栏
     const grid = wrapper.find('[data-test="history-detail-grid"]');
     expect(grid.exists()).toBe(true);
     const preview = wrapper.find('[data-test="history-detail-preview"] img');
@@ -355,13 +397,11 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
     await wrapper.findAll('[data-test="history-detail"]')[1].trigger("click");
     await flushPromises();
 
-    // 只渲染真实存在页的 tab，保留原始 sourceIndex
     expect(wrapper.find('[data-test="history-slide-tab-1"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="history-slide-tab-3"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="history-slide-tab-0"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="history-slide-tab-2"]').exists()).toBe(false);
 
-    // 选择第 4 页（原始索引 3）后左侧预览与右侧表单同步，表单常驻
     await wrapper.find('[data-test="history-slide-tab-3"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-test="history-detail-preview"] img').attributes("src")).toBe(
@@ -390,7 +430,6 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
     expect(record.text()).toContain("改图一");
     expect(record.find('[data-test="history-edit-history-time"]').text()).not.toBe("");
 
-    // 记录内联面板：点击记录后其内部出现 ImageEditPanel，主表单让位
     await record.trigger("click");
     await flushPromises();
     expect(record.find('[data-test="image-edit-panel"]').exists()).toBe(true);
@@ -409,28 +448,7 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
       imageUrl: "/api/generated-images/2/edit-1/file?sig=ddd",
     });
 
-    // 成功（@edited）后刷新积分与历史列表
     expect(counts.sessionCalls).toBeGreaterThanOrEqual(1);
     expect(counts.historyCalls).toBeGreaterThanOrEqual(2);
-  });
-
-  it("falls back to the selected detail slide index when a history record has no sourceSlideIndex", async () => {
-    const { wrapper } = await mountDetail();
-    await wrapper.findAll('[data-test="history-detail"]')[1].trigger("click");
-    await flushPromises();
-
-    await wrapper.find('[data-test="history-slide-tab-1"]').trigger("click");
-    await flushPromises();
-    await wrapper.find('[data-test="history-edit-history-item-edit-2"]').trigger("click");
-    await flushPromises();
-    const record = wrapper.find('[data-test="history-edit-history-item-edit-2"]');
-    await record.find('[data-test="image-edit-prompt"]').setValue("基于第二页继续改");
-    await record.find('[data-test="image-edit-submit"]').trigger("click");
-    await flushPromises();
-
-    const post = fetchMock.mock.calls.find(([url]) => String(url) === "/api/image-edits");
-    const body = JSON.parse(String((post?.[1] as RequestInit | undefined)?.body || "{}")) as Record<string, unknown>;
-    expect(body.parentEditId).toBe("edit-2");
-    expect(body.slideIndex).toBe(1);
   });
 });

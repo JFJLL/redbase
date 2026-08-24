@@ -11,6 +11,7 @@ const {
   fetchJsonNative,
   fetchOpenAIText,
   callTextModelJson,
+  callVisionModelJson,
   buildTextProviderEndpoint,
   buildTextProviderRequestOptions,
   createPinnedTextProviderLookup,
@@ -764,5 +765,198 @@ test("rejects an OpenAI-compatible stream that ends without the DONE marker", as
       },
     ),
     /ended before \[DONE\]/,
+  );
+});
+
+test("calls Google generateContent endpoint with multimodal inlineData and role descriptions", async (t) => {
+  let received = null;
+  let requestCount = 0;
+  const server = http.createServer((request, response) => {
+    let raw = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      raw += chunk;
+    });
+    request.on("end", () => {
+      requestCount += 1;
+      received = {
+        method: request.method,
+        path: request.url,
+        apiKeyHeader: request.headers["x-goog-api-key"],
+        body: JSON.parse(raw),
+      };
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        candidates: [{
+          finishReason: "STOP",
+          content: {
+            parts: [{ text: "{\"ok\":true,\"title\":\"测试脚本\"}" }],
+          },
+        }],
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  const appConfig = {
+    textProvider: {
+      apiStyle: "google",
+      model: "gemini-3.6-flash",
+      baseUrl: "http://127.0.0.1:" + port,
+      apiKey: "fixture-google-key",
+      maxOutputTokens: 4096,
+    },
+  };
+
+  const sampleBase64A = Buffer.from("fake-product-image").toString("base64");
+  const sampleBase64B = Buffer.from("fake-style-image").toString("base64");
+
+  const result = await callVisionModelJson(appConfig, {
+    systemPrompt: "你是一位 AI 视频提示词专家，输出纯 JSON",
+    userPrompt: "请为咖啡选题生成视频脚本",
+    images: [
+      {
+        role: "product",
+        roleDescription: "以下图片是产品参考图 1，只用于识别产品外观与包装。",
+        mimeType: "image/jpeg",
+        dataBase64: sampleBase64A,
+      },
+      {
+        role: "style",
+        roleDescription: "以下图片是风格参考图，只参考色调和光影氛围。",
+        mimeType: "image/png",
+        dataBase64: sampleBase64B,
+      },
+    ],
+    temperature: 0.3,
+    maxOutputTokens: 2048,
+  });
+
+  assert.deepEqual(result, { ok: true, title: "测试脚本" });
+  assert.equal(requestCount, 1);
+  assert.equal(received.method, "POST");
+  assert.equal(received.path, "/v1beta/models/gemini-3.6-flash:generateContent");
+  assert.equal(received.apiKeyHeader, "fixture-google-key");
+  assert.equal(received.body.systemInstruction.parts[0].text, "你是一位 AI 视频提示词专家，输出纯 JSON");
+
+  const parts = received.body.contents[0].parts;
+  assert.equal(parts[0].text, "请为咖啡选题生成视频脚本");
+  assert.equal(parts[1].text, "以下图片是产品参考图 1，只用于识别产品外观与包装。");
+  assert.deepEqual(parts[2].inlineData, { mimeType: "image/jpeg", data: sampleBase64A });
+  assert.equal(parts[3].text, "以下图片是风格参考图，只参考色调和光影氛围。");
+  assert.deepEqual(parts[4].inlineData, { mimeType: "image/png", data: sampleBase64B });
+
+  assert.equal(received.body.generationConfig.temperature, 0.3);
+  assert.equal(received.body.generationConfig.responseMimeType, "application/json");
+  assert.equal(received.body.generationConfig.maxOutputTokens, 2048);
+});
+
+test("rejects a Google multimodal MAX_TOKENS response", async (t) => {
+  let requestCount = 0;
+  const server = http.createServer((_request, response) => {
+    requestCount += 1;
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      candidates: [{
+        finishReason: "MAX_TOKENS",
+        content: { parts: [{ text: "{\"title\":\"截断" }] },
+      }],
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  const appConfig = {
+    textProvider: {
+      apiStyle: "google",
+      model: "gemini-3.6-flash",
+      baseUrl: "http://127.0.0.1:" + port,
+      apiKey: "fixture-key",
+    },
+  };
+
+  await assert.rejects(
+    callVisionModelJson(appConfig, {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      images: [{ mimeType: "image/png", dataBase64: Buffer.from("img").toString("base64") }],
+      maxAttempts: 1,
+    }),
+    (error) => {
+      assert.equal(error.code, "TEXT_MODEL_MAX_TOKENS");
+      assert.equal(error.finishReason, "MAX_TOKENS");
+      assert.equal(error.partial, true);
+      return true;
+    },
+  );
+  assert.equal(requestCount, 1);
+});
+
+test("rejects unsupported MIME and oversized images in callVisionModelJson", async () => {
+  const appConfig = {
+    textProvider: {
+      apiStyle: "google",
+      model: "gemini-3.6-flash",
+      baseUrl: "http://127.0.0.1:3000",
+      apiKey: "fixture-key",
+    },
+  };
+
+  // Unsupported MIME
+  await assert.rejects(
+    callVisionModelJson(appConfig, {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      images: [{ mimeType: "image/bmp", dataBase64: Buffer.from("img").toString("base64") }],
+    }),
+    { code: "VISION_UNSUPPORTED_MIME" },
+  );
+
+  // Oversized image (>10MB)
+  const hugeBase64 = Buffer.alloc(11 * 1024 * 1024).toString("base64");
+  await assert.rejects(
+    callVisionModelJson(appConfig, {
+      systemPrompt: "Return JSON",
+      userPrompt: "ping",
+      images: [{ mimeType: "image/jpeg", dataBase64: hugeBase64 }],
+    }),
+    { code: "VISION_IMAGE_TOO_LARGE" },
+  );
+});
+
+test("redacts provider credentials from propagated Google multimodal HTTP errors", async (t) => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "Invalid request with x-goog-api-key=secret-goog-12345" } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+
+  await assert.rejects(
+    callVisionModelJson(
+      {
+        textProvider: {
+          apiStyle: "google",
+          model: "gemini-3.6-flash",
+          baseUrl: "http://127.0.0.1:" + port,
+          apiKey: "secret-goog-12345",
+        },
+      },
+      {
+        systemPrompt: "Return JSON",
+        userPrompt: "ping",
+        images: [{ mimeType: "image/png", dataBase64: Buffer.from("img").toString("base64") }],
+        maxAttempts: 1,
+      },
+    ),
+    (error) => {
+      assert.doesNotMatch(error.message, /secret-goog-12345/);
+      assert.match(error.message, /\[redacted\]/);
+      return true;
+    },
   );
 });

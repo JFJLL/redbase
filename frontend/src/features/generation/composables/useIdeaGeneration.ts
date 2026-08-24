@@ -2,6 +2,7 @@ import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
+import { useHistoryStore } from "@/features/history/stores/history";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import {
@@ -88,6 +89,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   const route = useRoute();
   const router = useRouter();
   const auth = useAuthStore();
+  const historyStore = useHistoryStore();
   const scope = useAbortScope();
 
   const queryBrandId = computed(() => parsePositiveInt(route.query.brandId));
@@ -302,6 +304,12 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
       : [],
   );
 
+  const selectedStyleReferenceInputs = computed<Array<{ name?: string; dataUrl?: string }>>(() => {
+    return styleReference.value
+      ? [{ name: styleReference.value.fileName, dataUrl: styleReference.value.dataUrl }]
+      : [];
+  });
+
   function onProductImagesLoaded(images: ProductImageView[]) {
     if (externalLibrary) return;
     loadedProductImages.value = images;
@@ -399,6 +407,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     const signal = scope.signalFor("post-generation");
     try {
       await refreshGenerationHistory(signal);
+      await historyStore.refresh({ signal });
     } catch (error) {
       if (isAbortError(error)) return;
     }
@@ -842,6 +851,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     styleReference,
     restoreIdeaSettings,
     selectedProductImageInputs,
+    selectedStyleReferenceInputs,
     onProductImagesLoaded,
     onProductImagesLoadError,
     retryProductImagesLoad,
