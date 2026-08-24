@@ -229,7 +229,7 @@ describe("product media request contract (xhs carousel and style image)", () => 
   });
 
   it("style-image carries only styleReferenceImages even when product images are selected", async () => {
-    const { wrapper, fetchMock } = await mountIdeas(installFlowFetch(baseOptions()), {
+    const { wrapper, router, fetchMock } = await mountIdeas(installFlowFetch(baseOptions()), {
       brandId: "1",
       trendId: "5",
       ideaIndex: "0",
@@ -247,7 +247,7 @@ describe("product media request contract (xhs carousel and style image)", () => 
     }
     expect(wrapper.find('[data-test="idea-style-name-0"]').text()).toContain("style.png");
 
-    await wrapper.find('[data-test="idea-generate-style-0"]').trigger("click");
+    await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0", action: "styleImage" } });
     await flushPromises();
     await flushPromises();
 

@@ -75,11 +75,20 @@ function baseOptions(overrides: IdeasFlowOptions["overrides"] = () => undefined)
 }
 
 async function openIdeaAction(action: "moments" | "wechat" | "xhsCarousel" | "styleImage", options: IdeasFlowOptions = {}) {
+  if (action === "styleImage") {
+    const mounted = await mountIdeasGeneration(
+      { ...baseOptions(), ...options, overrides: options.overrides },
+      { brandId: "1", trendId: "5", ideaIndex: "0", action: "styleImage" },
+    );
+    await flushPromises();
+    await flushPromises();
+    return mounted;
+  }
   const mounted = await mountIdeasGeneration(
     { ...baseOptions(), ...options, overrides: options.overrides },
     { brandId: "1", trendId: "5", ideaIndex: "0" },
   );
-  const buttonName = action === "xhsCarousel" ? "xhs" : action === "styleImage" ? "style" : action;
+  const buttonName = action === "xhsCarousel" ? "xhs" : action;
   const button = `idea-generate-${buttonName}-0`;
   await mounted.wrapper.find(`[data-test="${button}"]`).trigger("click");
   await flushPromises();

@@ -928,7 +928,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       hasProductImage: Array.isArray(payload.productImages) ? payload.productImages.length > 0 : Boolean(payload.productImage),
     });
 
-    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+    let productImages = [];
+    let styleReferenceImages = [];
+    try {
+      productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+      styleReferenceImages = await resolveProductImageInputsSql(user, payload.styleReferenceImages || payload.styleReferenceImage, {
+        maxCount: 1,
+        maxTotalBytes: MAX_PRODUCT_IMAGE_BYTES,
+        label: "风格参考图",
+      });
+    } catch (error) {
+      if (error?.code === "IMAGE_LIMIT_EXCEEDED" || error?.code === "PRODUCT_IMAGE_BRAND_MISMATCH") {
+        badRequest(res, error.message);
+        return true;
+      }
+      throw error;
+    }
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     let metadata;
     try {
@@ -955,11 +970,13 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         payload: {
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
+          styleReferenceImageUsed: styleReferenceImages.length > 0,
+          styleReferenceImageCount: styleReferenceImages.length,
           logoUsed: Boolean(logoImage),
           aspectRatio,
         },
       }),
-      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, logoImage, aspectRatio, metadata: { ...metadata, aspectRatio } }),
+      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, styleReferenceImages, logoImage, aspectRatio, metadata: { ...metadata, aspectRatio } }),
     });
     if (!charged) return true;
     const job = charged.value;
@@ -1320,7 +1337,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const payload = await collectBody(req);
     const aspectRatio = requireAspectRatio(payload, "wechat", res, badRequest);
     if (!aspectRatio) return true;
-    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+    let productImages = [];
+    let styleReferenceImages = [];
+    try {
+      productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+      styleReferenceImages = await resolveProductImageInputsSql(user, payload.styleReferenceImages || payload.styleReferenceImage, {
+        maxCount: 1,
+        maxTotalBytes: MAX_PRODUCT_IMAGE_BYTES,
+        label: "风格参考图",
+      });
+    } catch (error) {
+      if (error?.code === "IMAGE_LIMIT_EXCEEDED" || error?.code === "PRODUCT_IMAGE_BRAND_MISMATCH") {
+        badRequest(res, error.message);
+        return true;
+      }
+      throw error;
+    }
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     console.log("[image-job] wechat request body collected", {
       elapsedMs: Date.now() - requestStartedAt,
@@ -1381,6 +1413,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           trend,
           idea,
           productImages,
+          styleReferenceImages,
           logoImage,
           aspectRatio,
           metadata: {
@@ -1942,7 +1975,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     const payload = await collectBody(req);
     const aspectRatio = requireAspectRatio(payload, "xhsCarousel", res, badRequest);
     if (!aspectRatio) return true;
-    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+    let productImages = [];
+    let styleReferenceImages = [];
+    try {
+      productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+      styleReferenceImages = await resolveProductImageInputsSql(user, payload.styleReferenceImages || payload.styleReferenceImage, {
+        maxCount: 1,
+        maxTotalBytes: MAX_PRODUCT_IMAGE_BYTES,
+        label: "风格参考图",
+      });
+    } catch (error) {
+      if (error?.code === "IMAGE_LIMIT_EXCEEDED" || error?.code === "PRODUCT_IMAGE_BRAND_MISMATCH") {
+        badRequest(res, error.message);
+        return true;
+      }
+      throw error;
+    }
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     console.log("[image-job] carousel request body collected", {
       elapsedMs: Date.now() - requestStartedAt,
@@ -2007,6 +2055,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               trend,
               idea,
               productImages,
+              styleReferenceImages,
               logoImage,
               aspectRatio,
               metadata: {
@@ -2132,7 +2181,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+    let productImages = [];
+    let styleReferenceImages = [];
+    try {
+      productImages = await resolveProductImageInputsSql(user, payload.productImages || payload.productImage);
+      styleReferenceImages = await resolveProductImageInputsSql(user, payload.styleReferenceImages || payload.styleReferenceImage, {
+        maxCount: 1,
+        maxTotalBytes: MAX_PRODUCT_IMAGE_BYTES,
+        label: "风格参考图",
+      });
+    } catch (error) {
+      if (error?.code === "IMAGE_LIMIT_EXCEEDED" || error?.code === "PRODUCT_IMAGE_BRAND_MISMATCH") {
+        badRequest(res, error.message);
+        return true;
+      }
+      throw error;
+    }
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
 
     console.log("[image-job] creating carousel single slide job", {
@@ -2162,6 +2226,8 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           pageLabel: slide.pageLabel,
           referenceImageUsed: productImages.length > 0,
           referenceImageCount: productImages.length,
+          styleReferenceImageUsed: styleReferenceImages.length > 0,
+          styleReferenceImageCount: styleReferenceImages.length,
           logoUsed: Boolean(logoImage),
           aspectRatio,
         },
@@ -2173,6 +2239,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           trend,
           idea,
           productImages,
+          styleReferenceImages,
           logoImage,
           aspectRatio,
           metadata: {

@@ -527,3 +527,79 @@ export async function pollImageJob(jobId: string, options: PollImageJobOptions =
     await sleep(delayMs, options.signal);
   }
 }
+
+
+
+// —— AI Video Script Generation ——
+
+export interface VideoScriptClip {
+  index: number;
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  purpose: string;
+  referenceAssets?: Array<{ kind?: string; label?: string; description?: string }>;
+  subjectReference: string;
+  firstFrame: string;
+  lastFrame: string;
+  scene: string;
+  subjectAction: string;
+  cameraMovement: string;
+  environmentMotion: string;
+  lightingAndStyle: string;
+  audioPrompt: string;
+  voiceover?: string;
+  dialogue?: string;
+  onScreenText?: string;
+  transition?: string;
+  continuity?: string;
+  prompt: string;
+}
+
+export interface VideoScriptAudioDirection {
+  music: string;
+  ambience: string;
+  voiceStyle: string;
+}
+
+export interface VideoScript {
+  title: string;
+  creativeConcept: string;
+  totalDurationSec: number;
+  aspectRatio: string;
+  globalSubjectReference: string;
+  globalStyleReference: string;
+  globalContinuity: string;
+  audioDirection: VideoScriptAudioDirection;
+  clips: VideoScriptClip[];
+}
+
+export interface VideoScriptRequest {
+  requestId: string;
+  aspectRatioSelection?: string;
+  useBrandLogo?: boolean;
+  useProductImages?: boolean;
+  productImages?: ProductImageInput[];
+  styleReferenceImages?: Array<{ name?: string; dataUrl?: string }>;
+}
+
+export interface VideoScriptSubmitResult {
+  generation?: Record<string, unknown>;
+  videoScript?: VideoScript;
+  user?: SessionUser;
+  [key: string]: unknown;
+}
+
+export function submitVideoScript(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: VideoScriptRequest,
+  signal?: AbortSignal,
+): Promise<VideoScriptSubmitResult> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/video-script`, {
+    method: "POST",
+    body,
+    signal,
+  });
+}
