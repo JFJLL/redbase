@@ -31,21 +31,21 @@ const clips = computed(() => (Array.isArray(props.script.clips) ? props.script.c
 function buildFullMarkdown(): string {
   const s = props.script;
   const lines = [
-    `# ${title.value}`,
+    "# " + title.value,
     "",
-    `> **核心创意**：${s.creativeConcept || "-"}`,
+    "> **核心创意**：" + (s.creativeConcept || "-"),
     "",
-    `- **总时长**：${totalDuration.value} 秒`,
-    `- **视频比例**：${aspectRatio.value}`,
-    `- **分段数量**：${clips.value.length} 个片段`,
-    `- **主体参考**：${s.globalSubjectReference || "-"}`,
-    `- **风格参考**：${s.globalStyleReference || "-"}`,
-    `- **连贯性要求**：${s.globalContinuity || "-"}`,
+    "- **总时长**：" + totalDuration.value + " 秒",
+    "- **视频比例**：" + aspectRatio.value,
+    "- **分段数量**：" + clips.value.length + " 个片段",
+    "- **主体参考**：" + (s.globalSubjectReference || "-"),
+    "- **风格参考**：" + (s.globalStyleReference || "-"),
+    "- **连贯性要求**：" + (s.globalContinuity || "-"),
     "",
     "## 音频方向",
-    `- **BGM 音乐**：${s.audioDirection?.music || "-"}`,
-    `- **环境音效**：${s.audioDirection?.ambience || "-"}`,
-    `- **解说/配音语调**：${s.audioDirection?.voiceStyle || "-"}`,
+    "- **BGM 音乐**：" + (s.audioDirection?.music || "-"),
+    "- **环境音效**：" + (s.audioDirection?.ambience || "-"),
+    "- **解说/配音语调**：" + (s.audioDirection?.voiceStyle || "-"),
     "",
     "---",
     "",
@@ -55,24 +55,24 @@ function buildFullMarkdown(): string {
 
   clips.value.forEach((clip, index) => {
     const duration = clip.durationSec || (clip.endSec - clip.startSec) || 0;
-    lines.push(`### 片段 ${clip.index || index + 1}：${clip.purpose || "分镜"}`);
-    lines.push(`- **时间**：${clip.startSec ?? 0}s - ${clip.endSec ?? duration}s (${duration}s)`);
-    lines.push(`- **主体参考**：${clip.subjectReference || "-"}`);
-    lines.push(`- **场景环境**：${clip.scene || "-"}`);
-    lines.push(`- **主体动作**：${clip.subjectAction || "-"}`);
-    lines.push(`- **镜头运动**：${clip.cameraMovement || "-"}`);
-    lines.push(`- **环境动态**：${clip.environmentMotion || "-"}`);
-    lines.push(`- **光影风格**：${clip.lightingAndStyle || "-"}`);
-    lines.push(`- **首帧画面**：${clip.firstFrame || "-"}`);
-    lines.push(`- **尾帧画面**：${clip.lastFrame || "-"}`);
-    lines.push(`- **音频提示**：${clip.audioPrompt || "-"}`);
-    if (clip.voiceover) lines.push(`- **旁白**：${clip.voiceover}`);
-    if (clip.dialogue) lines.push(`- **对话**：${clip.dialogue}`);
-    if (clip.onScreenText) lines.push(`- **画面花字**：${clip.onScreenText}`);
-    if (clip.transition) lines.push(`- **转场**：${clip.transition}`);
-    if (clip.continuity) lines.push(`- **连续性**：${clip.continuity}`);
+    lines.push("### 片段 " + (clip.index || index + 1) + "：" + (clip.purpose || "分镜"));
+    lines.push("- **时间**：" + (clip.startSec ?? 0) + "s - " + (clip.endSec ?? duration) + "s (" + duration + "s)");
+    lines.push("- **主体参考**：" + (clip.subjectReference || "-"));
+    lines.push("- **场景环境**：" + (clip.scene || "-"));
+    lines.push("- **主体动作**：" + (clip.subjectAction || "-"));
+    lines.push("- **镜头运动**：" + (clip.cameraMovement || "-"));
+    lines.push("- **环境动态**：" + (clip.environmentMotion || "-"));
+    lines.push("- **光影风格**：" + (clip.lightingAndStyle || "-"));
+    lines.push("- **首帧画面**：" + (clip.firstFrame || "-"));
+    lines.push("- **尾帧画面**：" + (clip.lastFrame || "-"));
+    lines.push("- **音频提示**：" + (clip.audioPrompt || "-"));
+    if (clip.voiceover) lines.push("- **旁白**：" + clip.voiceover);
+    if (clip.dialogue) lines.push("- **对话**：" + clip.dialogue);
+    if (clip.onScreenText) lines.push("- **画面花字**：" + clip.onScreenText);
+    if (clip.transition) lines.push("- **转场**：" + clip.transition);
+    if (clip.continuity) lines.push("- **连续性**：" + clip.continuity);
     lines.push("");
-    lines.push("#### AI 视频生成模型完整提示词");
+    lines.push("#### AI 视频生成模型中文提示词");
     lines.push("```text");
     lines.push(clip.prompt || "");
     lines.push("```");
@@ -86,8 +86,8 @@ function buildAllPromptsText(): string {
   return clips.value
     .map((clip, index) => {
       const idx = clip.index || index + 1;
-      const purpose = clip.purpose ? ` (${clip.purpose})` : "";
-      return `// 片段 ${idx}${purpose} [${clip.startSec}s-${clip.endSec}s]\n${clip.prompt || ""}`;
+      const purpose = clip.purpose ? " (" + clip.purpose + ")" : "";
+      return "// 片段 " + idx + purpose + " [" + clip.startSec + "s-" + clip.endSec + "s]\n" + (clip.prompt || "");
     })
     .join("\n\n");
 }
@@ -130,12 +130,7 @@ function downloadFile(content: string, filename: string, type: string) {
 
 function exportMarkdown() {
   const safeName = title.value.replace(/[/\\?%*:|"<>]/g, "-").slice(0, 40);
-  downloadFile(buildFullMarkdown(), `${safeName}-video-script.md`, "text/markdown;charset=utf-8");
-}
-
-function exportJson() {
-  const safeName = title.value.replace(/[/\\?%*:|"<>]/g, "-").slice(0, 40);
-  downloadFile(JSON.stringify(props.script, null, 2), `${safeName}-video-script.json`, "application/json;charset=utf-8");
+  downloadFile(buildFullMarkdown(), safeName + "-video-script.md", "text/markdown;charset=utf-8");
 }
 </script>
 
@@ -153,7 +148,9 @@ function exportJson() {
           </span>
         </div>
       </div>
+
       <h2 class="script-title" data-test="video-script-title">{{ title }}</h2>
+
       <p v-if="script.creativeConcept" class="script-concept" data-test="video-script-concept">
         <strong>核心创意：</strong>{{ script.creativeConcept }}
       </p>
@@ -200,14 +197,6 @@ function exportJson() {
           导出 Markdown
         </button>
         <button
-          type="button"
-          class="secondary-btn"
-          data-test="export-json"
-          @click="exportJson"
-        >
-          导出 JSON
-        </button>
-        <button
           v-if="showRegenerate"
           type="button"
           class="primary-btn"
@@ -220,14 +209,6 @@ function exportJson() {
     </header>
 
     <div class="clips-container">
-      <div class="clips-table-head" aria-hidden="true">
-        <span>时间</span>
-        <span>片段作用</span>
-        <span>首帧 → 尾帧</span>
-        <span>主体与运镜</span>
-        <span>音频提示</span>
-        <span style="text-align: right">操作</span>
-      </div>
       <div class="clips-list" data-test="video-clips-list">
         <VideoScriptClipRow
           v-for="(clip, index) in clips"
@@ -244,16 +225,16 @@ function exportJson() {
 .video-script-result {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   width: 100%;
 }
 
 .script-header {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px 20px;
-  border: 1px solid var(--workspace-border, #eae5e3);
+  gap: 14px;
+  padding: 20px 22px;
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
   border-radius: var(--workspace-radius, 10px);
   background: var(--workspace-surface, #ffffff);
 }
@@ -274,12 +255,12 @@ function exportJson() {
 .meta-tag {
   display: inline-flex;
   align-items: center;
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: #f4edea;
-  color: #6d4d51;
+  padding: 4px 10px;
+  border-radius: var(--workspace-radius-sm, 6px);
+  background: #f3e7e2;
+  color: var(--workspace-brand-ink, #7c2d32);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .brand-badge {
@@ -296,8 +277,9 @@ function exportJson() {
 .script-title {
   margin: 0;
   font-size: 1.3rem;
-  color: var(--workspace-text, #222);
+  color: var(--workspace-text, #31292b);
   line-height: 1.4;
+  font-weight: 700;
 }
 
 .script-concept {
@@ -307,27 +289,32 @@ function exportJson() {
   line-height: 1.6;
 }
 
+.script-concept strong {
+  color: var(--workspace-text, #31292b);
+}
+
 .script-global-context {
   display: grid;
   gap: 6px;
-  padding: 12px 14px;
-  background: #faf7f5;
-  border-radius: 8px;
-  border: 1px solid rgba(216, 68, 68, 0.08);
+  padding: 12px 16px;
+  background: var(--workspace-surface-soft, #faf7f5);
+  border-radius: var(--workspace-radius-sm, 8px);
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.08));
   font-size: 13px;
 }
 
 .global-ctx-item strong {
-  color: #7c7074;
+  color: var(--workspace-text-muted, #7c7074);
+  margin-right: 4px;
 }
 
 .global-ctx-item span {
-  color: var(--workspace-text, #333);
+  color: var(--workspace-text, #31292b);
 }
 
 .script-notice {
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: var(--workspace-radius-sm, 8px);
   background: #fff8eb;
   border: 1px solid #faeccb;
   color: #8c6314;
@@ -345,27 +332,34 @@ function exportJson() {
 
 .secondary-btn,
 .primary-btn {
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 38px;
+  padding: 0 16px;
+  font-family: inherit;
   font-size: 13px;
-  font-weight: 600;
-  border-radius: 6px;
+  font-weight: 700;
+  border-radius: var(--workspace-radius-sm, 6px);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .secondary-btn {
-  border: 1px solid var(--workspace-border, #eae5e3);
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
   background: #fff;
-  color: var(--workspace-text, #333);
+  color: var(--workspace-text, #31292b);
 }
 
 .secondary-btn:hover {
-  border-color: rgba(216, 68, 68, 0.3);
+  border-color: rgba(216, 68, 68, 0.28);
   background: #fff8f7;
+  color: var(--workspace-brand, #d83b46);
 }
 
 .primary-btn {
-  border: none;
+  border: 1px solid transparent;
   background: var(--workspace-brand, #d83b46);
   color: #fff;
 }
@@ -377,28 +371,12 @@ function exportJson() {
 .clips-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.clips-table-head {
-  display: grid;
-  grid-template-columns: 140px 110px minmax(200px, 1.2fr) minmax(180px, 1fr) minmax(140px, 0.8fr) 180px;
-  gap: 12px;
-  padding: 8px 16px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--workspace-text-muted, #7c7074);
+  gap: 10px;
 }
 
 .clips-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-@media (max-width: 960px) {
-  .clips-table-head {
-    display: none;
-  }
 }
 </style>

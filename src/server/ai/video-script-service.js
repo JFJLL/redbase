@@ -20,18 +20,18 @@ function buildSystemPrompt() {
   return `你是一位顶尖的 AI 视频创意总监与分镜提示词工程师（擅长 Kling / 可灵、Hailuo / 海螺、Sora、Runway Gen-3 等现代 AI 视频生成模型）。
 
 【核心使命】
-根据用户提供的品牌档案、热点趋势、内容选题以及参考素材（产品图、风格图、品牌标识），生成一套面向现代 AI 视频生成模型直接使用的“结构化视频分镜脚本与完整提示词”。
+根据用户提供的品牌档案、热点趋势、内容选题以及参考素材（产品图、风格图、品牌标识），生成一套面向现代 AI 视频生成模型直接使用的“结构化视频分镜脚本与完整中文提示词”。
 
 【重要产品原则】
 1. 只生成面向 AI 视频生成模型的提示词与分镜描述，严禁生成真人实拍执行内容（禁止出现摄影师安排、相机/镜头/灯具型号、场地勘景、拍摄日程、演员通告、道具采购清单、摄制组分工、机位编号、真人拍摄预算等）。
 2. “镜头运动/运镜”“景别”“视角”属于 AI 视频提示词语言，应当保留并详细描述。
-3. 视频总时长必须智能确定为 15、30、45 或 60 秒之一（社交传播优先推荐 15 秒或 30 秒）。
+3. 视频总时长必须确定为 15、30、45 或 60 秒之一（若用户指定了时长请严格遵循；未指定时由模型智能确定，推荐 15 秒或 30 秒）。
 4. 每个分镜片段（Clip）建议时长为 3 至 10 秒，相邻片段首尾时间必须严格连续（第1段从0秒开始，第N段结束时间等于总时长，无重叠、无空档）。
 5. 素材角色严格分离：
    - 有产品参考图时：分镜的主体参考（subjectReference）必须准确引用具体产品的造型、材质、包装、色彩与细节；
    - 有风格参考图时：风格图只控制画面的色调、光影、材质质感、构图和整体氛围，严禁将风格图里的人物、产品、文字或具体物体复制到视频画面中；
    - 无参考图时：主体参考使用准确细腻的文字具象化描述。
-6. 每一个分镜片段的 prompt 字段，必须是一段极其丰富、具象、可直接复制给 AI 视频模型的完整生成提示词（包含场景、主体、动作、运镜、光影风格、画质要求等）。
+6. 【中文语言要求】所有输出内容包括分镜生成提示词（prompt）、画面描述、主体动作、镜头运动、环境动态、音频提示等，必须全部使用中文生成！生成丰富、具象、具备电影质感且适合国内主流 AI 视频模型直接执行的中文生成提示词。
 
 【输出格式】
 必须严格输出纯 JSON 对象，不得包含任何 Markdown 代码块标签外的额外文字：
@@ -72,18 +72,21 @@ function buildSystemPrompt() {
       "onScreenText": "画面花字/排版字幕（如无则留空）",
       "transition": "与下一段的转场方式（如：匹配剪辑、快速横摇、淡入淡出、运动模糊转场等）",
       "continuity": "与前一片段的人物状态、空间位置或光线连贯性要求",
-      "prompt": "可直接复制给 AI 视频模型的完整高质量提示词，英文或中文描述，包含清晰的主体、动作、环境、运镜、光影与画质控制词。"
+      "prompt": "可直接复制给 AI 视频模型的完整高质量中文提示词，必须使用中文描述，包含清晰的主体特征、动作细节、场景环境、镜头运动、光影氛围与电影级画质控制词。"
     }
   ]
 }`;
 }
 
-function buildUserPrompt({ brand, trend, idea, aspectRatio, images = [] }) {
+function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = null, images = [] }) {
   const parts = [];
 
   parts.push("【任务目标】");
-  parts.push(`请根据以下品牌信息、选题视角与视频比例要求，创作一份完整的结构化 AI 视频生成脚本与分镜提示词。`);
+  parts.push("请根据以下品牌信息、选题视角与视频参数要求，创作一份完整的结构化 AI 视频生成脚本与分镜中文提示词。");
   parts.push(`要求输出视频比例：${aspectRatio || "9:16"}`);
+  if (targetDuration) {
+    parts.push(`指定视频总时长：${targetDuration} 秒（必须严格将所有分镜时长划分并保证总和为 ${targetDuration} 秒）`);
+  }
 
   parts.push("\n【品牌档案】");
   parts.push(`- 品牌名称：${brand?.name || "未命名品牌"}`);
@@ -129,18 +132,18 @@ function buildUserPrompt({ brand, trend, idea, aspectRatio, images = [] }) {
     parts.push(`- 提供了 ${brand?.profileType === "personal" ? "个人头像" : "品牌 Logo"} 参考，注意在片尾或关键时刻保持品牌识别规范。`);
   }
 
-  parts.push("\n请开始生成完整的视频脚本 JSON 对象。");
+  parts.push("\n请开始生成完整的视频脚本 JSON 对象，所有提示词与描述必须为中文。");
   return parts.join("\n");
 }
 
-function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", idea = {} } = {}) {
+function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", targetDuration = null, idea = {} } = {}) {
   if (!raw || typeof raw !== "object") {
     throw new Error("模型返回的不是有效的脚本对象。");
   }
 
   const title = compactString(raw.title, idea?.title || "AI 视频脚本", 120);
   const creativeConcept = compactString(raw.creativeConcept, idea?.summary || "视频创意方案", 500);
-  const totalDurationSec = normalizeTotalDuration(raw.totalDurationSec);
+  const totalDurationSec = targetDuration ? normalizeTotalDuration(targetDuration) : normalizeTotalDuration(raw.totalDurationSec);
   const aspectRatio = compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
 
   const globalSubjectReference = compactString(raw.globalSubjectReference, "保持全片主体特征与质感一致", 500);
@@ -164,7 +167,6 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", i
   let currentStart = 0;
   const clipCount = Math.min(rawClips.length, 10);
 
-  // 如果原始片段时长总和与 totalDurationSec 差距较大，计算合理分配
   for (let i = 0; i < clipCount; i++) {
     const rawClip = rawClips[i] || {};
     const isLast = i === clipCount - 1;
@@ -193,7 +195,7 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", i
     const audioPrompt = compactString(rawClip.audioPrompt, "背景音乐铺垫与环境音效", 300);
     const prompt = compactString(
       rawClip.prompt,
-      `Cinematic high quality video shot, ${compactString(rawClip.scene, "modern scene")}, ${compactString(rawClip.subjectAction, "natural movement")}, ${compactString(rawClip.cameraMovement, "smooth push in")}, professional lighting, photorealistic.`,
+      `电影级高清画质，${compactString(rawClip.scene, "现代生活场景")}，${compactString(rawClip.subjectAction, "主体自然运动")}，${compactString(rawClip.cameraMovement, "平滑推近运镜")}，自然光影氛围，照片级真实细节。`,
       2000,
     );
 
@@ -252,7 +254,7 @@ async function repairVideoScript(appConfig, brokenScript, errorMessage, context)
   const systemPrompt = `你是一位脚本修复专家。之前生成的 AI 视频脚本存在以下问题：
 ${errorMessage}
 
-请修正问题并输出符合完整 Schema 的纯 JSON 脚本。`;
+请修正问题并输出符合完整 Schema 的纯 JSON 脚本，所有提示词和描述必须为中文。`;
 
   const userPrompt = `请修复以下脚本数据：\n${JSON.stringify(brokenScript, null, 2)}`;
 
@@ -266,14 +268,23 @@ ${errorMessage}
   return validateAndNormalizeVideoScript(raw, context);
 }
 
-async function generateVideoScript(appConfig, { brand, trend, idea, aspectRatio = "9:16", images = [] } = {}) {
+async function generateVideoScript(
+  appConfig,
+  { brand, trend, idea, aspectRatio = "9:16", durationSelection = "auto", images = [] } = {},
+) {
   const safeAspectRatio = aspectRatio === "smart" || !aspectRatio ? "9:16" : aspectRatio;
+  const targetDuration =
+    durationSelection && durationSelection !== "auto" && ALLOWED_TOTAL_DURATIONS.includes(Number(durationSelection))
+      ? Number(durationSelection)
+      : null;
+
   const systemPrompt = buildSystemPrompt();
   const userPrompt = buildUserPrompt({
     brand,
     trend,
     idea,
     aspectRatio: safeAspectRatio,
+    targetDuration,
     images,
   });
 
@@ -300,6 +311,7 @@ async function generateVideoScript(appConfig, { brand, trend, idea, aspectRatio 
   try {
     return validateAndNormalizeVideoScript(rawScript, {
       requestedAspectRatio: safeAspectRatio,
+      targetDuration,
       brand,
       idea,
     });
@@ -308,6 +320,7 @@ async function generateVideoScript(appConfig, { brand, trend, idea, aspectRatio 
     try {
       return await repairVideoScript(appConfig, rawScript, validationError.message, {
         requestedAspectRatio: safeAspectRatio,
+        targetDuration,
         brand,
         idea,
       });

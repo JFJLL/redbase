@@ -17,6 +17,7 @@ export interface UseIdeaVideoScriptOptions {
   trendId: Ref<number | null | undefined>;
   ideaIndex: Ref<number | null | undefined>;
   aspectRatioSelection: Ref<string>;
+  videoDuration?: Ref<string | undefined>;
   useBrandLogo: Ref<boolean>;
   useProductImages: Ref<boolean>;
   selectedProductImageInputs: Ref<ProductImageInput[]>;
@@ -66,6 +67,7 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
     const payload: VideoScriptRequest = {
       requestId: reqId,
       aspectRatioSelection: options.aspectRatioSelection.value,
+      videoDuration: options.videoDuration?.value || "auto",
       useBrandLogo: options.useBrandLogo.value,
       useProductImages: options.useProductImages.value,
       productImages: options.selectedProductImageInputs.value,

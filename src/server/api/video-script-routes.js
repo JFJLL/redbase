@@ -192,6 +192,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
           styleReferenceImageCount: styleCount,
           logoUsed: logoCount > 0,
           aspectRatio: payload.aspectRatioSelection || "9:16",
+          videoDuration: payload.videoDuration || payload.durationSelection || "auto",
         },
       },
     });
@@ -207,6 +208,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         trend,
         idea,
         aspectRatio: payload.aspectRatioSelection || "9:16",
+        durationSelection: payload.videoDuration || payload.durationSelection || "auto",
         images: resolvedImages,
       });
 

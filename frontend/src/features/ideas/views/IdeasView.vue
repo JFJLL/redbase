@@ -21,6 +21,7 @@ import {
   MAX_SELECTED_PRODUCT_IMAGES,
   MAX_SELECTED_PRODUCT_IMAGE_BYTES,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  VIDEO_DURATION_OPTIONS,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
   deleteProductImage,
@@ -304,7 +305,7 @@ function creativeSummary(index: number): string {
     XHS_CREATIVE_STYLE_OPTIONS.find((option) => option.value === settings.visualStylePreset)?.label || "智能匹配";
   const template =
     WECHAT_TEMPLATE_OPTIONS.find((option) => option.value === settings.wechatTemplate)?.label || "智能配色";
-  const ratio = settings.aspectRatioSelection === "smart" ? "智能比例" : settings.aspectRatioSelection;
+  const ratio = settings.aspectRatioSelection === "smart" ? "智能" : settings.aspectRatioSelection;
   return `小红书：${style} · 公众号：${template} · 比例：${ratio}`;
 }
 
@@ -985,6 +986,15 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                       :options="WECHAT_TEMPLATE_OPTIONS"
                       :test-id="'idea-creative-template-' + index"
                       @update:value="patchSettings(index, { wechatTemplate: $event })"
+                    />
+                  </div>
+                  <div class="idea-creative-field">
+                    <CreativeOptionPicker
+                      title="视频脚本时长"
+                      :value="settingsFor(index).videoDuration || 'auto'"
+                      :options="VIDEO_DURATION_OPTIONS"
+                      :test-id="'idea-creative-duration-' + index"
+                      @update:value="patchSettings(index, { videoDuration: $event })"
                     />
                   </div>
                 </div>

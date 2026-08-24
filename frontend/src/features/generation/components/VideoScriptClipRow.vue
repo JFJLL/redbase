@@ -28,8 +28,8 @@ const timeRangeLabel = computed(() => {
   return start + " - " + end + " (" + duration + "s)";
 });
 
-async function copyPrompt(event: Event) {
-  event.stopPropagation();
+async function copyPrompt(event?: Event) {
+  event?.stopPropagation();
   try {
     await navigator.clipboard.writeText(props.clip.prompt || "");
     copiedPrompt.value = true;
@@ -41,8 +41,8 @@ async function copyPrompt(event: Event) {
   }
 }
 
-async function copyFullClip(event: Event) {
-  event.stopPropagation();
+async function copyFullClip(event?: Event) {
+  event?.stopPropagation();
   const text = [
     "### 片段 " + (props.clip.index || props.index + 1) + "：" + (props.clip.purpose || "分镜"),
     "- 时间：" + timeRangeLabel.value,
@@ -84,36 +84,18 @@ async function copyFullClip(event: Event) {
 <template>
   <div class="video-clip-row" :class="{ 'is-expanded': expanded }" :data-test="'video-clip-row-' + index">
     <div class="clip-summary" @click="toggleExpand">
-      <div class="clip-time-col">
+      <div class="clip-summary-left">
         <span class="clip-index-badge">#{{ clip.index || index + 1 }}</span>
         <strong class="clip-time">{{ timeRangeLabel }}</strong>
-      </div>
-      <div class="clip-purpose-col">
         <span class="clip-purpose-tag">{{ clip.purpose || "分镜片段" }}</span>
       </div>
-      <div class="clip-frames-col">
-        <div class="frame-brief">
-          <span class="frame-label">首帧：</span>
-          <span class="frame-text">{{ clip.firstFrame || "-" }}</span>
-        </div>
-        <div class="frame-brief">
-          <span class="frame-label">尾帧：</span>
-          <span class="frame-text">{{ clip.lastFrame || "-" }}</span>
-        </div>
-      </div>
-      <div class="clip-motion-col">
-        <div><strong>主体：</strong>{{ clip.subjectAction || "-" }}</div>
-        <div><strong>运镜：</strong>{{ clip.cameraMovement || "-" }}</div>
-      </div>
-      <div class="clip-audio-col">
-        <span class="clip-audio-text">{{ clip.audioPrompt || "-" }}</span>
-      </div>
+
       <div class="clip-actions-col">
         <button
           type="button"
           class="secondary-btn clip-action-btn"
           :data-test="'copy-clip-prompt-' + index"
-          @click="copyPrompt"
+          @click.stop="copyPrompt"
         >
           {{ copiedPrompt ? "已复制提示词" : "复制提示词" }}
         </button>
@@ -121,7 +103,7 @@ async function copyFullClip(event: Event) {
           type="button"
           class="secondary-btn clip-action-btn"
           :data-test="'copy-clip-full-' + index"
-          @click="copyFullClip"
+          @click.stop="copyFullClip"
         >
           {{ copiedClip ? "已复制片段" : "复制片段" }}
         </button>
@@ -130,8 +112,10 @@ async function copyFullClip(event: Event) {
           class="toggle-expand-btn"
           :aria-expanded="expanded"
           :data-test="'toggle-clip-expand-' + index"
+          @click.stop="toggleExpand"
         >
           {{ expanded ? "收起" : "展开详情" }}
+          <span class="expand-chevron" :class="{ 'is-expanded': expanded }" aria-hidden="true">▾</span>
         </button>
       </div>
     </div>
@@ -198,9 +182,12 @@ async function copyFullClip(event: Event) {
 
       <div class="clip-prompt-box">
         <div class="prompt-box-header">
-          <strong>完整 AI 视频生成模型提示词</strong>
-          <button type="button" class="secondary-btn small-btn" @click="copyPrompt">
-            {{ copiedPrompt ? "已复制" : "复制完整提示词" }}
+          <div class="prompt-box-title">
+            <span class="prompt-icon">✦</span>
+            <strong>完整 AI 视频生成模型提示词</strong>
+          </div>
+          <button type="button" class="secondary-btn small-btn" @click.stop="copyPrompt">
+            {{ copiedPrompt ? "已复制提示词" : "复制完整提示词" }}
           </button>
         </div>
         <pre class="prompt-code" :data-test="'clip-prompt-text-' + index">{{ clip.prompt }}</pre>
@@ -211,10 +198,10 @@ async function copyFullClip(event: Event) {
 
 <style scoped>
 .video-clip-row {
-  border: 1px solid var(--workspace-border, #eae5e3);
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
   border-radius: var(--workspace-radius, 8px);
   background: var(--workspace-surface, #ffffff);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
   overflow: hidden;
 }
 
@@ -228,130 +215,120 @@ async function copyFullClip(event: Event) {
 }
 
 .clip-summary {
-  display: grid;
-  grid-template-columns: 140px 110px minmax(200px, 1.2fr) minmax(180px, 1fr) minmax(140px, 0.8fr) 180px;
-  gap: 12px;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  padding: 14px 16px;
+  gap: 16px;
+  padding: 12px 18px;
   cursor: pointer;
   font-size: 13px;
   user-select: none;
+  background: #fff;
+  transition: background 0.16s ease;
 }
 
-.clip-time-col {
+.clip-summary:hover {
+  background: #fffdfc;
+}
+
+.clip-summary-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .clip-index-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
   border-radius: 6px;
   background: #f4edea;
-  color: #a82e38;
+  color: var(--workspace-brand-ink, #7c2d32);
   font-weight: 700;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .clip-time {
-  font-size: 12px;
-  color: var(--workspace-text, #333);
+  font-size: 13px;
+  color: var(--workspace-text, #31292b);
   white-space: nowrap;
 }
 
 .clip-purpose-tag {
   display: inline-block;
-  padding: 3px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: #eef5ff;
-  color: #2b5cb8;
+  background: #f3e7e2;
+  color: var(--workspace-brand-ink, #7c2d32);
   font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.clip-frames-col {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  overflow: hidden;
-}
-
-.frame-brief {
-  display: flex;
-  gap: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.frame-label {
-  color: var(--workspace-text-muted, #7c7074);
-  flex-shrink: 0;
-}
-
-.frame-text {
-  color: var(--workspace-text, #333);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.clip-motion-col {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 12px;
-  color: var(--workspace-text, #333);
-  overflow: hidden;
-}
-
-.clip-motion-col div {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.clip-audio-col {
-  font-size: 12px;
-  color: var(--workspace-text-muted, #7c7074);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 700;
   white-space: nowrap;
 }
 
 .clip-actions-col {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
-.clip-action-btn {
-  padding: 4px 8px;
-  font-size: 12px;
-  min-height: 28px;
-}
-
-.toggle-expand-btn {
-  border: none;
-  background: transparent;
-  color: var(--workspace-brand, #d83b46);
+.secondary-btn {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
+  border-radius: var(--workspace-radius-sm, 6px);
+  background: #fff;
+  color: var(--workspace-text, #31292b);
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  padding: 4px;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.secondary-btn:hover {
+  border-color: rgba(216, 68, 68, 0.28);
+  background: #fff8f7;
+  color: var(--workspace-brand, #d83b46);
+}
+
+.toggle-expand-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--workspace-brand, #d83b46);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: background 0.16s ease;
+}
+
+.toggle-expand-btn:hover {
+  background: rgba(216, 68, 68, 0.08);
+}
+
+.expand-chevron {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.expand-chevron.is-expanded {
+  transform: rotate(180deg);
 }
 
 .clip-details {
-  padding: 16px 20px 20px;
+  padding: 18px 20px 22px;
   background: #faf7f5;
-  border-top: 1px dashed var(--workspace-border, #eae5e3);
+  border-top: 1px dashed var(--workspace-border, rgba(18, 16, 17, 0.1));
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -359,8 +336,8 @@ async function copyFullClip(event: Event) {
 
 .details-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
 }
 
 .detail-item {
@@ -372,62 +349,72 @@ async function copyFullClip(event: Event) {
 
 .detail-item strong {
   font-size: 12px;
-  color: #7c7074;
+  color: var(--workspace-text-muted, #7c7074);
+  font-weight: 700;
 }
 
 .detail-item p {
   margin: 0;
-  color: var(--workspace-text, #222);
-  line-height: 1.5;
+  color: var(--workspace-text, #31292b);
+  line-height: 1.55;
 }
 
 .clip-prompt-box {
   border: 1px solid rgba(216, 68, 68, 0.18);
-  border-radius: 8px;
+  border-radius: var(--workspace-radius, 8px);
   background: #ffffff;
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .prompt-box-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
 }
 
-.prompt-box-header strong {
-  color: #a82e38;
+.prompt-box-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prompt-icon {
+  color: var(--workspace-brand, #d83b46);
+  font-size: 14px;
+}
+
+.prompt-box-title strong {
+  color: var(--workspace-brand-ink, #7c2d32);
   font-size: 13px;
+  font-weight: 700;
 }
 
 .prompt-code {
   margin: 0;
-  padding: 10px;
+  padding: 12px 14px;
   background: #fff9f8;
   border: 1px solid #f3dedb;
   border-radius: 6px;
   font-family: inherit;
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: #2b2224;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #31292b;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 760px) {
   .clip-summary {
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-  .clip-frames-col,
-  .clip-motion-col,
-  .clip-audio-col {
-    grid-column: 1 / -1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
   }
   .clip-actions-col {
-    grid-column: 1 / -1;
+    width: 100%;
     justify-content: flex-start;
   }
 }

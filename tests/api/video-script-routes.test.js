@@ -408,3 +408,151 @@ test("POST /video-script refunds credit when model generation fails", async (t) 
   // Credits fully refunded
   assert.equal(findUserById(TEST_USER.id).credits, creditsBefore);
 });
+
+test("GET /api/history returns complete videoScript payload without stripping fields", async (t) => {
+  const modelServer = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: "STOP",
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      title: "带娃出游必备清单，应对突发感冒不慌张",
+                      creativeConcept: "出游备药与急救指南",
+                      totalDurationSec: 15,
+                      aspectRatio: "9:16",
+                      globalSubjectReference: "母婴急救包与小快克",
+                      globalStyleReference: "温馨自然光影",
+                      globalContinuity: "动作连贯",
+                      audioDirection: {
+                        music: "轻快温馨BGM",
+                        ambience: "自然环境声",
+                        voiceStyle: "亲切叮嘱语调",
+                      },
+                      clips: [
+                        {
+                          index: 1,
+                          startSec: 0,
+                          endSec: 7,
+                          durationSec: 7,
+                          purpose: "开场吸睛与场景切入",
+                          firstFrame: "妈妈整理帆布包特写",
+                          lastFrame: "小男孩揉鼻子特写",
+                          subjectReference: "随身急救包",
+                          scene: "阳光草坪露营餐桌前",
+                          subjectAction: "妈妈整理随身物品",
+                          cameraMovement: "低角度慢速推近",
+                          environmentMotion: "微风吹拂",
+                          lightingAndStyle: "自然晨光侧逆光",
+                          audioPrompt: "轻快音乐与微风声",
+                          voiceover: "带娃出门最怕孩子突发感冒？",
+                          dialogue: "",
+                          onScreenText: "带娃出行急救清单",
+                          transition: "快速平滑横移转场",
+                          continuity: "光影方向一致",
+                          prompt: "电影级画质，阳光明媚的草坪露营餐桌前，妈妈正在整理随身帆布包，小男孩在背景草地上欢快奔跑，自然晨光侧逆光，微风吹拂发丝，4k超高清细节。",
+                        },
+                        {
+                          index: 2,
+                          startSec: 7,
+                          endSec: 15,
+                          durationSec: 8,
+                          purpose: "核心亮点与关怀收尾",
+                          firstFrame: "分装小药盒特写",
+                          lastFrame: "母子相视微笑",
+                          subjectReference: "独立分装药包",
+                          scene: "野餐桌特写",
+                          subjectAction: "妈妈递出温水杯",
+                          cameraMovement: "平滑横移升至母子中景",
+                          environmentMotion: "树影斑驳流转",
+                          lightingAndStyle: "暖调温馨氛围",
+                          audioPrompt: "水杯轻放声与治愈音乐",
+                          voiceover: "这份出行急救清单，让你在旅途中稳住阵脚。",
+                          dialogue: "",
+                          onScreenText: "稳住不慌 快乐出发",
+                          transition: "定格淡出",
+                          continuity: "母子位置连续",
+                          prompt: "电影级画质，妈妈将温水杯递给小男孩，温馨对视微笑，暖色调高光通透，画面干净温馨，电影级色彩，8k真实质感。",
+                        },
+                      ],
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => modelServer.close(resolve)));
+  const { port: modelPort } = modelServer.address();
+
+  const appConfig = {
+    ...DEFAULT_APP_CONFIG,
+    textProvider: {
+      apiStyle: "google",
+      model: "gemini-3.6-flash",
+      baseUrl: `http://127.0.0.1:${modelPort}`,
+      apiKey: "fixture-google-key",
+      maxOutputTokens: 8192,
+    },
+  };
+
+  const ai = createAiServices(appConfig);
+  const handler = createApiHandler({ appConfig, store: {}, ai });
+  const server = createMockServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const sessionToken = "session-user-101-history-test";
+  insertSession({ token: sessionToken, userId: TEST_USER.id, createdAt: new Date().toISOString() });
+
+  // 1. Generate video script
+  const generateRes = await makeRequest(
+    server,
+    {
+      method: "POST",
+      path: `/api/brands/${BRAND.id}/trends/501/ideas/0/video-script`,
+      headers: { Cookie: `redbase_session=${sessionToken}` },
+    },
+    {
+      requestId: "req-history-full-check",
+      aspectRatioSelection: "9:16",
+      videoDuration: "15",
+    },
+  );
+
+  assert.equal(generateRes.status, 200);
+  assert.equal(generateRes.body.videoScript.totalDurationSec, 15);
+  assert.equal(generateRes.body.videoScript.clips.length, 2);
+
+  // 2. Fetch /api/history and verify payload contains videoScript intact
+  const historyRes = await makeRequest(
+    server,
+    {
+      method: "GET",
+      path: "/api/history",
+      headers: { Cookie: `redbase_session=${sessionToken}` },
+    },
+  );
+
+  assert.equal(historyRes.status, 200);
+  const historyItem = historyRes.body.generations.find((item) => item.id === generateRes.body.generation.id);
+  assert.ok(historyItem, "history item must exist");
+  console.log("historyItem is:", JSON.stringify(historyItem, null, 2));
+  assert.equal(historyItem.type, "videoScript");
+  assert.ok(historyItem.payload.videoScript, "payload.videoScript must not be stripped by sanitizePayloadForClient");
+  assert.equal(historyItem.payload.videoScript.title, "带娃出游必备清单，应对突发感冒不慌张");
+  assert.equal(historyItem.payload.videoScript.totalDurationSec, 15);
+  assert.equal(historyItem.payload.videoScript.clips.length, 2);
+  assert.equal(historyItem.payload.videoScript.clips[0].firstFrame, "妈妈整理帆布包特写");
+  assert.match(historyItem.payload.videoScript.clips[0].prompt, /电影级画质/);
+});

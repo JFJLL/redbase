@@ -34,6 +34,7 @@ const brandIdRef = computed(() => brand.value?.id);
 const trendIdRef = computed(() => trend.value?.id);
 const ideaIndexRef = computed(() => props.ideaIndex);
 const aspectRatioSelectionRef = computed(() => settings.value.aspectRatioSelection || "smart");
+const videoDurationRef = computed(() => settings.value.videoDuration || "auto");
 const useBrandLogoRef = computed(() => Boolean(settings.value.useBrandLogo && brand.value?.logo));
 const useProductImagesRef = computed(() => settings.value.useProductImages !== false);
 
@@ -64,6 +65,7 @@ const {
   trendId: trendIdRef,
   ideaIndex: ideaIndexRef,
   aspectRatioSelection: aspectRatioSelectionRef,
+  videoDuration: videoDurationRef,
   useBrandLogo: useBrandLogoRef,
   useProductImages: useProductImagesRef,
   selectedProductImageInputs,

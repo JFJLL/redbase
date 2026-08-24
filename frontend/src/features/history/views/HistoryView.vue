@@ -164,9 +164,16 @@ function typeLabel(item: GenerationHistoryItem): string {
   return HISTORY_TYPE_LABELS.get(item.type) || item.type;
 }
 
-function asVideoScript(item: GenerationHistoryItem): VideoScript | null {
-  const payload = item?.payload as Record<string, unknown> | undefined;
-  return (payload?.videoScript as VideoScript) || null;
+function asVideoScript(item: GenerationHistoryItem | null): VideoScript | null {
+  if (!item) return null;
+  const payload = item.payload as Record<string, unknown> | undefined;
+  if (payload?.videoScript && typeof payload.videoScript === "object") {
+    return payload.videoScript as VideoScript;
+  }
+  if (payload && Array.isArray((payload as Record<string, unknown>).clips)) {
+    return payload as unknown as VideoScript;
+  }
+  return null;
 }
 
 function formatTime(value?: string): string {
@@ -473,6 +480,9 @@ onUnmounted(() => {
             :show-regenerate="false"
             @close="closeDetail"
           />
+          <div v-else class="history-script-empty" data-test="history-script-empty">
+            <p>该历史记录中未包含有效的分镜脚本数据。</p>
+          </div>
         </template>
 
         <!-- 图片类详情 -->

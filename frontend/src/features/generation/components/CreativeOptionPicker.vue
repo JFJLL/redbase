@@ -45,7 +45,7 @@ function handleKeydown(event: KeyboardEvent) {
       <div class="picker-summary-info">
         <span class="picker-label">{{ title }}</span>
         <strong class="picker-current-label" :data-test="testId ? testId + '-label' : undefined">
-          {{ selectedOption?.label || "智能匹配" }}
+          {{ selectedOption?.label || "智能推荐" }}
         </strong>
         <span class="picker-current-desc">
           {{ selectedOption?.description || "" }}
@@ -99,6 +99,7 @@ function handleKeydown(event: KeyboardEvent) {
               :value="option.value"
               :checked="option.value === value"
               class="picker-radio-input"
+              tabindex="-1"
             />
             <div class="picker-option-text">
               <strong class="picker-option-title">{{ option.label }}</strong>
@@ -124,15 +125,15 @@ function handleKeydown(event: KeyboardEvent) {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--workspace-border, rgba(50, 37, 41, 0.1));
-  border-radius: var(--workspace-radius, 8px);
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
+  border-radius: var(--workspace-radius-sm, 8px);
   background: var(--workspace-surface, #ffffff);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.16s ease, background 0.16s ease;
 }
 
 .picker-summary-card:hover {
-  border-color: rgba(216, 68, 68, 0.35);
+  border-color: rgba(216, 68, 68, 0.3);
   background: #fffdfc;
 }
 
@@ -151,7 +152,8 @@ function handleKeydown(event: KeyboardEvent) {
 
 .picker-current-label {
   font-size: 13.5px;
-  color: var(--workspace-text, #222);
+  font-weight: 700;
+  color: var(--workspace-text, #31292b);
 }
 
 .picker-current-desc {
@@ -163,22 +165,24 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 .picker-change-btn {
-  padding: 5px 12px;
-  border: 1px solid var(--workspace-border, rgba(50, 37, 41, 0.15));
-  border-radius: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
+  border-radius: var(--workspace-radius-sm, 6px);
   background: #fff;
-  color: var(--workspace-text, #333);
+  color: var(--workspace-text, #31292b);
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
 }
 
 .picker-change-btn:hover {
-  border-color: var(--workspace-brand, #d83b46);
-  color: var(--workspace-brand, #d83b46);
+  border-color: rgba(216, 68, 68, 0.28);
   background: #fff8f7;
+  color: var(--workspace-brand, #d83b46);
 }
 
 .picker-modal-backdrop {
@@ -189,7 +193,7 @@ function handleKeydown(event: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(30, 20, 22, 0.4);
+  background: rgba(30, 20, 22, 0.45);
   backdrop-filter: blur(2px);
 }
 
@@ -201,7 +205,7 @@ function handleKeydown(event: KeyboardEvent) {
   border-radius: var(--workspace-radius, 10px);
   border: 1px solid var(--workspace-border, #eae5e3);
   background: #fff;
-  color: var(--workspace-text, #222);
+  color: var(--workspace-text, #31292b);
   box-shadow: 0 16px 48px rgba(45, 25, 30, 0.18);
   overflow: hidden;
 }
@@ -216,17 +220,24 @@ function handleKeydown(event: KeyboardEvent) {
 
 .picker-modal-head h3 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1.15rem;
+  color: var(--workspace-text, #31292b);
 }
 
 .picker-modal-close {
   border: none;
   background: transparent;
   color: var(--workspace-text-muted, #7c7074);
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
-  padding: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.picker-modal-close:hover {
+  background: #f4edea;
+  color: var(--workspace-brand, #d83b46);
 }
 
 .picker-fieldset {
@@ -255,11 +266,11 @@ function handleKeydown(event: KeyboardEvent) {
   align-items: flex-start;
   gap: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--workspace-border, #eae5e3);
-  border-radius: 8px;
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.1));
+  border-radius: var(--workspace-radius-sm, 8px);
   background: #fff;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.16s ease, background 0.16s ease;
 }
 
 .picker-option-row:hover {
@@ -282,22 +293,23 @@ function handleKeydown(event: KeyboardEvent) {
 .picker-option-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
 .picker-option-title {
   font-size: 13.5px;
-  color: var(--workspace-text, #222);
+  color: var(--workspace-text, #31292b);
 }
 
 .picker-option-row.is-selected .picker-option-title {
   color: var(--workspace-brand, #d83b46);
+  font-weight: 700;
 }
 
 .picker-option-desc {
   font-size: 12px;
   color: var(--workspace-text-muted, #7c7074);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 </style>
