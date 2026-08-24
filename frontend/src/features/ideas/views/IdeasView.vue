@@ -39,7 +39,6 @@ import {
 } from "@/features/generation/ideaCreativeSettings";
 import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
 import IdeaVideoScriptDialog from "@/features/generation/components/IdeaVideoScriptDialog.vue";
-import CreativeOptionPicker from "@/features/generation/components/CreativeOptionPicker.vue";
 import type { IdeaProductLibrary } from "@/features/generation/composables/useIdeaGeneration";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 
@@ -296,6 +295,16 @@ function aspectRatioShapeStyle(ratio: string): Record<string, string> {
     width: `${Math.max(5, Math.round(width * scale))}px`,
     height: `${Math.max(5, Math.round(height * scale))}px`,
   };
+}
+
+function updateCreativeSetting(
+  index: number,
+  field: "visualStylePreset" | "wechatTemplate" | "videoDuration",
+  event: Event,
+): void {
+  const target = event.target as HTMLSelectElement | null;
+  if (!target) return;
+  patchSettings(index, { [field]: target.value });
 }
 
 function creativeSummary(index: number): string {
@@ -971,83 +980,48 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 </span>
               </button>
               <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
-                <!-- 1. 渠道风格 -->
-                <div class="idea-creative-section">
-                  <div class="idea-creative-section-header">
-                    <span class="idea-creative-section-title">渠道风格</span>
-                  </div>
-                  <div class="idea-channel-style-grid">
-                    <CreativeOptionPicker
-                      title="小红书组图视觉"
-                      hint="仅影响「一键小红书组图」"
-                      :name="`idea-${index}-xhs-style`"
+                <div class="idea-creative-grid">
+                  <label class="idea-creative-field">
+                    <span>小红书视觉路线</span>
+                    <select
+                      :data-test="`idea-creative-style-${index}`"
                       :value="settingsFor(index).visualStylePreset"
-                      :options="XHS_CREATIVE_STYLE_OPTIONS"
-                      :test-id="'idea-creative-style-' + index"
-                      @update:value="patchSettings(index, { visualStylePreset: $event })"
-                    />
-                    <CreativeOptionPicker
-                      title="公众号长图模板"
-                      hint="仅影响「一键公众号长图」"
-                      :name="`idea-${index}-wechat-template`"
+                      @change="updateCreativeSetting(index, 'visualStylePreset', $event)"
+                    >
+                      <option v-for="option in XHS_CREATIVE_STYLE_OPTIONS" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="idea-creative-field">
+                    <span>公众号长图模板</span>
+                    <select
+                      :data-test="`idea-creative-template-${index}`"
                       :value="settingsFor(index).wechatTemplate"
-                      :options="WECHAT_TEMPLATE_OPTIONS"
-                      :test-id="'idea-creative-template-' + index"
-                      @update:value="patchSettings(index, { wechatTemplate: $event })"
-                    />
-                  </div>
+                      @change="updateCreativeSetting(index, 'wechatTemplate', $event)"
+                    >
+                      <option v-for="option in WECHAT_TEMPLATE_OPTIONS" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="idea-creative-field">
+                    <span>视频脚本时长</span>
+                    <select
+                      :data-test="`idea-creative-duration-${index}`"
+                      :value="settingsFor(index).videoDuration || 'auto'"
+                      @change="updateCreativeSetting(index, 'videoDuration', $event)"
+                    >
+                      <option v-for="option in VIDEO_DURATION_OPTIONS" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
                 </div>
 
-                <!-- 2. 视频脚本 -->
-                <div class="idea-creative-section">
-                  <div class="idea-creative-section-header">
-                    <span class="idea-creative-section-title">视频脚本</span>
-                  </div>
-                  <fieldset class="idea-duration-group" :data-test="`idea-creative-duration-${index}`">
-                    <legend class="idea-duration-legend">
-                      <div class="picker-legend-header">
-                        <span class="picker-title">视频脚本时长</span>
-                        <span class="picker-hint">仅影响「一键生成脚本」</span>
-                      </div>
-                    </legend>
-                    <div class="idea-duration-options">
-                      <label
-                        v-for="opt in VIDEO_DURATION_OPTIONS"
-                        :key="opt.value"
-                        class="idea-duration-option"
-                        :class="{ 'is-selected': (settingsFor(index).videoDuration || 'auto') === opt.value }"
-                        :data-test="`idea-creative-duration-${index}-option-${opt.value}`"
-                      >
-                        <input
-                          type="radio"
-                          :name="`idea-${index}-video-duration`"
-                          :value="opt.value"
-                          :checked="(settingsFor(index).videoDuration || 'auto') === opt.value"
-                          class="picker-radio-input"
-                          @change="patchSettings(index, { videoDuration: opt.value })"
-                        />
-                        <span class="picker-radio-dot" aria-hidden="true"></span>
-                        <span class="idea-duration-label">{{ opt.label }}</span>
-                      </label>
-                    </div>
-                    <div class="picker-selected-desc" :data-test="`idea-creative-duration-${index}-desc`">
-                      <span class="picker-desc-text">
-                        {{ (VIDEO_DURATION_OPTIONS.find((o) => o.value === (settingsFor(index).videoDuration || 'auto')) || VIDEO_DURATION_OPTIONS[0]).description }}
-                      </span>
-                    </div>
-                  </fieldset>
-                </div>
-
-                <!-- 3. 图片输出 -->
-                <div class="idea-creative-section">
-                  <div class="idea-creative-section-header">
-                    <span class="idea-creative-section-title">图片输出</span>
-                  </div>
-                  <div class="idea-creative-field idea-creative-ratio-field">
-                    <div class="idea-ratio-header">
-                      <span class="picker-title">图片比例</span>
-                    </div>
-                    <div class="idea-aspect-ratio-grid">
+                <div class="idea-creative-field idea-creative-ratio-field">
+                  <span>图片比例</span>
+                  <div class="idea-aspect-ratio-grid">
                       <button
                         v-for="ratio in ['smart', ...IMAGE_ASPECT_RATIOS]"
                         :key="ratio"
@@ -1074,7 +1048,6 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                     </small>
                   </div>
                 </div>
-              </div>
             </section>
 
             <div class="idea-actions">
@@ -1675,104 +1648,50 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   line-height: 1.4;
 }
 
-.idea-creative-section {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.idea-creative-section-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 2px;
-}
-
-.idea-creative-section-title {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--workspace-text-muted, #806e73);
-  letter-spacing: 0.3px;
-}
-
-.idea-channel-style-grid {
+.idea-creative-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   align-items: start;
 }
 
-.idea-duration-group {
+.idea-creative-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.09));
-  border-radius: var(--workspace-radius-sm, 10px);
-  background: var(--workspace-surface, #ffffff);
+  gap: 6px;
   min-width: 0;
 }
 
-.idea-duration-legend {
-  padding: 0;
-  margin: 0 0 2px;
-  width: 100%;
-}
-
-.idea-duration-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.idea-duration-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  min-height: 32px;
-  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
-  border-radius: var(--workspace-radius-sm, 6px);
-  background: #ffffff;
-  cursor: pointer;
-  user-select: none;
-  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
-}
-
-.idea-duration-option:hover {
-  border-color: rgba(216, 59, 70, 0.35);
-  background: #fffdfc;
-}
-
-.idea-duration-option.is-selected {
-  border-color: var(--workspace-brand, #d83b46);
-  background: #fff5f3;
-  color: var(--workspace-brand, #d83b46);
-  font-weight: 700;
-  box-shadow: inset 0 0 0 1px rgba(216, 59, 70, 0.15);
-}
-
-.idea-duration-option:has(.picker-radio-input:focus-visible) {
-  outline: 2px solid var(--workspace-brand, #d83b46);
-  outline-offset: 1px;
-}
-
-.idea-duration-option.is-selected .picker-radio-dot {
-  border-color: var(--workspace-brand, #d83b46);
-  background: var(--workspace-brand, #d83b46);
-  box-shadow: inset 0 0 0 2px #ffffff;
-}
-
-.idea-duration-label {
+.idea-creative-field span {
   font-size: 12px;
-  white-space: nowrap;
-  line-height: 1.2;
+  font-weight: 700;
+  color: var(--workspace-text, #31292b);
 }
 
-.idea-ratio-header {
-  margin-bottom: 6px;
-  padding-left: 2px;
+.idea-creative-field select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--workspace-border, rgba(50, 37, 41, 0.14));
+  border-radius: var(--workspace-radius-sm, 8px);
+  background: #ffffff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23806e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center;
+  appearance: none;
+  color: var(--workspace-text, #30272a);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.idea-creative-field select:hover {
+  border-color: rgba(216, 59, 70, 0.35);
+}
+
+.idea-creative-field select:focus {
+  border-color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 0 0 2px rgba(216, 59, 70, 0.15);
 }
 
 .idea-creative-ratio-field {
@@ -1995,7 +1914,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .idea-channel-style-grid {
+  .idea-creative-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

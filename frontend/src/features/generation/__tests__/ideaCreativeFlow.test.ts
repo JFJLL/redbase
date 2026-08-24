@@ -97,8 +97,8 @@ describe("per-idea creative settings & carousel restoration (real entry)", () =>
     // 展开选题 0 的创作设置并设置一组非默认值。
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     await flushPromises();
-    await wrapper.find('[data-test="idea-creative-style-0-option-editorial"] input').setValue(true);
-    await wrapper.find('[data-test="idea-creative-template-0-option-tutorial"] input').setValue(true);
+    await wrapper.find('[data-test="idea-creative-style-0"]').setValue("editorial");
+    await wrapper.find('[data-test="idea-creative-template-0"]').setValue("tutorial");
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
     await wrapper.find('[data-test="idea-use-brand-logo-0"]').setValue(true);
     await wrapper.find('[data-test="idea-open-library-0"]').trigger("click");
@@ -112,8 +112,8 @@ describe("per-idea creative settings & carousel restoration (real entry)", () =>
     await flushPromises();
     await wrapper.find('[data-test="idea-creative-toggle-1"]').trigger("click");
     await flushPromises();
-    expect((wrapper.find('[data-test="idea-creative-style-1-option-auto"] input').element as HTMLInputElement).checked).toBe(true);
-    expect((wrapper.find('[data-test="idea-creative-template-1-option-auto"] input').element as HTMLInputElement).checked).toBe(true);
+    expect((wrapper.find('[data-test="idea-creative-style-1"]').element as HTMLSelectElement).value).toBe("auto");
+    expect((wrapper.find('[data-test="idea-creative-template-1"]').element as HTMLSelectElement).value).toBe("auto");
     expect(wrapper.find('[data-test="idea-ratio-1-smart"]').classes()).toContain("is-selected");
     expect((wrapper.find('[data-test="idea-use-brand-logo-1"]').element as HTMLInputElement).checked).toBe(false);
 
@@ -124,8 +124,8 @@ describe("per-idea creative settings & carousel restoration (real entry)", () =>
     // 回到选题 0：恢复选题 0 自己的设置。
     await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
     await flushPromises();
-    expect((wrapper.find('[data-test="idea-creative-style-0-option-editorial"] input').element as HTMLInputElement).checked).toBe(true);
-    expect((wrapper.find('[data-test="idea-creative-template-0-option-tutorial"] input').element as HTMLInputElement).checked).toBe(true);
+    expect((wrapper.find('[data-test="idea-creative-style-0"]').element as HTMLSelectElement).value).toBe("editorial");
+    expect((wrapper.find('[data-test="idea-creative-template-0"]').element as HTMLSelectElement).value).toBe("tutorial");
     expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
     expect((wrapper.find('[data-test="idea-use-brand-logo-0"]').element as HTMLInputElement).checked).toBe(true);
 
