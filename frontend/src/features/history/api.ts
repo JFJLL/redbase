@@ -3,11 +3,13 @@
  * public/app.js (loadGenerationHistory / matchesGenerationHistoryFilters).
  */
 import { apiFetch } from "@/shared/api/client";
+import type { VideoScript } from "@/features/generation/api";
 
 export const HISTORY_TYPE_LABELS = new Map<string, string>([
   ["moments", "朋友圈图文"],
   ["wechat", "公众号长图"],
   ["xhsCarousel", "小红书组图"],
+  ["videoScript", "视频脚本"],
   ["styleImage", "一键风格化"],
   ["imageEdit", "历史改图"],
 ]);
@@ -50,6 +52,7 @@ export interface HistorySlide {
 }
 
 export interface HistoryPayload {
+  videoScript?: VideoScript;
   caption?: string;
   visualDirection?: string;
   publishTitle?: string;
