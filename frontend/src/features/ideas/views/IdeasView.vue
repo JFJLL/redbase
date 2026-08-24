@@ -1562,11 +1562,14 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 .idea-cards {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--workspace-grid-gap);
+  align-items: start;
 }
 
 .idea-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+  min-height: 0;
   font-size: 0.92rem;
   line-height: 1.65;
 }
@@ -1606,14 +1609,28 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 }
 
 .idea-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .idea-tag {
+  display: inline-flex;
+  align-items: center;
+  height: auto;
   padding: 4px 10px;
   border-radius: var(--workspace-radius-sm);
   background: #f5f1ef;
   color: var(--workspace-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.idea-creative-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .idea-edit-form {

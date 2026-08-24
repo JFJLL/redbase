@@ -1037,23 +1037,19 @@
 }
 
 .workspace-layout .idea-creative-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding-top: 11px;
 }
 
 .workspace-layout .idea-creative-field {
-  display: grid;
-  gap: 7px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding: 12px;
-  border: 1px solid rgba(50, 37, 41, 0.09);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.72);
-  color: #46383d;
-  font-size: 0.8rem;
-  font-weight: 700;
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 
 .workspace-layout .idea-creative-field select {
