@@ -409,7 +409,8 @@ describe("IdeasView", () => {
     expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 脚本：智能推荐 · 比例：智能");
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-style-0"]').setValue("editorial");
+    await wrapper.find('[data-test="idea-creative-style-0"]').trigger("click");
+    await wrapper.find('[data-test="idea-creative-style-0-option-editorial"]').trigger("click");
     await flushPromises();
 
     // 比例网格选中态：智能＋具体比例按钮，选中 1:1。
@@ -424,7 +425,7 @@ describe("IdeasView", () => {
     await flushPromises();
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
-    expect((wrapper.find('[data-test="idea-creative-style-0"]').element as HTMLSelectElement).value).toBe("editorial");
+    expect(wrapper.find('[data-test="idea-creative-style-0"]').text()).toContain("杂志编辑感");
   });
 
   it("replaces the brand logo through the per-idea logo control", async () => {

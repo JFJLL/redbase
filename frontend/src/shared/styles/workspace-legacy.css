@@ -1052,18 +1052,6 @@
   background: transparent;
 }
 
-.workspace-layout .idea-creative-field select {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 34px 0 11px;
-  border: 1px solid rgba(50, 37, 41, 0.13);
-  border-radius: 9px;
-  background: #fff;
-  color: #30272a;
-  font-weight: 700;
-  font-family: inherit;
-}
-
 .workspace-layout .idea-library-backdrop {
   position: fixed;
   inset: 0;

@@ -39,6 +39,7 @@ import {
 } from "@/features/generation/ideaCreativeSettings";
 import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
 import IdeaVideoScriptDialog from "@/features/generation/components/IdeaVideoScriptDialog.vue";
+import IdeaCreativeSelect from "@/features/generation/components/IdeaCreativeSelect.vue";
 import type { IdeaProductLibrary } from "@/features/generation/composables/useIdeaGeneration";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 
@@ -295,16 +296,6 @@ function aspectRatioShapeStyle(ratio: string): Record<string, string> {
     width: `${Math.max(5, Math.round(width * scale))}px`,
     height: `${Math.max(5, Math.round(height * scale))}px`,
   };
-}
-
-function updateCreativeSetting(
-  index: number,
-  field: "visualStylePreset" | "wechatTemplate" | "videoDuration",
-  event: Event,
-): void {
-  const target = event.target as HTMLSelectElement | null;
-  if (!target) return;
-  patchSettings(index, { [field]: target.value });
 }
 
 function creativeSummary(index: number): string {
@@ -981,42 +972,27 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
               </button>
               <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
                 <div class="idea-creative-grid">
-                  <label class="idea-creative-field">
-                    <span>小红书视觉路线</span>
-                    <select
-                      :data-test="`idea-creative-style-${index}`"
-                      :value="settingsFor(index).visualStylePreset"
-                      @change="updateCreativeSetting(index, 'visualStylePreset', $event)"
-                    >
-                      <option v-for="option in XHS_CREATIVE_STYLE_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="idea-creative-field">
-                    <span>公众号长图模板</span>
-                    <select
-                      :data-test="`idea-creative-template-${index}`"
-                      :value="settingsFor(index).wechatTemplate"
-                      @change="updateCreativeSetting(index, 'wechatTemplate', $event)"
-                    >
-                      <option v-for="option in WECHAT_TEMPLATE_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="idea-creative-field">
-                    <span>视频脚本时长</span>
-                    <select
-                      :data-test="`idea-creative-duration-${index}`"
-                      :value="settingsFor(index).videoDuration || 'auto'"
-                      @change="updateCreativeSetting(index, 'videoDuration', $event)"
-                    >
-                      <option v-for="option in VIDEO_DURATION_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
+                  <IdeaCreativeSelect
+                    label="小红书视觉路线"
+                    :model-value="settingsFor(index).visualStylePreset"
+                    :options="XHS_CREATIVE_STYLE_OPTIONS"
+                    :test-id="`idea-creative-style-${index}`"
+                    @update:model-value="patchSettings(index, { visualStylePreset: $event })"
+                  />
+                  <IdeaCreativeSelect
+                    label="公众号长图模板"
+                    :model-value="settingsFor(index).wechatTemplate"
+                    :options="WECHAT_TEMPLATE_OPTIONS"
+                    :test-id="`idea-creative-template-${index}`"
+                    @update:model-value="patchSettings(index, { wechatTemplate: $event })"
+                  />
+                  <IdeaCreativeSelect
+                    label="视频脚本时长"
+                    :model-value="settingsFor(index).videoDuration || 'auto'"
+                    :options="VIDEO_DURATION_OPTIONS"
+                    :test-id="`idea-creative-duration-${index}`"
+                    @update:model-value="patchSettings(index, { videoDuration: $event })"
+                  />
                 </div>
 
                 <div class="idea-creative-field idea-creative-ratio-field">
@@ -1480,6 +1456,10 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   box-shadow: none;
 }
 
+.idea-card {
+  overflow: visible;
+}
+
 .idea-context-card,
 .idea-prompt-card,
 .idea-card {
@@ -1666,32 +1646,6 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   font-size: 12px;
   font-weight: 700;
   color: var(--workspace-text, #31292b);
-}
-
-.idea-creative-field select {
-  width: 100%;
-  min-height: 40px;
-  padding: 0 30px 0 10px;
-  border: 1px solid var(--workspace-border, rgba(50, 37, 41, 0.14));
-  border-radius: var(--workspace-radius-sm, 8px);
-  background: #ffffff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23806e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center;
-  appearance: none;
-  color: var(--workspace-text, #30272a);
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.idea-creative-field select:hover {
-  border-color: rgba(216, 59, 70, 0.35);
-}
-
-.idea-creative-field select:focus {
-  border-color: var(--workspace-brand, #d83b46);
-  box-shadow: 0 0 0 2px rgba(216, 59, 70, 0.15);
 }
 
 .idea-creative-ratio-field {
