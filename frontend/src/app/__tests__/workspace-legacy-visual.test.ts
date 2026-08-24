@@ -212,7 +212,7 @@ describe("legacy workspace visual shell", () => {
     expect(IdeasViewSource).toContain('data-test="`idea-generate-moments-${index}`"');
     expect(IdeasViewSource).toContain('data-test="`idea-generate-wechat-${index}`"');
     expect(IdeasViewSource).toContain('data-test="`idea-generate-xhs-${index}`"');
-    expect(IdeasViewSource).toContain('data-test="`idea-generate-style-${index}`"');
+    expect(IdeasViewSource).toContain('data-test="`idea-generate-script-${index}`"');
     // 比例恢复“智能＋具体比例”图形按钮网格。
     expect(IdeasViewSource).toContain("idea-aspect-ratio-grid");
     expect(IdeasViewSource).toContain("aspect-smart-mark");

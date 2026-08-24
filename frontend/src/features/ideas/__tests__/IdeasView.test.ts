@@ -291,7 +291,7 @@ describe("IdeasView", () => {
 
     const settings = card.find('[data-test="idea-creative-settings-0"]');
     expect(settings.text()).toContain("创作设置");
-    expect(settings.text()).toContain("智能匹配 · 智能配色 · 智能比例");
+    expect(settings.text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 比例：智能");
     expect(settings.text()).toContain("调整");
   });
 
@@ -301,13 +301,13 @@ describe("IdeasView", () => {
     await flushPromises();
     await flushPromises();
 
-    const expectations: Array<[string, string, string]> = [
-      ["idea-generate-moments-0", "moments", "1 积分"],
-      ["idea-generate-wechat-0", "wechat", "1 积分"],
-      ["idea-generate-xhs-0", "xhsCarousel", "4 积分"],
-      ["idea-generate-style-0", "styleImage", "1 积分"],
+    const expectations: Array<[string, string, string, string, string]> = [
+      ["idea-generate-moments-0", "moments", "1 积分", "idea-generation-dialog", "idea-generation-close"],
+      ["idea-generate-wechat-0", "wechat", "1 积分", "idea-generation-dialog", "idea-generation-close"],
+      ["idea-generate-xhs-0", "xhsCarousel", "4 积分", "idea-generation-dialog", "idea-generation-close"],
+      ["idea-generate-script-0", "videoScript", "1 积分", "idea-video-script-dialog", "video-script-dialog-close"],
     ];
-    for (const [selector, action, cost] of expectations) {
+    for (const [selector, action, cost, dialogTestId, closeTestId] of expectations) {
       const button = wrapper.find(`[data-test="${selector}"]`);
       expect(button.text()).toContain(cost);
       await button.trigger("click");
@@ -318,8 +318,8 @@ describe("IdeasView", () => {
       expect(query.trendId).toBe("501");
       expect(query.ideaIndex).toBe("0");
       expect([action, undefined]).toContain(query.action);
-      expect(wrapper.find('[data-test="idea-generation-dialog"]').exists()).toBe(true);
-      await wrapper.find('[data-test="idea-generation-close"]').trigger("click");
+      expect(wrapper.find(`[data-test="${dialogTestId}"]`).exists()).toBe(true);
+      await wrapper.find(`[data-test="${closeTestId}"]`).trigger("click");
       await flushPromises();
     }
   });
@@ -406,10 +406,11 @@ describe("IdeasView", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("智能匹配 · 智能配色 · 智能比例");
+    expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 比例：智能");
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-style-0"]').setValue("editorial");
+    await wrapper.find('[data-test="idea-creative-style-0-change"]').trigger("click");
+    await wrapper.find('[data-test="idea-creative-style-0-option-editorial"]').trigger("click");
     await flushPromises();
 
     // 比例网格选中态：智能＋具体比例按钮，选中 1:1。
@@ -424,7 +425,7 @@ describe("IdeasView", () => {
     await flushPromises();
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
-    expect((wrapper.find('[data-test="idea-creative-style-0"]').element as HTMLSelectElement).value).toBe("editorial");
+    expect(wrapper.find('[data-test="idea-creative-style-0-label"]').text()).toBe("杂志编辑感");
   });
 
   it("replaces the brand logo through the per-idea logo control", async () => {

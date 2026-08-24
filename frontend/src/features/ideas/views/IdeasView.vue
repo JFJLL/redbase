@@ -37,10 +37,12 @@ import {
   type IdeaCreativeSettings,
 } from "@/features/generation/ideaCreativeSettings";
 import IdeaGenerationDialog from "@/features/generation/components/IdeaGenerationDialog.vue";
+import IdeaVideoScriptDialog from "@/features/generation/components/IdeaVideoScriptDialog.vue";
+import CreativeOptionPicker from "@/features/generation/components/CreativeOptionPicker.vue";
 import type { IdeaProductLibrary } from "@/features/generation/composables/useIdeaGeneration";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 
-type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage";
+type GenerationAction = "moments" | "wechat" | "xhsCarousel" | "styleImage" | "videoScript";
 
 interface IdeaDraft {
   title: string;
@@ -278,14 +280,7 @@ function toggleCreativeSettings(index: number): void {
   openCreativeSettings[index] = !openCreativeSettings[index];
 }
 
-function updateCreativeSetting(
-  index: number,
-  field: "visualStylePreset" | "wechatTemplate" | "aspectRatioSelection",
-  event: Event,
-): void {
-  const value = (event.target as HTMLSelectElement).value;
-  patchSettings(index, { [field]: value } as Partial<IdeaCreativeSettings>);
-}
+
 
 function selectRatio(index: number, ratio: string): void {
   patchSettings(index, { aspectRatioSelection: ratio });
@@ -310,7 +305,7 @@ function creativeSummary(index: number): string {
   const template =
     WECHAT_TEMPLATE_OPTIONS.find((option) => option.value === settings.wechatTemplate)?.label || "智能配色";
   const ratio = settings.aspectRatioSelection === "smart" ? "智能比例" : settings.aspectRatioSelection;
-  return `${style} · ${template} · ${ratio}`;
+  return `小红书：${style} · 公众号：${template} · 比例：${ratio}`;
 }
 
 function openLibrary(index: number): void {
@@ -382,7 +377,7 @@ function parseIdeaIndex(value: unknown): number | null {
   return Number.isInteger(num) && num >= 0 ? num : null;
 }
 
-const GENERATION_ACTIONS: readonly GenerationAction[] = ["moments", "wechat", "xhsCarousel", "styleImage"];
+const GENERATION_ACTIONS: readonly GenerationAction[] = ["moments", "wechat", "xhsCarousel", "styleImage", "videoScript"];
 
 function parseAction(value: unknown): GenerationAction | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -902,7 +897,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                     <div class="idea-product-file" :class="{ 'has-file': Boolean(settingsFor(index).styleReference) }">
                       {{
                         settingsFor(index).styleReference
-                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于一键风格化图的色调和版式参考`
+                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于朋友圈、公众号长图和小红书组图的配色、光影、材质与版式参考，可与产品图同时使用`
                           : "未选择参考图"
                       }}
                     </div>
@@ -974,30 +969,24 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
               </button>
               <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
                 <div class="idea-creative-grid">
-                  <label class="idea-creative-field">
-                    <span>小红书视觉路线</span>
-                    <select
-                      :data-test="`idea-creative-style-${index}`"
+                  <div class="idea-creative-field">
+                    <CreativeOptionPicker
+                      title="小红书视觉路线"
                       :value="settingsFor(index).visualStylePreset"
-                      @change="updateCreativeSetting(index, 'visualStylePreset', $event)"
-                    >
-                      <option v-for="option in XHS_CREATIVE_STYLE_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="idea-creative-field">
-                    <span>公众号长图模板</span>
-                    <select
-                      :data-test="`idea-creative-template-${index}`"
+                      :options="XHS_CREATIVE_STYLE_OPTIONS"
+                      :test-id="'idea-creative-style-' + index"
+                      @update:value="patchSettings(index, { visualStylePreset: $event })"
+                    />
+                  </div>
+                  <div class="idea-creative-field">
+                    <CreativeOptionPicker
+                      title="公众号长图模板"
                       :value="settingsFor(index).wechatTemplate"
-                      @change="updateCreativeSetting(index, 'wechatTemplate', $event)"
-                    >
-                      <option v-for="option in WECHAT_TEMPLATE_OPTIONS" :key="option.value" :value="option.value">
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
+                      :options="WECHAT_TEMPLATE_OPTIONS"
+                      :test-id="'idea-creative-template-' + index"
+                      @update:value="patchSettings(index, { wechatTemplate: $event })"
+                    />
+                  </div>
                 </div>
                 <div class="idea-creative-field idea-creative-ratio-field">
                   <span>图片比例</span>
@@ -1061,10 +1050,10 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
               <button
                 class="secondary-btn small-btn cost-button"
                 type="button"
-                :data-test="`idea-generate-style-${index}`"
-                @click="openGeneration(index, 'styleImage')"
+                :data-test="`idea-generate-script-${index}`"
+                @click="openGeneration(index, 'videoScript')"
               >
-                <span>一键风格化图</span>
+                <span>一键生成脚本</span>
                 <small>1 积分</small>
               </button>
             </div>
@@ -1156,11 +1145,18 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
     </div>
 
     <!-- 内容选题内生成：进度、结果、失败与重试直接在此承接 -->
-    <IdeaGenerationDialog
-      v-if="activeGeneration"
-      :key="activeGeneration.ideaIndex"
+    <IdeaVideoScriptDialog
+      v-if="activeGeneration && activeGeneration.action === 'videoScript'"
+      :key="'script-' + activeGeneration.ideaIndex"
       :idea-index="activeGeneration.ideaIndex"
-      :action="activeGeneration.action"
+      :product-library="productLibraryProp"
+      @close="closeGeneration"
+    />
+    <IdeaGenerationDialog
+      v-else-if="activeGeneration"
+      :key="'image-' + activeGeneration.ideaIndex"
+      :idea-index="activeGeneration.ideaIndex"
+      :action="(activeGeneration.action as any)"
       :product-library="productLibraryProp"
       @close="closeGeneration"
     />

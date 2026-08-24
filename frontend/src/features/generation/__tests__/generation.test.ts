@@ -113,7 +113,7 @@ describe("real ideas entry (GenerationView removed)", () => {
     expect(wrapper.find('[data-test="idea-generate-moments-0"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="idea-generate-wechat-0"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="idea-generate-xhs-0"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="idea-generate-style-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="idea-generate-script-0"]').exists()).toBe(true);
     // 图3 的裸表单必须消失：原图地址 / 改图提示词 / 提交改图任务。
     expect(wrapper.find('input[name="imageUrl"]').exists()).toBe(false);
     expect(wrapper.find('textarea[name="prompt"]').exists()).toBe(false);
