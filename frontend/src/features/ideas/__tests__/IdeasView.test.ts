@@ -293,6 +293,15 @@ describe("IdeasView", () => {
     expect(settings.text()).toContain("创作设置");
     expect(settings.text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 脚本：智能推荐 · 比例：智能");
     expect(settings.text()).toContain("调整");
+
+    await card.find('[data-test="idea-creative-toggle-0"]').trigger("click");
+    expect(settings.text()).toContain("按生成类型单独设置");
+    expect(settings.text()).toContain("各项仅影响对应生成入口，互不叠加");
+    expect(settings.text()).toContain("小红书组图 · 视觉路线");
+    expect(settings.text()).toContain("公众号长图 · 版式模板");
+    expect(settings.text()).toContain("视频脚本 · 时长");
+    expect(settings.text()).toContain("图片通用设置");
+    expect(settings.text()).toContain("统一影响朋友圈、公众号长图和小红书组图");
   });
 
   it("opens the dialog from each of the four cost buttons with the correct action and cost label", async () => {

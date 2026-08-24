@@ -971,32 +971,41 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 </span>
               </button>
               <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
-                <div class="idea-creative-grid">
-                  <IdeaCreativeSelect
-                    label="小红书视觉路线"
-                    :model-value="settingsFor(index).visualStylePreset"
-                    :options="XHS_CREATIVE_STYLE_OPTIONS"
-                    :test-id="`idea-creative-style-${index}`"
-                    @update:model-value="patchSettings(index, { visualStylePreset: $event })"
-                  />
-                  <IdeaCreativeSelect
-                    label="公众号长图模板"
-                    :model-value="settingsFor(index).wechatTemplate"
-                    :options="WECHAT_TEMPLATE_OPTIONS"
-                    :test-id="`idea-creative-template-${index}`"
-                    @update:model-value="patchSettings(index, { wechatTemplate: $event })"
-                  />
-                  <IdeaCreativeSelect
-                    label="视频脚本时长"
-                    :model-value="settingsFor(index).videoDuration || 'auto'"
-                    :options="VIDEO_DURATION_OPTIONS"
-                    :test-id="`idea-creative-duration-${index}`"
-                    @update:model-value="patchSettings(index, { videoDuration: $event })"
-                  />
+                <div class="idea-creative-channel-section">
+                  <div class="idea-creative-section-heading">
+                    <strong>按生成类型单独设置</strong>
+                    <small>各项仅影响对应生成入口，互不叠加</small>
+                  </div>
+                  <div class="idea-creative-grid">
+                    <IdeaCreativeSelect
+                      label="小红书组图 · 视觉路线"
+                      :model-value="settingsFor(index).visualStylePreset"
+                      :options="XHS_CREATIVE_STYLE_OPTIONS"
+                      :test-id="`idea-creative-style-${index}`"
+                      @update:model-value="patchSettings(index, { visualStylePreset: $event })"
+                    />
+                    <IdeaCreativeSelect
+                      label="公众号长图 · 版式模板"
+                      :model-value="settingsFor(index).wechatTemplate"
+                      :options="WECHAT_TEMPLATE_OPTIONS"
+                      :test-id="`idea-creative-template-${index}`"
+                      @update:model-value="patchSettings(index, { wechatTemplate: $event })"
+                    />
+                    <IdeaCreativeSelect
+                      label="视频脚本 · 时长"
+                      :model-value="settingsFor(index).videoDuration || 'auto'"
+                      :options="VIDEO_DURATION_OPTIONS"
+                      :test-id="`idea-creative-duration-${index}`"
+                      @update:model-value="patchSettings(index, { videoDuration: $event })"
+                    />
+                  </div>
                 </div>
 
                 <div class="idea-creative-field idea-creative-ratio-field">
-                  <span>图片比例</span>
+                  <div class="idea-creative-section-heading">
+                    <strong>图片通用设置</strong>
+                    <small>统一影响朋友圈、公众号长图和小红书组图</small>
+                  </div>
                   <div class="idea-aspect-ratio-grid">
                       <button
                         v-for="ratio in ['smart', ...IMAGE_ASPECT_RATIOS]"
@@ -1635,6 +1644,32 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   align-items: start;
 }
 
+.idea-creative-channel-section {
+  display: grid;
+  gap: 12px;
+}
+
+.idea-creative-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.idea-creative-section-heading strong {
+  flex: 0 0 auto;
+  color: var(--workspace-text, #31292b);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.idea-creative-section-heading small {
+  min-width: 0;
+  color: #8a7c80;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .idea-creative-field {
   display: flex;
   flex-direction: column;
@@ -1651,7 +1686,9 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 .idea-creative-ratio-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px dashed rgba(99, 76, 82, 0.14);
 }
 
 .idea-edit-form {
@@ -1870,6 +1907,12 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 
   .idea-creative-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .idea-creative-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .idea-aspect-ratio-grid {
