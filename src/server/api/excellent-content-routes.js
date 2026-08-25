@@ -105,12 +105,26 @@ function rewriteExcellentNoteImageUrls(note, params) {
     ...params,
     noteId: String(note.noteId || note.id || params.noteId || "").trim(),
   };
-  const sequence = normalizeExcellentImageSequence(note);
+    const sequence = normalizeExcellentImageSequence(note);
+  const directImageUrls = Array.isArray(note.imageUrls) ? [...note.imageUrls] : [];
+  const directCoverUrls = Array.isArray(note.coverUrls) ? [...note.coverUrls] : [];
+  const directCoverUrl = typeof note.coverUrl === "string" ? note.coverUrl : "";
+  const directPrimaryCoverUrl = typeof note.primaryCoverUrl === "string" ? note.primaryCoverUrl : "";
   const sequenceIndex = (value) => {
+
     const index = sequence.indexOf(value);
     return index >= 0 ? index : 0;
   };
-  const rewritten = { ...note };
+    const rewritten = {
+    ...note,
+    // Return the original, upstream-provided URLs for direct browser loading.
+    // Keep the existing same-origin values below as a verified fallback path.
+    directImageUrls,
+    directCoverUrls,
+    directCoverUrl,
+    directPrimaryCoverUrl,
+  };
+
   for (const [key, child] of Object.entries(note)) {
     if ((key === "imageUrls" || key === "coverUrls") && Array.isArray(child)) {
       rewritten[key] = child.map((value) => rewriteExcellentImageUrl(value, sequenceIndex(value), noteParams));

@@ -577,8 +577,14 @@ test("excellent list and detail rewrite remote image URLs to same-origin proxy p
     "/api/excellent-contents/n1/images/0/file?board=xhs_hot&contentSource=all",
     "/api/excellent-contents/n1/images/1/file?board=xhs_hot&contentSource=all",
   ]);
-  assert.equal(n1.primaryCoverUrl, "/api/excellent-contents/n1/images/0/file?board=xhs_hot&contentSource=all");
+    assert.equal(n1.primaryCoverUrl, "/api/excellent-contents/n1/images/0/file?board=xhs_hot&contentSource=all");
+  assert.deepEqual(n1.directImageUrls, [
+    "https://ci.xiaohongshu.com/remote/1.jpg",
+    "https://ci.xiaohongshu.com/remote/2.jpg",
+  ]);
+  assert.equal(n1.directPrimaryCoverUrl, "https://ci.xiaohongshu.com/remote/1.jpg");
   const n2 = listRes.body.items.find((item) => item.noteId === "n2");
+
   assert.deepEqual(n2.imageUrls, ["/img/local.jpg"]);
   assert.equal(n2.primaryCoverUrl, "/img/local.jpg");
 
@@ -594,6 +600,11 @@ test("excellent list and detail rewrite remote image URLs to same-origin proxy p
     "/api/excellent-contents/n1/images/0/file?board=xhs_hot&contentSource=all",
     "/api/excellent-contents/n1/images/1/file?board=xhs_hot&contentSource=all",
   ]);
+  assert.deepEqual(detailRes.body.item.directImageUrls, [
+    "https://ci.xiaohongshu.com/remote/1.jpg",
+    "https://ci.xiaohongshu.com/remote/2.jpg",
+  ]);
+  assert.equal(detailRes.body.item.directPrimaryCoverUrl, "https://ci.xiaohongshu.com/remote/1.jpg");
 });
 
 test("excellent image proxy resolves notes from taxonomy/contentSource scoped caches", async () => {

@@ -3078,8 +3078,18 @@ textarea {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.idea-creative-field.is-disabled,
+.idea-creative-ratio.is-disabled {
+  opacity: 0.52;
+}
+
+.idea-creative-field.is-disabled {
+  background: rgba(244, 242, 242, 0.76);
+}
+
 .idea-creative-field > span,
 .idea-creative-ratio-heading strong {
+
   color: #46383d;
   font-size: 0.8rem;
   font-weight: 900;
@@ -3096,8 +3106,16 @@ textarea {
   font-weight: 800;
 }
 
+.idea-creative-field select:disabled,
+.idea-aspect-ratio-option:disabled {
+  cursor: not-allowed;
+  background: #f1eff0;
+  color: #9a9194;
+}
+
 .idea-creative-field small,
 .idea-creative-ratio-heading small {
+
   color: #8a7c80;
   font-size: 0.76rem;
   line-height: 1.5;
@@ -3219,7 +3237,7 @@ textarea {
   font-weight: 800;
 }
 
-.idea-aspect-ratio-option:hover {
+.idea-aspect-ratio-option:hover:not(:disabled) {
   border-color: rgba(216, 59, 70, 0.28);
   background: #fff;
 }

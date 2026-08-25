@@ -2823,12 +2823,7 @@ function renderIdeas() {
   root.querySelectorAll("[data-creative-field]").forEach((select) => {
     select.addEventListener("change", () => {
       const ideaIndex = Number(select.dataset.ideaIndex);
-      const key = getIdeaProductKey(ideaIndex);
-      if (select.dataset.creativeField === "wechat") {
-        state.wechatTemplates[key] = select.value;
-      } else {
-        state.creativeStylePresets[key] = select.value;
-      }
+      setIdeaCreativeControlSelection(ideaIndex, select.dataset.creativeField, select.value);
       renderIdeas();
     });
   });
@@ -2836,7 +2831,7 @@ function renderIdeas() {
   root.querySelectorAll("[data-select-aspect-ratio]").forEach((button) => {
     button.addEventListener("click", () => {
       const ideaIndex = Number(button.dataset.ideaIndex);
-      state.aspectRatios[getIdeaProductKey(ideaIndex)] = button.dataset.selectAspectRatio;
+      setIdeaCreativeControlSelection(ideaIndex, "ratio", button.dataset.selectAspectRatio);
       renderIdeas();
     });
   });
@@ -3144,19 +3139,53 @@ function getCreativeOption(options, value) {
   return options.find((option) => option.value === value) || options[0];
 }
 
+function getIdeaCreativeSettingsLock(ideaIndex) {
+  if (getIdeaCreativeStyleSelection(ideaIndex) !== "auto") return "xhs";
+  if (getIdeaWechatTemplateSelection(ideaIndex) !== "auto") return "wechat";
+  if (getIdeaAspectRatioSelection(ideaIndex) !== "smart") return "ratio";
+  return "";
+}
+
+function setIdeaCreativeControlSelection(ideaIndex, field, value) {
+  const key = getIdeaProductKey(ideaIndex);
+  if (field === "xhs") {
+    state.creativeStylePresets[key] = value;
+    if (value !== "auto") {
+      state.wechatTemplates[key] = "auto";
+      state.aspectRatios[key] = "smart";
+    }
+    return;
+  }
+  if (field === "wechat") {
+    state.wechatTemplates[key] = value;
+    if (value !== "auto") {
+      state.creativeStylePresets[key] = "auto";
+      state.aspectRatios[key] = "smart";
+    }
+    return;
+  }
+  state.aspectRatios[key] = value;
+  if (value !== "smart") {
+    state.creativeStylePresets[key] = "auto";
+    state.wechatTemplates[key] = "auto";
+  }
+}
+
 function getAspectRatioShapeStyle(ratio) {
+
   const [width, height] = String(ratio).split(":").map(Number);
   const max = 30;
   const scale = max / Math.max(width, height);
   return `width:${Math.max(5, Math.round(width * scale))}px;height:${Math.max(5, Math.round(height * scale))}px`;
 }
 
-function renderCreativeOptionSelect({ ideaIndex, field, title, options, selectedValue }) {
+function renderCreativeOptionSelect({ ideaIndex, field, title, options, selectedValue, disabled = false, disabledHint = "" }) {
   const selected = getCreativeOption(options, selectedValue);
   return `
-    <label class="idea-creative-field">
+    <label class="idea-creative-field ${disabled ? "is-disabled" : ""}">
       <span>${escapeHtml(title)}</span>
-      <select data-creative-field="${field}" data-idea-index="${ideaIndex}">
+      <select data-creative-field="${field}" data-idea-index="${ideaIndex}" ${disabled ? "disabled" : ""}>
+
         ${options
           .map(
             (option) =>
@@ -3164,7 +3193,8 @@ function renderCreativeOptionSelect({ ideaIndex, field, title, options, selected
           )
           .join("")}
       </select>
-      <small>${escapeHtml(selected.description)}</small>
+            <small>${escapeHtml(disabled ? disabledHint : selected.description)}</small>
+
     </label>
   `;
 }
@@ -3176,8 +3206,11 @@ function renderIdeaCreativeSettings(ideaIndex) {
   const wechatSelection = getIdeaWechatTemplateSelection(ideaIndex);
   const styleOption = getCreativeOption(XHS_CREATIVE_STYLE_OPTIONS, styleSelection);
   const wechatOption = getCreativeOption(WECHAT_TEMPLATE_OPTIONS, wechatSelection);
-  const isOpen = state.openCreativeSettingsKey === key;
+    const isOpen = state.openCreativeSettingsKey === key;
+  const lockedField = getIdeaCreativeSettingsLock(ideaIndex);
+  const lockLabel = lockedField === "xhs" ? "小红书视觉路线" : lockedField === "wechat" ? "公众号长图模板" : lockedField === "ratio" ? "图片比例" : "";
   const ratioLabel = selection === "smart" ? "智能比例" : selection;
+
   const options = ["smart", ...IMAGE_ASPECT_RATIOS];
   return `
     <section class="idea-creative-settings idea-aspect-ratio ${isOpen ? "is-open" : ""}">
@@ -3199,18 +3232,25 @@ function renderIdeaCreativeSettings(ideaIndex) {
                   ideaIndex,
                   field: "xhs",
                   title: "小红书视觉路线",
-                  options: XHS_CREATIVE_STYLE_OPTIONS,
+                                    options: XHS_CREATIVE_STYLE_OPTIONS,
                   selectedValue: styleSelection,
+                  disabled: Boolean(lockedField && lockedField !== "xhs"),
+                  disabledHint: `已选择「${lockLabel}」，其他创作设置不可同时生效。`,
                 })}
+
                 ${renderCreativeOptionSelect({
                   ideaIndex,
                   field: "wechat",
                   title: "公众号长图模板",
-                  options: WECHAT_TEMPLATE_OPTIONS,
+                                    options: WECHAT_TEMPLATE_OPTIONS,
                   selectedValue: wechatSelection,
+                  disabled: Boolean(lockedField && lockedField !== "wechat"),
+                  disabledHint: `已选择「${lockLabel}」，其他创作设置不可同时生效。`,
                 })}
+
               </div>
-              <div class="idea-creative-ratio">
+                            <div class="idea-creative-ratio ${lockedField && lockedField !== "ratio" ? "is-disabled" : ""}">
+
                 <div class="idea-creative-ratio-heading">
                   <strong>图片比例</strong>
                   <small>${selection === "smart" ? "按图片类型自动匹配" : "四种生图使用统一比例"}</small>
@@ -3219,7 +3259,9 @@ function renderIdeaCreativeSettings(ideaIndex) {
                   ${options
                     .map((ratio) => {
                       const selected = ratio === selection;
-                      return `<button class="idea-aspect-ratio-option ${selected ? "is-selected" : ""}" data-select-aspect-ratio="${ratio}" data-idea-index="${ideaIndex}" type="button">
+                                            const disabled = Boolean(lockedField && lockedField !== "ratio");
+                      return `<button class="idea-aspect-ratio-option ${selected ? "is-selected" : ""}" data-select-aspect-ratio="${ratio}" data-idea-index="${ideaIndex}" type="button" ${disabled ? "disabled" : ""}>
+
                         <span class="idea-aspect-ratio-visual">${ratio === "smart" ? `<span class="aspect-smart-mark"><i></i><i></i></span>` : `<i class="aspect-shape" style="${getAspectRatioShapeStyle(ratio)}"></i>`}</span>
                         <span>${ratio === "smart" ? "智能" : ratio}</span>
                       </button>`;
@@ -3227,7 +3269,8 @@ function renderIdeaCreativeSettings(ideaIndex) {
                     .join("")}
                 </div>
               </div>
-              <p>视觉路线仅影响小红书组图，长图模板仅影响公众号；智能比例会为公众号使用 9:21，其余图片使用 3:4。</p>
+                            <p>${lockedField ? `已选择「${lockLabel}」，其他两项不会同时生效；将当前选项改回智能匹配/智能比例即可重新选择。` : "三项设置仅可选择一项：视觉路线仅影响小红书组图，长图模板仅影响公众号；智能比例会为公众号使用 9:21，其余图片使用 3:4。"}</p>
+
             </div>`
           : ""
       }
@@ -4897,7 +4940,33 @@ function renderExcellentFilterChrome() {
   renderExcellentStatus();
 }
 
+function getExcellentImageSources(item) {
+  if (!item) return [];
+  const directUrls = Array.isArray(item.directImageUrls) && item.directImageUrls.length
+    ? item.directImageUrls
+    : [item.directPrimaryCoverUrl, ...(item.directCoverUrls || [])].filter(Boolean);
+  const proxyUrls = getDetailImages(item);
+  const count = Math.max(directUrls.length, proxyUrls.length);
+  return Array.from({ length: count }, (_, index) => {
+    const proxySrc = safeImageSrc(proxyUrls[index] || "");
+    const directSrc = safeImageSrc(directUrls[index] || proxySrc);
+    return { directSrc, proxySrc };
+  }).filter((source) => source.directSrc || source.proxySrc);
+}
+
+function renderExcellentContentImage(source, { alt = "", loading = "" } = {}) {
+  const directSrc = safeImageSrc(source?.directSrc || source?.proxySrc || "");
+  const proxySrc = safeImageSrc(source?.proxySrc || "");
+  if (!directSrc) return `<div class="excellent-cover-fallback">暂无图片</div>`;
+  const fallbackAttribute = proxySrc && proxySrc !== directSrc
+    ? ` data-image-fallback-src="${escapeHtml(proxySrc)}"`
+    : "";
+  const loadingAttribute = loading ? ` loading="${loading}"` : "";
+  return `<img src="${escapeHtml(directSrc)}" alt="${escapeHtml(alt)}"${loadingAttribute} referrerpolicy="no-referrer"${fallbackAttribute} onerror="if(this.dataset.imageFallbackSrc){var fallback=this.dataset.imageFallbackSrc;delete this.dataset.imageFallbackSrc;this.src=fallback;}else{this.replaceWith(Object.assign(document.createElement('div'),{className:'excellent-cover-fallback',textContent:'图片加载失败'}));}" />`;
+}
+
 function renderExcellentContents() {
+
   const root = document.getElementById("excellentContentGrid");
   if (!root) return;
   syncExcellentActiveBoardMirrors();
@@ -4931,7 +5000,8 @@ function renderExcellentContents() {
   root.innerHTML = items
     .map((item) => {
       const noteId = String(item.noteId || item.id || "");
-      const cover = safeImageSrc(item.primaryCoverUrl || item.imageUrls?.[0] || item.coverUrls?.[0] || "");
+            const cover = getExcellentImageSources(item)[0] || null;
+
       const imageCount = Array.isArray(item.imageUrls)
         ? item.imageUrls.filter(Boolean).length
         : Number(item.imageCount || 0);
@@ -4940,9 +5010,10 @@ function renderExcellentContents() {
         <article class="excellent-note-card" data-note-id="${escapeHtml(noteId)}">
           <button class="excellent-note-cover" data-excellent-detail="${escapeHtml(noteId)}" type="button">
             ${
-              cover
-                ? `<img src="${cover}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'excellent-cover-fallback',textContent:'封面加载失败'}))" />`
+                            cover
+                ? renderExcellentContentImage(cover, { loading: "lazy" })
                 : `<div class="excellent-cover-fallback">暂无封面</div>`
+
             }
             <span class="excellent-note-rank">TOP ${escapeHtml(String(item.rank || ""))}</span>
             ${imageCount > 1 ? `<span class="excellent-note-count">${imageCount}图</span>` : ""}
@@ -5231,11 +5302,12 @@ function renderExcellentDetailCarousel() {
   const detail = document.getElementById("excellentContentDetail");
   const modal = document.getElementById("excellentContentModal");
   if (!detail || !modal || !state.excellentDetail?.item) return;
-  const item = state.excellentDetail.item;
-  const images = getDetailImages(item).map((src) => safeImageSrc(src)).filter(Boolean);
-  const index = clampImageIndex(state.excellentDetail.activeImageIndex, images.length);
+    const item = state.excellentDetail.item;
+  const imageSources = getExcellentImageSources(item);
+  const index = clampImageIndex(state.excellentDetail.activeImageIndex, imageSources.length);
   state.excellentDetail.activeImageIndex = index;
-  const current = images[index] || "";
+  const current = imageSources[index] || null;
+
   const detailBoard = state.excellentDetail.board === "ecommerce_hot" ? "ecommerce_hot" : "xhs_hot";
   const taxonomyLabel =
     item.industryPath ||
@@ -5249,26 +5321,31 @@ function renderExcellentDetailCarousel() {
     <div class="excellent-detail-layout excellent-detail-carousel-layout">
       <section class="excellent-detail-gallery excellent-detail-carousel">
         <div class="excellent-carousel-stage">
-          <button type="button" class="excellent-carousel-nav is-prev" data-excellent-img-prev ${canGoPrevious(index, images.length) ? "" : "disabled"} aria-label="上一张">‹</button>
+                    <button type="button" class="excellent-carousel-nav is-prev" data-excellent-img-prev ${canGoPrevious(index, imageSources.length) ? "" : "disabled"} aria-label="上一张">‹</button>
+
           <div class="excellent-carousel-main">
             ${
-              current
-                ? `<img src="${current}" alt="${escapeHtml(item.title || "笔记")} 第 ${index + 1} 张" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'excellent-cover-fallback',textContent:'图片加载失败'}))" />`
+                            current
+                ? renderExcellentContentImage(current, { alt: `${item.title || "笔记"} 第 ${index + 1} 张` })
                 : `<div class="excellent-cover-fallback">暂无图片</div>`
+
             }
           </div>
-          <button type="button" class="excellent-carousel-nav is-next" data-excellent-img-next ${canGoNext(index, images.length) ? "" : "disabled"} aria-label="下一张">›</button>
+                    <button type="button" class="excellent-carousel-nav is-next" data-excellent-img-next ${canGoNext(index, imageSources.length) ? "" : "disabled"} aria-label="下一张">›</button>
+
         </div>
-        <div class="excellent-detail-gallery-meta">${images.length ? `${index + 1} / ${images.length}` : "暂无图片"}</div>
+                <div class="excellent-detail-gallery-meta">${imageSources.length ? `${index + 1} / ${imageSources.length}` : "暂无图片"}</div>
+
         ${
-          images.length > 1
-            ? `<div class="excellent-carousel-thumbs">${images
+                    imageSources.length > 1
+            ? `<div class="excellent-carousel-thumbs">${imageSources
                 .map(
-                  (src, i) =>
-                    `<button type="button" class="excellent-carousel-thumb ${i === index ? "is-active" : ""}" data-excellent-img-index="${i}"><img src="${src}" alt="" referrerpolicy="no-referrer" /></button>`,
+                  (source, i) =>
+                    `<button type="button" class="excellent-carousel-thumb ${i === index ? "is-active" : ""}" data-excellent-img-index="${i}">${renderExcellentContentImage(source)}</button>`,
                 )
                 .join("")}</div>`
             : ""
+
         }
         ${state.excellentDetail.loading ? `<div class="excellent-detail-loading">正在加载详情…</div>` : ""}
         ${state.excellentDetail.error ? `<div class="excellent-detail-error">${escapeHtml(state.excellentDetail.error)}</div>` : ""}
@@ -5303,20 +5380,30 @@ function renderExcellentDetailCarousel() {
     event.preventDefault();
     openExcellentRemix(event.currentTarget.dataset.excellentRemix);
   });
-  detail.querySelector("[data-excellent-img-prev]")?.addEventListener("click", () => {
-    state.excellentDetail.activeImageIndex = getPreviousImageIndex(state.excellentDetail.activeImageIndex, images.length);
+    detail.querySelector("[data-excellent-img-prev]")?.addEventListener("click", () => {
+    state.excellentDetail.activeImageIndex = getPreviousImageIndex(
+      state.excellentDetail.activeImageIndex,
+      imageSources.length,
+    );
     renderExcellentDetailCarousel();
   });
   detail.querySelector("[data-excellent-img-next]")?.addEventListener("click", () => {
-    state.excellentDetail.activeImageIndex = getNextImageIndex(state.excellentDetail.activeImageIndex, images.length);
+    state.excellentDetail.activeImageIndex = getNextImageIndex(
+      state.excellentDetail.activeImageIndex,
+      imageSources.length,
+    );
     renderExcellentDetailCarousel();
   });
   detail.querySelectorAll("[data-excellent-img-index]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.excellentDetail.activeImageIndex = clampImageIndex(Number(btn.getAttribute("data-excellent-img-index")), images.length);
+      state.excellentDetail.activeImageIndex = clampImageIndex(
+        Number(btn.getAttribute("data-excellent-img-index")),
+        imageSources.length,
+      );
       renderExcellentDetailCarousel();
     });
   });
+
 }
 
 async function openExcellentContentDetail(noteId) {
@@ -6368,21 +6455,28 @@ function bindExcellentContentLibrary() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (document.getElementById("excellentContentModal")?.classList.contains("is-open") && state.excellentDetail?.item) {
-      const images = getDetailImages(state.excellentDetail.item);
+        if (document.getElementById("excellentContentModal")?.classList.contains("is-open") && state.excellentDetail?.item) {
+      const imageSources = getExcellentImageSources(state.excellentDetail.item);
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        state.excellentDetail.activeImageIndex = getPreviousImageIndex(state.excellentDetail.activeImageIndex, images.length);
+        state.excellentDetail.activeImageIndex = getPreviousImageIndex(
+          state.excellentDetail.activeImageIndex,
+          imageSources.length,
+        );
         renderExcellentDetailCarousel();
         return;
       }
       if (event.key === "ArrowRight") {
         event.preventDefault();
-        state.excellentDetail.activeImageIndex = getNextImageIndex(state.excellentDetail.activeImageIndex, images.length);
+        state.excellentDetail.activeImageIndex = getNextImageIndex(
+          state.excellentDetail.activeImageIndex,
+          imageSources.length,
+        );
         renderExcellentDetailCarousel();
         return;
       }
     }
+
     if (event.key !== "Escape") return;
     if (document.getElementById("excellentRemixModal")?.classList.contains("is-open")) {
       closeExcellentRemix();
