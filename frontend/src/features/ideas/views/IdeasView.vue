@@ -345,18 +345,7 @@ function aspectRatioShapeStyle(ratio: string): Record<string, string> {
   };
 }
 
-function creativeSummary(index: number): string {
-  void settingsVersion.value;
-  const settings = settingsFor(index);
-  const style =
-    XHS_CREATIVE_STYLE_OPTIONS.find((option) => option.value === settings.visualStylePreset)?.label || "智能匹配";
-  const template =
-    WECHAT_TEMPLATE_OPTIONS.find((option) => option.value === settings.wechatTemplate)?.label || "智能配色";
-  const duration =
-    VIDEO_DURATION_OPTIONS.find((option) => option.value === (settings.videoDuration || "auto"))?.label || "智能推荐";
-  const ratio = settings.aspectRatioSelection === "smart" ? "智能" : settings.aspectRatioSelection;
-  return `小红书：${style} · 公众号：${template} · 脚本：${duration} · 比例：${ratio}`;
-}
+
 
 function openLibrary(index: number): void {
   openLibraryFor.value = index;
@@ -1001,22 +990,28 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
               :class="{ 'is-open': Boolean(openCreativeSettings[index]) }"
               :data-test="`idea-creative-settings-${index}`"
             >
-              <button
-                class="idea-aspect-ratio-trigger"
-                type="button"
-                :data-test="`idea-creative-toggle-${index}`"
-                :aria-expanded="Boolean(openCreativeSettings[index])"
-                @click="toggleCreativeSettings(index)"
-              >
-                <span class="idea-aspect-ratio-copy">
-                  <strong>创作设置</strong>
-                  <small>{{ creativeSummary(index) }}</small>
-                </span>
-                <span class="idea-aspect-ratio-value">
-                  <b>{{ openCreativeSettings[index] ? "收起" : "调整" }}</b>
+                            <div class="idea-creative-settings-toolbar">
+                <div class="idea-creative-settings-heading">
+                  <span class="idea-creative-settings-icon" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </span>
+                  <span>
+                    <strong>创作设置</strong>
+                    <small>生成前可选调整</small>
+                  </span>
+                </div>
+                <button
+                  class="idea-aspect-ratio-trigger"
+                  type="button"
+                  :data-test="`idea-creative-toggle-${index}`"
+                  :aria-expanded="Boolean(openCreativeSettings[index])"
+                  @click="toggleCreativeSettings(index)"
+                >
+                  <span>{{ openCreativeSettings[index] ? "收起设置" : "调整设置" }}</span>
                   <span class="idea-aspect-ratio-chevron" aria-hidden="true"></span>
-                </span>
-              </button>
+                </button>
+              </div>
+
               <div v-if="openCreativeSettings[index]" class="idea-aspect-ratio-panel">
                 <div class="idea-creative-channel-section">
                   <div class="idea-creative-section-heading">

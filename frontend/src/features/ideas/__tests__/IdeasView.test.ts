@@ -291,11 +291,14 @@ describe("IdeasView", () => {
 
     const settings = card.find('[data-test="idea-creative-settings-0"]');
     expect(settings.text()).toContain("创作设置");
-    expect(settings.text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 脚本：智能推荐 · 比例：智能");
-    expect(settings.text()).toContain("调整");
+    expect(settings.text()).toContain("生成前可选调整");
+    expect(settings.text()).toContain("调整设置");
+    expect(settings.text()).not.toContain("小红书：智能匹配");
 
-    await card.find('[data-test="idea-creative-toggle-0"]').trigger("click");
+        await card.find('[data-test="idea-creative-toggle-0"]').trigger("click");
+    expect(settings.text()).toContain("收起设置");
     expect(settings.text()).toContain("按生成类型单独设置");
+
     expect(settings.text()).toContain("各项仅影响对应生成入口，互不叠加");
     expect(settings.text()).toContain("小红书组图 · 视觉路线");
     expect(settings.text()).toContain("公众号长图 · 版式模板");
@@ -415,7 +418,8 @@ describe("IdeasView", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("小红书：智能匹配 · 公众号：智能配色 · 脚本：智能推荐 · 比例：智能");
+        expect(wrapper.find('[data-test="idea-creative-settings-0"]').text()).toContain("生成前可选调整");
+
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
     await wrapper.find('[data-test="idea-creative-style-0"]').trigger("click");
