@@ -85,6 +85,7 @@ import type {
   TaxonomyNode,
   XingtuLearnResult,
   XingtuTranscriptResult,
+  XingtuVideoFilters,
 } from "../types";
 
 // 优秀内容：双板块列表（缓存读取 + 显式更新）、筛选草稿/正式两态、
@@ -99,6 +100,19 @@ const BOARDS: Array<{ value: ExcellentBoard; label: string }> = [
   { value: "xingtu", label: "巨量星图" },
 ];
 
+const XINGTU_VIDEO_TYPES = ["all", "星图视频", "自然视频"] as const;
+const XINGTU_CONTENT_TYPES = [
+  "all", "时尚", "科技", "科普", "摄影摄像", "美食", "母婴", "亲子", "剧情", "游戏", "汽车", "动物", "旅行", "舞蹈", "传统文化", "艺术", "体育", "音乐", "生活记录", "生活家居", "休闲娱乐", "职场", "三农", "随拍", "二次元", "电影", "电视剧", "综艺", "明星", "人文社科", "教育校园", "情感", "财经", "公益",
+] as const;
+const XINGTU_DATA_SORTS: Array<{ value: XingtuVideoFilters["dataSort"]; label: string }> = [
+  { value: "all", label: "不限" },
+  { value: "likeCount", label: "点赞量" },
+  { value: "commentCount", label: "评论量" },
+  { value: "shareCount", label: "分享量" },
+  { value: "interactCount", label: "互动量" },
+  { value: "followerCount", label: "达人粉丝量" },
+];
+
 const activeBoard = ref<ExcellentBoard>("xhs_hot");
 const slices = reactive({
   xhs_hot: createExcellentBoardSlice(),
@@ -107,6 +121,12 @@ const slices = reactive({
 });
 
 const contentSources = ref<ContentSourceOption[]>([]);
+const xingtuFilters = reactive<XingtuVideoFilters>({
+  videoType: "all",
+  contentType: "all",
+  dataSort: "all",
+});
+
 const taxonomyOptions = reactive<Record<ExcellentBoard, Array<{ label: string; value: string }>>>({
   xhs_hot: [],
   ecommerce_hot: [],
@@ -220,7 +240,7 @@ async function loadBoard(board: ExcellentBoard) {
   if (!hadItems) boardSlice.status = "loading";
     try {
     const result = board === "xingtu"
-      ? await fetchXingtuVideos(scope.signalFor(`list-${board}`))
+      ? await fetchXingtuVideos({ ...xingtuFilters }, scope.signalFor(`list-${board}`))
       : await fetchExcellentContents(formalFilters(board), scope.signalFor(`list-${board}`));
     applyExcellentListResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
     if (board === "xingtu") {
@@ -270,7 +290,7 @@ function boardLabel(board: ExcellentBoard): string {
 /** Explicit refresh with the draft filters snapshot (the only Pgy path). */
 async function refreshBoard(board: ExcellentBoard) {
   const boardSlice = slices[board];
-  if (boardSlice.refreshing || refreshCooldownSeconds.value > 0) return;
+  if (boardSlice.refreshing || (board !== "xingtu" && refreshCooldownSeconds.value > 0)) return;
     const requestFilters = draftFilters(board);
   const requestId = boardSlice.requestId + 1;
 
@@ -279,7 +299,7 @@ async function refreshBoard(board: ExcellentBoard) {
   boardSlice.refreshError = "";
   try {
     if (board === "xingtu") {
-      const result = await fetchXingtuVideos(scope.signalFor(`refresh-${board}`));
+      const result = await fetchXingtuVideos({ ...xingtuFilters }, scope.signalFor(`refresh-${board}`));
       applyExcellentRefreshResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
       boardSlice.hasCache = false;
       boardSlice.needsUpdate = false;
@@ -325,7 +345,12 @@ async function refreshBoard(board: ExcellentBoard) {
   }
 }
 
+function applyXingtuFilters() {
+  if (activeBoard.value === "xingtu") void loadBoard("xingtu");
+}
+
 function switchBoard(board: ExcellentBoard) {
+
   if (activeBoard.value === board) return;
   saveBoardScrollPosition(activeBoard.value, window.scrollY || 0);
   activeBoard.value = board;
@@ -404,6 +429,12 @@ const xingtuTranscript = reactive({
   data: null as XingtuTranscriptResult | null,
 });
 
+const xingtuPlayer = reactive({ failed: false });
+
+function onXingtuPlayerError() {
+  xingtuPlayer.failed = true;
+}
+
 const xingtuLearn = reactive({
   open: false,
   loading: false,
@@ -477,6 +508,7 @@ async function openDetail(item: ExcellentNote) {
   xingtuTranscript.error = "";
   xingtuTranscript.itemId = "";
   xingtuTranscript.data = null;
+  xingtuPlayer.failed = false;
   if (isXingtuBoard(board)) {
     detail.loading = false;
     return;
@@ -515,6 +547,7 @@ function closeDetail() {
   xingtuTranscript.error = "";
   xingtuTranscript.itemId = "";
   xingtuTranscript.data = null;
+  xingtuPlayer.failed = false;
 }
 
 async function loadXingtuTranscript(item: ExcellentNote | null | undefined) {
@@ -1304,42 +1337,55 @@ onUnmounted(() => {
     </div>
 
     <div class="excellent-filters">
-            <label v-if="activeBoard !== 'xingtu'">
-        <span>内容来源</span>
-        <select v-model="slice.draftContentSource" data-test="filter-source">
-          <option value="all">全部来源</option>
-          <option v-for="source in contentSources" :key="String(source.value)" :value="source.value">
-            {{ source.label || source.value }}
-          </option>
-        </select>
-      </label>
-      <label v-else>
-        <span>视频范围</span>
-        <select disabled><option>巨量星图公开内容</option></select>
-      </label>
-
-      <label v-if="activeBoard === 'xhs_hot'">
-        <span>内容类目</span>
-        <select v-model="slice.draftCategoryPath" data-test="filter-category">
-          <option value="">全部类目</option>
-          <option v-for="option in taxonomyOptions.xhs_hot" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-            <label v-else-if="activeBoard === 'ecommerce_hot'">
-        <span>所属行业</span>
-        <select v-model="slice.draftIndustryPath" data-test="filter-industry">
-          <option value="">全部行业</option>
-          <option v-for="option in taxonomyOptions.ecommerce_hot" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label v-else>
-        <span>媒体策略</span>
-        <select disabled><option>官方直链播放，不存储视频</option></select>
-      </label>
+      <template v-if="activeBoard === 'xingtu'">
+        <label>
+          <span>视频类型</span>
+          <select v-model="xingtuFilters.videoType" data-test="xingtu-video-type" @change="applyXingtuFilters()">
+            <option v-for="type in XINGTU_VIDEO_TYPES" :key="type" :value="type">{{ type === 'all' ? '全部' : type }}</option>
+          </select>
+        </label>
+        <label>
+          <span>内容类型</span>
+          <select v-model="xingtuFilters.contentType" data-test="xingtu-content-type" @change="applyXingtuFilters()">
+            <option v-for="type in XINGTU_CONTENT_TYPES" :key="type" :value="type">{{ type === 'all' ? '不限' : type }}</option>
+          </select>
+        </label>
+        <label>
+          <span>数据筛选</span>
+          <select v-model="xingtuFilters.dataSort" data-test="xingtu-data-sort" @change="applyXingtuFilters()">
+            <option v-for="option in XINGTU_DATA_SORTS" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+        </label>
+      </template>
+      <template v-else>
+        <label>
+          <span>内容来源</span>
+          <select v-model="slice.draftContentSource" data-test="filter-source">
+            <option value="all">全部来源</option>
+            <option v-for="source in contentSources" :key="String(source.value)" :value="source.value">
+              {{ source.label || source.value }}
+            </option>
+          </select>
+        </label>
+        <label v-if="activeBoard === 'xhs_hot'">
+          <span>内容类目</span>
+          <select v-model="slice.draftCategoryPath" data-test="filter-category">
+            <option value="">全部类目</option>
+            <option v-for="option in taxonomyOptions.xhs_hot" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label v-else>
+          <span>所属行业</span>
+          <select v-model="slice.draftIndustryPath" data-test="filter-industry">
+            <option value="">全部行业</option>
+            <option v-for="option in taxonomyOptions.ecommerce_hot" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+      </template>
 
       <button
         type="button"
@@ -1393,7 +1439,13 @@ onUnmounted(() => {
       <article v-for="item in slice.items" :key="noteKey(item)" class="excellent-card" data-test="excellent-card">
                 <button type="button" class="excellent-cover" :class="{ 'xingtu-video-cover': isXingtuBoard() }" @click="openDetail(item)">
           <template v-if="isXingtuBoard()">
-            <img v-if="item.coverUrl" :src="String(item.coverUrl)" :alt="item.title || ''" loading="lazy" referrerpolicy="no-referrer" />
+            <img
+              v-if="item.coverUrl && !isImageFailed(String(item.coverUrl))"
+              :src="String(item.coverUrl)"
+              :alt="item.title || ''"
+              loading="lazy"
+              @error="onExcellentImageError(String(item.coverUrl))"
+            />
             <span v-else class="excellent-cover-fallback">暂无封面</span>
             <span class="xingtu-video-play" aria-hidden="true">▶</span>
             <span class="xingtu-video-duration">{{ formatVideoDuration(item.duration) }}</span>
@@ -1579,34 +1631,30 @@ onUnmounted(() => {
           <section class="excellent-detail-gallery xingtu-player-shell">
             <div class="xingtu-player-frame">
               <video
-                v-if="detail.item?.playerUrl"
+                v-if="detail.item?.playerUrl && !xingtuPlayer.failed"
                 class="xingtu-video-player"
                 controls
                 playsinline
                 preload="metadata"
                 :poster="String(detail.item?.coverUrl || '')"
                 :src="String(detail.item.playerUrl)"
-              >
-                当前浏览器无法播放该官方视频。
-              </video>
-              <div v-else class="excellent-cover-fallback">暂无可播放的官方视频链接</div>
+                @error="onXingtuPlayerError()"
+              ></video>
+              <div v-else class="excellent-cover-fallback">视频暂不可用</div>
             </div>
-            <p class="xingtu-player-note">视频直接从官方链接播放，RedBase 不下载、保存或缓存视频文件。</p>
             <a
               class="xingtu-open-official"
               :href="String(detail.item?.videoUrl || detail.item?.officialContentMarketUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')"
               target="_blank"
               rel="noopener noreferrer"
-            >在官方页面打开视频</a>
+            >查看原视频</a>
           </section>
           <aside class="excellent-detail-copy xingtu-video-copy">
-            <span class="xingtu-detail-chip">巨量星图 · {{ detail.item?.category || '公开视频' }}</span>
             <h2>{{ detail.item?.title || '未命名视频' }}</h2>
             <div class="excellent-detail-meta">
-              <div>作者：{{ detail.item?.author?.nickname || detail.item?.authorName || '星图创作者' }}</div>
+              <div>作者：{{ detail.item?.author?.nickname || detail.item?.authorName || '未知作者' }}</div>
               <div>粉丝：{{ formatCompactMetric(detail.item?.author?.followerCount) }}</div>
               <div>时长：{{ formatVideoDuration(detail.item?.duration) }}</div>
-              <div>视频 ID：{{ detail.item?.videoId || '-' }}</div>
             </div>
             <div class="excellent-detail-metrics xingtu-detail-metrics">
               <div><strong>{{ formatCompactMetric(detail.item?.metrics?.viewCount) }}</strong><span>播放</span></div>
@@ -1617,19 +1665,19 @@ onUnmounted(() => {
               <div><strong>{{ formatPercent(detail.item?.metrics?.interactRate) }}</strong><span>互动率</span></div>
             </div>
             <section class="xingtu-transcript-panel">
-              <div class="xingtu-transcript-head"><h3>视频文稿</h3><span>来源：巨量星图官方</span></div>
-              <div v-if="xingtuTranscript.loading" class="xingtu-transcript-loading">正在读取巨量星图官方视频文稿…</div>
+              <div class="xingtu-transcript-head"><h3>视频文稿</h3></div>
+              <div v-if="xingtuTranscript.loading" class="xingtu-transcript-loading">正在读取视频文稿…</div>
               <div v-else-if="xingtuTranscript.error" class="xingtu-transcript-empty">{{ xingtuTranscript.error }}</div>
               <div v-else-if="xingtuTranscript.data?.available" class="xingtu-transcript-list">
                 <div v-for="segment in xingtuTranscript.data.segments || []" :key="`${segment.startMs}-${segment.endMs}-${segment.text}`" class="xingtu-transcript-segment">
                   <time>{{ formatTranscriptTime(segment.startMs) }}</time><p>{{ segment.text }}</p>
                 </div>
               </div>
-              <div v-else-if="xingtuTranscript.data" class="xingtu-transcript-empty">官方暂无视频文稿。这是正常情况；你仍可查看数据与官方视频。</div>
-              <button v-else type="button" class="secondary-btn xingtu-transcript-trigger" @click="loadXingtuTranscript(detail.item)">查看官方视频文稿</button>
+              <div v-else-if="xingtuTranscript.data" class="xingtu-transcript-empty">暂无可用视频文稿。</div>
+              <button v-else type="button" class="secondary-btn xingtu-transcript-trigger" @click="loadXingtuTranscript(detail.item)">查看视频文稿</button>
             </section>
             <div class="excellent-detail-actions">
-              <a :href="String(detail.item?.officialContentMarketUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')" target="_blank" rel="noopener noreferrer">查看巨量星图</a>
+              <a :href="String(detail.item?.videoUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')" target="_blank" rel="noopener noreferrer">查看原视频</a>
               <button type="button" class="primary-btn excellent-detail-remix" @click="detail.item && openXingtuLearn(detail.item)">一键仿视频</button>
             </div>
           </aside>
@@ -1637,28 +1685,25 @@ onUnmounted(() => {
       </div>
     </div>
 
-        <!-- 一键仿视频：只提炼官方文稿的结构与节奏，不复刻视频素材或台词。 -->
+        <!-- 一键仿视频：提炼文稿结构与节奏，不复刻视频素材或台词。 -->
     <div v-if="xingtuLearn.open" class="excellent-modal" @click.self="closeXingtuLearn()">
       <div class="excellent-modal-body xingtu-video-learn-modal-panel">
         <header class="excellent-modal-header xingtu-video-learn-head">
           <div>
-            <span class="xingtu-detail-chip">一键仿视频</span>
             <h3>学习视频结构与叙事节奏</h3>
-            <p>仅使用巨量星图官方返回的视频文稿和公开数据提炼方法；请用自己的观点、素材和场景重新创作。</p>
           </div>
           <button type="button" class="secondary-btn remix-close-button" aria-label="关闭视频学习分析" @click="closeXingtuLearn()">×</button>
         </header>
         <div class="xingtu-video-learn-body">
           <div v-if="xingtuLearn.loading" class="xingtu-video-learn-loading">
-            <strong>正在读取官方文稿并提炼结构…</strong>
-            <p>不会下载或保存视频文件；文稿仅用于本次学习分析。</p>
+            <strong>正在读取视频文稿并提炼结构…</strong>
           </div>
           <div v-else-if="xingtuLearn.error" class="xingtu-video-learn-error">
             <strong>暂时无法完成视频学习分析</strong><p>{{ xingtuLearn.error }}</p>
           </div>
           <template v-else>
             <section class="xingtu-video-learn-summary">
-              <span>官方文稿 {{ xingtuLearn.result?.transcript?.available ? `${xingtuLearn.result?.transcript?.segmentCount || 0} 段` : '暂无' }}</span>
+              <span>视频文稿 {{ xingtuLearn.result?.transcript?.available ? `${xingtuLearn.result?.transcript?.segmentCount || 0} 段` : '暂无' }}</span>
               <h3>{{ xingtuLearn.result?.analysis?.title || '视频学习分析' }}</h3>
               <p>{{ xingtuLearn.result?.analysis?.summary }}</p>
             </section>
@@ -4051,7 +4096,7 @@ onUnmounted(() => {
 }
 
 
-/* 巨量星图：视频直链、官方文稿与原创学习分析 */
+/* 巨量星图：视频详情与学习分析 */
 .xingtu-video-cover { position: relative; overflow: hidden; background: #121821; }
 .xingtu-video-cover img { width: 100%; height: 100%; object-fit: cover; }
 .xingtu-video-play { position: absolute; left: 50%; top: 50%; display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(12,18,28,.58); color: #fff; font-size: 18px; transform: translate(-50%,-50%); transition: transform .16s ease, background .16s ease; }

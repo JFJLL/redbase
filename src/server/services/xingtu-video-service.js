@@ -1,7 +1,14 @@
 const XINGTU_CONTENT_MARKET_URL = "https://www.xingtu.cn/ad/creator/insight/content-market";
+const { normalizeCookieHeader } = require("../integrations/pgy-content-square");
+
 const XINGTU_TRANSCRIPT_ENDPOINT = "https://www.xingtu.cn/gw/api/aggregator/get_item_high_quality_text";
-const MAX_TRANSCRIPT_SEGMENTS = 1200;
-const MAX_TRANSCRIPT_TEXT_LENGTH = 120000;
+const XINGTU_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const MAX_TRANSCRIPT_SEGMENTS = 360;
+const MAX_TRANSCRIPT_TEXT_LENGTH = 300000;
+const TRANSCRIPT_TIMEOUT_MS = 12000;
+const MEDIA_TIMEOUT_MS = 25000;
+const MAX_MEDIA_REDIRECTS = 4;
 
 /**
  * A public, display-only catalogue sampled from the official content market.
@@ -112,10 +119,119 @@ function officialVideoPageUrl(itemId) {
   return `https://www.douyin.com/video/${encodeURIComponent(normalizeItemId(itemId))}`;
 }
 
-function officialPlayerUrl(videoId) {
+function officialMediaUrl(videoId) {
   const normalized = String(videoId || "").trim();
   if (!/^[a-zA-Z0-9_-]{8,128}$/.test(normalized)) return "";
   return `https://www.iesdouyin.com/aweme/v1/play/?video_id=${encodeURIComponent(normalized)}&ratio=720p&line=0`;
+}
+
+function xingtuCookie(value = "") {
+  return normalizeCookieHeader(value || process.env.XINGTU_COOKIE || "");
+}
+
+function xingtuRequestHeaders(targetUrl, { range = "", cookie = "" } = {}) {
+  const target = new URL(targetUrl);
+  const headers = {
+    Accept: "*/*",
+    "User-Agent": XINGTU_BROWSER_USER_AGENT,
+    Referer: XINGTU_CONTENT_MARKET_URL,
+  };
+  if (range) headers.Range = String(range).slice(0, 256);
+  // Cookie only ever goes to official xingtu.cn hosts. Redirected media/CDN
+  // hosts never receive it, so the application cannot leak the session token.
+  if (target.hostname === "xingtu.cn" || target.hostname.endsWith(".xingtu.cn")) {
+    const normalizedCookie = xingtuCookie(cookie);
+    if (normalizedCookie) headers.Cookie = normalizedCookie;
+  }
+  return headers;
+}
+
+function isAllowedOfficialResourceUrl(value) {
+  let target;
+  try {
+    target = new URL(value);
+  } catch (_error) {
+    return false;
+  }
+  if (target.protocol !== "https:") return false;
+  const host = target.hostname.toLowerCase();
+  return host === "xingtu.cn"
+    || host.endsWith(".xingtu.cn")
+    || host === "iesdouyin.com"
+    || host.endsWith(".iesdouyin.com")
+    || host.endsWith(".byteimg.com")
+    || host.endsWith(".douyinvod.com")
+    || host.endsWith(".douyinpic.com")
+    || host.endsWith(".bytecdn.cn");
+}
+
+function upstreamMediaError(message, code = "XINGTU_MEDIA_UPSTREAM_ERROR") {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = 502;
+  return error;
+}
+
+async function requestOfficialResource(targetUrl, { fetchImpl = global.fetch, range = "", cookie = "" } = {}) {
+  if (typeof fetchImpl !== "function") {
+    const error = new Error("当前运行环境不支持读取官方媒体资源。");
+    error.code = "XINGTU_FETCH_UNAVAILABLE";
+    throw error;
+  }
+  let currentUrl = String(targetUrl || "");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MEDIA_TIMEOUT_MS);
+  try {
+    for (let redirectCount = 0; redirectCount <= MAX_MEDIA_REDIRECTS; redirectCount += 1) {
+      if (!isAllowedOfficialResourceUrl(currentUrl)) {
+        throw upstreamMediaError("官方媒体地址不在允许范围内。", "XINGTU_MEDIA_HOST_REJECTED");
+      }
+      const response = await fetchImpl(currentUrl, {
+        method: "GET",
+        redirect: "manual",
+        headers: xingtuRequestHeaders(currentUrl, { range, cookie }),
+        signal: controller.signal,
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers?.get?.("location");
+        if (!location) throw upstreamMediaError("官方媒体重定向缺少目标地址。");
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+      if (!response.ok) {
+        throw upstreamMediaError(`官方媒体资源暂时不可用（${response.status}）。`);
+      }
+      return response;
+    }
+    throw upstreamMediaError("官方媒体重定向次数过多。", "XINGTU_MEDIA_REDIRECT_LIMIT");
+  } catch (error) {
+    if (error?.name === "AbortError") throw upstreamMediaError("官方媒体请求超时。", "XINGTU_MEDIA_TIMEOUT");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function requestOfficialCover(item, options = {}) {
+  const url = officialCoverUrl(item?.coverUri);
+  if (!url) {
+    const error = new Error("该视频暂无可用封面。");
+    error.code = "XINGTU_COVER_UNAVAILABLE";
+    error.statusCode = 404;
+    throw error;
+  }
+  return requestOfficialResource(url, options);
+}
+
+async function requestOfficialMedia(item, options = {}) {
+  const url = officialMediaUrl(item?.videoId);
+  if (!url) {
+    const error = new Error("该视频暂无可用播放地址。");
+    error.code = "XINGTU_MEDIA_UNAVAILABLE";
+    error.statusCode = 404;
+    throw error;
+  }
+  return requestOfficialResource(url, options);
 }
 
 function officialTranscriptUrl(itemId) {
@@ -135,9 +251,10 @@ function normalizeCatalogItem(item, index) {
     duration: Number(item.duration || 0),
     author: { ...item.author },
     metrics: { ...item.metrics },
-    coverUrl: officialCoverUrl(item.coverUri),
+    coverUrl: `/api/xingtu/videos/${encodeURIComponent(id)}/cover`,
     videoId: item.videoId,
-    playerUrl: officialPlayerUrl(item.videoId),
+    videoType: String(item.videoType || "自然视频"),
+    playerUrl: `/api/xingtu/videos/${encodeURIComponent(id)}/media`,
     videoUrl: officialVideoPageUrl(id),
     officialContentMarketUrl: XINGTU_CONTENT_MARKET_URL,
     transcriptUrl: officialTranscriptUrl(id),
@@ -165,7 +282,7 @@ function normalizeTranscriptSegments(rawTexts) {
   return segments.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 }
 
-async function requestOfficialTranscript(itemId, { fetchImpl = global.fetch } = {}) {
+async function requestOfficialTranscript(itemId, { fetchImpl = global.fetch, cookie = "" } = {}) {
   const normalizedId = normalizeItemId(itemId);
   if (typeof fetchImpl !== "function") {
     const error = new Error("当前运行环境不支持读取官方视频文稿。");
@@ -178,8 +295,8 @@ async function requestOfficialTranscript(itemId, { fetchImpl = global.fetch } = 
     const response = await fetchImpl(officialTranscriptUrl(normalizedId), {
       method: "GET",
       headers: {
+        ...xingtuRequestHeaders(officialTranscriptUrl(normalizedId), { cookie }),
         Accept: "application/json",
-        "User-Agent": "RedBase/1.0 (+https://www.xingtu.cn/)",
       },
       signal: controller.signal,
     });
@@ -298,6 +415,9 @@ module.exports = {
   getXingtuPublicVideoCatalog,
   normalizeItemId,
   officialTranscriptUrl,
+  requestOfficialCover,
+  requestOfficialMedia,
+  requestOfficialResource,
   requestOfficialTranscript,
   buildTranscriptLearningAnalysis,
 };

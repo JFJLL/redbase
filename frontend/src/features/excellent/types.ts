@@ -34,6 +34,7 @@ export interface ExcellentNote {
   category?: string;
   duration?: number;
   videoId?: string;
+  videoType?: "星图视频" | "自然视频" | string;
   playerUrl?: string;
   videoUrl?: string;
   officialContentMarketUrl?: string;
@@ -59,6 +60,12 @@ export interface ExcellentListResult {
   hasCache?: boolean;
   needsUpdate?: boolean;
   [key: string]: unknown;
+}
+
+export interface XingtuVideoFilters {
+  videoType?: "all" | "星图视频" | "自然视频";
+  contentType?: string;
+  dataSort?: "all" | "likeCount" | "commentCount" | "shareCount" | "interactCount" | "followerCount";
 }
 
 export interface XingtuTranscriptSegment {
@@ -89,7 +96,7 @@ export interface XingtuLearningAnalysis {
 
 export interface XingtuLearnResult {
   itemId?: string;
-  transcript?: { available?: boolean; segmentCount?: number; sourceUrl?: string; fetchedAt?: string };
+  transcript?: { available?: boolean; segmentCount?: number; unavailableReason?: string; sourceUrl?: string; fetchedAt?: string };
   analysis?: XingtuLearningAnalysis;
 }
 

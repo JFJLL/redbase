@@ -765,4 +765,57 @@ describe("ExcellentView", () => {
     expect(wrapper.find('img[src="/img/a.jpg"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="excellent-image-error"]').exists()).toBe(false);
   });
+
+  it("uses xingtu filters, neutral detail copy and metadata learning when no transcript is available", async () => {
+    const xingtuItems = [{
+      id: "7675709137612013818",
+      itemId: "7675709137612013818",
+      title: "视频标题",
+      category: "剧情",
+      videoType: "自然视频",
+      duration: 32,
+      coverUrl: "/api/xingtu/videos/7675709137612013818/cover",
+      playerUrl: "/api/xingtu/videos/7675709137612013818/media",
+      videoUrl: "https://www.douyin.com/video/7675709137612013818",
+      author: { nickname: "作者", followerCount: 12 },
+      metrics: { viewCount: 100, likeCount: 10, commentCount: 2, shareCount: 1, interactCount: 13, finishRate: 0.1, interactRate: 0.13 },
+    }];
+    const wrapper = await mountView((url, init) => {
+      if (url.startsWith("/api/xingtu/videos?")) return jsonResponse(200, { board: "xingtu", items: xingtuItems });
+      if (url.endsWith("/learn")) {
+        return jsonResponse(200, {
+          itemId: xingtuItems[0].itemId,
+          transcript: { available: false, segmentCount: 0, unavailableReason: "当前未获取到视频文稿。" },
+          analysis: { title: "视频学习分析", summary: "可根据公开视频数据学习内容结构。", disclaimer: "请保持原创。", structure: [], learningPoints: [], originalGuidance: [] },
+        });
+      }
+      void init;
+      return defaultHandlers(url);
+    });
+
+    await wrapper.findAll('[role="tab"]').find((tab) => tab.text() === "巨量星图")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="xingtu-video-type"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="xingtu-content-type"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="xingtu-data-sort"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("视频范围");
+    expect(wrapper.text()).not.toContain("媒体策略");
+
+    await wrapper.find('[data-test="xingtu-content-type"]').setValue("剧情");
+    await flushPromises();
+    expect(calls.some((call) => call.url.includes("/api/xingtu/videos?") && call.url.includes("contentType=%E5%89%A7%E6%83%85"))).toBe(true);
+
+    await wrapper.find(".excellent-cover").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".xingtu-open-official").text()).toBe("查看原视频");
+    expect(wrapper.text()).not.toContain("来源：巨量星图");
+    expect(wrapper.text()).not.toContain("从官方链接播放");
+
+    await wrapper.find('[data-test="detail-close"]').trigger("click");
+    await wrapper.find('[data-test="remix-button"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("视频学习分析");
+    expect(wrapper.text()).not.toContain("暂时无法完成视频学习分析");
+  });
 });

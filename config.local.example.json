@@ -164,6 +164,9 @@
     "origins": ["http://127.0.0.1:3013"],
     "credentials": true
   },
+  "xingtu": {
+    "cookie": ""
+  },
   "pgy": {
     "enabled": false,
     "cookie": "",

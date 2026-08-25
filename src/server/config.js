@@ -179,6 +179,9 @@ const DEFAULT_APP_CONFIG = {
   billing: {
     rechargePlans: [],
   },
+  xingtu: {
+    cookie: "",
+  },
   pgy: {
     enabled: false,
     cookie: "",
@@ -695,6 +698,9 @@ function loadAppConfig() {
       },
       billing: {
       rechargePlans,
+    },
+    xingtu: {
+      cookie: String(process.env.XINGTU_COOKIE || merged.xingtu?.cookie || "").trim(),
     },
     pgy: {
       enabled: parseBooleanConfig(process.env.PGY_CONTENT_SQUARE_ENABLED, parseBooleanConfig(merged.pgy?.enabled, hasPgyCookieSource)),

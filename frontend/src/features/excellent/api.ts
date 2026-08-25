@@ -20,6 +20,7 @@ import type {
   TaxonomyResult,
   XingtuLearnResult,
   XingtuTranscriptResult,
+  XingtuVideoFilters,
 } from "./types";
 
 export interface ExcellentQueryFilters {
@@ -56,8 +57,15 @@ export function fetchExcellentContents(filters: ExcellentQueryFilters, signal?: 
 }
 
 /** 巨量星图公开目录：仅取得官方链接和公开元数据，不存储媒体文件。 */
-export function fetchXingtuVideos(signal?: AbortSignal): Promise<ExcellentListResult> {
-  return apiFetch("/api/xingtu/videos", { signal });
+export function fetchXingtuVideos(filters: XingtuVideoFilters = {}, signal?: AbortSignal): Promise<ExcellentListResult> {
+  return apiFetch("/api/xingtu/videos", {
+    query: {
+      videoType: filters.videoType || "all",
+      contentType: filters.contentType || "all",
+      dataSort: filters.dataSort || "all",
+    },
+    signal,
+  });
 }
 
 export function fetchXingtuTranscript(itemId: string, signal?: AbortSignal): Promise<XingtuTranscriptResult> {

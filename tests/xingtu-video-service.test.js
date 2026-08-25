@@ -2,18 +2,42 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   getXingtuPublicVideoCatalog,
+  requestOfficialResource,
   requestOfficialTranscript,
   buildTranscriptLearningAnalysis,
 } = require("../src/server/services/xingtu-video-service");
 
-test("巨量星图公开视频目录仅返回官方直链元数据，不包含本地媒体路径", () => {
+test("巨量星图公开视频目录仅返回同源媒体代理元数据，不包含本地媒体文件", () => {
   const items = getXingtuPublicVideoCatalog();
   assert.ok(items.length >= 6);
   assert.equal(items[0].noteType, "video");
-  assert.match(items[0].playerUrl, /^https:\/\/www\.iesdouyin\.com\//);
+  assert.match(items[0].playerUrl, /^\/api\/xingtu\/videos\/\d+\/media$/);
+  assert.match(items[0].coverUrl, /^\/api\/xingtu\/videos\/\d+\/cover$/);
   assert.match(items[0].videoUrl, /^https:\/\/www\.douyin\.com\/video\//);
   assert.match(items[0].transcriptUrl, /^https:\/\/www\.xingtu\.cn\/gw\/api\/aggregator\/get_item_high_quality_text/);
   assert.equal(JSON.stringify(items).includes("/data/"), false);
+  assert.equal(JSON.stringify(items).includes("iesdouyin.com"), false);
+});
+
+test("媒体重定向逐跳重建请求头，绝不把会话凭据传给 CDN", async () => {
+  const calls = [];
+  await requestOfficialResource("https://www.xingtu.cn/media/example", {
+    cookie: "synthetic_session=1",
+    range: "bytes=0-1023",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 1) {
+        return { status: 302, ok: false, headers: new Headers({ location: "https://v3.douyinvod.com/media/example" }) };
+      }
+      return { status: 206, ok: true, headers: new Headers(), body: null };
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].init.redirect, "manual");
+  assert.equal(calls[0].init.headers.Cookie, "synthetic_session=1");
+  assert.equal(calls[0].init.headers.Range, "bytes=0-1023");
+  assert.equal("Cookie" in calls[1].init.headers, false);
+  assert.equal(calls[1].init.headers.Range, "bytes=0-1023");
 });
 
 test("官方视频文稿会规范化并按时间排序，不保存上游原始响应", async () => {
