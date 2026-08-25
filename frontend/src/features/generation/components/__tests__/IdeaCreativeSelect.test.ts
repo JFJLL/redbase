@@ -16,6 +16,7 @@ describe("IdeaCreativeSelect", () => {
 
     expect(wrapper.text()).toContain("智能匹配");
     expect(wrapper.find('[data-test="creative-style-menu"]').exists()).toBe(false);
+    expect(wrapper.find('[data-direction="down"]').exists()).toBe(true);
     expect(wrapper.find("select").exists()).toBe(false);
   });
 
@@ -31,10 +32,12 @@ describe("IdeaCreativeSelect", () => {
 
     await wrapper.find('[data-test="creative-style"]').trigger("click");
     expect(wrapper.find('[data-test="creative-style-menu"]').exists()).toBe(true);
+    expect(wrapper.find('[data-direction="up"]').exists()).toBe(true);
 
     await wrapper.find('[data-test="creative-style-option-editorial"]').trigger("click");
     expect(wrapper.emitted("update:modelValue")).toEqual([["editorial"]]);
     expect(wrapper.find('[data-test="creative-style-menu"]').exists()).toBe(false);
+    expect(wrapper.find('[data-direction="down"]').exists()).toBe(true);
   });
 
   it("closes with Escape and restores focus to the trigger", async () => {

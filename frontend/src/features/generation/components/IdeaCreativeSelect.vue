@@ -100,7 +100,15 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handleDocument
       @keydown.up.prevent="openMenu"
     >
       <span class="idea-creative-select-value">{{ selectedOption?.label }}</span>
-      <span class="idea-creative-select-chevron" aria-hidden="true"></span>
+      <svg
+        class="idea-creative-select-chevron"
+        :class="{ 'is-open': isOpen }"
+        :data-direction="isOpen ? 'up' : 'down'"
+        aria-hidden="true"
+        viewBox="0 0 12 12"
+      >
+        <path d="M2.25 4.25 6 8l3.75-3.75" />
+      </svg>
     </button>
 
     <div
@@ -190,17 +198,21 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handleDocument
 }
 
 .idea-creative-select-chevron {
-  width: 7px;
-  height: 7px;
+  width: 12px;
+  height: 12px;
   flex: 0 0 auto;
-  border-right: 1.5px solid #9d6d72;
-  border-bottom: 1.5px solid #9d6d72;
-  transform: rotate(45deg) translateY(-2px);
+  fill: none;
+  stroke: #9d6d72;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  transform: rotate(0deg);
+  transform-origin: center;
   transition: transform 150ms ease;
 }
 
-.is-open .idea-creative-select-chevron {
-  transform: rotate(225deg) translate(-2px, -1px);
+.idea-creative-select-chevron.is-open {
+  transform: rotate(180deg);
 }
 
 .idea-creative-select-menu {
