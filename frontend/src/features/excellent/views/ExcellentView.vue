@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
+
+import RemixBrandSelect from "../components/RemixBrandSelect.vue";
+
 import { ApiError, isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
@@ -1491,15 +1494,17 @@ onUnmounted(() => {
                     <section class="excellent-remix-section remix-subject-section">
             <h3>2. 选择内容主体</h3>
 
-            <label class="excellent-remix-brand-field">
+                        <div class="excellent-remix-brand-field">
               <span>品牌 / 个人 IP</span>
-                            <select v-model="remix.brandId" class="remix-brand-select" data-test="remix-brand" :disabled="loadingBrand" @change="onRemixBrandChange">
+              <RemixBrandSelect
+                v-model="remix.brandId"
+                :brands="brands"
+                :disabled="loadingBrand"
+                test-id="remix-brand"
+                @update:model-value="onRemixBrandChange"
+              />
+            </div>
 
-                <option v-for="brand in brands" :key="brand.id" :value="brand.id">
-                  {{ brand.name }}{{ brand.profileType === "personal" ? " · 个人 IP" : "" }}
-                </option>
-              </select>
-            </label>
             <span v-if="loadingBrand" class="excellent-loading">品牌加载中…</span>
             <div v-if="remixBrand" class="excellent-remix-summary-card" data-test="remix-brand-summary">
               <div><span>品牌</span><strong>{{ remixBrand.name || "" }}</strong></div>
@@ -3703,41 +3708,6 @@ onUnmounted(() => {
   .remix-submit-heading .primary-btn {
     justify-content: center;
   }
-}
-
-.remix-brand-select {
-  min-height: 46px;
-  padding: 0 42px 0 14px;
-  border: 1px solid rgba(216, 68, 68, 0.2);
-  border-radius: 13px;
-  appearance: none;
-  background:
-    linear-gradient(45deg, transparent 50%, #c84652 50%) calc(100% - 17px) 20px / 5px 5px no-repeat,
-    linear-gradient(135deg, #c84652 50%, transparent 50%) calc(100% - 12px) 20px / 5px 5px no-repeat,
-    linear-gradient(135deg, #fff 0%, #fff5f3 100%);
-  box-shadow: 0 5px 14px rgba(117, 47, 56, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  color: #432e33;
-  cursor: pointer;
-  font-weight: 800;
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-}
-
-.remix-brand-select:hover:not(:disabled) {
-  border-color: rgba(216, 68, 68, 0.45);
-  box-shadow: 0 8px 18px rgba(159, 50, 61, 0.1);
-}
-
-.remix-brand-select:focus {
-  border-color: #dd535d;
-  outline: none;
-  box-shadow: 0 0 0 4px rgba(216, 68, 68, 0.11), 0 8px 18px rgba(159, 50, 61, 0.08);
-}
-
-.remix-brand-select:disabled {
-  border-color: rgba(112, 83, 89, 0.1);
-  background: #f4f1f0;
-  color: #a49699;
-  cursor: wait;
 }
 
 .remix-directions-button,
