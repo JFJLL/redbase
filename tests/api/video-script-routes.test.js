@@ -554,5 +554,10 @@ test("GET /api/history returns complete videoScript payload without stripping fi
   assert.equal(historyItem.payload.videoScript.totalDurationSec, 15);
   assert.equal(historyItem.payload.videoScript.clips.length, 2);
   assert.equal(historyItem.payload.videoScript.clips[0].firstFrame, "妈妈整理帆布包特写");
-  assert.match(historyItem.payload.videoScript.clips[0].prompt, /电影级画质/);
+  const compiledPrompt = historyItem.payload.videoScript.clips[0].prompt;
+  assert.match(compiledPrompt, /【场景环境】/);
+  assert.match(compiledPrompt, /阳光草坪露营餐桌前/);
+  assert.match(compiledPrompt, /【声音设计】/);
+  assert.match(compiledPrompt, /轻快音乐与微风声/);
+  assert.doesNotMatch(compiledPrompt, /电影级画质/);
 });

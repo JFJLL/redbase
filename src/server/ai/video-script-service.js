@@ -1,6 +1,7 @@
 const { callTextModelJson, callVisionModelJson } = require("./text-provider");
 
 const ALLOWED_TOTAL_DURATIONS = [15, 30, 45, 60];
+const STRUCTURED_FIELD_MAX_LENGTH = 8000;
 
 function normalizeTotalDuration(duration) {
   const num = Number(duration);
@@ -11,16 +12,101 @@ function normalizeTotalDuration(duration) {
   return 60;
 }
 
-function compactString(value, fallback = "", maxLen = 2000) {
+function compactString(value, fallback = "", maxLen = STRUCTURED_FIELD_MAX_LENGTH) {
   const text = String(value ?? fallback).trim();
   return text.slice(0, maxLen);
+}
+
+function normalizeReferenceAssets(referenceAssets) {
+  if (!Array.isArray(referenceAssets)) return [];
+
+  return referenceAssets
+    .filter((asset) => asset && typeof asset === "object")
+    .map((asset, index) => ({
+      ...asset,
+      kind: compactString(asset.kind, "", 100),
+      label: compactString(asset.label, `参考素材${index + 1}`, 300),
+      description: compactString(asset.description, "", STRUCTURED_FIELD_MAX_LENGTH),
+    }));
+}
+
+function formatReferenceAsset(asset, index) {
+  const kind = compactString(asset?.kind, "", 100).toLowerCase();
+  const label = compactString(asset?.label, `参考素材${index + 1}`, 300);
+  const description = compactString(asset?.description, "", STRUCTURED_FIELD_MAX_LENGTH);
+  const descriptionLine = description ? `${label}：${description}` : label;
+
+  if (["product", "产品", "product_image"].includes(kind)) {
+    return `${descriptionLine}。严格保持参考图中的产品造型、包装结构、颜色、材质与品牌识别元素，不擅自修改产品主体。`;
+  }
+  if (["style", "风格", "style_image"].includes(kind)) {
+    return `${descriptionLine}。仅参考色调、光影、构图、材质和氛围，不复制风格图中的具体人物、商品或文字。`;
+  }
+  if (["logo", "标志", "品牌标识"].includes(kind)) {
+    return `${descriptionLine}。仅用于品牌识别与对应位置展示，保持 Logo 本身结构与比例正确。`;
+  }
+  return `${descriptionLine}。请严格遵循该参考素材中已提供的说明，不擅自修改其明确要求。`;
+}
+
+function appendPromptSection(parts, title, value) {
+  const content = String(value ?? "").trim();
+  if (content) parts.push(`【${title}】\n${content}`);
+}
+
+function compileVideoClipPrompt(clip, globalContext = {}) {
+  const parts = [];
+  const aspectRatio = compactString(globalContext.aspectRatio, "", 100);
+  const durationSec = Number(clip?.durationSec);
+  const videoParameters = [
+    aspectRatio ? `画幅比例：${aspectRatio}` : "",
+    Number.isFinite(durationSec) && durationSec > 0 ? `本分镜时长：${durationSec} 秒` : "",
+  ].filter(Boolean).join("；");
+
+  appendPromptSection(parts, "视频参数", videoParameters);
+  appendPromptSection(parts, "主体参考", clip?.subjectReference);
+
+  const referenceAssets = Array.isArray(clip?.referenceAssets) ? clip.referenceAssets : [];
+  const formattedAssets = referenceAssets
+    .map((asset, index) => formatReferenceAsset(asset, index))
+    .filter(Boolean)
+    .join("\n");
+  appendPromptSection(parts, "参考素材", formattedAssets);
+
+  appendPromptSection(parts, "场景环境", clip?.scene);
+  appendPromptSection(parts, "首帧", clip?.firstFrame);
+  appendPromptSection(parts, "主体动作", clip?.subjectAction);
+  appendPromptSection(parts, "镜头运动", clip?.cameraMovement);
+  appendPromptSection(parts, "环境动态", clip?.environmentMotion);
+  appendPromptSection(parts, "光影与视觉风格", clip?.lightingAndStyle);
+  appendPromptSection(parts, "尾帧", clip?.lastFrame);
+  appendPromptSection(parts, "连续性要求", clip?.continuity);
+  appendPromptSection(parts, "转场", clip?.transition);
+  appendPromptSection(parts, "画面文字", clip?.onScreenText);
+  appendPromptSection(parts, "旁白", clip?.voiceover);
+  appendPromptSection(parts, "人物对话", clip?.dialogue);
+  appendPromptSection(parts, "声音设计", clip?.audioPrompt);
+
+  const globalRequirements = [
+    globalContext.globalSubjectReference ? `全片主体一致性：${globalContext.globalSubjectReference}` : "",
+    globalContext.globalStyleReference ? `全片视觉风格：${globalContext.globalStyleReference}` : "",
+    globalContext.globalContinuity ? `全片连续性要求：${globalContext.globalContinuity}` : "",
+  ].filter(Boolean);
+  if (globalRequirements.length > 0) {
+    appendPromptSection(
+      parts,
+      "全片统一要求",
+      `以下要求为补充约束，不覆盖上述分镜的具体描述。\n${globalRequirements.join("\n")}`,
+    );
+  }
+
+  return parts.join("\n\n");
 }
 
 function buildSystemPrompt() {
   return `你是一位顶尖的 AI 视频创意总监与分镜提示词工程师（擅长 Kling / 可灵、Hailuo / 海螺、Sora、Runway Gen-3 等现代 AI 视频生成模型）。
 
 【核心使命】
-根据用户提供的品牌档案、热点趋势、内容选题以及参考素材（产品图、风格图、品牌标识），生成一套面向现代 AI 视频生成模型直接使用的“结构化视频分镜脚本与完整中文提示词”。
+根据用户提供的品牌档案、热点趋势、内容选题以及参考素材（产品图、风格图、品牌标识），生成一套面向现代 AI 视频生成模型使用的“结构化视频分镜脚本”。
 
 【重要产品原则】
 1. 只生成面向 AI 视频生成模型的提示词与分镜描述，严禁生成真人实拍执行内容（禁止出现摄影师安排、相机/镜头/灯具型号、场地勘景、拍摄日程、演员通告、道具采购清单、摄制组分工、机位编号、真人拍摄预算等）。
@@ -31,7 +117,8 @@ function buildSystemPrompt() {
    - 有产品参考图时：分镜的主体参考（subjectReference）必须准确引用具体产品的造型、材质、包装、色彩与细节；
    - 有风格参考图时：风格图只控制画面的色调、光影、材质质感、构图和整体氛围，严禁将风格图里的人物、产品、文字或具体物体复制到视频画面中；
    - 无参考图时：主体参考使用准确细腻的文字具象化描述。
-6. 【中文语言要求】所有输出内容包括分镜生成提示词（prompt）、画面描述、主体动作、镜头运动、环境动态、音频提示等，必须全部使用中文生成！生成丰富、具象、具备电影质感且适合国内主流 AI 视频模型直接执行的中文生成提示词。
+6. 【中文语言要求】所有结构化字段，包括画面描述、主体动作、镜头运动、环境动态、音频提示等，必须全部使用中文生成！生成丰富、具象、具备电影质感且适合国内主流 AI 视频模型直接执行的中文描述。
+7. 【Prompt 字段说明】clips[].prompt 仅为兼容历史数据结构而保留，无需生成详细内容，可以留空。系统会根据同一 Clip 的完整结构化字段自动编译最终完整提示词；请优先将全部细节准确填写在对应的结构化字段中。
 
 【输出格式】
 必须严格输出纯 JSON 对象，不得包含任何 Markdown 代码块标签外的额外文字：
@@ -72,17 +159,19 @@ function buildSystemPrompt() {
       "onScreenText": "画面花字/排版字幕（如无则留空）",
       "transition": "与下一段的转场方式（如：匹配剪辑、快速横摇、淡入淡出、运动模糊转场等）",
       "continuity": "与前一片段的人物状态、空间位置或光线连贯性要求",
-      "prompt": "可直接复制给 AI 视频模型的完整高质量中文提示词，必须使用中文描述，包含清晰的主体特征、动作细节、场景环境、镜头运动、光影氛围与电影级画质控制词。"
+      "prompt": ""
     }
   ]
-}`;
+}
+
+请开始生成完整的视频脚本 JSON 对象。clips[].prompt 可留空；最终完整提示词由系统根据结构化字段自动编译。`;
 }
 
 function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = null, images = [] }) {
   const parts = [];
 
   parts.push("【任务目标】");
-  parts.push("请根据以下品牌信息、选题视角与视频参数要求，创作一份完整的结构化 AI 视频生成脚本与分镜中文提示词。");
+  parts.push("请根据以下品牌信息、选题视角与视频参数要求，创作一份完整的结构化 AI 视频生成脚本。请将全部可执行细节准确写入各个分镜结构化字段；兼容字段 prompt 可留空，系统会自动编译最终完整提示词。");
   parts.push(`要求输出视频比例：${aspectRatio || "9:16"}`);
   if (targetDuration) {
     parts.push(`指定视频总时长：${targetDuration} 秒（必须严格将所有分镜时长划分并保证总和为 ${targetDuration} 秒）`);
@@ -132,7 +221,7 @@ function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = nul
     parts.push(`- 提供了 ${brand?.profileType === "personal" ? "个人头像" : "品牌 Logo"} 参考，注意在片尾或关键时刻保持品牌识别规范。`);
   }
 
-  parts.push("\n请开始生成完整的视频脚本 JSON 对象，所有提示词与描述必须为中文。");
+  parts.push("\n请开始生成完整的视频脚本 JSON 对象，所有结构化描述必须为中文，clips[].prompt 可留空。");
   return parts.join("\n");
 }
 
@@ -146,9 +235,9 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", t
   const totalDurationSec = targetDuration ? normalizeTotalDuration(targetDuration) : normalizeTotalDuration(raw.totalDurationSec);
   const aspectRatio = compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
 
-  const globalSubjectReference = compactString(raw.globalSubjectReference, "保持全片主体特征与质感一致", 500);
-  const globalStyleReference = compactString(raw.globalStyleReference, "电影感光影与统一色调", 500);
-  const globalContinuity = compactString(raw.globalContinuity, "分镜间动作与光线自然衔接", 500);
+  const globalSubjectReference = compactString(raw.globalSubjectReference, "保持全片主体特征与质感一致", STRUCTURED_FIELD_MAX_LENGTH);
+  const globalStyleReference = compactString(raw.globalStyleReference, "电影感光影与统一色调", STRUCTURED_FIELD_MAX_LENGTH);
+  const globalContinuity = compactString(raw.globalContinuity, "分镜间动作与光线自然衔接", STRUCTURED_FIELD_MAX_LENGTH);
 
   const rawAudio = raw.audioDirection && typeof raw.audioDirection === "object" ? raw.audioDirection : {};
   const audioDirection = {
@@ -189,43 +278,37 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", t
       clipDuration = Math.max(2, clipEnd - currentStart);
     }
 
-    const firstFrame = compactString(rawClip.firstFrame, "特写镜头，主体清晰呈现", 500);
-    const lastFrame = compactString(rawClip.lastFrame, "主体动作完成，平滑过渡", 500);
-    const subjectReference = compactString(rawClip.subjectReference, globalSubjectReference, 500);
-    const audioPrompt = compactString(rawClip.audioPrompt, "背景音乐铺垫与环境音效", 300);
-    const prompt = compactString(
-      rawClip.prompt,
-      `电影级高清画质，${compactString(rawClip.scene, "现代生活场景")}，${compactString(rawClip.subjectAction, "主体自然运动")}，${compactString(rawClip.cameraMovement, "平滑推近运镜")}，自然光影氛围，照片级真实细节。`,
-      2000,
-    );
-
-    if (!prompt) {
-      throw new Error(`第 ${i + 1} 个分镜缺少生成提示词。`);
-    }
-
-    clips.push({
+    const normalizedClip = {
       index: i + 1,
       startSec: currentStart,
       endSec: clipEnd,
       durationSec: clipDuration,
       purpose: compactString(rawClip.purpose, `分镜 ${i + 1}`, 100),
-      referenceAssets: Array.isArray(rawClip.referenceAssets) ? rawClip.referenceAssets : [],
-      subjectReference,
-      firstFrame,
-      lastFrame,
-      scene: compactString(rawClip.scene, "生活化场景", 500),
-      subjectAction: compactString(rawClip.subjectAction, "主体自然运动", 500),
-      cameraMovement: compactString(rawClip.cameraMovement, "平滑推近镜头", 300),
-      environmentMotion: compactString(rawClip.environmentMotion, "光影流转与环境微动", 300),
-      lightingAndStyle: compactString(rawClip.lightingAndStyle, "自然柔和光照，电影感质感", 300),
-      audioPrompt,
-      voiceover: compactString(rawClip.voiceover, "", 500),
-      dialogue: compactString(rawClip.dialogue, "", 500),
-      onScreenText: compactString(rawClip.onScreenText, "", 200),
-      transition: compactString(rawClip.transition, "顺畅切换至下一分镜", 200),
-      continuity: compactString(rawClip.continuity, "保持主体位置与光线连续", 300),
-      prompt,
+      referenceAssets: normalizeReferenceAssets(rawClip.referenceAssets),
+      subjectReference: compactString(rawClip.subjectReference, globalSubjectReference, STRUCTURED_FIELD_MAX_LENGTH),
+      firstFrame: compactString(rawClip.firstFrame, "", STRUCTURED_FIELD_MAX_LENGTH),
+      lastFrame: compactString(rawClip.lastFrame, "", STRUCTURED_FIELD_MAX_LENGTH),
+      scene: compactString(rawClip.scene, "", STRUCTURED_FIELD_MAX_LENGTH),
+      subjectAction: compactString(rawClip.subjectAction, "", STRUCTURED_FIELD_MAX_LENGTH),
+      cameraMovement: compactString(rawClip.cameraMovement, "", STRUCTURED_FIELD_MAX_LENGTH),
+      environmentMotion: compactString(rawClip.environmentMotion, "", STRUCTURED_FIELD_MAX_LENGTH),
+      lightingAndStyle: compactString(rawClip.lightingAndStyle, "", STRUCTURED_FIELD_MAX_LENGTH),
+      audioPrompt: compactString(rawClip.audioPrompt, "", STRUCTURED_FIELD_MAX_LENGTH),
+      voiceover: compactString(rawClip.voiceover, "", STRUCTURED_FIELD_MAX_LENGTH),
+      dialogue: compactString(rawClip.dialogue, "", STRUCTURED_FIELD_MAX_LENGTH),
+      onScreenText: compactString(rawClip.onScreenText, "", STRUCTURED_FIELD_MAX_LENGTH),
+      transition: compactString(rawClip.transition, "", STRUCTURED_FIELD_MAX_LENGTH),
+      continuity: compactString(rawClip.continuity, "", STRUCTURED_FIELD_MAX_LENGTH),
+    };
+
+    normalizedClip.prompt = compileVideoClipPrompt(normalizedClip, {
+      aspectRatio,
+      globalSubjectReference,
+      globalStyleReference,
+      globalContinuity,
     });
+
+    clips.push(normalizedClip);
 
     currentStart = clipEnd;
   }
@@ -254,7 +337,7 @@ async function repairVideoScript(appConfig, brokenScript, errorMessage, context)
   const systemPrompt = `你是一位脚本修复专家。之前生成的 AI 视频脚本存在以下问题：
 ${errorMessage}
 
-请修正问题并输出符合完整 Schema 的纯 JSON 脚本，所有提示词和描述必须为中文。`;
+请修正问题并输出符合完整 Schema 的纯 JSON 脚本，所有结构化描述必须为中文。clips[].prompt 仅为兼容字段，可留空；最终完整提示词会由系统根据结构化字段自动编译。`;
 
   const userPrompt = `请修复以下脚本数据：\n${JSON.stringify(brokenScript, null, 2)}`;
 
@@ -332,7 +415,10 @@ async function generateVideoScript(
 
 module.exports = {
   ALLOWED_TOTAL_DURATIONS,
+  STRUCTURED_FIELD_MAX_LENGTH,
   normalizeTotalDuration,
+  normalizeReferenceAssets,
+  compileVideoClipPrompt,
   buildSystemPrompt,
   buildUserPrompt,
   validateAndNormalizeVideoScript,
