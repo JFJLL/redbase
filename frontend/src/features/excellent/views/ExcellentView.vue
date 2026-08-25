@@ -15,8 +15,12 @@ import {
   fetchContentSources,
   fetchExcellentContentDetail,
   fetchExcellentContents,
-  fetchExcellentTaxonomy,
+    fetchExcellentTaxonomy,
+  fetchXingtuLearning,
+  fetchXingtuTranscript,
+  fetchXingtuVideos,
   fetchFusionPlan,
+
   fetchBrandProductImages,
   fetchRemixAnalysis,
   generateExcellentRemixSlide,
@@ -79,6 +83,8 @@ import type {
   ProductImage,
   RemixBillingInfo,
   TaxonomyNode,
+  XingtuLearnResult,
+  XingtuTranscriptResult,
 } from "../types";
 
 // 优秀内容：双板块列表（缓存读取 + 显式更新）、筛选草稿/正式两态、
@@ -90,18 +96,23 @@ const scope = useAbortScope();
 const BOARDS: Array<{ value: ExcellentBoard; label: string }> = [
   { value: "xhs_hot", label: "小红书热门" },
   { value: "ecommerce_hot", label: "电商热门" },
+  { value: "xingtu", label: "巨量星图" },
 ];
 
 const activeBoard = ref<ExcellentBoard>("xhs_hot");
 const slices = reactive({
   xhs_hot: createExcellentBoardSlice(),
   ecommerce_hot: createExcellentBoardSlice(),
+  xingtu: createExcellentBoardSlice(),
 });
+
 const contentSources = ref<ContentSourceOption[]>([]);
 const taxonomyOptions = reactive<Record<ExcellentBoard, Array<{ label: string; value: string }>>>({
   xhs_hot: [],
   ecommerce_hot: [],
+  xingtu: [],
 });
+
 const toastMessage = ref("");
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -207,9 +218,17 @@ async function loadBoard(board: ExcellentBoard) {
   boardSlice.requestId = requestId;
   const hadItems = boardSlice.items.length > 0;
   if (!hadItems) boardSlice.status = "loading";
-  try {
-    const result = await fetchExcellentContents(formalFilters(board), scope.signalFor(`list-${board}`));
+    try {
+    const result = board === "xingtu"
+      ? await fetchXingtuVideos(scope.signalFor(`list-${board}`))
+      : await fetchExcellentContents(formalFilters(board), scope.signalFor(`list-${board}`));
     applyExcellentListResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
+    if (board === "xingtu") {
+      // 巨量星图仅保留当次页面内的官方元数据；不会写入本地媒体或缓存。
+      boardSlice.hasCache = false;
+      boardSlice.needsUpdate = false;
+    }
+
     // 首次/切回未加载榜单：列表就绪后恢复该榜单的浏览位置。
     if (board === activeBoard.value && boardSlice.items.length) restoreBoardScroll();
   } catch (error) {
@@ -244,6 +263,7 @@ function formatCompactMetric(value: unknown): string {
 }
 
 function boardLabel(board: ExcellentBoard): string {
+  if (board === "xingtu") return "巨量星图";
   return board === "ecommerce_hot" ? "电商热门" : "小红书热门";
 }
 
@@ -251,13 +271,23 @@ function boardLabel(board: ExcellentBoard): string {
 async function refreshBoard(board: ExcellentBoard) {
   const boardSlice = slices[board];
   if (boardSlice.refreshing || refreshCooldownSeconds.value > 0) return;
-  const requestFilters = draftFilters(board);
+    const requestFilters = draftFilters(board);
   const requestId = boardSlice.requestId + 1;
-  boardSlice.requestId = requestId;
+
+    boardSlice.requestId = requestId;
   boardSlice.refreshing = true;
   boardSlice.refreshError = "";
   try {
+    if (board === "xingtu") {
+      const result = await fetchXingtuVideos(scope.signalFor(`refresh-${board}`));
+      applyExcellentRefreshResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
+      boardSlice.hasCache = false;
+      boardSlice.needsUpdate = false;
+      showToast("已刷新巨量星图公开视频目录");
+      return;
+    }
     const result = await refreshExcellentContents(requestFilters, scope.signalFor(`refresh-${board}`));
+
     if (!excellentRefreshResponseMatches(result, requestFilters)) {
       throw new Error("优秀内容响应与请求条件不一致，请重试。");
     }
@@ -335,7 +365,9 @@ function flattenTaxonomy(nodes: TaxonomyNode[] | undefined, depth = 0, out: Arra
 }
 
 async function loadTaxonomy(board: ExcellentBoard) {
+  if (board === "xingtu") return;
   try {
+
     const result = await fetchExcellentTaxonomy(board, scope.signalFor(`taxonomy-${board}`));
     taxonomyOptions[board] = flattenTaxonomy(result.tree?.items);
   } catch (error) {
@@ -364,6 +396,44 @@ const detail = reactive({
   activeImageIndex: 0,
   requestId: 0,
 });
+
+const xingtuTranscript = reactive({
+  loading: false,
+  error: "",
+  itemId: "",
+  data: null as XingtuTranscriptResult | null,
+});
+
+const xingtuLearn = reactive({
+  open: false,
+  loading: false,
+  error: "",
+  item: null as ExcellentNote | null,
+  result: null as XingtuLearnResult | null,
+});
+
+function isXingtuBoard(board = activeBoard.value): boolean {
+  return board === "xingtu";
+}
+
+function xingtuItemId(item: ExcellentNote | null | undefined): string {
+  return String(item?.itemId || item?.id || item?.noteId || "");
+}
+
+function formatVideoDuration(seconds: unknown): string {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function formatPercent(value: unknown): string {
+  const numeric = Number(value || 0) * 100;
+  return `${numeric.toFixed(numeric >= 10 ? 0 : 1)}%`;
+}
+
+function formatTranscriptTime(milliseconds: unknown): string {
+  const total = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
 
 const detailImages = computed(() => (Array.isArray(detail.item?.imageUrls) ? detail.item.imageUrls.filter(Boolean) : []));
 const detailSourceLabel = computed(() => {
@@ -401,9 +471,18 @@ async function openDetail(item: ExcellentNote) {
   detail.open = true;
   detail.loading = true;
   detail.error = "";
-  detail.item = { ...item };
+    detail.item = { ...item };
   detail.activeImageIndex = 0;
+  xingtuTranscript.loading = false;
+  xingtuTranscript.error = "";
+  xingtuTranscript.itemId = "";
+  xingtuTranscript.data = null;
+  if (isXingtuBoard(board)) {
+    detail.loading = false;
+    return;
+  }
   try {
+
     const result = await fetchExcellentContentDetail(noteKey(item), formalFilters(board), scope.signalFor("detail"));
     if (requestId !== detail.requestId) return;
     if (result?.item) {
@@ -432,6 +511,55 @@ function closeDetail() {
   detail.open = false;
   detail.item = null;
   detail.requestId += 1;
+  xingtuTranscript.loading = false;
+  xingtuTranscript.error = "";
+  xingtuTranscript.itemId = "";
+  xingtuTranscript.data = null;
+}
+
+async function loadXingtuTranscript(item: ExcellentNote | null | undefined) {
+  const itemId = xingtuItemId(item);
+  if (!itemId || !isXingtuBoard()) return;
+  xingtuTranscript.loading = true;
+  xingtuTranscript.error = "";
+  xingtuTranscript.itemId = itemId;
+  try {
+    xingtuTranscript.data = await fetchXingtuTranscript(itemId, scope.signalFor("xingtu-transcript"));
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    xingtuTranscript.error = (error as Error).message || "官方视频文稿读取失败";
+  } finally {
+    xingtuTranscript.loading = false;
+  }
+}
+
+async function openXingtuLearn(item: ExcellentNote) {
+  const itemId = xingtuItemId(item);
+  if (!itemId) return;
+  if (detail.open) closeDetail();
+  xingtuLearn.open = true;
+  xingtuLearn.loading = true;
+  xingtuLearn.error = "";
+  xingtuLearn.item = { ...item };
+  xingtuLearn.result = null;
+  try {
+    xingtuLearn.result = await fetchXingtuLearning(itemId, scope.signalFor("xingtu-learn"));
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    xingtuLearn.error = (error as Error).message || "巨量星图视频学习分析暂时不可用";
+  } finally {
+    xingtuLearn.loading = false;
+  }
+}
+
+function closeXingtuLearn() {
+  xingtuLearn.open = false;
+  xingtuLearn.loading = false;
+  xingtuLearn.error = "";
+  xingtuLearn.item = null;
+  xingtuLearn.result = null;
 }
 
 function detailPrev() {
@@ -509,7 +637,12 @@ const learningStatusLabel = computed(() =>
 
 async function openRemix(item: ExcellentNote) {
   const board = activeBoard.value;
+  if (isXingtuBoard(board)) {
+    await openXingtuLearn(item);
+    return;
+  }
   const boardSlice = slices[board];
+
   if (detail.open) closeDetail();
   remix.value = createExcellentRemixState({
     noteId: noteKey(item),
@@ -1150,7 +1283,8 @@ onUnmounted(() => {
           <span class="panel-icon excellent-panel-icon">优</span>
           <h1 class="panel-title">优秀内容</h1>
         </div>
-        <p class="panel-subtitle">近7日高阅读图文榜单，支持小红书热门与电商热门，可一键仿图文。</p>
+                <p class="panel-subtitle">浏览小红书、电商和巨量星图优秀内容；图文可仿写，视频可基于官方文稿学习结构与节奏。</p>
+
       </div>
     </header>
 
@@ -1170,7 +1304,7 @@ onUnmounted(() => {
     </div>
 
     <div class="excellent-filters">
-      <label>
+            <label v-if="activeBoard !== 'xingtu'">
         <span>内容来源</span>
         <select v-model="slice.draftContentSource" data-test="filter-source">
           <option value="all">全部来源</option>
@@ -1179,6 +1313,11 @@ onUnmounted(() => {
           </option>
         </select>
       </label>
+      <label v-else>
+        <span>视频范围</span>
+        <select disabled><option>巨量星图公开内容</option></select>
+      </label>
+
       <label v-if="activeBoard === 'xhs_hot'">
         <span>内容类目</span>
         <select v-model="slice.draftCategoryPath" data-test="filter-category">
@@ -1188,7 +1327,7 @@ onUnmounted(() => {
           </option>
         </select>
       </label>
-      <label v-else>
+            <label v-else-if="activeBoard === 'ecommerce_hot'">
         <span>所属行业</span>
         <select v-model="slice.draftIndustryPath" data-test="filter-industry">
           <option value="">全部行业</option>
@@ -1197,11 +1336,16 @@ onUnmounted(() => {
           </option>
         </select>
       </label>
+      <label v-else>
+        <span>媒体策略</span>
+        <select disabled><option>官方直链播放，不存储视频</option></select>
+      </label>
+
       <button
         type="button"
         class="primary-btn"
         data-test="refresh-button"
-        :disabled="slice.refreshing || refreshCooldownSeconds > 0"
+        :disabled="slice.refreshing || (activeBoard !== 'xingtu' && refreshCooldownSeconds > 0)"
         @click="refreshBoard(activeBoard)"
       >
         {{
@@ -1232,7 +1376,7 @@ onUnmounted(() => {
       <button
         type="button"
         class="primary-btn"
-        :disabled="slice.refreshing || refreshCooldownSeconds > 0"
+        :disabled="slice.refreshing || (activeBoard !== 'xingtu' && refreshCooldownSeconds > 0)"
         @click="refreshBoard(activeBoard)"
       >
         {{
@@ -1247,41 +1391,58 @@ onUnmounted(() => {
 
     <div v-else class="excellent-grid">
       <article v-for="item in slice.items" :key="noteKey(item)" class="excellent-card" data-test="excellent-card">
-        <button type="button" class="excellent-cover" @click="openDetail(item)">
-          <div
-            v-if="isImageFailed(coverSrc(item))"
-            class="excellent-image-error"
-            data-test="excellent-image-error"
-          >
-            <span>图片加载失败</span>
-            <button
-              type="button"
-              class="secondary-btn"
-              data-test="excellent-image-retry"
-              @click.stop="retryImage(coverSrc(item))"
+                <button type="button" class="excellent-cover" :class="{ 'xingtu-video-cover': isXingtuBoard() }" @click="openDetail(item)">
+          <template v-if="isXingtuBoard()">
+            <img v-if="item.coverUrl" :src="String(item.coverUrl)" :alt="item.title || ''" loading="lazy" referrerpolicy="no-referrer" />
+            <span v-else class="excellent-cover-fallback">暂无封面</span>
+            <span class="xingtu-video-play" aria-hidden="true">▶</span>
+            <span class="xingtu-video-duration">{{ formatVideoDuration(item.duration) }}</span>
+          </template>
+          <template v-else>
+            <div
+              v-if="isImageFailed(coverSrc(item))"
+              class="excellent-image-error"
+              data-test="excellent-image-error"
             >
-              重试
-            </button>
-          </div>
-          <img
-            v-else-if="coverSrc(item)"
-            :src="coverSrc(item)"
-            :alt="item.title || ''"
-            loading="lazy"
-            decoding="async"
-            @error="onExcellentImageError(coverSrc(item))"
-          />
+              <span>图片加载失败</span>
+              <button
+                type="button"
+                class="secondary-btn"
+                data-test="excellent-image-retry"
+                @click.stop="retryImage(coverSrc(item))"
+              >
+                重试
+              </button>
+            </div>
+            <img
+              v-else-if="coverSrc(item)"
+              :src="coverSrc(item)"
+              :alt="item.title || ''"
+              loading="lazy"
+              decoding="async"
+              @error="onExcellentImageError(coverSrc(item))"
+            />
+          </template>
         </button>
+
         <div class="excellent-card-body">
           <h3>{{ item.title }}</h3>
-          <p class="excellent-card-meta">
+                    <p v-if="isXingtuBoard()" class="excellent-card-meta xingtu-card-meta">
+            <span>{{ item.author?.nickname || item.authorName || '星图创作者' }}</span>
+            <span>{{ item.category || '公开视频' }}</span>
+            <span>播放 {{ formatCompactMetric(item.metrics?.viewCount) }}</span>
+            <span>互动 {{ formatCompactMetric(item.metrics?.interactCount) }}</span>
+          </p>
+          <p v-else class="excellent-card-meta">
             <span v-if="item.authorName">{{ item.authorName }}</span>
             <span v-if="item.metrics?.readCount != null">阅读 {{ item.metrics?.readCount }}</span>
             <span v-if="item.metrics?.engagementCount != null">互动 {{ item.metrics?.engagementCount }}</span>
           </p>
+
           <div class="excellent-card-actions">
-            <button type="button" class="secondary-btn" @click="openDetail(item)">查看详情</button>
-            <button type="button" class="primary-btn" data-test="remix-button" @click="openRemix(item)">一键仿图文</button>
+                        <button type="button" class="secondary-btn" @click="openDetail(item)">查看详情</button>
+            <button type="button" class="primary-btn" data-test="remix-button" @click="openRemix(item)">{{ isXingtuBoard() ? '一键仿视频' : '一键仿图文' }}</button>
+
           </div>
         </div>
       </article>
@@ -1300,7 +1461,8 @@ onUnmounted(() => {
         >
           关闭
         </button>
-        <div class="excellent-detail-layout">
+                <div v-if="!isXingtuBoard()" class="excellent-detail-layout">
+
           <section class="excellent-detail-gallery excellent-detail-carousel">
             <div class="excellent-carousel-stage">
               <button
@@ -1411,12 +1573,117 @@ onUnmounted(() => {
                 一键仿图文
               </button>
             </div>
+                    </aside>
+        </div>
+        <div v-else class="excellent-detail-layout xingtu-video-detail-layout">
+          <section class="excellent-detail-gallery xingtu-player-shell">
+            <div class="xingtu-player-frame">
+              <video
+                v-if="detail.item?.playerUrl"
+                class="xingtu-video-player"
+                controls
+                playsinline
+                preload="metadata"
+                :poster="String(detail.item?.coverUrl || '')"
+                :src="String(detail.item.playerUrl)"
+              >
+                当前浏览器无法播放该官方视频。
+              </video>
+              <div v-else class="excellent-cover-fallback">暂无可播放的官方视频链接</div>
+            </div>
+            <p class="xingtu-player-note">视频直接从官方链接播放，RedBase 不下载、保存或缓存视频文件。</p>
+            <a
+              class="xingtu-open-official"
+              :href="String(detail.item?.videoUrl || detail.item?.officialContentMarketUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')"
+              target="_blank"
+              rel="noopener noreferrer"
+            >在官方页面打开视频</a>
+          </section>
+          <aside class="excellent-detail-copy xingtu-video-copy">
+            <span class="xingtu-detail-chip">巨量星图 · {{ detail.item?.category || '公开视频' }}</span>
+            <h2>{{ detail.item?.title || '未命名视频' }}</h2>
+            <div class="excellent-detail-meta">
+              <div>作者：{{ detail.item?.author?.nickname || detail.item?.authorName || '星图创作者' }}</div>
+              <div>粉丝：{{ formatCompactMetric(detail.item?.author?.followerCount) }}</div>
+              <div>时长：{{ formatVideoDuration(detail.item?.duration) }}</div>
+              <div>视频 ID：{{ detail.item?.videoId || '-' }}</div>
+            </div>
+            <div class="excellent-detail-metrics xingtu-detail-metrics">
+              <div><strong>{{ formatCompactMetric(detail.item?.metrics?.viewCount) }}</strong><span>播放</span></div>
+              <div><strong>{{ formatCompactMetric(detail.item?.metrics?.likeCount) }}</strong><span>点赞</span></div>
+              <div><strong>{{ formatCompactMetric(detail.item?.metrics?.commentCount) }}</strong><span>评论</span></div>
+              <div><strong>{{ formatCompactMetric(detail.item?.metrics?.shareCount) }}</strong><span>分享</span></div>
+              <div><strong>{{ formatPercent(detail.item?.metrics?.finishRate) }}</strong><span>完播率</span></div>
+              <div><strong>{{ formatPercent(detail.item?.metrics?.interactRate) }}</strong><span>互动率</span></div>
+            </div>
+            <section class="xingtu-transcript-panel">
+              <div class="xingtu-transcript-head"><h3>视频文稿</h3><span>来源：巨量星图官方</span></div>
+              <div v-if="xingtuTranscript.loading" class="xingtu-transcript-loading">正在读取巨量星图官方视频文稿…</div>
+              <div v-else-if="xingtuTranscript.error" class="xingtu-transcript-empty">{{ xingtuTranscript.error }}</div>
+              <div v-else-if="xingtuTranscript.data?.available" class="xingtu-transcript-list">
+                <div v-for="segment in xingtuTranscript.data.segments || []" :key="`${segment.startMs}-${segment.endMs}-${segment.text}`" class="xingtu-transcript-segment">
+                  <time>{{ formatTranscriptTime(segment.startMs) }}</time><p>{{ segment.text }}</p>
+                </div>
+              </div>
+              <div v-else-if="xingtuTranscript.data" class="xingtu-transcript-empty">官方暂无视频文稿。这是正常情况；你仍可查看数据与官方视频。</div>
+              <button v-else type="button" class="secondary-btn xingtu-transcript-trigger" @click="loadXingtuTranscript(detail.item)">查看官方视频文稿</button>
+            </section>
+            <div class="excellent-detail-actions">
+              <a :href="String(detail.item?.officialContentMarketUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')" target="_blank" rel="noopener noreferrer">查看巨量星图</a>
+              <button type="button" class="primary-btn excellent-detail-remix" @click="detail.item && openXingtuLearn(detail.item)">一键仿视频</button>
+            </div>
           </aside>
         </div>
       </div>
     </div>
 
+        <!-- 一键仿视频：只提炼官方文稿的结构与节奏，不复刻视频素材或台词。 -->
+    <div v-if="xingtuLearn.open" class="excellent-modal" @click.self="closeXingtuLearn()">
+      <div class="excellent-modal-body xingtu-video-learn-modal-panel">
+        <header class="excellent-modal-header xingtu-video-learn-head">
+          <div>
+            <span class="xingtu-detail-chip">一键仿视频</span>
+            <h3>学习视频结构与叙事节奏</h3>
+            <p>仅使用巨量星图官方返回的视频文稿和公开数据提炼方法；请用自己的观点、素材和场景重新创作。</p>
+          </div>
+          <button type="button" class="secondary-btn remix-close-button" aria-label="关闭视频学习分析" @click="closeXingtuLearn()">×</button>
+        </header>
+        <div class="xingtu-video-learn-body">
+          <div v-if="xingtuLearn.loading" class="xingtu-video-learn-loading">
+            <strong>正在读取官方文稿并提炼结构…</strong>
+            <p>不会下载或保存视频文件；文稿仅用于本次学习分析。</p>
+          </div>
+          <div v-else-if="xingtuLearn.error" class="xingtu-video-learn-error">
+            <strong>暂时无法完成视频学习分析</strong><p>{{ xingtuLearn.error }}</p>
+          </div>
+          <template v-else>
+            <section class="xingtu-video-learn-summary">
+              <span>官方文稿 {{ xingtuLearn.result?.transcript?.available ? `${xingtuLearn.result?.transcript?.segmentCount || 0} 段` : '暂无' }}</span>
+              <h3>{{ xingtuLearn.result?.analysis?.title || '视频学习分析' }}</h3>
+              <p>{{ xingtuLearn.result?.analysis?.summary }}</p>
+            </section>
+            <section v-if="xingtuLearn.result?.analysis?.structure?.length" class="xingtu-learn-section">
+              <h3>可学习的结构</h3>
+              <div class="xingtu-structure-list">
+                <article v-for="part in xingtuLearn.result?.analysis?.structure || []" :key="`${part.range}-${part.label}`">
+                  <span>{{ part.range }}</span><h4>{{ part.label }}</h4><p>{{ part.text }}</p>
+                </article>
+              </div>
+            </section>
+            <section v-if="xingtuLearn.result?.analysis?.learningPoints?.length" class="xingtu-learn-section">
+              <h3>学习重点</h3><ul><li v-for="point in xingtuLearn.result?.analysis?.learningPoints || []" :key="point">{{ point }}</li></ul>
+            </section>
+            <section v-if="xingtuLearn.result?.analysis?.originalGuidance?.length" class="xingtu-learn-section xingtu-original-guidance">
+              <h3>原创改写原则</h3><ul><li v-for="point in xingtuLearn.result?.analysis?.originalGuidance || []" :key="point">{{ point }}</li></ul>
+            </section>
+            <p class="xingtu-learn-disclaimer">{{ xingtuLearn.result?.analysis?.disclaimer || '请以自己的观点、事实、素材与表达完成原创创作。' }}</p>
+          </template>
+        </div>
+      </div>
+    </div>
+
     <!-- 一键仿图文弹窗（旧版分区式工作流：1 参考笔记 → 6 素材 → 提交） -->
+
     <div v-if="remixOpen && remix" class="excellent-modal" @click.self="closeRemix()">
             <div class="excellent-modal-body excellent-remix-modal-panel">
         <header class="excellent-modal-header remix-modal-header">
@@ -3782,5 +4049,54 @@ onUnmounted(() => {
     width: 100%;
   }
 }
+
+
+/* 巨量星图：视频直链、官方文稿与原创学习分析 */
+.xingtu-video-cover { position: relative; overflow: hidden; background: #121821; }
+.xingtu-video-cover img { width: 100%; height: 100%; object-fit: cover; }
+.xingtu-video-play { position: absolute; left: 50%; top: 50%; display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(12,18,28,.58); color: #fff; font-size: 18px; transform: translate(-50%,-50%); transition: transform .16s ease, background .16s ease; }
+.xingtu-video-cover:hover .xingtu-video-play { background: rgba(224,54,74,.92); transform: translate(-50%,-50%) scale(1.08); }
+.xingtu-video-duration { position: absolute; right: 10px; bottom: 10px; padding: 3px 7px; border-radius: 5px; background: rgba(0,0,0,.68); color: #fff; font-size: 12px; font-variant-numeric: tabular-nums; }
+.xingtu-card-meta { flex-wrap: wrap; }
+.xingtu-video-detail-layout { align-items: start; }
+.xingtu-player-shell { display: flex; flex-direction: column; gap: 10px; }
+.xingtu-player-frame { width: min(100%, 400px); margin: 0 auto; overflow: hidden; border-radius: 14px; background: #10141c; box-shadow: 0 16px 42px rgba(19,29,48,.2); }
+.xingtu-video-player { display: block; width: 100%; max-height: min(68vh,680px); background: #10141c; }
+.xingtu-player-note, .xingtu-learn-disclaimer { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.65; }
+.xingtu-open-official { color: var(--accent); font-size: 13px; font-weight: 700; text-decoration: none; }
+.xingtu-detail-chip { display: inline-flex; margin-bottom: 10px; padding: 4px 9px; border-radius: 999px; background: #fff0f1; color: #c53043; font-size: 12px; font-weight: 700; }
+.xingtu-detail-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.xingtu-transcript-panel { margin-top: 20px; overflow: hidden; border: 1px solid #e7eaf0; border-radius: 12px; background: #fbfcfe; }
+.xingtu-transcript-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #e7eaf0; }
+.xingtu-transcript-head h3 { margin: 0; color: #293244; font-size: 14px; }
+.xingtu-transcript-head span { color: #8a94a6; font-size: 12px; }
+.xingtu-transcript-trigger { margin: 14px; }
+.xingtu-transcript-loading, .xingtu-transcript-empty { padding: 16px 14px; color: #697386; font-size: 13px; line-height: 1.65; }
+.xingtu-transcript-list { max-height: 260px; overflow-y: auto; }
+.xingtu-transcript-segment { display: grid; grid-template-columns: 44px minmax(0,1fr); gap: 10px; padding: 10px 14px; border-bottom: 1px solid #eef0f4; }
+.xingtu-transcript-segment:last-child { border-bottom: 0; }
+.xingtu-transcript-segment time { color: #c53043; font-size: 12px; font-variant-numeric: tabular-nums; }
+.xingtu-transcript-segment p { margin: 0; color: #3e4859; font-size: 13px; line-height: 1.6; }
+.xingtu-video-learn-modal-panel { width: min(820px,calc(100vw - 28px)); max-height: min(88vh,880px); overflow-y: auto; }
+.xingtu-video-learn-head { padding-bottom: 8px; }
+.xingtu-video-learn-body { padding: 0 28px 28px; }
+.xingtu-video-learn-loading, .xingtu-video-learn-error { padding: 42px 24px; border: 1px dashed #d7dce6; border-radius: 12px; background: #fbfcfe; text-align: center; }
+.xingtu-video-learn-loading strong, .xingtu-video-learn-error strong { color: #293244; }
+.xingtu-video-learn-loading p, .xingtu-video-learn-error p { margin: 8px 0 0; color: #697386; font-size: 13px; }
+.xingtu-video-learn-summary { padding: 18px; border-radius: 12px; background: linear-gradient(135deg,#fff0f1,#fff9f8); }
+.xingtu-video-learn-summary > span { color: #c53043; font-size: 12px; font-weight: 700; }
+.xingtu-video-learn-summary h3, .xingtu-learn-section h3 { margin: 7px 0; color: #20293a; font-size: 17px; }
+.xingtu-video-learn-summary p { margin: 0; color: #505a6c; font-size: 14px; line-height: 1.72; }
+.xingtu-learn-section { margin-top: 20px; }
+.xingtu-structure-list { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.xingtu-structure-list article { padding: 14px; border: 1px solid #e7eaf0; border-radius: 10px; background: #fff; }
+.xingtu-structure-list span { color: #c53043; font-size: 12px; font-weight: 700; }
+.xingtu-structure-list h4 { margin: 7px 0; color: #30394a; font-size: 14px; }
+.xingtu-structure-list p, .xingtu-learn-section li { color: #5c6678; font-size: 13px; line-height: 1.65; }
+.xingtu-structure-list p { margin: 0; }
+.xingtu-learn-section ul { display: grid; gap: 9px; margin: 0; padding-left: 20px; }
+.xingtu-learn-section li::marker { color: #c53043; }
+.xingtu-original-guidance { padding: 14px 16px; border-left: 3px solid #c53043; border-radius: 0 10px 10px 0; background: #fff8f7; }
+@media (max-width: 760px) { .xingtu-video-detail-layout { grid-template-columns: minmax(0,1fr); } .xingtu-player-frame { width: min(100%,340px); } .xingtu-detail-metrics, .xingtu-structure-list { grid-template-columns: repeat(2,minmax(0,1fr)); } .xingtu-video-learn-body { padding: 0 18px 20px; } }
 
 </style>

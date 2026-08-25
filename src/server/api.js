@@ -11,6 +11,8 @@ const { handleImageGenerationRoutes } = require("./api/image-generation-routes")
 const { handleExcellentContentRoutes } = require("./api/excellent-content-routes");
 const { handlePaymentRoutes } = require("./api/payment-routes");
 const { handleVideoScriptRoutes } = require("./api/video-script-routes");
+const { handleXingtuVideoRoutes } = require("./api/xingtu-video-routes");
+
 const imageStore = require("./assets/image-store");
 const { createGeneratedAssetStorage } = require("./assets/generated-asset-storage");
 const generationDeletionService = require("./assets/generation-deletion-service");
@@ -24,8 +26,10 @@ const routeHandlers = [
   handleProductImageRoutes,
   handleBrandRoutes,
   handleTrendRoutes,
-  handleExcellentContentRoutes,
+    handleExcellentContentRoutes,
+  handleXingtuVideoRoutes,
   handleImageGenerationRoutes,
+
   handleVideoScriptRoutes,
   handlePaymentRoutes,
 ];

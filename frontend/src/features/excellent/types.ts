@@ -3,27 +3,45 @@
  * Field names mirror the Node backend responses exactly.
  */
 
-export type ExcellentBoard = "xhs_hot" | "ecommerce_hot";
+export type ExcellentBoard = "xhs_hot" | "ecommerce_hot" | "xingtu";
 
 export interface ExcellentNoteMetrics {
   readCount?: number;
   engagementCount?: number;
   likeCount?: number;
   favoriteCount?: number;
-  commentCount?: number;
+    commentCount?: number;
+  viewCount?: number;
+  shareCount?: number;
+  finishRate?: number;
+  interactRate?: number;
   [key: string]: unknown;
+
 }
 
 export interface ExcellentNote {
-  noteId?: string;
+    noteId?: string;
+  itemId?: string;
   id?: string;
+
   title?: string;
   content?: string;
   coverUrl?: string;
   imageUrls?: string[];
   imageCount?: number;
-  authorName?: string;
+    authorName?: string;
+  author?: { nickname?: string; followerCount?: number; [key: string]: unknown };
+  category?: string;
+  duration?: number;
+  videoId?: string;
+  playerUrl?: string;
+  videoUrl?: string;
+  officialContentMarketUrl?: string;
+  transcriptUrl?: string;
+  noteType?: "image" | "video" | string;
+  rank?: number;
   contentSource?: string;
+
   categoryPath?: string;
   industryPath?: string;
   metrics?: ExcellentNoteMetrics;
@@ -43,7 +61,40 @@ export interface ExcellentListResult {
   [key: string]: unknown;
 }
 
+export interface XingtuTranscriptSegment {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface XingtuTranscriptResult {
+  itemId?: string;
+  available?: boolean;
+  segments?: XingtuTranscriptSegment[];
+  sourceUrl?: string;
+  fetchedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface XingtuLearningAnalysis {
+  available?: boolean;
+  title?: string;
+  summary?: string;
+  disclaimer?: string;
+  structure?: Array<{ label?: string; range?: string; text?: string }>;
+  learningPoints?: string[];
+  originalGuidance?: string[];
+  [key: string]: unknown;
+}
+
+export interface XingtuLearnResult {
+  itemId?: string;
+  transcript?: { available?: boolean; segmentCount?: number; sourceUrl?: string; fetchedAt?: string };
+  analysis?: XingtuLearningAnalysis;
+}
+
 export interface ExcellentDetailResult {
+
   item?: ExcellentNote;
   complete?: boolean;
   [key: string]: unknown;

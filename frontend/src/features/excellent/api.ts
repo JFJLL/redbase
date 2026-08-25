@@ -18,6 +18,8 @@ import type {
   RemixBillingInfo,
   SmartDirection,
   TaxonomyResult,
+  XingtuLearnResult,
+  XingtuTranscriptResult,
 } from "./types";
 
 export interface ExcellentQueryFilters {
@@ -53,7 +55,21 @@ export function fetchExcellentContents(filters: ExcellentQueryFilters, signal?: 
   return apiFetch("/api/excellent-contents", { query: taxonomyQuery(filters), signal });
 }
 
+/** 巨量星图公开目录：仅取得官方链接和公开元数据，不存储媒体文件。 */
+export function fetchXingtuVideos(signal?: AbortSignal): Promise<ExcellentListResult> {
+  return apiFetch("/api/xingtu/videos", { signal });
+}
+
+export function fetchXingtuTranscript(itemId: string, signal?: AbortSignal): Promise<XingtuTranscriptResult> {
+  return apiFetch(`/api/xingtu/videos/${encodeURIComponent(itemId)}/transcript`, { signal });
+}
+
+export function fetchXingtuLearning(itemId: string, signal?: AbortSignal): Promise<XingtuLearnResult> {
+  return apiFetch(`/api/xingtu/videos/${encodeURIComponent(itemId)}/learn`, { method: "POST", body: {}, signal });
+}
+
 /** Explicit refresh — the only path that calls Pgy upstream. */
+
 export function refreshExcellentContents(
   filters: ExcellentQueryFilters,
   signal?: AbortSignal,
