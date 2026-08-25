@@ -1377,19 +1377,32 @@ onUnmounted(() => {
 
     <!-- 一键仿图文弹窗（旧版分区式工作流：1 参考笔记 → 6 素材 → 提交） -->
     <div v-if="remixOpen && remix" class="excellent-modal" @click.self="closeRemix()">
-      <div class="excellent-modal-body excellent-remix-modal-panel">
-        <header class="excellent-modal-header">
-          <div>
-            <h3>参考优秀内容生成品牌原创图文</h3>
-            <p class="remix-subtitle">学习参考内容的表达方法，不复制原图、原排版与原品牌。</p>
-            <p class="remix-credits" data-test="remix-credits">当前积分：{{ auth.user?.credits ?? "—" }}</p>
+            <div class="excellent-modal-body excellent-remix-modal-panel">
+        <header class="excellent-modal-header remix-modal-header">
+          <div class="remix-header-copy">
+            <div class="remix-header-kicker"><span aria-hidden="true">✦</span> 优秀内容实验室</div>
+            <h3>参考优秀内容，生成品牌原创图文</h3>
+            <p class="remix-subtitle">提取表达方法，融入内容方向与品牌信息，生成 4 页可继续创作的小红书组图。</p>
+            <div class="remix-header-meta">
+              <span>4 页原创组图</span>
+              <span>不复制原图与原品牌</span>
+              <p class="remix-credits" data-test="remix-credits">当前积分：{{ auth.user?.credits ?? "—" }}</p>
+            </div>
           </div>
-          <button type="button" class="secondary-btn" @click="closeRemix()">关闭</button>
+          <button type="button" class="secondary-btn remix-close-button" aria-label="关闭一键仿图文弹窗" @click="closeRemix()">×</button>
         </header>
 
+        <div class="remix-creation-flow" aria-label="仿图文创建流程">
+          <span><b>01</b> 参考内容</span><i aria-hidden="true"></i>
+          <span><b>02</b> 融合方向</span><i aria-hidden="true"></i>
+          <span><b>03</b> 原创组图</span>
+        </div>
+
         <div class="excellent-remix-form">
+
           <!-- 1. 参考笔记 -->
-          <section class="excellent-remix-section" data-test="remix-reference">
+                    <section class="excellent-remix-section remix-reference-section" data-test="remix-reference">
+
             <h3>1. 参考笔记</h3>
             <div class="excellent-remix-template">
               <img
@@ -1437,8 +1450,9 @@ onUnmounted(() => {
           </section>
 
           <!-- 2. 选择内容主体 -->
-          <section class="excellent-remix-section">
+                    <section class="excellent-remix-section remix-subject-section">
             <h3>2. 选择内容主体</h3>
+
             <label class="excellent-remix-brand-field">
               <span>品牌 / 个人 IP</span>
               <select v-model="remix.brandId" data-test="remix-brand" @change="onRemixBrandChange">
@@ -1460,8 +1474,9 @@ onUnmounted(() => {
           </section>
 
           <!-- 3. 想重点学习什么 -->
-          <section class="excellent-remix-section">
+                    <section class="excellent-remix-section remix-focus-section">
             <h3>3. 想重点学习什么</h3>
+
             <div class="remix-focus">
               <label v-for="option in LEARNING_FOCUS_OPTIONS" :key="option.value" class="remix-focus-item">
                 <input
@@ -1476,8 +1491,9 @@ onUnmounted(() => {
           </section>
 
           <!-- 4. 内容方向 -->
-          <section class="excellent-remix-section">
+                    <section class="excellent-remix-section remix-direction-section">
             <h3>4. 内容方向</h3>
+
             <div class="excellent-mode-tabs" role="tablist" aria-label="内容方向模式">
               <label
                 v-for="mode in REMIX_MODE_TABS"
@@ -1571,7 +1587,8 @@ onUnmounted(() => {
           </section>
 
           <!-- 5. 融合方案 -->
-          <section class="excellent-remix-section excellent-remix-fusion">
+                    <section class="excellent-remix-section excellent-remix-fusion remix-fusion-section">
+
             <div class="excellent-remix-section-head">
               <h3>5. 融合方案</h3>
               <button
@@ -1606,7 +1623,8 @@ onUnmounted(() => {
           </section>
 
           <!-- 6. 素材使用方式 -->
-          <section class="excellent-remix-section" data-test="remix-assets">
+                    <section class="excellent-remix-section remix-assets-section" data-test="remix-assets">
+
             <h3>6. 素材使用方式（可选）</h3>
             <p class="excellent-remix-hint">默认按品牌档案与产品描述原创生成。需要时可叠加品牌 Logo 与产品实拍图。</p>
             <div v-if="isPersonalSubject" class="excellent-asset-unified">
@@ -1652,14 +1670,22 @@ onUnmounted(() => {
             </div>
           </section>
 
-          <p class="excellent-originality-note">
+                    <p class="excellent-originality-note remix-originality-note">
+
             只学习参考笔记的信息节奏、页面角色和内容方法；不会复制原文、原图人物、原品牌、原 Logo、水印或具体版式。参考笔记图片不会自动进入最终生图。
           </p>
 
-          <section class="excellent-remix-section">
-            <button type="button" class="primary-btn" data-test="remix-submit" :disabled="!remixCanSubmit" @click="submitRemix">
-              生成 4 页组图
-            </button>
+                    <section class="excellent-remix-section remix-submit-section">
+            <div class="remix-submit-heading">
+              <div>
+                <span class="remix-submit-step">最后一步</span>
+                <strong>生成 4 页原创组图</strong>
+                <p>确认融合方案后开始生成，成品将保存至历史生成。</p>
+              </div>
+              <button type="button" class="primary-btn" data-test="remix-submit" :disabled="!remixCanSubmit" @click="submitRemix">
+                开始生成 <span aria-hidden="true">→</span>
+              </button>
+            </div>
             <p v-if="submitPhase === 'preview'" class="excellent-loading">正在准备仿图文方案...</p>
             <ul v-if="submitSlides.length" class="remix-progress">
               <li v-for="(row, index) in submitSlides" :key="index" data-test="submit-slide">
@@ -1672,6 +1698,7 @@ onUnmounted(() => {
             <p v-if="submitError" class="excellent-error" data-test="submit-error">{{ submitError }}</p>
             <button v-if="completeContext" type="button" class="secondary-btn" @click="retryComplete">重新写入历史</button>
           </section>
+
         </div>
       </div>
 
@@ -3168,4 +3195,472 @@ onUnmounted(() => {
     min-height: 280px;
   }
 }
+/* Brand refresh for the remix creation workspace */
+.excellent-remix-modal-panel {
+  width: min(980px, calc(100vw - 40px));
+  max-height: min(94vh, 960px);
+  border: 1px solid rgba(216, 68, 68, 0.18);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 95% -10%, rgba(255, 146, 151, 0.17), transparent 32%),
+    linear-gradient(180deg, #fffdfc 0%, #fff8f6 100%);
+  box-shadow: 0 30px 80px rgba(74, 32, 39, 0.28);
+}
+
+.excellent-remix-modal-panel > .remix-modal-header {
+  position: relative;
+  min-height: 132px;
+  padding: 24px 28px 20px;
+  border-bottom: 0;
+  background:
+    radial-gradient(circle at 0 0, rgba(255, 216, 218, 0.6), transparent 34%),
+    linear-gradient(135deg, #fff4f3 0%, #fffaf7 74%);
+}
+
+.remix-header-copy {
+  padding-right: 56px;
+}
+
+.remix-header-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  color: #c83f4b;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.remix-header-kicker span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #e84d5a, #ff917d);
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0;
+  box-shadow: 0 6px 12px rgba(216, 68, 68, 0.2);
+}
+
+.remix-modal-header h3 {
+  margin: 0;
+  color: #322326;
+  font-size: clamp(21px, 2.2vw, 27px);
+  letter-spacing: -0.035em;
+  line-height: 1.25;
+}
+
+.remix-modal-header .remix-subtitle {
+  max-width: 650px;
+  margin: 7px 0 0;
+  color: #826e72;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.remix-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  color: #9a7c81;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.remix-header-meta > span,
+.remix-credits {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid rgba(216, 68, 68, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #8a696f;
+}
+
+.remix-credits {
+  margin-left: 3px;
+  color: #c2404c;
+}
+
+.remix-close-button {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(113, 78, 84, 0.13);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #79656a;
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.remix-close-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(216, 68, 68, 0.28);
+  background: #fff;
+  color: #d64551;
+}
+
+.remix-creation-flow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 28px;
+  overflow-x: auto;
+  border-top: 1px solid rgba(216, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(216, 68, 68, 0.11);
+  background: rgba(255, 255, 255, 0.76);
+  color: #867277;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.remix-creation-flow span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.remix-creation-flow b {
+  color: #d94651;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.remix-creation-flow i {
+  width: 30px;
+  height: 1px;
+  flex: 0 0 30px;
+  background: linear-gradient(90deg, rgba(216, 68, 68, 0.36), rgba(216, 68, 68, 0.04));
+}
+
+.excellent-remix-form {
+  gap: 14px;
+  max-height: min(66vh, 680px);
+  padding: 18px 24px 24px;
+  background: linear-gradient(180deg, rgba(255, 252, 250, 0.56), rgba(255, 248, 246, 0.72));
+  scrollbar-color: #e6a0a6 transparent;
+  scrollbar-width: thin;
+}
+
+.excellent-remix-form::-webkit-scrollbar {
+  width: 8px;
+}
+
+.excellent-remix-form::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #e6a0a6;
+  background-clip: padding-box;
+}
+
+.excellent-remix-section {
+  position: relative;
+  padding: 17px 18px 18px;
+  overflow: hidden;
+  border-color: rgba(108, 74, 80, 0.11);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 22px rgba(91, 51, 59, 0.045);
+}
+
+.excellent-remix-section::before {
+  position: absolute;
+  top: 17px;
+  bottom: 17px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 999px 999px 0;
+  background: linear-gradient(180deg, #ed6870, #ffc17e);
+  content: "";
+}
+
+.excellent-remix-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 13px;
+  color: #3b292d;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.excellent-remix-section h3::after {
+  height: 1px;
+  flex: 1;
+  background: linear-gradient(90deg, rgba(216, 68, 68, 0.16), transparent);
+  content: "";
+}
+
+.excellent-remix-template {
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px;
+  border-color: rgba(216, 68, 68, 0.11);
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff8f7, #fffdfb);
+}
+
+.excellent-remix-template > img {
+  width: 104px;
+  height: 112px;
+  border-radius: 11px;
+  box-shadow: 0 8px 16px rgba(83, 48, 54, 0.13);
+}
+
+.excellent-remix-template span,
+.excellent-asset-count {
+  background: #fff0ee;
+  color: #c6414d;
+}
+
+.excellent-remix-summary-card {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.excellent-remix-summary-card > div,
+.excellent-fusion-card > div {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid rgba(108, 74, 80, 0.08);
+  border-radius: 12px;
+  background: #fffaf9;
+}
+
+.excellent-remix-summary-card strong,
+.excellent-remix-summary-card p,
+.excellent-fusion-card p {
+  overflow: hidden;
+  margin: 0;
+  color: #4a3539;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+
+.excellent-remix-brand-field select,
+.excellent-remix-section textarea,
+.remix-search {
+  border-color: rgba(116, 81, 87, 0.16);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.remix-focus {
+  gap: 8px;
+}
+
+.remix-focus-item,
+.excellent-logo-check {
+  padding: 9px 11px;
+  border: 1px solid rgba(216, 68, 68, 0.1);
+  border-radius: 999px;
+  background: #fff9f8;
+  color: #5a4145;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.remix-focus-item:has(input:checked),
+.excellent-logo-check:has(input:checked) {
+  border-color: rgba(216, 68, 68, 0.34);
+  background: #fff0ef;
+  color: #bd3b47;
+}
+
+.excellent-mode-tabs {
+  gap: 5px;
+  padding: 5px;
+  border-color: rgba(216, 68, 68, 0.12);
+  background: #fff7f6;
+}
+
+.excellent-mode-tab {
+  min-height: 42px;
+  padding: 9px 8px;
+  color: #806d71;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.excellent-mode-tab.is-active {
+  border-color: rgba(216, 68, 68, 0.22);
+  box-shadow: 0 4px 12px rgba(143, 60, 68, 0.1);
+  color: #cd3f4b;
+}
+
+.excellent-direction-card,
+.excellent-asset-block {
+  border-color: rgba(112, 77, 83, 0.1);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.excellent-direction-card.is-selected,
+.excellent-asset-block.is-selected {
+  border-color: rgba(216, 68, 68, 0.44);
+  background: linear-gradient(135deg, #fff2f0, #fffaf8);
+  box-shadow: 0 6px 16px rgba(178, 58, 70, 0.1);
+}
+
+.excellent-remix-status {
+  border: 1px solid rgba(115, 81, 87, 0.08);
+  border-radius: 11px;
+  background: #fff9f8;
+}
+
+.excellent-remix-status.is-loading {
+  border-color: rgba(235, 164, 75, 0.24);
+  background: #fff9ec;
+}
+
+.excellent-remix-status.is-ready {
+  border-color: rgba(86, 169, 137, 0.24);
+  background: #f3fbf5;
+}
+
+.remix-originality-note {
+  border-style: dashed;
+  border-color: rgba(216, 68, 68, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 247, 243, 0.72);
+  color: #896d61;
+}
+
+.remix-submit-section {
+  border-color: rgba(216, 68, 68, 0.2);
+  background: linear-gradient(120deg, #fff3f1, #fffdfb 72%);
+}
+
+.remix-submit-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.remix-submit-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.remix-submit-step {
+  color: #d44550;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.remix-submit-heading strong {
+  color: #3b292d;
+  font-size: 15px;
+}
+
+.remix-submit-heading p {
+  margin: 0;
+  color: #8a7478;
+  font-size: 12px;
+}
+
+.remix-submit-heading .primary-btn {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-radius: 12px;
+  box-shadow: 0 10px 20px rgba(216, 68, 68, 0.2);
+}
+
+.remix-submit-heading .primary-btn span {
+  font-size: 16px;
+  transition: transform 160ms ease;
+}
+
+.remix-submit-heading .primary-btn:hover:not(:disabled) span {
+  transform: translateX(3px);
+}
+
+@media (max-width: 760px) {
+  .excellent-remix-modal-panel {
+    width: calc(100vw - 20px);
+    border-radius: 20px;
+  }
+
+  .excellent-remix-modal-panel > .remix-modal-header {
+    min-height: 0;
+    padding: 19px 18px 16px;
+  }
+
+  .remix-header-copy {
+    padding-right: 30px;
+  }
+
+  .remix-modal-header h3 {
+    font-size: 20px;
+  }
+
+  .remix-header-meta {
+    flex-wrap: wrap;
+  }
+
+  .remix-creation-flow {
+    gap: 7px;
+    padding: 0 18px;
+  }
+
+  .remix-creation-flow i {
+    width: 15px;
+    flex-basis: 15px;
+  }
+
+  .excellent-remix-form {
+    max-height: min(69vh, 680px);
+    padding: 14px;
+  }
+
+  .excellent-remix-section {
+    padding: 15px;
+  }
+
+  .excellent-remix-template {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 11px;
+  }
+
+  .excellent-remix-template > img {
+    width: 76px;
+    height: 96px;
+  }
+
+  .excellent-remix-summary-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .remix-submit-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .remix-submit-heading .primary-btn {
+    justify-content: center;
+  }
+}
+
 </style>
