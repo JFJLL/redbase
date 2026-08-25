@@ -281,9 +281,56 @@ function toggleCreativeSettings(index: number): void {
   openCreativeSettings[index] = !openCreativeSettings[index];
 }
 
+type CreativeChannel = "xhs" | "wechat" | "video";
 
+function activeCreativeChannel(index: number): CreativeChannel | null {
+  const settings = settingsFor(index);
+  if (settings.visualStylePreset !== "auto") return "xhs";
+  if (settings.wechatTemplate !== "auto") return "wechat";
+  if ((settings.videoDuration || "auto") !== "auto") return "video";
+  return null;
+}
+
+function creativeChannelLabel(channel: CreativeChannel | null): string {
+  if (channel === "xhs") return "小红书组图 · 视觉路线";
+  if (channel === "wechat") return "公众号长图 · 版式模板";
+  if (channel === "video") return "视频脚本 · 时长";
+  return "";
+}
+
+function isCreativeChannelDisabled(index: number, channel: CreativeChannel): boolean {
+  const active = activeCreativeChannel(index);
+  return Boolean(active && active !== channel);
+}
+
+function creativeChannelDisabledMessage(index: number): string {
+  const active = activeCreativeChannel(index);
+  return active ? `已选择「${creativeChannelLabel(active)}」，其他两项不可同时生效。` : "";
+}
+
+function updateCreativeChannel(index: number, channel: CreativeChannel, value: string): void {
+  if (channel === "xhs") {
+    patchSettings(index, {
+      visualStylePreset: value,
+      ...(value !== "auto" ? { wechatTemplate: "auto", videoDuration: "auto" } : {}),
+    });
+    return;
+  }
+  if (channel === "wechat") {
+    patchSettings(index, {
+      wechatTemplate: value,
+      ...(value !== "auto" ? { visualStylePreset: "auto", videoDuration: "auto" } : {}),
+    });
+    return;
+  }
+  patchSettings(index, {
+    videoDuration: value,
+    ...(value !== "auto" ? { visualStylePreset: "auto", wechatTemplate: "auto" } : {}),
+  });
+}
 
 function selectRatio(index: number, ratio: string): void {
+
   patchSettings(index, { aspectRatioSelection: ratio });
 }
 
@@ -981,27 +1028,40 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                       label="小红书组图 · 视觉路线"
                       :model-value="settingsFor(index).visualStylePreset"
                       :options="XHS_CREATIVE_STYLE_OPTIONS"
-                      :test-id="`idea-creative-style-${index}`"
-                      @update:model-value="patchSettings(index, { visualStylePreset: $event })"
+                                            :test-id="`idea-creative-style-${index}`"
+                      :disabled="isCreativeChannelDisabled(index, 'xhs')"
+                      :disabled-message="creativeChannelDisabledMessage(index)"
+                      @update:model-value="updateCreativeChannel(index, 'xhs', $event)"
+
                     />
                     <IdeaCreativeSelect
                       label="公众号长图 · 版式模板"
                       :model-value="settingsFor(index).wechatTemplate"
                       :options="WECHAT_TEMPLATE_OPTIONS"
-                      :test-id="`idea-creative-template-${index}`"
-                      @update:model-value="patchSettings(index, { wechatTemplate: $event })"
+                                            :test-id="`idea-creative-template-${index}`"
+                      :disabled="isCreativeChannelDisabled(index, 'wechat')"
+                      :disabled-message="creativeChannelDisabledMessage(index)"
+                      @update:model-value="updateCreativeChannel(index, 'wechat', $event)"
+
                     />
                     <IdeaCreativeSelect
                       label="视频脚本 · 时长"
                       :model-value="settingsFor(index).videoDuration || 'auto'"
                       :options="VIDEO_DURATION_OPTIONS"
-                      :test-id="`idea-creative-duration-${index}`"
-                      @update:model-value="patchSettings(index, { videoDuration: $event })"
+                                            :test-id="`idea-creative-duration-${index}`"
+                      :disabled="isCreativeChannelDisabled(index, 'video')"
+                      :disabled-message="creativeChannelDisabledMessage(index)"
+                      @update:model-value="updateCreativeChannel(index, 'video', $event)"
+
                     />
-                  </div>
+                                    </div>
+                  <p v-if="activeCreativeChannel(index)" class="idea-creative-lock-note">
+                    {{ creativeChannelDisabledMessage(index) }} 将当前项改回“智能”后即可重新选择。
+                  </p>
                 </div>
 
                 <div class="idea-creative-field idea-creative-ratio-field">
+
                   <div class="idea-creative-section-heading">
                     <strong>图片通用设置</strong>
                     <small>统一影响朋友圈、公众号长图和小红书组图</small>
@@ -1822,8 +1882,20 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   background: #fffaf8;
 }
 
+.idea-creative-lock-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(142, 125, 129, 0.14);
+  border-radius: 9px;
+  background: #f7f5f4;
+  color: #8a797d;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
 .idea-ratio-hint {
   color: var(--workspace-text-muted);
+
   font-size: 0.78rem;
   line-height: 1.5;
 }

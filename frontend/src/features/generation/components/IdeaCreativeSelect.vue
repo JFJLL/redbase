@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+
 import type { CreativeOption } from "../api";
 
 const props = defineProps<{
@@ -7,6 +8,8 @@ const props = defineProps<{
   modelValue: string;
   options: readonly CreativeOption[];
   testId: string;
+  disabled?: boolean;
+  disabledMessage?: string;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +32,7 @@ function focusOption(value = props.modelValue): void {
 }
 
 function openMenu(): void {
+  if (props.disabled) return;
   isOpen.value = true;
   focusOption();
 }
@@ -41,12 +45,15 @@ function closeMenu({ restoreFocus = false } = {}): void {
 }
 
 function toggleMenu(): void {
+  if (props.disabled) return;
   if (isOpen.value) closeMenu();
   else openMenu();
 }
 
 function choose(value: string): void {
+  if (props.disabled) return;
   emit("update:modelValue", value);
+
   closeMenu({ restoreFocus: true });
 }
 
@@ -82,19 +89,31 @@ function handleDocumentPointerDown(event: PointerEvent): void {
   if (isOpen.value && !root.value?.contains(event.target as Node)) closeMenu();
 }
 
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) closeMenu();
+  },
+);
+
 onMounted(() => document.addEventListener("pointerdown", handleDocumentPointerDown));
+
 onBeforeUnmount(() => document.removeEventListener("pointerdown", handleDocumentPointerDown));
 </script>
 
 <template>
-  <div ref="root" class="idea-creative-select" :class="{ 'is-open': isOpen }">
+    <div ref="root" class="idea-creative-select" :class="{ 'is-open': isOpen, 'is-disabled': disabled }" :title="disabled ? disabledMessage : undefined">
+
     <span class="idea-creative-select-label">{{ label }}</span>
     <button
       type="button"
       class="idea-creative-select-trigger"
       :data-test="testId"
-      :aria-expanded="isOpen"
+            :aria-expanded="isOpen"
+      :aria-disabled="disabled || undefined"
+      :disabled="disabled"
       aria-haspopup="listbox"
+
       @click="toggleMenu"
       @keydown.down.prevent="openMenu"
       @keydown.up.prevent="openMenu"
@@ -182,12 +201,32 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handleDocument
 
 .idea-creative-select-trigger:focus-visible,
 .is-open .idea-creative-select-trigger {
+
   border-color: rgba(216, 59, 70, 0.58);
   outline: none;
   box-shadow: 0 0 0 3px rgba(216, 59, 70, 0.1);
 }
 
+.idea-creative-select.is-disabled .idea-creative-select-label {
+  color: #a99ca0;
+}
+
+.idea-creative-select.is-disabled .idea-creative-select-trigger {
+  border-color: rgba(91, 75, 79, 0.08);
+  background: #f5f3f2;
+  color: #aaa0a2;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.idea-creative-select.is-disabled .idea-creative-select-value,
+.idea-creative-select.is-disabled .idea-creative-select-chevron {
+  color: #aaa0a2;
+  stroke: #aaa0a2;
+}
+
 .idea-creative-select-value {
+
   overflow: hidden;
   color: #493c40;
   font-size: 12.5px;

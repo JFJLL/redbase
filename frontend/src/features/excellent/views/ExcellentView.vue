@@ -450,6 +450,10 @@ const remixOpen = ref(false);
 const remix = ref<ExcellentRemixState | null>(null);
 const brands = ref<BrandSummary[]>([]);
 const loadingBrand = ref(false);
+let remixBrandsPromise: Promise<BrandSummary[]> | null = null;
+const remixIdeasCache = new Map<number, Awaited<ReturnType<typeof fetchBrandRemixIdeas>>["ideas"]>();
+const remixIdeasRequests = new Map<number, Promise<Awaited<ReturnType<typeof fetchBrandRemixIdeas>>>>();
+
 // —— 素材使用方式（旧版第 6 区：品牌 Logo + 产品实拍图）——
 const remixProductImages = ref<ProductImage[]>([]);
 const remixUnassignedImages = ref<ProductImage[]>([]);
@@ -769,19 +773,33 @@ async function ensureRemixAnalysis() {
   await remixAnalysisPromise;
 }
 
-async function loadRemixBrands() {
+async function loadRemixBrands({ silent = false } = {}): Promise<BrandSummary[]> {
+  if (brands.value.length) {
+    if (remix.value && !remix.value.brandId) remix.value.brandId = brands.value[0].id;
+    return brands.value;
+  }
+  if (!remixBrandsPromise) {
+    remixBrandsPromise = fetchBrands(scope.signalFor("remix-brands"))
+      .then((result) => {
+        brands.value = result.brands || [];
+        return brands.value;
+      })
+      .finally(() => {
+        remixBrandsPromise = null;
+      });
+  }
   loadingBrand.value = true;
   try {
-    const result = await fetchBrands(scope.signalFor("remix-brands"));
-    brands.value = result.brands || [];
-    if (remix.value && !remix.value.brandId && brands.value.length) {
-      remix.value.brandId = brands.value[0].id;
-      loadRemixIdeas();
+    const loadedBrands = await remixBrandsPromise;
+    if (remix.value && !remix.value.brandId && loadedBrands.length) {
+      remix.value.brandId = loadedBrands[0].id;
     }
+    return loadedBrands;
   } catch (error) {
-    if (isAbortError(error)) return;
-    if (await handleUnauthorizedError(error)) return;
-    showToast(`品牌详情加载失败：${(error as Error).message}`);
+    if (isAbortError(error)) return [];
+    if (await handleUnauthorizedError(error)) return [];
+    if (!silent) showToast(`品牌详情加载失败：${(error as Error).message}`);
+    return [];
   } finally {
     loadingBrand.value = false;
   }
@@ -790,15 +808,29 @@ async function loadRemixBrands() {
 async function loadRemixIdeas() {
   const state = remix.value;
   if (!state?.brandId) return;
-  const brandId = state.brandId;
+  const brandId = Number(state.brandId);
+  const cachedIdeas = remixIdeasCache.get(brandId);
+  if (cachedIdeas) {
+    state.existingIdeas = cachedIdeas;
+    return;
+  }
+  let request = remixIdeasRequests.get(brandId);
+  if (!request) {
+    request = fetchBrandRemixIdeas(brandId, scope.signalFor(`remix-ideas-${brandId}`));
+    remixIdeasRequests.set(brandId, request);
+  }
   try {
-    const result = await fetchBrandRemixIdeas(brandId, scope.signalFor("remix-ideas"));
-    if (remix.value !== state || state.brandId !== brandId) return;
-    state.existingIdeas = result.ideas || [];
+    const result = await request;
+    const ideas = result.ideas || [];
+    remixIdeasCache.set(brandId, ideas);
+    if (remix.value !== state || Number(state.brandId) !== brandId) return;
+    state.existingIdeas = ideas;
   } catch (error) {
     if (isAbortError(error) || remix.value !== state) return;
     if (await handleUnauthorizedError(error)) return;
-    showToast(`品牌详情加载失败：${(error as Error).message}`);
+    showToast(`已有选题加载失败：${(error as Error).message}`);
+  } finally {
+    remixIdeasRequests.delete(brandId);
   }
 }
 
@@ -821,8 +853,12 @@ function onRemixBrandChange() {
   remixProductImagesLoading.value = false;
   remixProductImages.value = [];
   remixUnassignedImages.value = [];
-  remixPickerMessage.value = "";
-  loadRemixIdeas();
+    remixPickerMessage.value = "";
+}
+
+function onContentModeChange(mode: string) {
+  onContentInputChanged();
+  if (mode === REMIX_CONTENT_MODES.EXISTING_IDEA) void loadRemixIdeas();
 }
 
 function onToggleFocus(value: string, checked: boolean) {
@@ -1082,8 +1118,10 @@ async function submitRemix() {
 onMounted(() => {
   window.addEventListener("keydown", onDetailKeydown);
   window.addEventListener("scroll", scheduleScrollSave, { passive: true });
-  loadContentSources();
+    loadContentSources();
+  void loadRemixBrands({ silent: true });
   loadTaxonomy(activeBoard.value);
+
   loadBoard(activeBoard.value);
   restoreBoardScroll();
 });
@@ -1455,7 +1493,8 @@ onUnmounted(() => {
 
             <label class="excellent-remix-brand-field">
               <span>品牌 / 个人 IP</span>
-              <select v-model="remix.brandId" data-test="remix-brand" @change="onRemixBrandChange">
+                            <select v-model="remix.brandId" class="remix-brand-select" data-test="remix-brand" :disabled="loadingBrand" @change="onRemixBrandChange">
+
                 <option v-for="brand in brands" :key="brand.id" :value="brand.id">
                   {{ brand.name }}{{ brand.profileType === "personal" ? " · 个人 IP" : "" }}
                 </option>
@@ -1503,9 +1542,10 @@ onUnmounted(() => {
               >
                 <input
                   v-model="remix.contentDirectionMode"
-                  type="radio"
+                                    type="radio"
                   :value="mode.value"
-                  @change="onContentInputChanged"
+                  @change="onContentModeChange(mode.value)"
+
                 />
                 {{ mode.label }}
               </label>
@@ -1515,8 +1555,9 @@ onUnmounted(() => {
               <div class="excellent-smart-actions">
                 <button
                   type="button"
-                  class="secondary-btn small-btn"
+                                    class="secondary-btn small-btn remix-directions-button"
                   data-test="generate-directions"
+
                   :disabled="remix.directionsStatus === 'loading' || !remix.brandId"
                   @click="generateDirections"
                 >
@@ -1658,8 +1699,9 @@ onUnmounted(() => {
                 </div>
                 <button
                   type="button"
-                  class="secondary-btn small-btn"
+                                    class="secondary-btn small-btn remix-product-picker-button"
                   data-test="remix-open-product-picker"
+
                   :disabled="!remix.brandId"
                   @click="openRemixProductPicker"
                 >
@@ -3660,6 +3702,114 @@ onUnmounted(() => {
 
   .remix-submit-heading .primary-btn {
     justify-content: center;
+  }
+}
+
+.remix-brand-select {
+  min-height: 46px;
+  padding: 0 42px 0 14px;
+  border: 1px solid rgba(216, 68, 68, 0.2);
+  border-radius: 13px;
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, #c84652 50%) calc(100% - 17px) 20px / 5px 5px no-repeat,
+    linear-gradient(135deg, #c84652 50%, transparent 50%) calc(100% - 12px) 20px / 5px 5px no-repeat,
+    linear-gradient(135deg, #fff 0%, #fff5f3 100%);
+  box-shadow: 0 5px 14px rgba(117, 47, 56, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  color: #432e33;
+  cursor: pointer;
+  font-weight: 800;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.remix-brand-select:hover:not(:disabled) {
+  border-color: rgba(216, 68, 68, 0.45);
+  box-shadow: 0 8px 18px rgba(159, 50, 61, 0.1);
+}
+
+.remix-brand-select:focus {
+  border-color: #dd535d;
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(216, 68, 68, 0.11), 0 8px 18px rgba(159, 50, 61, 0.08);
+}
+
+.remix-brand-select:disabled {
+  border-color: rgba(112, 83, 89, 0.1);
+  background: #f4f1f0;
+  color: #a49699;
+  cursor: wait;
+}
+
+.remix-directions-button,
+.remix-product-picker-button {
+  position: relative;
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  overflow: hidden;
+  border: 1px solid rgba(216, 68, 68, 0.28);
+  border-radius: 11px;
+  background: linear-gradient(135deg, #fff 0%, #fff0ef 100%);
+  box-shadow: 0 5px 12px rgba(137, 50, 60, 0.08);
+  color: #c53d49;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.01em;
+}
+
+.remix-directions-button::before,
+.remix-product-picker-button::before {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 6px;
+  background: linear-gradient(145deg, #df4c58, #fa8d75);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  content: "✦";
+}
+
+.remix-product-picker-button::before {
+  content: "+";
+  font-size: 15px;
+}
+
+.remix-directions-button:hover:not(:disabled),
+.remix-product-picker-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(216, 68, 68, 0.48);
+  background: linear-gradient(135deg, #fff7f6 0%, #ffe5e1 100%);
+  box-shadow: 0 9px 18px rgba(173, 53, 65, 0.16);
+}
+
+.remix-directions-button:disabled,
+.remix-product-picker-button:disabled {
+  border-color: rgba(111, 84, 90, 0.1);
+  background: #f5f2f1;
+  box-shadow: none;
+  color: #a79a9d;
+}
+
+.remix-directions-button:disabled::before,
+.remix-product-picker-button:disabled::before {
+  background: #c9bec0;
+}
+
+@media (max-width: 760px) {
+  .remix-brand-select {
+    min-height: 44px;
+  }
+
+  .remix-directions-button,
+  .remix-product-picker-button {
+    width: 100%;
   }
 }
 

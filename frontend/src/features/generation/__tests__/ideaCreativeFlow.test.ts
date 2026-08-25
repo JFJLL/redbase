@@ -97,11 +97,12 @@ describe("per-idea creative settings & carousel restoration (real entry)", () =>
     // 展开选题 0 的创作设置并设置一组非默认值。
     await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     await flushPromises();
-    await wrapper.find('[data-test="idea-creative-style-0"]').trigger("click");
+        await wrapper.find('[data-test="idea-creative-style-0"]').trigger("click");
     await wrapper.find('[data-test="idea-creative-style-0-option-editorial"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-template-0"]').trigger("click");
-    await wrapper.find('[data-test="idea-creative-template-0-option-tutorial"]').trigger("click");
+    expect((wrapper.find('[data-test="idea-creative-template-0"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect((wrapper.find('[data-test="idea-creative-duration-0"]').element as HTMLButtonElement).disabled).toBe(true);
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
+
     await wrapper.find('[data-test="idea-use-brand-logo-0"]').setValue(true);
     await wrapper.find('[data-test="idea-open-library-0"]').trigger("click");
     await flushPromises();
@@ -126,8 +127,10 @@ describe("per-idea creative settings & carousel restoration (real entry)", () =>
     // 回到选题 0：恢复选题 0 自己的设置。
     await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
     await flushPromises();
-    expect(wrapper.find('[data-test="idea-creative-style-0"]').text()).toContain("杂志编辑感");
-    expect(wrapper.find('[data-test="idea-creative-template-0"]').text()).toContain("干货教程");
+        expect(wrapper.find('[data-test="idea-creative-style-0"]').text()).toContain("杂志编辑感");
+    expect(wrapper.find('[data-test="idea-creative-template-0"]').text()).toContain("智能配色");
+    expect((wrapper.find('[data-test="idea-creative-template-0"]').element as HTMLButtonElement).disabled).toBe(true);
+
     expect(wrapper.find('[data-test="idea-ratio-0-1:1"]').classes()).toContain("is-selected");
     expect((wrapper.find('[data-test="idea-use-brand-logo-0"]').element as HTMLInputElement).checked).toBe(true);
 

@@ -40,7 +40,30 @@ describe("IdeaCreativeSelect", () => {
     expect(wrapper.find('[data-direction="down"]').exists()).toBe(true);
   });
 
+    it("renders a disabled grey control and prevents opening or choosing options", async () => {
+    const wrapper = mount(IdeaCreativeSelect, {
+      props: {
+        label: "公众号长图版式模板",
+        modelValue: "auto",
+        options: XHS_CREATIVE_STYLE_OPTIONS,
+        testId: "creative-template",
+        disabled: true,
+        disabledMessage: "已选择小红书组图视觉路线，其他两项不可同时生效。",
+      },
+    });
+
+    const trigger = wrapper.find('[data-test="creative-template"]');
+    expect(trigger.attributes("disabled")).toBeDefined();
+    expect(trigger.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.classes()).toContain("is-disabled");
+
+    await trigger.trigger("click");
+    expect(wrapper.find('[data-test="creative-template-menu"]').exists()).toBe(false);
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+  });
+
   it("closes with Escape and restores focus to the trigger", async () => {
+
     const wrapper = mount(IdeaCreativeSelect, {
       attachTo: document.body,
       props: {
