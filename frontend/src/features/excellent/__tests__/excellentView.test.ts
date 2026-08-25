@@ -799,6 +799,8 @@ describe("ExcellentView", () => {
     expect(wrapper.find('[data-test="xingtu-video-type"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="xingtu-content-type"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="xingtu-data-sort"]').exists()).toBe(true);
+    expect(wrapper.find('img[src="/api/xingtu/videos/7675709137612013818/cover"]').exists()).toBe(true);
+    expect(wrapper.find('video.xingtu-card-preview').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("视频范围");
     expect(wrapper.text()).not.toContain("媒体策略");
 

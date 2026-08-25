@@ -2,6 +2,7 @@ const XINGTU_CONTENT_MARKET_URL = "https://www.xingtu.cn/ad/creator/insight/cont
 const { normalizeCookieHeader } = require("../integrations/pgy-content-square");
 
 const XINGTU_TRANSCRIPT_ENDPOINT = "https://www.xingtu.cn/gw/api/aggregator/get_item_high_quality_text";
+const DOUYIN_MEDIA_REFERER = "https://www.douyin.com/";
 const XINGTU_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_TRANSCRIPT_SEGMENTS = 360;
@@ -131,10 +132,19 @@ function xingtuCookie(value = "") {
 
 function xingtuRequestHeaders(targetUrl, { range = "", cookie = "" } = {}) {
   const target = new URL(targetUrl);
+  const host = target.hostname.toLowerCase();
+  const isDouyinMedia = host === "douyin.com"
+    || host.endsWith(".douyin.com")
+    || host === "iesdouyin.com"
+    || host.endsWith(".iesdouyin.com")
+    || host.endsWith(".douyinvod.com")
+    || host.endsWith(".zjcdn.com");
   const headers = {
     Accept: "*/*",
     "User-Agent": XINGTU_BROWSER_USER_AGENT,
-    Referer: XINGTU_CONTENT_MARKET_URL,
+    // The video CDN validates a Douyin referer. Xingtu's referer works for its
+    // own API, but produces a 403 after the public media endpoint redirects.
+    Referer: isDouyinMedia ? DOUYIN_MEDIA_REFERER : XINGTU_CONTENT_MARKET_URL,
   };
   if (range) headers.Range = String(range).slice(0, 256);
   // Cookie only ever goes to official xingtu.cn hosts. Redirected media/CDN
@@ -162,6 +172,7 @@ function isAllowedOfficialResourceUrl(value) {
     || host.endsWith(".byteimg.com")
     || host.endsWith(".douyinvod.com")
     || host.endsWith(".douyinpic.com")
+    || host.endsWith(".zjcdn.com")
     || host.endsWith(".bytecdn.cn");
 }
 
@@ -223,6 +234,34 @@ async function requestOfficialCover(item, options = {}) {
   return requestOfficialResource(url, options);
 }
 
+function escapeSvgText(value) {
+  return String(value || "").replace(/[&<>\"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&apos;",
+  }[character]));
+}
+
+function splitCoverTitle(value, maxCharacters = 15) {
+  const text = String(value || "视频预览").replace(/\s+/g, " ").trim();
+  const rows = [];
+  for (let index = 0; index < text.length && rows.length < 2; index += maxCharacters) {
+    const row = text.slice(index, index + maxCharacters);
+    rows.push(index + maxCharacters < text.length && rows.length === 1 ? `${row}…` : row);
+  }
+  return rows.length ? rows : ["视频预览"];
+}
+
+function buildXingtuPreviewCover(item) {
+  const titleRows = splitCoverTitle(item?.title).map(escapeSvgText);
+  const category = escapeSvgText(item?.category || "精选视频");
+  const author = escapeSvgText(item?.author?.nickname || "内容创作者");
+  const titleSvg = titleRows.map((row, index) => `<text x="42" y="${306 + index * 46}" fill="#ffffff" font-family="Arial, Microsoft YaHei, sans-serif" font-size="30" font-weight="700">${row}</text>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 960" role="img" aria-label="${escapeSvgText(item?.title || "视频预览")}">\n  <defs>\n    <linearGradient id="background" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#161923"/><stop offset=".55" stop-color="#24202a"/><stop offset="1" stop-color="#a92e41"/></linearGradient>\n    <radialGradient id="glow" cx="1" cy="0" r=".9"><stop stop-color="#ed6c76" stop-opacity=".85"/><stop offset="1" stop-color="#ed6c76" stop-opacity="0"/></radialGradient>\n  </defs>\n  <rect width="720" height="960" rx="28" fill="url(#background)"/>\n  <rect width="720" height="960" rx="28" fill="url(#glow)"/>\n  <path d="M0 684C174 612 382 746 720 634V960H0Z" fill="#ffffff" fill-opacity=".055"/>\n  <rect x="42" y="42" width="126" height="42" rx="21" fill="#ffffff" fill-opacity=".14"/>\n  <text x="64" y="70" fill="#ffffff" font-family="Arial, Microsoft YaHei, sans-serif" font-size="18" font-weight="700">${category}</text>\n  <circle cx="360" cy="430" r="68" fill="#ffffff" fill-opacity=".15" stroke="#ffffff" stroke-opacity=".55" stroke-width="2"/>\n  <path d="M342 392L400 430L342 468Z" fill="#ffffff"/>\n  ${titleSvg}\n  <text x="42" y="438" fill="#ffffff" fill-opacity=".68" font-family="Arial, Microsoft YaHei, sans-serif" font-size="18">${author}</text>\n  <rect x="42" y="844" width="196" height="2" fill="#ffffff" fill-opacity=".62"/>\n  <text x="42" y="890" fill="#ffffff" fill-opacity=".7" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" letter-spacing="3">视频洞察</text>\n</svg>`;
+}
+
 async function requestOfficialMedia(item, options = {}) {
   const url = officialMediaUrl(item?.videoId);
   if (!url) {
@@ -263,6 +302,11 @@ function normalizeCatalogItem(item, index) {
 
 function getXingtuPublicVideoCatalog() {
   return XINGTU_PUBLIC_VIDEO_CATALOG.map(normalizeCatalogItem);
+}
+
+function getXingtuVideoMediaSource(itemId) {
+  const normalizedId = normalizeItemId(itemId);
+  return XINGTU_PUBLIC_VIDEO_CATALOG.find((item) => String(item.id) === normalizedId) || null;
 }
 
 function normalizeTranscriptSegments(rawTexts) {
@@ -413,10 +457,12 @@ function buildTranscriptLearningAnalysis({ item, transcript }) {
 module.exports = {
   XINGTU_CONTENT_MARKET_URL,
   getXingtuPublicVideoCatalog,
+  getXingtuVideoMediaSource,
   normalizeItemId,
   officialTranscriptUrl,
   requestOfficialCover,
   requestOfficialMedia,
+  buildXingtuPreviewCover,
   requestOfficialResource,
   requestOfficialTranscript,
   buildTranscriptLearningAnalysis,

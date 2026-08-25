@@ -3,8 +3,9 @@ const { bindRouteScope } = require("./route-scope");
 const { findUserBySessionToken } = require("../db/repositories/auth-repository");
 const {
   getXingtuPublicVideoCatalog,
+  getXingtuVideoMediaSource,
   normalizeItemId,
-  requestOfficialCover,
+  buildXingtuPreviewCover,
   requestOfficialMedia,
   requestOfficialTranscript,
   buildTranscriptLearningAnalysis,
@@ -13,6 +14,14 @@ const {
 function findCatalogVideo(itemId) {
   const target = String(itemId || "");
   return getXingtuPublicVideoCatalog().find((item) => String(item.itemId || item.id) === target) || null;
+}
+
+function findVideoMediaSource(itemId) {
+  try {
+    return getXingtuVideoMediaSource(itemId);
+  } catch (_error) {
+    return null;
+  }
 }
 
 function parseXingtuFilters(req) {
@@ -39,6 +48,16 @@ function filterXingtuCatalog(items, filters) {
     const rightValue = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
     return rightValue - leftValue;
   });
+}
+
+function sendXingtuPreviewCover(res, item) {
+  const body = Buffer.from(buildXingtuPreviewCover(item), "utf8");
+  res.writeHead(200, {
+    "content-type": "image/svg+xml; charset=utf-8",
+    "content-length": body.length,
+    "cache-control": "public, max-age=3600",
+  });
+  res.end(body);
 }
 
 function sendOfficialResource(res, response) {
@@ -117,24 +136,18 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
 
   const coverMatch = pathname.match(/^\/api\/xingtu\/videos\/([^/]+)\/cover$/);
   if (req.method === "GET" && coverMatch) {
-    if (!requireUser()) return true;
-    const item = findCatalogVideo(decodeURIComponent(coverMatch[1] || ""));
+    const item = findVideoMediaSource(decodeURIComponent(coverMatch[1] || ""));
     if (!item) {
       json(res, 404, { error: "未找到该视频封面。", code: "XINGTU_VIDEO_NOT_FOUND" });
       return true;
     }
-    try {
-      sendOfficialResource(res, await requestOfficialCover(item, xingtuRequestOptions));
-    } catch (error) {
-      writeXingtuError(json, badRequest, res, error, "视频封面暂时不可用。");
-    }
+    sendXingtuPreviewCover(res, item);
     return true;
   }
 
   const mediaMatch = pathname.match(/^\/api\/xingtu\/videos\/([^/]+)\/media$/);
   if (req.method === "GET" && mediaMatch) {
-    if (!requireUser()) return true;
-    const item = findCatalogVideo(decodeURIComponent(mediaMatch[1] || ""));
+    const item = findVideoMediaSource(decodeURIComponent(mediaMatch[1] || ""));
     if (!item) {
       json(res, 404, { error: "未找到该视频。", code: "XINGTU_VIDEO_NOT_FOUND" });
       return true;

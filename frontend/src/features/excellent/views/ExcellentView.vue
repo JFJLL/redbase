@@ -1336,26 +1336,41 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div class="excellent-filters">
+    <div class="excellent-filters" :class="{ 'xingtu-filter-toolbar': activeBoard === 'xingtu' }">
       <template v-if="activeBoard === 'xingtu'">
-        <label>
-          <span>视频类型</span>
-          <select v-model="xingtuFilters.videoType" data-test="xingtu-video-type" @change="applyXingtuFilters()">
-            <option v-for="type in XINGTU_VIDEO_TYPES" :key="type" :value="type">{{ type === 'all' ? '全部' : type }}</option>
-          </select>
-        </label>
-        <label>
-          <span>内容类型</span>
-          <select v-model="xingtuFilters.contentType" data-test="xingtu-content-type" @change="applyXingtuFilters()">
-            <option v-for="type in XINGTU_CONTENT_TYPES" :key="type" :value="type">{{ type === 'all' ? '不限' : type }}</option>
-          </select>
-        </label>
-        <label>
-          <span>数据筛选</span>
-          <select v-model="xingtuFilters.dataSort" data-test="xingtu-data-sort" @change="applyXingtuFilters()">
-            <option v-for="option in XINGTU_DATA_SORTS" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-        </label>
+        <div class="xingtu-filter-intro">
+          <span class="xingtu-filter-kicker">内容检索</span>
+          <p>按视频形式、内容题材和数据表现筛选</p>
+        </div>
+        <div class="xingtu-filter-fields" role="group" aria-label="视频筛选条件">
+          <label class="xingtu-filter-field">
+            <span>视频类型</span>
+            <select v-model="xingtuFilters.videoType" data-test="xingtu-video-type" @change="applyXingtuFilters()">
+              <option v-for="type in XINGTU_VIDEO_TYPES" :key="type" :value="type">{{ type === 'all' ? '全部' : type }}</option>
+            </select>
+          </label>
+          <label class="xingtu-filter-field">
+            <span>内容类型</span>
+            <select v-model="xingtuFilters.contentType" data-test="xingtu-content-type" @change="applyXingtuFilters()">
+              <option v-for="type in XINGTU_CONTENT_TYPES" :key="type" :value="type">{{ type === 'all' ? '不限' : type }}</option>
+            </select>
+          </label>
+          <label class="xingtu-filter-field">
+            <span>数据筛选</span>
+            <select v-model="xingtuFilters.dataSort" data-test="xingtu-data-sort" @change="applyXingtuFilters()">
+              <option v-for="option in XINGTU_DATA_SORTS" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+          </label>
+        </div>
+        <button
+          type="button"
+          class="xingtu-refresh-button"
+          data-test="refresh-button"
+          :disabled="slice.refreshing"
+          @click="refreshBoard('xingtu')"
+        >
+          <span aria-hidden="true">↻</span>{{ slice.refreshing ? "正在刷新" : "刷新列表" }}
+        </button>
       </template>
       <template v-else>
         <label>
@@ -1385,23 +1400,22 @@ onUnmounted(() => {
             </option>
           </select>
         </label>
+        <button
+          type="button"
+          class="primary-btn"
+          data-test="refresh-button"
+          :disabled="slice.refreshing || refreshCooldownSeconds > 0"
+          @click="refreshBoard(activeBoard)"
+        >
+          {{
+            slice.refreshing
+              ? "正在更新…"
+              : refreshCooldownSeconds > 0
+                ? `更新中（${refreshCooldownSeconds}s）`
+                : "更新内容"
+          }}
+        </button>
       </template>
-
-      <button
-        type="button"
-        class="primary-btn"
-        data-test="refresh-button"
-        :disabled="slice.refreshing || (activeBoard !== 'xingtu' && refreshCooldownSeconds > 0)"
-        @click="refreshBoard(activeBoard)"
-      >
-        {{
-          slice.refreshing
-            ? "正在更新…"
-            : refreshCooldownSeconds > 0
-              ? `更新中（${refreshCooldownSeconds}s）`
-              : "更新内容"
-        }}
-      </button>
     </div>
 
     <p v-if="statusText" class="excellent-status" data-test="excellent-status">{{ statusText }}</p>
@@ -1440,13 +1454,12 @@ onUnmounted(() => {
                 <button type="button" class="excellent-cover" :class="{ 'xingtu-video-cover': isXingtuBoard() }" @click="openDetail(item)">
           <template v-if="isXingtuBoard()">
             <img
-              v-if="item.coverUrl && !isImageFailed(String(item.coverUrl))"
+              v-if="item.coverUrl"
               :src="String(item.coverUrl)"
               :alt="item.title || ''"
               loading="lazy"
-              @error="onExcellentImageError(String(item.coverUrl))"
             />
-            <span v-else class="excellent-cover-fallback">暂无封面</span>
+            <span v-else class="excellent-cover-fallback">视频预览暂不可用</span>
             <span class="xingtu-video-play" aria-hidden="true">▶</span>
             <span class="xingtu-video-duration">{{ formatVideoDuration(item.duration) }}</span>
           </template>
@@ -1491,9 +1504,9 @@ onUnmounted(() => {
             <span v-if="item.metrics?.engagementCount != null">互动 {{ item.metrics?.engagementCount }}</span>
           </p>
 
-          <div class="excellent-card-actions">
-                        <button type="button" class="secondary-btn" @click="openDetail(item)">查看详情</button>
-            <button type="button" class="primary-btn" data-test="remix-button" @click="openRemix(item)">{{ isXingtuBoard() ? '一键仿视频' : '一键仿图文' }}</button>
+          <div class="excellent-card-actions" :class="{ 'xingtu-card-actions': isXingtuBoard() }">
+            <button type="button" class="secondary-btn xingtu-card-detail-action" @click="openDetail(item)">查看详情</button>
+            <button type="button" class="primary-btn xingtu-card-learn-action" data-test="remix-button" @click="openRemix(item)">{{ isXingtuBoard() ? '一键仿视频' : '一键仿图文' }}</button>
 
           </div>
         </div>
@@ -4097,6 +4110,57 @@ onUnmounted(() => {
 
 
 /* 巨量星图：视频详情与学习分析 */
+.xingtu-filter-toolbar {
+  display: grid;
+  grid-template-columns: minmax(170px, .8fr) minmax(0, 2.5fr) auto;
+  gap: 18px;
+  align-items: center;
+  margin: 4px 0 20px;
+  padding: 16px 18px;
+  border: 1px solid #f1d8db;
+  border-radius: 16px;
+  background: linear-gradient(118deg, #fffafa 0%, #fff 54%, #fff5f5 100%);
+  box-shadow: 0 8px 24px rgba(189, 45, 60, .06);
+}
+.xingtu-filter-intro { display: grid; gap: 4px; min-width: 0; }
+.xingtu-filter-kicker { color: #c53043; font-size: 11px; font-weight: 760; letter-spacing: .12em; }
+.xingtu-filter-intro p { margin: 0; color: #6d5b5e; font-size: 12px; line-height: 1.55; }
+.xingtu-filter-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.xingtu-filter-toolbar .xingtu-filter-field { display: grid; gap: 6px; min-width: 0; color: #7a6669; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.xingtu-filter-toolbar .xingtu-filter-field select {
+  width: 100%; min-width: 0; height: 38px; appearance: none;
+  padding: 0 34px 0 12px; border: 1px solid #ead7da; border-radius: 10px;
+  color: #2c2526; font-size: 13px; font-weight: 600;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m1 1 5 5 5-5' fill='none' stroke='%23945a63' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 13px center;
+  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+}
+.xingtu-filter-toolbar .xingtu-filter-field select:hover { border-color: #dca5ac; background-color: #fffafa; }
+.xingtu-filter-toolbar .xingtu-filter-field select:focus { outline: none; border-color: #d6394d; box-shadow: 0 0 0 3px rgba(214, 57, 77, .12); }
+.xingtu-refresh-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 38px;
+  padding: 0 15px; border: 1px solid #d6394d; border-radius: 10px; background: #d6394d;
+  color: #fff; font-size: 13px; font-weight: 700; white-space: nowrap; cursor: pointer;
+  box-shadow: 0 7px 14px rgba(198, 42, 59, .18); transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.xingtu-refresh-button > span { font-size: 16px; line-height: 1; }
+.xingtu-refresh-button:hover:not(:disabled) { background: #bd2639; box-shadow: 0 10px 18px rgba(198, 42, 59, .24); transform: translateY(-1px); }
+.xingtu-refresh-button:disabled { opacity: .58; cursor: wait; box-shadow: none; }
+.xingtu-card-actions { gap: 8px; }
+.xingtu-card-actions .xingtu-card-detail-action,
+.xingtu-card-actions .xingtu-card-learn-action { min-height: 36px; border-radius: 9px; font-size: 12px; font-weight: 700; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+.xingtu-card-actions .xingtu-card-detail-action { border-color: #ecdadd; color: #675255; background: #fff; }
+.xingtu-card-actions .xingtu-card-detail-action:hover { border-color: #d7a7ae; background: #fff9fa; }
+.xingtu-card-actions .xingtu-card-learn-action { background: linear-gradient(135deg, #e14b5c, #c92f43); box-shadow: 0 7px 14px rgba(202, 47, 67, .16); }
+.xingtu-card-actions .xingtu-card-learn-action:hover { box-shadow: 0 10px 18px rgba(202, 47, 67, .22); transform: translateY(-1px); }
+@media (max-width: 980px) {
+  .xingtu-filter-toolbar { grid-template-columns: 1fr; gap: 14px; }
+  .xingtu-filter-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .xingtu-refresh-button { width: 100%; }
+}
+@media (max-width: 620px) {
+  .xingtu-filter-toolbar { padding: 14px; border-radius: 13px; }
+  .xingtu-filter-fields { grid-template-columns: 1fr; }
+}
 .xingtu-video-cover { position: relative; overflow: hidden; background: #121821; }
 .xingtu-video-cover img { width: 100%; height: 100%; object-fit: cover; }
 .xingtu-video-play { position: absolute; left: 50%; top: 50%; display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(12,18,28,.58); color: #fff; font-size: 18px; transform: translate(-50%,-50%); transition: transform .16s ease, background .16s ease; }

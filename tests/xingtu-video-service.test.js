@@ -6,6 +6,7 @@ const {
   requestOfficialTranscript,
   buildTranscriptLearningAnalysis,
 } = require("../src/server/services/xingtu-video-service");
+const { handleXingtuVideoRoutes } = require("../src/server/api/xingtu-video-routes");
 
 test("巨量星图公开视频目录仅返回同源媒体代理元数据，不包含本地媒体文件", () => {
   const items = getXingtuPublicVideoCatalog();
@@ -17,6 +18,66 @@ test("巨量星图公开视频目录仅返回同源媒体代理元数据，不�
   assert.match(items[0].transcriptUrl, /^https:\/\/www\.xingtu\.cn\/gw\/api\/aggregator\/get_item_high_quality_text/);
   assert.equal(JSON.stringify(items).includes("/data/"), false);
   assert.equal(JSON.stringify(items).includes("iesdouyin.com"), false);
+});
+
+test("公共封面和媒体端点不依赖应用会话", async () => {
+  const requestedPaths = [
+    "/api/xingtu/videos/invalid/cover",
+    "/api/xingtu/videos/invalid/media",
+  ];
+  for (const pathname of requestedPaths) {
+    const result = { status: 0, payload: null };
+    const handled = await handleXingtuVideoRoutes({
+      appConfig: {},
+      json: (_res, status, payload) => {
+        result.status = status;
+        result.payload = payload;
+      },
+      unauthorized: () => {
+        throw new Error("公共媒体端点不应触发应用鉴权");
+      },
+      badRequest: () => {
+        throw new Error("无效目录项应返回未找到，而不是参数错误");
+      },
+    }, {
+      method: "GET",
+      url: pathname,
+      headers: {},
+    }, {}, pathname);
+    assert.equal(handled, true);
+    assert.equal(result.status, 404);
+    assert.match(result.payload.error, /未找到该视频/);
+  }
+});
+
+test("公共封面端点无需应用会话并返回稳定 SVG 预览", async () => {
+  const result = { status: 0, headers: {}, body: "" };
+  const res = {
+    writeHead: (status, headers) => {
+      result.status = status;
+      result.headers = headers;
+    },
+    end: (body) => {
+      result.body = Buffer.from(body || "").toString("utf8");
+    },
+  };
+  const handled = await handleXingtuVideoRoutes({
+    appConfig: {},
+    json: () => {
+      throw new Error("已知视频封面不应走 JSON 错误分支");
+    },
+    unauthorized: () => {
+      throw new Error("公共封面端点不应触发应用鉴权");
+    },
+  }, {
+    method: "GET",
+    url: "/api/xingtu/videos/7675709137612013818/cover",
+    headers: {},
+  }, res, "/api/xingtu/videos/7675709137612013818/cover");
+  assert.equal(handled, true);
+  assert.equal(result.status, 200);
+  assert.equal(result.headers["content-type"], "image/svg+xml; charset=utf-8");
+  assert.match(result.body, /牛来听完这故事/);
 });
 
 test("媒体重定向逐跳重建请求头，绝不把会话凭据传给 CDN", async () => {
@@ -38,6 +99,22 @@ test("媒体重定向逐跳重建请求头，绝不把会话凭据传给 CDN", a
   assert.equal(calls[0].init.headers.Range, "bytes=0-1023");
   assert.equal("Cookie" in calls[1].init.headers, false);
   assert.equal(calls[1].init.headers.Range, "bytes=0-1023");
+});
+
+test("抖音媒体重定向始终使用公开播放所需的来源头", async () => {
+  const calls = [];
+  await requestOfficialResource("https://www.iesdouyin.com/aweme/v1/play/?video_id=sample", {
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 1) {
+        return { status: 302, ok: false, headers: new Headers({ location: "https://v3-dy-o.zjcdn.com/video/sample" }) };
+      }
+      return { status: 206, ok: true, headers: new Headers(), body: null };
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].init.headers.Referer, "https://www.douyin.com/");
+  assert.equal(calls[1].init.headers.Referer, "https://www.douyin.com/");
 });
 
 test("官方视频文稿会规范化并按时间排序，不保存上游原始响应", async () => {
