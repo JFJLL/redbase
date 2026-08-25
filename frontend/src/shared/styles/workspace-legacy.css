@@ -992,7 +992,7 @@
   gap: 10px;
 }
 
-.workspace-layout .idea-creative-settings-heading > span:last-child {
+.workspace-layout .idea-creative-settings-copy {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -1013,57 +1013,33 @@
   white-space: nowrap;
 }
 
-.workspace-layout .idea-creative-settings-icon {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
-  align-content: center;
-  gap: 3px;
-  padding: 0 7px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, #e5535d, #fa957c);
-  box-shadow: 0 5px 10px rgba(201, 71, 80, 0.18);
-}
-
-.workspace-layout .idea-creative-settings-icon i {
-  display: block;
-  height: 1.5px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.96);
-}
-
-.workspace-layout .idea-creative-settings-icon i:nth-child(1) { width: 100%; }
-.workspace-layout .idea-creative-settings-icon i:nth-child(2) { width: 68%; }
-.workspace-layout .idea-creative-settings-icon i:nth-child(3) { width: 84%; }
-
 .workspace-layout .idea-aspect-ratio-trigger {
   display: inline-flex;
   min-height: 34px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
-  padding: 0 11px 0 12px;
-  border: 1px solid rgba(216, 59, 70, 0.21);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.82);
+  gap: 7px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: #b43b46;
   cursor: pointer;
   font-family: inherit;
   font-size: 0.76rem;
   font-weight: 800;
-  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+  transition: color 150ms ease, opacity 150ms ease, transform 150ms ease;
 }
 
 .workspace-layout .idea-aspect-ratio-trigger:hover {
-  border-color: rgba(216, 59, 70, 0.45);
-  background: #fff7f5;
-  box-shadow: 0 5px 12px rgba(159, 48, 56, 0.1);
+  color: #952b36;
+  opacity: 0.88;
   transform: translateY(-1px);
 }
 
 .workspace-layout .idea-aspect-ratio-trigger:focus-visible {
   outline: none;
+  border-radius: 6px;
   box-shadow: 0 0 0 3px rgba(216, 59, 70, 0.12);
 }
 

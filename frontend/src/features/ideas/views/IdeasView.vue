@@ -992,10 +992,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
             >
                             <div class="idea-creative-settings-toolbar">
                 <div class="idea-creative-settings-heading">
-                  <span class="idea-creative-settings-icon" aria-hidden="true">
-                    <i></i><i></i><i></i>
-                  </span>
-                  <span>
+                  <span class="idea-creative-settings-copy">
                     <strong>创作设置</strong>
                     <small>生成前可选调整</small>
                   </span>

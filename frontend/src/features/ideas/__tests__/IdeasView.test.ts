@@ -294,8 +294,9 @@ describe("IdeasView", () => {
     expect(settings.text()).toContain("生成前可选调整");
     expect(settings.text()).toContain("调整设置");
     expect(settings.text()).not.toContain("小红书：智能匹配");
+    expect(settings.find(".idea-creative-settings-icon").exists()).toBe(false);
 
-        await card.find('[data-test="idea-creative-toggle-0"]').trigger("click");
+    await card.find('[data-test="idea-creative-toggle-0"]').trigger("click");
     expect(settings.text()).toContain("收起设置");
     expect(settings.text()).toContain("按生成类型单独设置");
 
