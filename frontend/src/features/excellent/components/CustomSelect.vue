@@ -25,15 +25,25 @@ const isOpen = ref(false);
 const activeIndex = ref(-1);
 
 const normalizedOptions = computed<Array<{ value: string; label: string }>>(() => {
-  return props.options.map((opt) => {
+  const normalized: Array<{ value: string; label: string }> = [];
+  const seenValues = new Set<string>();
+
+  for (const opt of props.options) {
     if (typeof opt === "string" || typeof opt === "number") {
       const s = String(opt);
-      return { value: s, label: s === "all" ? "全部" : s };
+      if (seenValues.has(s)) continue;
+      seenValues.add(s);
+      normalized.push({ value: s, label: s === "all" ? "全部" : s });
+      continue;
     }
     const val = String(opt.value ?? "");
     const lab = String(opt.label ?? val ?? "");
-    return { value: val, label: lab || (val === "all" ? "全部" : val) };
-  });
+    if (seenValues.has(val)) continue;
+    seenValues.add(val);
+    normalized.push({ value: val, label: lab || (val === "all" ? "全部" : val) });
+  }
+
+  return normalized;
 });
 
 const currentLabel = computed(() => {
@@ -125,7 +135,7 @@ onBeforeUnmount(() => {
       :disabled="disabled"
       :aria-expanded="isOpen"
       aria-haspopup="listbox"
-      @click.stop="toggleMenu()"
+      @click="toggleMenu()"
     >
       <span class="custom-select-value">{{ currentLabel }}</span>
       <span class="custom-select-icon-wrap" :class="{ 'is-rotated': isOpen }">

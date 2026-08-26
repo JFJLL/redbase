@@ -1361,13 +1361,19 @@ onUnmounted(() => {
 <template>
   <section class="excellent-view">
     <header class="panel-header excellent-panel-header">
-      <div>
-        <div class="panel-icon-title">
-          <span class="panel-icon excellent-panel-icon">优</span>
+      <div class="panel-icon-title">
+        <span class="panel-icon excellent-panel-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="4.25" y="5.25" width="11.5" height="14.5" rx="2.25" />
+            <path d="M8 9.25h4M8 12.75h4" />
+            <path d="m18.1 3 .55 1.35L20 4.9l-1.35.55-.55 1.35-.55-1.35-1.35-.55 1.35-.55L18.1 3Z" />
+            <path d="m19.25 10 .35.85.85.35-.85.35-.35.85-.35-.85-.85-.35.85-.35.35-.85Z" />
+          </svg>
+        </span>
+        <div class="excellent-title-copy">
           <h1 class="panel-title">优秀内容</h1>
+          <p class="panel-subtitle">浏览小红书、电商和巨量星图优秀内容；图文可仿写，视频可基于官方文稿学习结构与节奏。</p>
         </div>
-                <p class="panel-subtitle">浏览小红书、电商和巨量星图优秀内容；图文可仿写，视频可基于官方文稿学习结构与节奏。</p>
-
       </div>
     </header>
 
@@ -2616,35 +2622,52 @@ onUnmounted(() => {
 
 .excellent-view .panel-icon-title {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  align-items: flex-start;
+  gap: 16px;
 }
 
 .excellent-view .panel-icon {
-  display: block;
-  width: 28.8125px;
-  color: var(--workspace-brand);
-  font-size: 1.8rem;
-  font-weight: 400;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
 }
 
 .excellent-view .excellent-panel-icon {
-  background: linear-gradient(135deg, #ff3f59, #ff7a4c);
-  color: #fff;
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgba(218, 61, 80, 0.16);
+  border-radius: 14px;
+  background: linear-gradient(145deg, #fff7f8 0%, #ffe9ec 100%);
+  color: #d9364d;
+  box-shadow: 0 8px 20px rgba(191, 42, 61, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.excellent-view .excellent-panel-icon svg {
+  width: 27px;
+  height: 27px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.excellent-title-copy {
+  min-width: 0;
 }
 
 .excellent-view .panel-title {
   margin: 0;
   color: var(--workspace-text);
   font-family: var(--workspace-font-heading);
-  font-size: 2.1rem;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  line-height: 1.6;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
 }
 
 .excellent-view .panel-subtitle {
-  margin: 10px 0 0;
+  margin: 7px 0 0;
   color: var(--workspace-text-muted);
   font-size: 0.93rem;
   line-height: 1.6;
