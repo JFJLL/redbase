@@ -1418,6 +1418,9 @@ onUnmounted(() => {
           :disabled="slice.refreshing"
           @click="refreshBoard('xingtu')"
         >
+          <svg class="primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8.1 8.1 0 0 0-15.5-3M4 4v4h4M4 13a8.1 8.1 0 0 0 15.5 3M20 20v-4h-4" />
+          </svg>
           {{ slice.refreshing ? "正在刷新…" : "刷新列表" }}
         </button>
       </template>
@@ -1451,6 +1454,9 @@ onUnmounted(() => {
           :disabled="slice.refreshing || refreshCooldownSeconds > 0"
           @click="refreshBoard(activeBoard)"
         >
+          <svg class="primary-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8.1 8.1 0 0 0-15.5-3M4 4v4h4M4 13a8.1 8.1 0 0 0 15.5 3M20 20v-4h-4" />
+          </svg>
           {{
             slice.refreshing
               ? "正在更新…"
@@ -4139,38 +4145,104 @@ onUnmounted(() => {
 
 
 .unified-filter-toolbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 168px;
+  align-items: end;
+  gap: 18px;
   margin: 12px 0 20px;
-  padding: 16px 20px;
+  padding: 18px 20px;
   border: 1px solid #f1d8db;
   border-radius: 16px;
   background: linear-gradient(118deg, #fffafa 0%, #ffffff 54%, #fff5f5 100%);
   box-shadow: 0 8px 24px rgba(189, 45, 60, 0.06);
 }
+
+.filter-fields-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.xingtu-fields-group {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.primary-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e14559 0%, #cf3046 100%);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 7px 16px rgba(198, 42, 59, 0.2);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.primary-action-icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: 0 0 auto;
+}
+
 .primary-action-btn:hover:not(:disabled) {
-  background-color: #bd2639;
+  background: linear-gradient(135deg, #d83a50 0%, #bd2639 100%);
   box-shadow: 0 8px 20px rgba(198, 42, 59, 0.24);
   transform: translateY(-1px);
 }
+
+.primary-action-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 4px 10px rgba(198, 42, 59, 0.2);
+}
+
+.primary-action-btn:focus-visible {
+  outline: 3px solid rgba(214, 57, 77, 0.18);
+  outline-offset: 2px;
+}
+
 .primary-action-btn:disabled {
   opacity: 0.58;
   cursor: wait;
   box-shadow: none;
 }
-.action-btn-icon {
-  font-size: 15px;
-  line-height: 1;
-}
-@media (max-width: 860px) {
+
+@media (max-width: 900px) {
   .unified-filter-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr) 148px;
+    gap: 12px;
   }
-  .primary-action-btn {
-    width: 100%;
+
+  .filter-fields-group {
+    gap: 10px;
+  }
+}
+
+@media (max-width: 680px) {
+  .unified-filter-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .filter-fields-group,
+  .xingtu-fields-group {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .xingtu-card-actions { gap: 8px; }
