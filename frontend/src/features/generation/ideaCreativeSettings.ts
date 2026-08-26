@@ -12,6 +12,7 @@
 import { onAuthReset } from "@/shared/composables/useAbortScope";
 import {
   IMAGE_ASPECT_RATIOS,
+  VIDEO_ASPECT_RATIOS,
   VIDEO_DURATION_OPTIONS,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
@@ -31,6 +32,10 @@ export interface IdeaCreativeSettings {
   videoModel?: "d2" | "g2" | string;
   videoMode?: "text" | "image" | string;
   videoResolution?: string;
+  /** 视频工作台自己的画幅，不复用图片生成的 aspectRatioSelection。 */
+  videoAspectRatio?: string;
+  /** 视频工作台自己的参考图选择，不复用 selectedProductIds。 */
+  videoReferenceImageIds?: number[];
   useBrandLogo: boolean;
   selectedProductIds: number[];
   /** 内容选题页「使用这些产品图生成图片」开关（旧版 productImages[key].useImage）。
@@ -63,6 +68,7 @@ function defaultSettings(): IdeaCreativeSettings {
     videoModel: "d2",
     videoMode: "text",
     videoResolution: "720p",
+    videoAspectRatio: "smart",
     useBrandLogo: false,
     selectedProductIds: [],
     useProductImages: true,
@@ -77,6 +83,11 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
   const validStyle = XHS_CREATIVE_STYLE_OPTIONS.some((option) => option.value === settings.visualStylePreset);
   const validTemplate = WECHAT_TEMPLATE_OPTIONS.some((option) => option.value === settings.wechatTemplate);
   const validDuration = VIDEO_DURATION_OPTIONS.some((option) => option.value === settings.videoDuration);
+  const validVideoAspectRatio = settings.videoAspectRatio === "smart" || VIDEO_ASPECT_RATIOS.includes(String(settings.videoAspectRatio) as (typeof VIDEO_ASPECT_RATIOS)[number]);
+  const hasVideoReferenceImageIds = Array.isArray(settings.videoReferenceImageIds);
+  const videoReferenceImageIds = Array.isArray(settings.videoReferenceImageIds)
+    ? [...new Set(settings.videoReferenceImageIds.map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0))]
+    : [];
   return {
     ...settings,
     aspectRatioSelection: validRatio ? settings.aspectRatioSelection : "smart",
@@ -88,6 +99,8 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
     videoResolution: ["720p", "1080p", "2K"].includes(String(settings.videoResolution))
       ? settings.videoResolution
       : "720p",
+    videoAspectRatio: validVideoAspectRatio ? String(settings.videoAspectRatio) : "smart",
+    ...(hasVideoReferenceImageIds ? { videoReferenceImageIds } : {}),
     selectedProductIds: Array.isArray(settings.selectedProductIds) ? [...settings.selectedProductIds] : [],
     useProductImages: settings.useProductImages !== false,
   };
@@ -103,6 +116,9 @@ export function saveIdeaCreativeSettings(key: string, settings: IdeaCreativeSett
   settingsByKey.set(key, {
     ...settings,
     selectedProductIds: [...settings.selectedProductIds],
+    ...(Array.isArray(settings.videoReferenceImageIds)
+      ? { videoReferenceImageIds: [...settings.videoReferenceImageIds] }
+      : {}),
   });
 }
 

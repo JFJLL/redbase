@@ -13,7 +13,8 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
     disabledUntil: 0,
     health: "healthy",
   }));
-  let cursor = 0;
+  let submissionCursor = 0;
+  let pollingCursor = 0;
   const intervalMs = Math.max(1000, Math.ceil(60000 / Math.max(1, Number(rpmPerKey) || 1)));
 
   function publicSlot(slot) {
@@ -23,13 +24,15 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
 
   function acquire({ rateLimit = true } = {}) {
     const timestamp = now();
+    const cursor = rateLimit ? submissionCursor : pollingCursor;
     for (let offset = 0; offset < slots.length; offset += 1) {
       const index = (cursor + offset) % slots.length;
       const slot = slots[index];
       if (slot.disabledUntil > timestamp || slot.inFlight > 0 || (rateLimit && slot.nextAvailableAt > timestamp)) continue;
       slot.inFlight += 1;
       if (rateLimit) slot.nextAvailableAt = timestamp + intervalMs;
-      cursor = (index + 1) % slots.length;
+      if (rateLimit) submissionCursor = (index + 1) % slots.length;
+      else pollingCursor = (index + 1) % slots.length;
       return { slot: slot.slot, key: slot.key, nextAvailableAt: slot.nextAvailableAt };
     }
     return null;

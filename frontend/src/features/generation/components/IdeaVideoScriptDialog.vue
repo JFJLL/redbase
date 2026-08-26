@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { isAbortError, isUnauthorized } from "@/shared/api/client";
+import { useAuthStore } from "@/shared/stores/auth";
+import { useAbortScope } from "@/shared/composables/useAbortScope";
+import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import { useInsightsStore } from "@/features/trends/stores/insights";
 import {
   getIdeaCreativeSettings,
@@ -11,13 +15,52 @@ import { useIdeaVideoScript } from "../composables/useIdeaVideoScript";
 import VideoScriptResult from "./VideoScriptResult.vue";
 import {
   createVideoProject,
+  fetchVideoModelCapabilities,
   fetchVideoProject,
+  MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  retryVideoProjectClip,
+  uploadProductImage,
   VIDEO_ASPECT_RATIOS,
   VIDEO_DURATION_OPTIONS,
   type ProductImageInput,
+  type ProductImageView,
+  type VideoModelCapability,
   type VideoProject,
 } from "../api";
 import type { IdeaProductLibrary } from "../composables/useIdeaGeneration";
+
+const FALLBACK_VIDEO_CAPABILITIES: VideoModelCapability[] = [
+  {
+    id: "d2",
+    displayName: "D2",
+    provider: "fallback",
+    supportedModes: ["text", "image"],
+    resolutions: ["720p", "1080p", "2K"],
+    aspectRatios: [...VIDEO_ASPECT_RATIOS],
+    totalDurationOptions: [10, 15, 30, 45, 60],
+    clipDurationRules: { min: 4, max: 15 },
+    preferredClipDurations: [10, 5],
+    maxReferenceImages: 9,
+    pricing: { "720p": 2, "1080p": 3, "2K": 4 },
+    pricingUnit: "per_second",
+  },
+  {
+    id: "g2",
+    displayName: "G2",
+    provider: "fallback",
+    supportedModes: ["text", "image"],
+    resolutions: ["720p"],
+    aspectRatios: [...VIDEO_ASPECT_RATIOS],
+    totalDurationOptions: [10, 15, 30, 45, 60],
+    allowedClipDurations: [5, 10],
+    clipDurationRules: { min: 5, max: 10 },
+    preferredClipDurations: [10, 5],
+    maxReferenceImages: 5,
+    pricing: { "5": 1, "10": 2 },
+    pricingUnit: "per_clip",
+    promotionLabel: "限时特惠",
+  },
+];
 
 const props = defineProps<{
   ideaIndex: number;
@@ -41,13 +84,26 @@ const settings = computed(() => getIdeaCreativeSettings(ideaKey.value));
 const brandIdRef = computed(() => brand.value?.id);
 const trendIdRef = computed(() => trend.value?.id);
 const ideaIndexRef = computed(() => props.ideaIndex);
-const aspectRatioSelectionRef = ref(settings.value.aspectRatioSelection || "smart");
+const videoAspectRatioRef = ref(settings.value.videoAspectRatio || "9:16");
 const videoDurationRef = ref(settings.value.videoDuration || "auto");
 const videoModelRef = ref(settings.value.videoModel || "d2");
 const videoModeRef = ref(settings.value.videoMode || "text");
 const videoResolutionRef = ref(settings.value.videoResolution || "720p");
 const useBrandLogoRef = computed(() => Boolean(settings.value.useBrandLogo && brand.value?.logo));
-const useProductImagesRef = computed(() => settings.value.useProductImages !== false);
+const initialVideoReferenceIds = Array.isArray(settings.value.videoReferenceImageIds)
+  ? settings.value.videoReferenceImageIds
+  : [];
+const videoReferenceImageIdsRef = ref<number[]>(normalizeImageIds(initialVideoReferenceIds));
+const auth = useAuthStore();
+const scope = useAbortScope();
+const uploadedVideoReferenceImages = ref<ProductImageView[]>([]);
+const videoCapabilities = ref<VideoModelCapability[]>([]);
+const capabilitiesLoading = ref(false);
+const capabilitiesError = ref("");
+const videoReferenceUploadLoading = ref(false);
+const videoScriptBlockedError = ref("");
+const retryingClipIndex = ref<number | null>(null);
+let disposed = false;
 
 const project = ref<VideoProject | null>(null);
 const projectLoading = ref(false);
@@ -55,39 +111,84 @@ const projectError = ref("");
 const generatedVideoSignature = ref("");
 let projectPollTimer: ReturnType<typeof setTimeout> | null = null;
 
-const selectedProductImageInputs = computed<ProductImageInput[]>(() => {
-  if (!useProductImagesRef.value) return [];
-  const libraryImages = props.productLibrary?.images.value || [];
-  const selectedIds = settings.value.selectedProductIds || [];
-  return libraryImages
-    .filter((img) => selectedIds.includes(img.id))
-    .map((img) => ({ id: img.id, name: img.originalName }));
-});
+function normalizeImageIds(value: unknown): number[] {
+  return Array.isArray(value)
+    ? [...new Set(value.map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0))]
+    : [];
+}
 
-const selectedStyleReferenceInputs = computed<Array<{ name?: string; dataUrl?: string }>>(() => {
-  const styleRef = settings.value.styleReference as StyleReferenceImage | null;
-  if (!styleRef?.dataUrl) return [];
-  return [{ name: styleRef.fileName, dataUrl: styleRef.dataUrl }];
-});
-
-const selectedVideoReferenceIds = computed(() => selectedProductImageInputs.value.map((image) => Number(image.id)).filter(Boolean));
-const maxVideoReferences = computed(() => (videoModelRef.value === "g2" ? 5 : 9));
-const visibleVideoDurationOptions = computed(() => VIDEO_DURATION_OPTIONS.filter((option) => ["auto", "10", "15", "30", "45", "60"].includes(option.value)));
-const availableResolutions = computed(() => videoModelRef.value === "g2" ? ["720p"] : ["720p", "1080p", "2K"]);
-const estimatedCredits = computed(() => {
-  const total = videoDurationRef.value === "auto" ? Number(script.value?.totalDurationSec || 30) : Number(videoDurationRef.value);
-  if (videoModelRef.value === "g2") {
-    let remaining = total;
-    let credits = 0;
-    while (remaining > 0) {
-      const duration = Math.min(10, remaining);
-      credits += duration <= 5 ? 1 : 2;
-      remaining -= duration;
-    }
-    return credits;
+const availableProductImages = computed<ProductImageView[]>(() => {
+  const byId = new Map<number, ProductImageView>();
+  for (const image of [...(props.productLibrary?.images.value || []), ...uploadedVideoReferenceImages.value]) {
+    byId.set(Number(image.id), image);
   }
-  return total * ({ "720p": 2, "1080p": 3, "2K": 4 } as Record<string, number>)[videoResolutionRef.value];
+  return [...byId.values()];
 });
+
+const effectiveVideoCapabilities = computed(() =>
+  videoCapabilities.value.length ? videoCapabilities.value : FALLBACK_VIDEO_CAPABILITIES,
+);
+const activeVideoCapability = computed(() =>
+  effectiveVideoCapabilities.value.find((model) => model.id === videoModelRef.value) || effectiveVideoCapabilities.value[0],
+);
+const videoModelOptions = computed(() => effectiveVideoCapabilities.value);
+const availableVideoModes = computed(() => activeVideoCapability.value?.supportedModes || ["text", "image"]);
+const availableVideoRatios = computed(() => activeVideoCapability.value?.aspectRatios || [...VIDEO_ASPECT_RATIOS]);
+const availableResolutions = computed(() => activeVideoCapability.value?.resolutions || ["720p"]);
+const visibleVideoDurationOptions = computed(() => {
+  const supported = new Set(activeVideoCapability.value?.totalDurationOptions || []);
+  return VIDEO_DURATION_OPTIONS.filter((option) => option.value === "auto" || supported.has(Number(option.value)));
+});
+
+const selectedVideoReferenceImages = computed(() => {
+  const selectedIds = new Set(videoReferenceImageIdsRef.value);
+  return availableProductImages.value.filter((image) => selectedIds.has(Number(image.id)));
+});
+const maxVideoReferences = computed(() => Number(activeVideoCapability.value?.maxReferenceImages || 0));
+const selectedVideoReferenceIds = computed(() =>
+  selectedVideoReferenceImages.value.map((image) => Number(image.id)).filter(Boolean).slice(0, maxVideoReferences.value),
+);
+const selectedProductImageInputs = computed<ProductImageInput[]>(() =>
+  selectedVideoReferenceImages.value.map((image) => ({ id: image.id, name: image.originalName })),
+);
+const useVideoProductImagesRef = computed(() => selectedProductImageInputs.value.length > 0);
+
+function segmentVideoDuration(capability: VideoModelCapability, total: number): number[] {
+  const min = Number(capability.clipDurationRules?.min || 1);
+  const max = Number(capability.clipDurationRules?.max || min);
+  const allowed = capability.allowedClipDurations?.map(Number);
+  if (!Number.isFinite(total) || total <= 0) return [];
+  if (total <= max) {
+    if (total < min || (allowed && !allowed.includes(total))) return [];
+    return [total];
+  }
+  const clips: number[] = [];
+  let remaining = total;
+  const preferred = Number(capability.preferredClipDurations?.[0] || max);
+  while (remaining > 0) {
+    let next = Math.min(preferred, remaining);
+    const after = remaining - next;
+    if (after > 0 && after < min) next -= min - after;
+    if (next < min || next > max || (allowed && !allowed.includes(next))) return [];
+    clips.push(next);
+    remaining -= next;
+  }
+  return clips;
+}
+
+const estimatedCredits = computed(() => {
+  const capability = activeVideoCapability.value;
+  if (!capability) return 0;
+  const total = videoDurationRef.value === "auto" ? Number(script.value?.totalDurationSec || 30) : Number(videoDurationRef.value);
+  const clips = segmentVideoDuration(capability, total);
+  if (!clips.length) return 0;
+  if (capability.pricingUnit === "per_clip") {
+    return clips.reduce((sum, duration) => sum + Number(capability.pricing[String(duration)] || 0), 0);
+  }
+  const price = Number(capability.pricing[String(videoResolutionRef.value)] || 0);
+  return clips.reduce((sum, duration) => sum + duration * price, 0);
+});
+
 const projectStatusLabel = computed(() => ({
   queued: "排队中",
   running: "生成中",
@@ -100,26 +201,31 @@ const currentVideoSignature = computed(() => [
   videoModeRef.value,
   videoResolutionRef.value,
   videoDurationRef.value,
-  aspectRatioSelectionRef.value,
+  videoAspectRatioRef.value,
   selectedVideoReferenceIds.value.join(","),
 ].join("|"));
 const controlsDirty = computed(() => Boolean(script.value && generatedVideoSignature.value && generatedVideoSignature.value !== currentVideoSignature.value));
+
+const selectedStyleReferenceInputs = computed<Array<{ name?: string; dataUrl?: string }>>(() => {
+  const styleRef = settings.value.styleReference as StyleReferenceImage | null;
+  if (!styleRef?.dataUrl) return [];
+  return [{ name: styleRef.fileName, dataUrl: styleRef.dataUrl }];
+});
 
 const {
   loading,
   error,
   script,
   generateScript,
-  retry,
   reset,
 } = useIdeaVideoScript({
   brandId: brandIdRef,
   trendId: trendIdRef,
   ideaIndex: ideaIndexRef,
-  aspectRatioSelection: aspectRatioSelectionRef,
+  aspectRatioSelection: videoAspectRatioRef,
   videoDuration: videoDurationRef,
   useBrandLogo: useBrandLogoRef,
-  useProductImages: useProductImagesRef,
+  useProductImages: useVideoProductImagesRef,
   selectedProductImageInputs,
   selectedStyleReferenceInputs,
   videoModel: videoModelRef,
@@ -128,29 +234,103 @@ const {
   videoReferenceImageIds: selectedVideoReferenceIds,
 });
 
+const scriptCompatible = computed(() => {
+  const capability = activeVideoCapability.value;
+  const currentScript = script.value;
+  if (!capability || !currentScript) return true;
+  const scriptRatio = currentScript.aspectRatio === "smart" ? "9:16" : currentScript.aspectRatio;
+  if (!capability.aspectRatios.includes(scriptRatio)) return false;
+  return (currentScript.clips || []).every((clip) => {
+    const duration = Number(clip.durationSec);
+    const allowed = capability.allowedClipDurations?.map(Number);
+    return Number.isFinite(duration) && duration >= capability.clipDurationRules.min && duration <= capability.clipDurationRules.max && (!allowed || allowed.includes(duration));
+  });
+});
+
+function applyVideoCapabilityDefaults() {
+  const capability = activeVideoCapability.value;
+  if (!capability) return;
+  if (!capability.supportedModes.includes(videoModeRef.value)) {
+    videoModeRef.value = capability.supportedModes[0] || "text";
+  }
+  if (!capability.resolutions.includes(videoResolutionRef.value)) {
+    videoResolutionRef.value = capability.resolutions[0] || "720p";
+  }
+  if (videoAspectRatioRef.value !== "smart" && !capability.aspectRatios.includes(videoAspectRatioRef.value)) {
+    videoAspectRatioRef.value = capability.aspectRatios.includes("9:16") ? "9:16" : (capability.aspectRatios[0] || "9:16");
+  }
+  if (videoDurationRef.value !== "auto" && !capability.totalDurationOptions.includes(Number(videoDurationRef.value))) {
+    videoDurationRef.value = "auto";
+  }
+  videoReferenceImageIdsRef.value = normalizeImageIds(videoReferenceImageIdsRef.value).slice(0, capability.maxReferenceImages);
+}
+
+async function loadVideoCapabilities() {
+  capabilitiesLoading.value = true;
+  capabilitiesError.value = "";
+  try {
+    const response = await fetchVideoModelCapabilities(scope.signalFor("video-capabilities"));
+    const models = Array.isArray(response.models) ? response.models.filter((model) => model && model.id) : [];
+    if (models.length) {
+      videoCapabilities.value = models;
+      if (!models.some((model) => model.id === videoModelRef.value)) videoModelRef.value = models[0].id;
+    } else {
+      capabilitiesError.value = "暂时无法读取视频模型能力，已使用安全默认值。";
+    }
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (isUnauthorized(error)) {
+      auth.handleUnauthorized();
+      return;
+    }
+    capabilitiesError.value = "暂时无法读取视频模型能力，已使用安全默认值。";
+  } finally {
+    capabilitiesLoading.value = false;
+  }
+  applyVideoCapabilityDefaults();
+}
+
 onMounted(() => {
-  generateScript();
+  void (async () => {
+    await loadVideoCapabilities();
+    if (!disposed) generateScriptWhenReady();
+  })();
 });
 
 watch(script, (value) => {
   if (value) generatedVideoSignature.value = currentVideoSignature.value;
 });
 
-watch(videoModelRef, (model) => {
-  if (model === "g2") videoResolutionRef.value = "720p";
+watch(videoModelRef, () => {
+  applyVideoCapabilityDefaults();
   project.value = null;
 });
-watch([videoModeRef, videoResolutionRef, videoDurationRef, aspectRatioSelectionRef], () => {
+watch([videoModeRef, videoResolutionRef, videoDurationRef, videoAspectRatioRef, videoReferenceImageIdsRef, selectedVideoReferenceIds], () => {
   saveIdeaCreativeSettings(ideaKey.value, {
     ...settings.value,
-    aspectRatioSelection: aspectRatioSelectionRef.value,
     videoDuration: videoDurationRef.value,
     videoModel: videoModelRef.value,
     videoMode: videoModeRef.value,
     videoResolution: videoResolutionRef.value,
+    videoAspectRatio: videoAspectRatioRef.value,
+    videoReferenceImageIds: [...videoReferenceImageIdsRef.value],
   });
+  if (videoModeRef.value === "image" && !selectedVideoReferenceIds.value.length) {
+    videoScriptBlockedError.value = "图生视频必须先选择或上传至少一张视频参考图，再生成脚本。";
+  } else if (selectedVideoReferenceIds.value.length) {
+    videoScriptBlockedError.value = "";
+  }
   project.value = null;
-});
+}, { deep: true });
+
+function generateScriptWhenReady() {
+  if (videoModeRef.value === "image" && !selectedVideoReferenceIds.value.length) {
+    videoScriptBlockedError.value = "图生视频必须先选择或上传至少一张视频参考图，再生成脚本。";
+    return null;
+  }
+  videoScriptBlockedError.value = "";
+  return generateScript();
+}
 
 function projectRequestId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -164,11 +344,12 @@ function stopProjectPolling() {
 
 async function pollProject(projectId: number) {
   try {
-    const response = await fetchVideoProject(projectId);
+    const response = await fetchVideoProject(projectId, scope.signalFor("video-project-poll"));
     project.value = response.project;
     if (["completed", "failed", "partial_failed", "cancelled"].includes(response.project.status)) return;
     projectPollTimer = setTimeout(() => pollProject(projectId), 2500);
   } catch (error) {
+    if (isAbortError(error)) return;
     projectError.value = (error as Error).message || "暂时无法刷新视频状态。";
   }
 }
@@ -179,8 +360,12 @@ async function generateRealVideo() {
     projectError.value = "视频参数已变更，请先点击“重新生成”让脚本与当前参数同步。";
     return;
   }
+  if (!scriptCompatible.value) {
+    projectError.value = "当前模型不能直接执行这份分镜，请重新生成视频脚本。";
+    return;
+  }
   if (videoModeRef.value === "image" && !selectedVideoReferenceIds.value.length) {
-    projectError.value = "图生视频需要先在内容设置中选择产品参考图。";
+    projectError.value = "图生视频需要先在视频工作台中选择一张参考图。";
     return;
   }
   projectLoading.value = true;
@@ -192,12 +377,12 @@ async function generateRealVideo() {
       model: videoModelRef.value,
       mode: videoModeRef.value,
       resolution: videoResolutionRef.value,
-      aspectRatio: aspectRatioSelectionRef.value === "smart" ? "9:16" : aspectRatioSelectionRef.value,
+      aspectRatio: videoAspectRatioRef.value === "smart" ? "9:16" : videoAspectRatioRef.value,
       totalDurationSec: videoDurationRef.value === "auto" ? Number(script.value.totalDurationSec || 30) : Number(videoDurationRef.value),
       referenceAssetIds: selectedVideoReferenceIds.value.slice(0, maxVideoReferences.value),
       visualBible: script.value.visualBible || {},
       script: script.value,
-    });
+    }, scope.signalFor("video-project-create"));
     project.value = response.project;
     if (project.value.status !== "completed") await pollProject(project.value.id);
   } catch (error) {
@@ -207,9 +392,93 @@ async function generateRealVideo() {
   }
 }
 
+async function retryVideoClip(clipIndex: number) {
+  if (!project.value || retryingClipIndex.value != null) return;
+  retryingClipIndex.value = clipIndex;
+  projectError.value = "";
+  stopProjectPolling();
+  try {
+    const response = await retryVideoProjectClip(project.value.id, clipIndex, projectRequestId(), scope.signalFor(`video-clip-retry-${clipIndex}`));
+    project.value = response.project;
+    if (!["completed", "failed"].includes(response.project.status)) await pollProject(response.project.id);
+  } catch (error) {
+    if (isAbortError(error)) return;
+    projectError.value = (error as Error).message || "当前镜头重试失败，请稍后再试。";
+  } finally {
+    retryingClipIndex.value = null;
+  }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+
+function handleVideoReferenceToggle(imageId: number, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  const id = Number(imageId);
+  const current = normalizeImageIds(videoReferenceImageIdsRef.value);
+  if (checked) {
+    if (current.includes(id)) return;
+    if (current.length >= maxVideoReferences.value) {
+      projectError.value = `当前模型最多选择 ${maxVideoReferences.value} 张视频参考图。`;
+      return;
+    }
+    videoReferenceImageIdsRef.value = [...current, id];
+    return;
+  }
+  videoReferenceImageIdsRef.value = current.filter((candidate) => candidate !== id);
+}
+
+async function handleVideoReferenceUpload(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file || videoReferenceUploadLoading.value) return;
+  if (file.size > MAX_SINGLE_UPLOAD_IMAGE_BYTES) {
+    projectError.value = `单张参考图最多上传 ${formatFileSize(MAX_SINGLE_UPLOAD_IMAGE_BYTES)}。`;
+    return;
+  }
+  videoReferenceUploadLoading.value = true;
+  projectError.value = "";
+  try {
+    const signal = scope.signalFor("video-reference-upload");
+    const dataUrl = await fileToDataUrl(file, signal);
+    if (signal.aborted) return;
+    const result = await uploadProductImage({ name: file.name, dataUrl, brandId: brand.value?.id }, signal);
+    if (!result.image) return;
+    uploadedVideoReferenceImages.value = [result.image, ...uploadedVideoReferenceImages.value.filter((image) => image.id !== result.image.id)];
+    if (props.productLibrary) {
+      props.productLibrary.images.value = [
+        result.image,
+        ...props.productLibrary.images.value.filter((image) => image.id !== result.image.id),
+      ];
+    }
+    if (videoReferenceImageIdsRef.value.length < maxVideoReferences.value) {
+      videoReferenceImageIdsRef.value = [...videoReferenceImageIdsRef.value, result.image.id];
+      videoScriptBlockedError.value = "";
+    } else {
+      projectError.value = `图片已上传，但当前模型最多选择 ${maxVideoReferences.value} 张参考图。`;
+    }
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (isUnauthorized(error)) {
+      auth.handleUnauthorized();
+      return;
+    }
+    projectError.value = (error as Error).message || "参考图上传失败，请重试。";
+  } finally {
+    videoReferenceUploadLoading.value = false;
+  }
+}
+
 function handleRegenerate() {
   reset();
-  generateScript();
+  generateScriptWhenReady();
+}
+
+function handleRetry() {
+  generateScriptWhenReady();
 }
 
 function handleClose() {
@@ -217,7 +486,10 @@ function handleClose() {
   emit("close");
 }
 
-onUnmounted(stopProjectPolling);
+onUnmounted(() => {
+  disposed = true;
+  stopProjectPolling();
+});
 </script>
 
 <template>
@@ -256,16 +528,26 @@ onUnmounted(stopProjectPolling);
           <div class="studio-control-grid">
             <label class="studio-field model-field">
               <span>视频模型</span>
+              <small v-if="activeVideoCapability?.promotionLabel" class="model-promotion">{{ activeVideoCapability.promotionLabel }}</small>
               <span class="model-switch" role="radiogroup" aria-label="视频模型">
-                <button type="button" :class="{ active: videoModelRef === 'd2' }" data-test="video-model-d2" @click="videoModelRef = 'd2'">D2</button>
-                <button type="button" :class="{ active: videoModelRef === 'g2' }" data-test="video-model-g2" @click="videoModelRef = 'g2'">G2</button>
+                <button
+                  v-for="model in videoModelOptions"
+                  :key="model.id"
+                  type="button"
+                  :class="{ active: videoModelRef === model.id }"
+                  :data-test="`video-model-${model.id}`"
+                  @click="videoModelRef = model.id"
+                >
+                  {{ model.displayName }}
+                </button>
               </span>
             </label>
             <label class="studio-field">
               <span>生成方式</span>
               <select v-model="videoModeRef" data-test="video-mode-select">
-                <option value="text">文生视频</option>
-                <option value="image">图生视频</option>
+                <option v-for="mode in availableVideoModes" :key="mode" :value="mode">
+                  {{ mode === 'image' ? '图生视频' : '文生视频' }}
+                </option>
               </select>
             </label>
             <label class="studio-field">
@@ -276,9 +558,9 @@ onUnmounted(stopProjectPolling);
             </label>
             <label class="studio-field">
               <span>画幅</span>
-              <select v-model="aspectRatioSelectionRef" data-test="video-aspect-select">
+              <select v-model="videoAspectRatioRef" data-test="video-aspect-select">
                 <option value="smart">智能竖屏（9:16）</option>
-                <option v-for="ratio in VIDEO_ASPECT_RATIOS" :key="ratio" :value="ratio">{{ ratio }}</option>
+                <option v-for="ratio in availableVideoRatios" :key="ratio" :value="ratio">{{ ratio }}</option>
               </select>
             </label>
             <label class="studio-field">
@@ -288,9 +570,40 @@ onUnmounted(stopProjectPolling);
               </select>
             </label>
           </div>
-              <p class="reference-summary">
-            {{ videoModeRef === 'image' ? `图生视频将使用 ${Math.min(selectedVideoReferenceIds.length, maxVideoReferences)} / ${maxVideoReferences} 张产品参考图，并先生成视觉理解 Bible。` : '文生视频将使用脚本中的主体、镜头和连续性约束。' }}
+          <p v-if="capabilitiesLoading" class="capability-hint">正在读取模型能力配置…</p>
+          <p v-else-if="capabilitiesError" class="capability-hint">{{ capabilitiesError }}</p>
+          <p class="reference-summary">
+            {{ videoModeRef === 'image' ? `图生视频将使用 ${selectedVideoReferenceIds.length} / ${maxVideoReferences} 张视频参考图，并先生成视觉理解 Bible。` : '文生视频将使用脚本中的主体、镜头和连续性约束。' }}
           </p>
+          <section v-if="videoModeRef === 'image'" class="video-reference-picker" data-test="video-reference-picker">
+            <div class="reference-picker-heading">
+              <div>
+                <strong>视频参考图</strong>
+                <span>{{ selectedVideoReferenceIds.length }} / {{ maxVideoReferences }} 张</span>
+              </div>
+              <small>图片输入不额外计费，只用于理解产品、人物、场景与视觉风格。</small>
+            </div>
+            <p class="reference-picker-copy">这里只影响本次视频创作，不会修改当前图片生成设置。</p>
+            <div v-if="!availableProductImages.length && !productLibrary?.loading.value" class="reference-empty">
+              暂无可选参考图，请上传一张新的产品或场景图。
+            </div>
+            <div v-else class="video-reference-options">
+              <label v-for="image in availableProductImages" :key="image.id" class="video-reference-option">
+                <input
+                  type="checkbox"
+                  :checked="videoReferenceImageIdsRef.includes(image.id)"
+                  :disabled="!videoReferenceImageIdsRef.includes(image.id) && selectedVideoReferenceIds.length >= maxVideoReferences"
+                  @change="handleVideoReferenceToggle(image.id, $event)"
+                />
+                <img :src="image.url" :alt="image.originalName" loading="lazy" />
+                <span>{{ image.originalName }}</span>
+              </label>
+            </div>
+            <label class="video-reference-upload">
+              <input type="file" accept="image/*" :disabled="videoReferenceUploadLoading" @change="handleVideoReferenceUpload" />
+              {{ videoReferenceUploadLoading ? '上传中…' : '上传新的参考图' }}
+            </label>
+          </section>
           <p v-if="controlsDirty" class="stale-settings-warning" data-test="video-script-settings-stale">参数已变更，脚本尚未同步；请重新生成脚本后再生成真实视频。</p>
         </section>
 
@@ -310,7 +623,7 @@ onUnmounted(stopProjectPolling);
               type="button"
               class="primary-btn"
               data-test="video-script-retry"
-              @click="retry"
+              @click="handleRetry"
             >
               重新尝试
             </button>
@@ -325,6 +638,15 @@ onUnmounted(stopProjectPolling);
           </div>
         </div>
 
+        <div v-else-if="videoScriptBlockedError && !script" class="dialog-error-state" data-test="video-script-reference-required">
+          <div class="error-icon" aria-hidden="true">!</div>
+          <h3>先准备视频参考图</h3>
+          <p class="error-text">{{ videoScriptBlockedError }}</p>
+          <button type="button" class="primary-btn" data-test="video-script-generate-after-reference" @click="handleRegenerate">
+            生成视频脚本
+          </button>
+        </div>
+
         <div v-else-if="script" class="dialog-result-state">
           <VideoScriptResult
             :script="script"
@@ -333,6 +655,10 @@ onUnmounted(stopProjectPolling);
             @regenerate="handleRegenerate"
             @close="handleClose"
           />
+          <div class="script-compatibility" :class="{ incompatible: !scriptCompatible }" data-test="video-script-compatibility">
+            <strong>{{ scriptCompatible ? '当前模型可直接生成' : '当前模型需要重新生成分镜' }}</strong>
+            <span v-if="!scriptCompatible">当前分镜包含模型不支持的比例或镜头时长，请重新生成视频脚本。</span>
+          </div>
           <section class="real-video-panel" data-test="real-video-panel">
             <div class="real-video-copy">
               <span class="control-eyebrow">下一步</span>
@@ -344,7 +670,7 @@ onUnmounted(stopProjectPolling);
               type="button"
               class="primary-btn generate-video-btn"
               data-test="generate-real-video"
-              :disabled="projectLoading || controlsDirty"
+              :disabled="projectLoading || controlsDirty || !scriptCompatible"
               @click="generateRealVideo"
             >
               {{ projectLoading ? "提交中..." : "生成真实视频" }}
@@ -356,11 +682,29 @@ onUnmounted(stopProjectPolling);
               <strong>{{ projectStatusLabel }}</strong>
               <span>{{ project.model.toUpperCase() }} · {{ project.totalDurationSec }} 秒 · 已扣 {{ project.chargedCredits }} 积分</span>
             </div>
+            <p v-if="project.refundedCredits" class="refund-summary">已退款 {{ project.refundedCredits }} 积分。</p>
             <video v-if="project.finalVideoUrl" class="final-video-player" controls playsinline :src="project.finalVideoUrl"></video>
-            <div v-else class="clip-progress-list">
-              <span v-for="clip in project.clips" :key="clip.id" :class="['clip-progress', `clip-${clip.status}`]">
-                镜头 {{ clip.index }}：{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'failed' ? '失败' : '排队' }}
-              </span>
+            <div class="clip-progress-list">
+              <article v-for="clip in project.clips" :key="clip.id" :class="['clip-progress', `clip-${clip.status}`]">
+                <div class="clip-progress-heading">
+                  <strong>镜头 {{ clip.index }}</strong>
+                  <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : '排队' }}</span>
+                </div>
+                <video v-if="clip.videoUrl" class="clip-video-player" controls playsinline :src="clip.videoUrl"></video>
+                <small v-if="clip.error" class="clip-error">失败原因：{{ clip.error }}</small>
+                <div class="clip-actions">
+                  <a v-if="clip.videoUrl" class="clip-download" :href="clip.videoUrl" download>下载本段</a>
+                  <button
+                    v-if="['failed', 'uncertain_submission', 'cancelled'].includes(clip.status)"
+                    type="button"
+                    class="secondary-btn clip-retry-btn"
+                    :disabled="retryingClipIndex === clip.index"
+                    @click="retryVideoClip(clip.index)"
+                  >
+                    {{ retryingClipIndex === clip.index ? '提交中…' : '重新生成当前镜头' }}
+                  </button>
+                </div>
+              </article>
             </div>
           </section>
         </div>
@@ -544,6 +888,18 @@ onUnmounted(stopProjectPolling);
   color: white;
 }
 
+.model-promotion {
+  color: #a45f28;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.capability-hint {
+  margin: 10px 0 0;
+  color: #a45f28;
+  font-size: 11px;
+}
+
 .reference-summary {
   margin: 12px 0 0;
   color: #806e70;
@@ -551,11 +907,146 @@ onUnmounted(stopProjectPolling);
   line-height: 1.5;
 }
 
+.video-reference-picker {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #eaded8;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.reference-picker-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reference-picker-heading div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #4a3b3e;
+  font-size: 12px;
+}
+
+.reference-picker-heading div span,
+.reference-picker-heading small,
+.reference-picker-copy,
+.reference-empty {
+  color: #806e70;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.reference-picker-heading small {
+  max-width: 440px;
+  text-align: right;
+}
+
+.reference-picker-copy {
+  margin: 5px 0 10px;
+}
+
+.video-reference-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.video-reference-option {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #eaded8;
+  border-radius: 8px;
+  background: #fffaf8;
+  color: #5d4d50;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.video-reference-option:has(input:checked) {
+  border-color: #7c2d32;
+  box-shadow: 0 0 0 1px #7c2d32;
+}
+
+.video-reference-option input {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+}
+
+.video-reference-option img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #f4edea;
+}
+
+.video-reference-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-reference-upload {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin-top: 10px;
+  padding: 0 10px;
+  border: 1px dashed #cda9a0;
+  border-radius: 7px;
+  color: #7c2d32;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.video-reference-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .stale-settings-warning {
   margin: 8px 0 0;
   color: #a45f28;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.script-compatibility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid #cfe7d5;
+  border-radius: 8px;
+  background: #f2fbf4;
+  color: #2c7547;
+  font-size: 12px;
+}
+
+.script-compatibility.incompatible {
+  border-color: #f0c7bc;
+  background: #fff5f2;
+  color: #b34b3d;
+}
+
+.script-compatibility span {
+  color: inherit;
+  font-size: 11px;
 }
 
 .real-video-panel {
@@ -611,18 +1102,73 @@ onUnmounted(stopProjectPolling);
 }
 
 .clip-progress-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 7px;
   margin-top: 10px;
 }
 
 .clip-progress {
+  display: grid;
+  gap: 7px;
   padding: 5px 8px;
-  border-radius: 999px;
+  border: 1px solid #eaded8;
+  border-radius: 8px;
   background: #f5efeb;
   color: #806e70;
   font-size: 11px;
+}
+
+.clip-progress-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.clip-progress-heading strong {
+  color: #5d4d50;
+}
+
+.clip-video-player {
+  display: block;
+  width: min(100%, 420px);
+  max-height: 260px;
+  border-radius: 6px;
+  background: #211d1d;
+}
+
+.clip-error {
+  color: #b72e3a;
+  line-height: 1.45;
+}
+
+.clip-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.clip-download {
+  color: #7c2d32;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.clip-download:hover {
+  text-decoration: underline;
+}
+
+.clip-retry-btn {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.refund-summary {
+  margin: 8px 0 0;
+  color: #2c7547;
+  font-size: 12px;
 }
 
 .clip-completed {
@@ -658,6 +1204,15 @@ onUnmounted(stopProjectPolling);
 @media (max-width: 840px) {
   .studio-control-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reference-picker-heading {
+    flex-direction: column;
+  }
+
+  .reference-picker-heading small {
+    max-width: none;
+    text-align: left;
   }
 
   .real-video-panel {

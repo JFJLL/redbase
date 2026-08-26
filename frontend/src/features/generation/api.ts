@@ -643,6 +643,7 @@ export interface VideoProjectClip {
   attempt: number;
   retryCount: number;
   error?: string;
+  [key: string]: unknown;
 }
 
 export interface VideoProject {

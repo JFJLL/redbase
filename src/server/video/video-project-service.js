@@ -569,7 +569,9 @@ function createVideoProjectService(options = {}) {
   }
 
   async function recover() {
-    for (const project of listRecoverableProjects({ limit: 100 })) {
+    for (const summary of listRecoverableProjects({ limit: 100 })) {
+      const project = getProject(summary.id);
+      if (!project) continue;
       const submitting = (project.clips || []).find((clip) => clip.status === "submitting" && !clip.providerTaskId);
       if (submitting) await markUncertainSubmission(project, submitting, "服务重启后无法确认供应商是否已接受任务");
     }

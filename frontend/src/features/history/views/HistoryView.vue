@@ -5,7 +5,7 @@ import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
-import type { VideoScript } from "@/features/generation/api";
+import { retryVideoProjectClip, type VideoScript } from "@/features/generation/api";
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
 import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
@@ -36,6 +36,7 @@ const loadError = computed(() => historyStore.error);
 const detailItem = ref<GenerationHistoryItem | null>(null);
 const detailSlideIndex = ref<number | null>(null);
 const editEntryId = ref<string | null>(null);
+const retryingVideoClip = ref<string | null>(null);
 
 // 图片加载失败：明确错误态 + 重试；签名过期只刷新一次列表拿新签名，不无限循环。
 const failedImageUrls = reactive(new Set<string>());
@@ -183,12 +184,58 @@ function videoProjectVideoUrl(item: GenerationHistoryItem | null): string {
   return safeImageSrc(item?.payload?.finalVideoUrl || item?.previewUrl);
 }
 
+function videoProjectThumbnailUrl(item: GenerationHistoryItem | null): string {
+  const firstClip = videoProjectClips(item)[0];
+  return safeImageSrc(String(firstClip?.continuityFrameUrl || firstClip?.videoUrl || ""));
+}
+
 function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<string, unknown>> {
   return Array.isArray(item?.payload?.videoClips) ? item.payload.videoClips : [];
 }
 
 function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
   return ({ queued: "排队中", running: "生成中", partial_failed: "部分失败", completed: "已完成", failed: "失败" } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
+}
+
+function videoRequestId(): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `history-video-retry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function retryHistoryVideoClip(clip: Record<string, unknown>): Promise<void> {
+  const item = detailItem.value;
+  const projectId = Number(item?.payload?.projectId);
+  const clipIndex = Number(clip.index);
+  if (!item || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(clipIndex) || clipIndex <= 0) return;
+  retryingVideoClip.value = String(clipIndex);
+  try {
+    const response = await retryVideoProjectClip(projectId, clipIndex, videoRequestId(), scope.signalFor(`history-video-retry-${clipIndex}`));
+    const project = response.project;
+    detailItem.value = {
+      ...item,
+      payload: {
+        ...(item.payload || {}),
+        projectId: project.id,
+        videoModel: project.model,
+        videoMode: project.mode,
+        videoResolution: project.resolution,
+        videoDuration: project.totalDurationSec,
+        videoAspectRatio: project.aspectRatio,
+        videoStatus: project.status,
+        finalVideoUrl: project.finalVideoUrl || "",
+        videoClips: project.clips,
+      },
+    };
+    await historyStore.refresh();
+    const refreshed = historyStore.items.find((candidate) => Number(candidate.id) === Number(item.id));
+    if (refreshed) detailItem.value = refreshed;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    alert(`当前镜头重试失败：${(error as Error).message}`);
+  } finally {
+    retryingVideoClip.value = null;
+  }
 }
 
 function formatTime(value?: string): string {
@@ -440,6 +487,7 @@ onUnmounted(() => {
         </div>
         <div v-else-if="item.type === 'videoProject'" class="history-video-box" @click="openDetail(item)">
           <video v-if="videoProjectVideoUrl(item)" :src="videoProjectVideoUrl(item)" muted playsinline preload="metadata"></video>
+          <img v-else-if="videoProjectThumbnailUrl(item)" :src="videoProjectThumbnailUrl(item)" alt="视频首帧" loading="lazy" />
           <div v-else class="history-video-placeholder">
             <span class="script-icon">🎬</span>
             <strong>{{ videoProjectStatusLabel(item) }}</strong>
@@ -534,12 +582,31 @@ onUnmounted(() => {
               <strong>{{ videoProjectStatusLabel(detailItem) }}</strong>
               <small>视频完成后刷新历史记录即可播放。</small>
             </div>
+            <p v-if="detailItem.payload?.videoStatus === 'partial_failed' || detailItem.payload?.videoStatus === 'failed'" class="history-video-refund">
+              失败镜头的未执行积分会自动退款；本项目累计退款 {{ detailItem.payload?.refundedCredits || 0 }} 积分。
+            </p>
             <div class="history-video-clips">
-              <div v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
-                <span>镜头 {{ clip.index }}</span>
-                <span>{{ clip.status }}</span>
-                <span>{{ clip.durationSec }} 秒</span>
-              </div>
+              <article v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
+                <div class="history-video-clip-heading">
+                  <strong>镜头 {{ clip.index }}</strong>
+                  <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : '排队中' }}</span>
+                  <span>{{ clip.durationSec }} 秒</span>
+                </div>
+                <video v-if="safeImageSrc(String(clip.videoUrl || ''))" class="history-clip-player" controls playsinline :src="safeImageSrc(String(clip.videoUrl || ''))"></video>
+                <small v-if="clip.error" class="history-video-clip-error">失败原因：{{ clip.error }}</small>
+                <div class="history-video-clip-actions">
+                  <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
+                  <button
+                    v-if="['failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
+                    type="button"
+                    class="secondary-btn"
+                    :disabled="retryingVideoClip === String(clip.index)"
+                    @click="retryHistoryVideoClip(clip)"
+                  >
+                    {{ retryingVideoClip === String(clip.index) ? '提交中…' : '重新生成当前镜头' }}
+                  </button>
+                </div>
+              </article>
             </div>
             <VideoScriptResult
               v-if="asVideoScript(detailItem)"
@@ -810,6 +877,13 @@ onUnmounted(() => {
   object-fit: cover;
 }
 
+.history-video-box img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: cover;
+}
+
 .history-video-placeholder {
   min-height: 150px;
   display: flex;
@@ -848,12 +922,57 @@ onUnmounted(() => {
 
 .history-video-clip {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
   gap: 10px;
   padding: 9px 11px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 8px);
   color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.history-video-clip-heading,
+.history-video-clip-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.history-video-clip-heading {
+  justify-content: space-between;
+}
+
+.history-video-clip-heading strong {
+  color: var(--color-text-primary);
+}
+
+.history-clip-player {
+  display: block;
+  width: min(100%, 560px);
+  max-height: 320px;
+  border-radius: var(--radius-md, 8px);
+  background: #211d1d;
+}
+
+.history-video-clip-error {
+  color: var(--color-brand);
+  line-height: 1.5;
+}
+
+.history-video-clip-actions a {
+  color: var(--color-brand);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.history-video-clip-actions a:hover {
+  text-decoration: underline;
+}
+
+.history-video-refund {
+  margin: 10px 0;
+  color: var(--color-success, #2c7547);
   font-size: 12px;
 }
 

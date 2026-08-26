@@ -4,7 +4,12 @@ import { createPinia, setActivePinia } from "pinia";
 import { useAuthStore } from "@/shared/stores/auth";
 import IdeasView from "@/features/ideas/views/IdeasView.vue";
 import { makeBrandDetail, makeIdea, makeTrend } from "@/features/trends/__tests__/insightsTestUtils";
-import { clearIdeaCreativeSettings } from "../ideaCreativeSettings";
+import {
+  clearIdeaCreativeSettings,
+  getIdeaCreativeSettings,
+  getIdeaSettingsKey,
+  saveIdeaCreativeSettings,
+} from "../ideaCreativeSettings";
 import {
   installFlowFetch,
   makeIdeasRouter,
@@ -231,5 +236,93 @@ describe("video script generation flow", () => {
 
     // 验证积分扣除同步
     expect(auth.user?.credits).toBe(4);
+  });
+
+  it("derives model controls from the public capability response", async () => {
+    const options = baseOptions();
+    const originalOverride = options.overrides;
+    options.overrides = (url, init) => {
+      const path = String(url).split("?")[0];
+      if (String(init?.method || "GET") === "GET" && path === "/api/video-models/capabilities") {
+        return jsonResponse(200, {
+          models: [{
+            id: "studio-x",
+            displayName: "Studio X",
+            provider: "test-provider",
+            supportedModes: ["text"],
+            resolutions: ["1080p"],
+            aspectRatios: ["16:9"],
+            totalDurationOptions: [10],
+            clipDurationRules: { min: 4, max: 10 },
+            preferredClipDurations: [10],
+            maxReferenceImages: 3,
+            pricing: { "1080p": 7 },
+            pricingUnit: "per_second",
+          }],
+        });
+      }
+      return originalOverride?.(url, init);
+    };
+
+    const fetchMock = installFlowFetch(options);
+    vi.stubGlobal("fetch", fetchMock);
+    const router = makeIdeasRouter();
+    await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
+    await router.isReady();
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", credits: 5 };
+    auth.sessionLoaded = true;
+
+    const wrapper = mount(IdeasView, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+    await flushPromises();
+    await wrapper.find('[data-test="idea-generate-script-0"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    expect(dialog.find('[data-test="video-model-studio-x"]').exists()).toBe(true);
+    expect(dialog.find('[data-test="video-model-d2"]').exists()).toBe(false);
+    expect((dialog.find('[data-test="video-resolution-select"]').element as HTMLSelectElement).value).toBe("1080p");
+    expect(dialog.find('[data-test="video-mode-select"] option').exists()).toBe(true);
+    expect(dialog.find('[data-test="video-mode-select"] option[value="image"]').exists()).toBe(false);
+
+    const scriptCalls = postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script");
+    expect(scriptCalls[0].model).toBe("studio-x");
+    expect(scriptCalls[0].resolution).toBe("1080p");
+  });
+
+  it("blocks image-to-video script generation until an independent reference is selected", async () => {
+    const key = getIdeaSettingsKey(1, 5, 0);
+    saveIdeaCreativeSettings(key, {
+      ...getIdeaCreativeSettings(key),
+      videoMode: "image",
+      videoReferenceImageIds: [],
+    });
+
+    const fetchMock = installFlowFetch(baseOptions());
+    vi.stubGlobal("fetch", fetchMock);
+    const router = makeIdeasRouter();
+    await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
+    await router.isReady();
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", credits: 5 };
+    auth.sessionLoaded = true;
+
+    const wrapper = mount(IdeasView, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+    await flushPromises();
+    await wrapper.find('[data-test="idea-generate-script-0"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    expect(dialog.find('[data-test="video-script-reference-required"]').exists()).toBe(true);
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
+    expect(dialog.text()).toContain("这里只影响本次视频创作，不会修改当前图片生成设置");
   });
 });

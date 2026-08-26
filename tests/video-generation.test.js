@@ -1,12 +1,15 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fsp = require("fs/promises");
+const path = require("path");
 
 process.env.REDBASE_DB_FILE = ":memory:";
 
 const { openDatabase } = require("../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/server/db/schema");
 const { insertUser, findUserById } = require("../src/server/db/repositories/auth-repository");
+const { insertProductImage } = require("../src/server/db/repositories/product-image-repository");
+const { updateClip } = require("../src/server/db/repositories/video-project-repository");
 const { createVideoProjectService } = require("../src/server/video/video-project-service");
 const {
   getVideoModelConfig,
@@ -20,6 +23,9 @@ const { createG2Provider } = require("../src/server/video/providers/g2-provider"
 const { validateGeneratedAssetInput } = require("../src/server/assets/generated-asset-utils");
 const { collectGenerationAssets } = require("../src/server/assets/generation-deletion-service");
 const { sanitizeGeneration } = require("../src/server/utils");
+const { assertSafeProviderUrl, downloadProviderMedia } = require("../src/server/video/video-remote");
+const { extractStableLastFrame, withVideoTempDir } = require("../src/server/video/video-frame-extractor");
+const { assembleVideoClips } = require("../src/server/video/video-assembler");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -35,30 +41,67 @@ insertUser({
   createdAt: "2026-08-26T00:00:00.000Z",
 });
 
+for (const id of [902, 903, 904, 905, 906, 907, 908, 909, 910]) {
+  insertUser({
+    id,
+    name: `Video Tester ${id}`,
+    phone: `13900000${String(id).padStart(3, "0")}`,
+    password: "hash",
+    accountType: "customer",
+    credits: 300,
+    createdAt: "2026-08-26T00:00:00.000Z",
+  });
+}
+
+for (let index = 1; index <= 9; index += 1) {
+  insertProductImage({
+    id: 9020 + index,
+    ownerUserId: 902,
+    brandId: 1,
+    originalName: `product-${index}.png`,
+    storedPath: `uploads/video-tests/902/product-${index}.png`,
+    mimeType: "image/png",
+    sizeBytes: 4,
+    sha256: `video-test-sha-${index}`,
+    createdAt: "2026-08-26T00:00:00.000Z",
+  });
+}
+insertProductImage({
+  id: 9041,
+  ownerUserId: 904,
+  brandId: 1,
+  originalName: "g2-reference.png",
+  storedPath: "uploads/video-tests/904/g2-reference.png",
+  mimeType: "image/png",
+  sizeBytes: 4,
+  sha256: "video-test-g2-reference",
+  createdAt: "2026-08-26T00:00:00.000Z",
+});
+
 const MP4_BUFFER = Buffer.concat([Buffer.alloc(4), Buffer.from("ftyp"), Buffer.alloc(12)]);
 const JPEG_BUFFER = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
 
-function makeScript() {
+function makeScript(totalDurationSec = 10, clipCount = 1) {
+  const baseClip = {
+    purpose: "开场",
+    scene: "桌面",
+    subjectReference: "产品",
+    subjectAction: "缓慢旋转",
+    cameraMovement: "推近",
+    environmentMotion: "光影流动",
+    lightingAndStyle: "自然光",
+    continuity: "保持主体位置",
+  };
   return {
     title: "测试视频",
     creativeConcept: "连续展示产品质感",
-    totalDurationSec: 10,
+    totalDurationSec,
     aspectRatio: "9:16",
     globalSubjectReference: "产品主体保持一致",
     globalStyleReference: "自然光",
     globalContinuity: "前后镜头连续",
     audioDirection: { music: "轻快", ambience: "环境声", voiceStyle: "自然" },
-    clips: [{
-      index: 1,
-      purpose: "开场",
-      scene: "桌面",
-      subjectReference: "产品",
-      subjectAction: "缓慢旋转",
-      cameraMovement: "推近",
-      environmentMotion: "光影流动",
-      lightingAndStyle: "自然光",
-      continuity: "保持主体位置",
-    }],
+    clips: Array.from({ length: clipCount }, (_, index) => ({ ...baseClip, index: index + 1, purpose: `分镜 ${index + 1}` })),
   };
 }
 
@@ -66,6 +109,7 @@ function makeStorage() {
   const buffers = new Map();
   return {
     provider: "local",
+    buffers,
     async save({ ownerUserId, generationId, variant, mimeType, buffer }) {
       const extension = mimeType === "video/mp4" ? "mp4" : "jpg";
       const storedPath = `generated-images/users/${ownerUserId}/2026/08/${generationId}/gi_${generationId}_${variant}_test.${extension}`;
@@ -102,27 +146,52 @@ function makeProvider({ failNext = false } = {}) {
   };
 }
 
-function makeService(provider, storage = makeStorage()) {
+function makeService(provider, storage = makeStorage(), overrides = {}) {
   return createVideoProjectService({
-    appConfig: {
+    appConfig: overrides.appConfig || {
       security: { assetSigningSecret: "video-test-secret" },
       video: { publicBaseUrl: "https://redbase.example", schedulerIntervalMs: 1000, pollIntervalMs: 1, agnes: { apiKeys: [] } },
     },
     generatedAssetStorage: storage,
-    providers: { d2: provider, g2: provider },
-    keyPool: createAgnesKeyPool({ keys: ["test-key"], rpmPerKey: 60 }),
-    executor: async (_binary, args) => {
+    providers: overrides.providers || { d2: provider, g2: provider },
+    keyPool: overrides.keyPool || createAgnesKeyPool({ keys: ["test-key-a", "test-key-b"], rpmPerKey: 60 }),
+    executor: overrides.executor || (async (_binary, args) => {
       await fsp.writeFile(args[args.length - 1], MP4_BUFFER);
-    },
-    now: () => Date.now(),
+    }),
+    now: overrides.now || (() => Date.now()),
+    fetchImpl: overrides.fetchImpl,
   });
 }
 
+async function settleProject(service, projectId, ownerUserId, maxIterations = 30) {
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    await service.pump();
+    const project = service.getProject(projectId, ownerUserId);
+    if (["completed", "partial_failed", "failed", "cancelled"].includes(project?.status)) return project;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`项目 ${projectId} 未在测试窗口内结束`);
+}
+
 test("video registry enforces D2/G2 clip rules and pricing", () => {
-  assert.deepEqual(segmentVideoDuration("d2", 15), [15]);
+  assert.deepEqual(segmentVideoDuration("d2", 10), [10]);
+  assert.deepEqual(segmentVideoDuration("d2", 15), [10, 5]);
+  assert.deepEqual(segmentVideoDuration("d2", 60), [10, 10, 10, 10, 10, 10]);
+  assert.deepEqual(segmentVideoDuration("g2", 10), [10]);
+  assert.deepEqual(segmentVideoDuration("g2", 15), [10, 5]);
   assert.deepEqual(segmentVideoDuration("g2", 30), [10, 10, 10]);
   assert.deepEqual(segmentVideoDuration("g2", 45), [10, 10, 10, 10, 5]);
+  assert.deepEqual(segmentVideoDuration("g2", 60), [10, 10, 10, 10, 10, 10]);
+  assert.deepEqual(segmentVideoDuration("g2", 9), []);
+  assert.deepEqual(getVideoModelConfig("d2").resolutions, ["720p", "1080p", "2K"]);
+  assert.deepEqual(getVideoModelConfig("d2").aspectRatios, ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]);
+  assert.equal(getVideoModelConfig("d2").maxReferenceImages, 9);
+  assert.equal(getVideoModelConfig("g2").maxReferenceImages, 5);
   assert.equal(estimateVideoCredits({ model: "d2", resolution: "720p", totalDurationSec: 15 }), 30);
+  assert.equal(estimateVideoCredits({ model: "d2", resolution: "1080p", totalDurationSec: 10 }), 30);
+  assert.equal(estimateVideoCredits({ model: "d2", resolution: "2K", totalDurationSec: 10 }), 40);
+  assert.equal(estimateVideoCredits({ model: "g2", clipDurations: [5] }), 1);
+  assert.equal(estimateVideoCredits({ model: "g2", totalDurationSec: 10 }), 2);
   assert.equal(estimateVideoCredits({ model: "g2", totalDurationSec: 15 }), 3);
   assert.equal(getVideoModelConfig("d2").hiddenDefaults.generateAudio, true);
   assert.equal(getVideoModelConfig("g2").providerCapabilities.supportsVideoInput, false);
@@ -140,10 +209,44 @@ test("Agnes key pool never exposes API keys and applies per-key cooldown", () =>
   assert.ok(pool.acquire());
 });
 
+test("Agnes polling leases do not consume the submission RPM slot", () => {
+  let clock = 0;
+  const pool = createAgnesKeyPool({ keys: ["single-key"], rpmPerKey: 1, now: () => clock });
+  const submission = pool.acquire();
+  assert.ok(submission);
+  pool.release(submission.slot, {});
+  const polling = pool.acquire({ rateLimit: false });
+  assert.ok(polling);
+  pool.release(polling.slot, {});
+  assert.equal(pool.acquire(), null);
+  clock = 60001;
+  assert.ok(pool.acquire());
+});
+
 test("generated asset validation accepts MP4 but rejects a fake MP4 header", () => {
   const valid = validateGeneratedAssetInput({ ownerUserId: 901, generationId: 1, variant: "clip-1", mimeType: "video/mp4", buffer: MP4_BUFFER });
   assert.equal(valid.mimeType, "video/mp4");
   assert.throws(() => validateGeneratedAssetInput({ ownerUserId: 901, generationId: 1, variant: "clip-1", mimeType: "video/mp4", buffer: Buffer.from("not-video") }), /content does not match/);
+});
+
+test("provider media downloads reject insecure hosts and private redirect targets", async () => {
+  assert.throws(() => assertSafeProviderUrl("http://provider.example/clip.mp4", { allowedHosts: ["provider.example"] }), /HTTPS/);
+  assert.throws(() => assertSafeProviderUrl("https://127.0.0.1/clip.mp4", { allowedHosts: ["provider.example"] }), /host/);
+  assert.throws(() => assertSafeProviderUrl("https://evil.example/clip.mp4", { allowedHosts: ["provider.example"] }), /host/);
+
+  let fetchCount = 0;
+  await assert.rejects(downloadProviderMedia("https://provider.example/clip.mp4", {
+    allowedHosts: ["provider.example"],
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return {
+        ok: false,
+        status: 302,
+        headers: { get: (name) => String(name).toLowerCase() === "location" ? "https://127.0.0.1/private.mp4" : "" },
+      };
+    },
+  }), /host/);
+  assert.equal(fetchCount, 1);
 });
 
 test("D2 and G2 provider adapters send only the approved product contract fields", async () => {
@@ -190,6 +293,460 @@ test("D2 and G2 provider adapters send only the approved product contract fields
   });
 });
 
+test("FFmpeg helpers inject the binary, prefer the stable tail offset, retry failures, and clean temp files", async () => {
+  let tempDir = "";
+  const calls = [];
+  await withVideoTempDir(async (directory) => {
+    tempDir = directory;
+    const sourcePath = path.join(directory, "source.mp4");
+    const framePath = path.join(directory, "continuity.jpg");
+    const clipPath = path.join(directory, "clip.mp4");
+    const finalPath = path.join(directory, "final.mp4");
+    await fsp.writeFile(sourcePath, MP4_BUFFER);
+    await fsp.writeFile(clipPath, MP4_BUFFER);
+    const executor = async (binary, args) => {
+      calls.push({ binary, args });
+      await fsp.writeFile(args[args.length - 1], String(args[args.length - 1]).endsWith(".jpg") ? JPEG_BUFFER : MP4_BUFFER);
+    };
+
+    const extracted = await extractStableLastFrame({
+      videoPath: sourcePath,
+      outputPath: framePath,
+      appConfig: { video: { ffmpegPath: "C:/app/ffmpeg.exe" } },
+      executor,
+    });
+    assert.equal(extracted.ffmpegPath, "C:/app/ffmpeg.exe");
+    assert.equal(extracted.offsetSeconds, 0.3);
+    assert.deepEqual(calls[0].args.slice(0, 6), ["-hide_banner", "-loglevel", "error", "-sseof", "-0.300", "-i"]);
+
+    await assembleVideoClips({
+      clipPaths: [clipPath],
+      outputPath: finalPath,
+      appConfig: { video: { ffmpegPath: "C:/app/ffmpeg.exe" } },
+      executor,
+    });
+    await assert.rejects(fsp.access(`${finalPath}.concat.txt`));
+  });
+  await assert.rejects(fsp.access(tempDir));
+
+  let failureAttempts = 0;
+  await withVideoTempDir(async (directory) => {
+    await assert.rejects(extractStableLastFrame({
+      videoPath: path.join(directory, "missing.mp4"),
+      outputPath: path.join(directory, "missing.jpg"),
+      appConfig: {},
+      executor: async () => {
+        failureAttempts += 1;
+        throw new Error("ffmpeg failure");
+      },
+    }), /ffmpeg failure/);
+  });
+  assert.equal(failureAttempts, 3);
+});
+
+test("provider native last frame wins and is persisted without an unnecessary FFmpeg extraction", async () => {
+  const storage = makeStorage();
+  const calls = [];
+  const provider = {
+    provider: "native",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() {
+      return { taskId: "native-task" };
+    },
+    async getTaskStatus() {
+      return {
+        status: "completed",
+        videoUrl: "https://provider.example/clip.mp4",
+        nativeLastFrameUrl: "https://provider.example/last.jpg",
+      };
+    },
+  };
+  const service = makeService(provider, storage, {
+    fetchImpl: async (url) => ({
+      ok: true,
+      status: 200,
+      headers: { get: (name) => String(name).toLowerCase() === "content-type" ? (String(url).endsWith(".jpg") ? "image/jpeg" : "video/mp4") : "" },
+      async arrayBuffer() {
+        const source = String(url).endsWith(".jpg") ? JPEG_BUFFER : MP4_BUFFER;
+        return Uint8Array.from(source).buffer;
+      },
+    }),
+    executor: async (_binary, args) => {
+      calls.push(args);
+      await fsp.writeFile(args[args.length - 1], MP4_BUFFER);
+    },
+  });
+  const result = service.createProject({
+    ownerUserId: 906,
+    requestId: "video-native-last-frame",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+  await service.pump();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await service.pump();
+  assert.equal(service.getProject(result.project.id, 906).status, "completed");
+  assert.equal(calls.some((args) => args.includes("-sseof")), false);
+  assert.ok([...storage.buffers.values()].some((buffer) => buffer.equals(JPEG_BUFFER)));
+});
+
+test("G2 falls back to FFmpeg for a stable continuity frame", async () => {
+  const storage = makeStorage();
+  const ffmpegCalls = [];
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip() { return { taskId: "g2-frame-task" }; },
+    async getTaskStatus() { return { status: "completed", videoBuffer: MP4_BUFFER }; },
+  };
+  const service = makeService(provider, storage, {
+    executor: async (_binary, args) => {
+      ffmpegCalls.push(args);
+      await fsp.writeFile(args[args.length - 1], String(args[args.length - 1]).endsWith(".jpg") ? JPEG_BUFFER : MP4_BUFFER);
+    },
+  });
+  const result = service.createProject({
+    ownerUserId: 905,
+    requestId: "video-g2-ffmpeg-fallback",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+  await service.pump();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await service.pump();
+  assert.equal(service.getProject(result.project.id, 905).status, "completed");
+  assert.ok(ffmpegCalls.some((args) => args.includes("-sseof") && args.includes("-0.300")));
+  assert.ok([...storage.buffers.values()].some((buffer) => buffer.equals(JPEG_BUFFER)));
+});
+
+test("D2 projects run clips sequentially and carry the previous continuity frame within the reference limit", async () => {
+  const storage = makeStorage();
+  const submissions = [];
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip(args) {
+      submissions.push(args);
+      return { taskId: `d2-sequential-${submissions.length}` };
+    },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const service = makeService(provider, storage);
+  const result = service.createProject({
+    ownerUserId: 902,
+    requestId: "video-d2-sequential",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 15,
+    referenceAssetIds: [9021, 9022, 9023, 9024, 9025, 9026, 9027, 9028, 9029],
+    script: makeScript(15, 2),
+  });
+
+  await service.pump();
+  const running = service.getProject(result.project.id, 902);
+  assert.equal(running.clips[0].status, "running");
+  assert.equal(running.clips[1].status, "waiting_dependency");
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].referenceUrls.length, 9);
+
+  const completed = await settleProject(service, result.project.id, 902);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.clips.length, 2);
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[1].referenceUrls.length, 9);
+  assert.match(submissions[1].referenceUrls[0], /continuity-frame\/1/);
+  assert.equal(completed.clips[1].continuityMode, "image");
+});
+
+test("separate D2 projects submit in parallel while each project remains independently schedulable", async () => {
+  const storage = makeStorage();
+  let active = 0;
+  let maxActive = 0;
+  let taskNumber = 0;
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip() {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active -= 1;
+      taskNumber += 1;
+      return { taskId: `d2-parallel-${taskNumber}` };
+    },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const service = makeService(provider, storage);
+  const first = service.createProject({
+    ownerUserId: 903,
+    requestId: "video-d2-parallel-a",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea A" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+  const second = service.createProject({
+    ownerUserId: 908,
+    requestId: "video-d2-parallel-b",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea B" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 1,
+    model: "d2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  await service.pump();
+  assert.equal(maxActive, 2);
+  assert.equal(service.getProject(first.project.id, 903).clips[0].status, "running");
+  assert.equal(service.getProject(second.project.id, 908).clips[0].status, "running");
+  assert.equal((await settleProject(service, first.project.id, 903)).status, "completed");
+  assert.equal((await settleProject(service, second.project.id, 908)).status, "completed");
+});
+
+test("G2 maps text, reference, and keyframe modes while rotating submission keys", async () => {
+  let clock = 0;
+  const storage = makeStorage();
+  const submissions = [];
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip(args) {
+      submissions.push(args);
+      return { taskId: `g2-modes-${submissions.length}` };
+    },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const service = makeService(provider, storage, {
+    now: () => clock,
+    keyPool: createAgnesKeyPool({ keys: ["g2-test-a", "g2-test-b"], rpmPerKey: 60, now: () => clock }),
+  });
+  const result = service.createProject({
+    ownerUserId: 907,
+    requestId: "video-g2-mode-sequence",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 15,
+    script: makeScript(15, 2),
+  });
+
+  await service.pump();
+  assert.equal(submissions[0].mode, "text");
+  assert.deepEqual(submissions[0].referenceUrls, []);
+  clock = 1001;
+  await service.pump();
+  clock = 1002;
+  await service.pump();
+  assert.equal(submissions[1].mode, "keyframe");
+  assert.notEqual(submissions[0].apiKey, submissions[1].apiKey);
+  assert.match(submissions[1].firstFrameUrl, /continuity-frame\/1/);
+  assert.deepEqual(submissions[1].referenceUrls, []);
+  clock = 2003;
+  const completed = await settleProject(service, result.project.id, 907);
+  assert.equal(completed.status, "completed");
+
+  let imageClock = 0;
+  const imageSubmissions = [];
+  const imageProvider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip(args) {
+      imageSubmissions.push(args);
+      return { taskId: "g2-reference-mode" };
+    },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const imageService = makeService(imageProvider, makeStorage(), {
+    now: () => imageClock,
+    keyPool: createAgnesKeyPool({ keys: ["g2-reference-only"], rpmPerKey: 60, now: () => imageClock }),
+  });
+  const imageResult = imageService.createProject({
+    ownerUserId: 904,
+    requestId: "video-g2-reference-mode",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "image",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    referenceAssetIds: [9041],
+    script: makeScript(),
+  });
+  await imageService.pump();
+  assert.equal(imageSubmissions[0].mode, "reference");
+  assert.equal(imageSubmissions[0].referenceUrls.length, 1);
+  assert.match(imageSubmissions[0].referenceUrls[0], /product-images\/9041\/file/);
+  assert.equal(imageSubmissions[0].firstFrameUrl, "");
+  imageClock = 1001;
+  await imageService.pump();
+  imageClock = 1002;
+  assert.equal((await settleProject(imageService, imageResult.project.id, 904)).status, "completed");
+});
+
+test("video recovery polls persisted tasks, marks ambiguous submissions, and retries with idempotent billing", async () => {
+  const storage = makeStorage();
+  const submissions = [];
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip(args) {
+      submissions.push(args);
+      return { taskId: `recovery-${submissions.length}` };
+    },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const firstService = makeService(provider, storage);
+  const restartProject = firstService.createProject({
+    ownerUserId: 905,
+    requestId: "video-restart-recovery",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+  await firstService.pump();
+  const restartedService = makeService(provider, storage);
+  await restartedService.recover();
+  assert.equal((await settleProject(restartedService, restartProject.project.id, 905)).status, "completed");
+  assert.equal(submissions.length, 1, "recovery must poll instead of resubmitting a persisted task");
+
+  const uncertainService = makeService(provider);
+  const uncertainProject = uncertainService.createProject({
+    ownerUserId: 909,
+    requestId: "video-uncertain-submission",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+  updateClip(uncertainProject.project.clips[0].id, { status: "submitting", providerTaskId: "" });
+  await uncertainService.recover();
+  const uncertain = uncertainService.getProject(uncertainProject.project.id, 909);
+  assert.equal(uncertain.status, "partial_failed");
+  assert.equal(uncertain.clips[0].status, "uncertain_submission");
+  assert.equal(findUserById(909).credits, 300);
+
+  let failNext = true;
+  const retryProvider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip() { return { taskId: "retry-task" }; },
+    async getTaskStatus() {
+      if (failNext) {
+        failNext = false;
+        return { status: "failed", error: "retryable provider failure" };
+      }
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const retryService = makeService(retryProvider);
+  const retryProject = retryService.createProject({
+    ownerUserId: 910,
+    requestId: "video-retry-billing",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+  const failed = await settleProject(retryService, retryProject.project.id, 910);
+  assert.equal(failed.status, "partial_failed");
+  assert.equal(findUserById(910).credits, 300);
+  retryService.retryClip(retryProject.project.id, 910, 1, "video-retry-request");
+  assert.equal(findUserById(910).credits, 298);
+  assert.equal((await settleProject(retryService, retryProject.project.id, 910)).status, "completed");
+  retryService.retryClip(retryProject.project.id, 910, 1, "video-retry-request");
+  assert.equal(findUserById(910).credits, 298, "same retry request must not charge twice");
+});
+
 test("video project charges once, runs clips sequentially, assembles final video, and retains private cleanup handles", async () => {
   const storage = makeStorage();
   const service = makeService(makeProvider(), storage);
@@ -226,6 +783,10 @@ test("video project charges once, runs clips sequentially, assembles final video
   assert.ok(rawGeneration.payload.videoAssets.final);
   assert.ok(collectGenerationAssets(rawGeneration).length >= 3);
   assert.equal(sanitizeGeneration(rawGeneration).payload.videoAssets, undefined);
+  const historyGeneration = sanitizeGeneration(rawGeneration, { security: { assetSigningSecret: "video-test-secret" } });
+  assert.match(historyGeneration.payload.finalVideoUrl, /assetExpires=\d+/);
+  assert.match(historyGeneration.payload.finalVideoUrl, /assetSignature=/);
+  assert.match(historyGeneration.payload.videoClips[0].videoUrl, /assetSignature=/);
 });
 
 test("failed video clip refunds the unexecuted reservation once", async () => {

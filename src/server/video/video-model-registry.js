@@ -88,15 +88,17 @@ function segmentVideoDuration(model, value) {
   const config = getVideoModelConfig(model);
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return [];
-  if (numeric <= config.clipDurationRules.max) {
+  const preferred = Number(config.preferredClipDurations[0] || config.clipDurationRules.max);
+  if (numeric <= config.clipDurationRules.max && numeric <= preferred) {
     if (numeric < config.clipDurationRules.min) return [];
+    if (config.allowedClipDurations && !config.allowedClipDurations.includes(numeric)) return [];
     return [numeric];
   }
 
   const clips = [];
   let remaining = numeric;
   while (remaining > 0) {
-    let next = Math.min(config.preferredClipDurations[0], remaining);
+    let next = Math.min(preferred, remaining);
     const after = remaining - next;
     if (after > 0 && after < config.clipDurationRules.min) {
       next -= config.clipDurationRules.min - after;

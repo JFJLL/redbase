@@ -48,6 +48,13 @@ function buildFullMarkdown(): string {
     "- **环境音效**：" + (s.audioDirection?.ambience || "-"),
     "- **解说/配音语调**：" + (s.audioDirection?.voiceStyle || "-"),
     "",
+    ...(visualBibleEntries.value.length
+      ? [
+          "## 视觉理解 Visual Bible",
+          ...visualBibleEntries.value.map(([key, value]) => `- **${key}**：${value}`),
+          "",
+        ]
+      : []),
     "---",
     "",
     "## 分镜脚本与提示词",

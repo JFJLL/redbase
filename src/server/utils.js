@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const util = require("util");
 const { jsonrepair } = require("jsonrepair");
+const { signLocalAssetUrls } = require("./assets/signed-urls");
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
 const LOG_DIR = path.join(ROOT_DIR, "logs");
@@ -283,8 +284,8 @@ function flattenTrendBuckets(trends) {
   );
 }
 
-function sanitizeGeneration(item) {
-  return {
+function sanitizeGeneration(item, appConfig) {
+  const sanitized = {
     id: item.id,
     ownerUserId: item.ownerUserId,
     type: item.type,
@@ -300,6 +301,7 @@ function sanitizeGeneration(item) {
     summary: item.summary || "",
     payload: sanitizePayloadForClient(item.payload || {}),
   };
+  return appConfig ? signLocalAssetUrls(sanitized, appConfig) : sanitized;
 }
 
 function sanitizeUser(user) {

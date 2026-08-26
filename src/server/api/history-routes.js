@@ -11,7 +11,7 @@ const {
 const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
 const { removeGenerationAssetsAndRows } = require("../assets/generation-deletion-service");
 
-const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "styleImage", "imageEdit"]);
+const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "videoScript", "videoProject", "styleImage", "imageEdit"]);
 const HISTORY_GENERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 

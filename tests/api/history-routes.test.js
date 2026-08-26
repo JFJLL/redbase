@@ -216,6 +216,34 @@ test("GET /api/history applies type and keyword filters", async () => {
   assert.deepEqual(res.body.generations.map((item) => item.id), [1]);
 });
 
+test("GET /api/history accepts video script and project type filters", async () => {
+  for (const type of ["videoScript", "videoProject"]) {
+    const res = createRes();
+    const handled = await handleHistoryRoutes(
+      context,
+      createReq(`/api/history?type=${type}`, "redbase_session=route-token"),
+      res,
+      "/api/history",
+    );
+    assert.equal(handled, true);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.generations, []);
+  }
+});
+
+test("GET /api/history still applies the normal type filter after adding video types", async () => {
+  const res = createRes();
+  const handled = await handleHistoryRoutes(
+    context,
+    createReq("/api/history?type=moments", "redbase_session=route-token"),
+    res,
+    "/api/history",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.generations.map((item) => item.id), [3, 1]);
+});
+
 test("GET /api/history combines brand and type filters", async () => {
   const res = createRes();
   const handled = await handleHistoryRoutes(

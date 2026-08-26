@@ -174,6 +174,89 @@ describe("HistoryView", () => {
     expect(wrapper.find('[data-test="image-edit-panel"]').exists()).toBe(false);
   });
 
+  it("renders video project clip playback, download, failure refund, and retry controls", async () => {
+    const project = {
+      id: 77,
+      generationId: 177,
+      brandId: 7,
+      trendId: 5,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 15,
+      status: "partial_failed",
+      referenceAssetIds: [],
+      visualBible: {},
+      estimatedCredits: 30,
+      chargedCredits: 30,
+      refundedCredits: 5,
+      finalVideoUrl: "",
+      clips: [
+        { id: 7701, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0, videoUrl: "/api/video-projects/77/assets/clip/1?assetExpires=9999999999999&assetSignature=clip-one", error: "" },
+        { id: 7702, index: 2, startSec: 10, endSec: 15, durationSec: 5, status: "failed", prompt: "", continuityMode: "image", referenceAssetIds: [], creditCost: 10, attempt: 1, retryCount: 0, error: "供应商暂时不可用" },
+      ],
+      script: GENERATIONS[2].payload?.videoScript,
+    };
+    const retryResponse = {
+      ...project,
+      status: "queued",
+      clips: project.clips.map((clip) => clip.index === 2 ? { ...clip, status: "queued", error: "" } : clip),
+    };
+    const { wrapper, calls } = await mountView((url, init) => {
+      if (url === "/api/video-projects/77/clips/2/retry" && init?.method === "POST") {
+        return jsonResponse(200, { project: retryResponse });
+      }
+      if (url.startsWith("/api/history")) {
+        return jsonResponse(200, {
+          generations: [{
+            id: 77,
+            type: "videoProject",
+            cardTitle: "露营咖啡视频",
+            brandName: "品牌A",
+            brandId: 7,
+            trendTitle: "五一露营潮",
+            ideaTitle: "户外手冲咖啡指南",
+            channelLabel: "AI 视频",
+            createdAt: "2026-07-23T08:00:00.000Z",
+            previewUrl: "",
+            payload: {
+              projectId: project.id,
+              videoModel: project.model,
+              videoMode: project.mode,
+              videoResolution: project.resolution,
+              videoDuration: project.totalDurationSec,
+              videoAspectRatio: project.aspectRatio,
+              videoStatus: project.status,
+              refundedCredits: project.refundedCredits,
+              finalVideoUrl: project.finalVideoUrl,
+              videoClips: project.clips,
+              script: project.script,
+            },
+          }],
+        });
+      }
+      return undefined;
+    });
+
+    const card = wrapper.find('[data-test="history-card"]');
+    expect(card.text()).toContain("AI 视频");
+    expect(card.text()).toContain("部分失败");
+    expect(card.find('img[src*="video-projects/77/assets/clip/1"]').exists()).toBe(true);
+    await card.find('[data-test="history-detail"]').trigger("click");
+    await flushPromises();
+
+    const detail = wrapper.find('[data-test="history-video-project-detail"]');
+    expect(detail.exists()).toBe(true);
+    expect(detail.text()).toContain("累计退款 5 积分");
+    expect(detail.findAll("video")).toHaveLength(1);
+    expect(detail.text()).toContain("供应商暂时不可用");
+    await detail.find('.history-video-clip-actions button').trigger("click");
+    await flushPromises();
+    expect(calls.some((call) => call.url === "/api/video-projects/77/clips/2/retry")).toBe(true);
+  });
+
   it("sends DELETE /api/history/:id after confirm and removes the card from store", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const { wrapper, calls } = await mountView((url, init) => {
