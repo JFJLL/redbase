@@ -184,6 +184,8 @@ const SAFE_CLIENT_PAYLOAD_KEYS = new Set([
   "audioDirection", "music", "ambience", "voiceStyle", "clips", "startSec", "endSec", "durationSec", "purpose", "referenceAssets",
   "subjectReference", "firstFrame", "lastFrame", "subjectAction", "cameraMovement", "environmentMotion", "lightingAndStyle", "audioPrompt",
   "voiceover", "dialogue", "onScreenText", "transition", "continuity", "stylePrompt", "videoDuration",
+  "projectId", "videoModel", "videoMode", "videoResolution", "videoStatus", "finalVideoUrl", "videoClips", "script", "visualBible",
+  "model", "generationDurationSec", "dependsOnClipIndex", "continuityMode", "referenceAssetIds", "continuityState", "creditCost", "attempt", "retryCount", "videoUrl", "continuityFrameUrl", "estimatedCredits", "chargedCredits", "refundedCredits", "prompt",
   "styleReferenceImageUsed", "styleReferenceImageCount", "styleReferenceImageName", "referenceImageUsed", "referenceImageCount",
 ].map((key) => key.toLowerCase()));
 

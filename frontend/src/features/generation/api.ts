@@ -44,12 +44,15 @@ export const XHS_CREATIVE_STYLE_OPTIONS: readonly CreativeOption[] = Object.free
 
 
 export const VIDEO_DURATION_OPTIONS: readonly CreativeOption[] = Object.freeze([
-  { value: "auto", label: "智能推荐", description: "根据选题内容与创意复杂度自动确定时长（推荐 15s/30s）" },
+  { value: "auto", label: "智能推荐", description: "根据选题内容与创意复杂度自动确定时长（推荐 10s/30s）" },
+  { value: "10", label: "10 秒", description: "适合单一产品动作、快速展示与短节奏开场" },
   { value: "15", label: "15 秒", description: "适合快速吸睛、单一亮点卡点与快节奏短视频" },
   { value: "30", label: "30 秒", description: "标准黄金时长，适合完整故事线与产品核心场景展开" },
   { value: "45", label: "45 秒", description: "适合多场景对比、深度干货与递进式叙事" },
   { value: "60", label: "60 秒", description: "适合沉浸式大片感、多维度种草与完整情景剧" },
 ]);
+
+export const VIDEO_ASPECT_RATIOS = ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"] as const;
 
 export const WECHAT_TEMPLATE_OPTIONS: readonly CreativeOption[] = Object.freeze([
   { value: "auto", label: "智能配色", description: "根据文章主题自动匹配长图配色与结构" },
@@ -562,6 +565,10 @@ export interface VideoScriptClip {
   onScreenText?: string;
   transition?: string;
   continuity?: string;
+  generationDurationSec?: number;
+  dependsOnClipIndex?: number | null;
+  continuityMode?: string;
+  referenceAssetIds?: number[];
   prompt: string;
 }
 
@@ -581,6 +588,86 @@ export interface VideoScript {
   globalContinuity: string;
   audioDirection: VideoScriptAudioDirection;
   clips: VideoScriptClip[];
+  model?: "d2" | "g2" | string;
+  mode?: "text" | "image" | string;
+  resolution?: string;
+  visualBible?: VisualBible;
+}
+
+export interface VisualBible {
+  subject?: string;
+  appearance?: string;
+  materials?: string;
+  colors?: string;
+  logoAndText?: string;
+  environment?: string;
+  lighting?: string;
+  camera?: string;
+  continuity?: string;
+  exclusions?: string;
+  [key: string]: unknown;
+}
+
+export interface VideoModelCapability {
+  id: "d2" | "g2" | string;
+  displayName: string;
+  provider: string;
+  supportedModes: string[];
+  resolutions: string[];
+  aspectRatios: string[];
+  totalDurationOptions: number[];
+  clipDurationRules: { min: number; max: number };
+  allowedClipDurations?: number[];
+  preferredClipDurations: number[];
+  maxReferenceImages: number;
+  pricing: Record<string, number>;
+  pricingUnit: string;
+  promotionLabel?: string;
+}
+
+export interface VideoProjectClip {
+  id: number;
+  index: number;
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  status: string;
+  dependsOnClipIndex?: number | null;
+  prompt: string;
+  continuityMode: string;
+  referenceAssetIds: number[];
+  continuityState?: Record<string, unknown>;
+  videoUrl?: string;
+  continuityFrameUrl?: string;
+  creditCost: number;
+  attempt: number;
+  retryCount: number;
+  error?: string;
+}
+
+export interface VideoProject {
+  id: number;
+  generationId: number;
+  brandId: number;
+  trendId: number;
+  ideaIndex: number;
+  model: string;
+  mode: string;
+  resolution: string;
+  aspectRatio: string;
+  totalDurationSec: number;
+  status: string;
+  referenceAssetIds: number[];
+  visualBible: VisualBible;
+  script: VideoScript;
+  estimatedCredits: number;
+  chargedCredits: number;
+  refundedCredits: number;
+  finalVideoUrl?: string;
+  clips: VideoProjectClip[];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface VideoScriptRequest {
@@ -591,6 +678,12 @@ export interface VideoScriptRequest {
   useProductImages?: boolean;
   productImages?: ProductImageInput[];
   styleReferenceImages?: Array<{ name?: string; dataUrl?: string }>;
+  model?: "d2" | "g2" | string;
+  mode?: "text" | "image" | string;
+  resolution?: string;
+  videoReferenceImageIds?: number[];
+  referenceAssetIds?: number[];
+  visualBible?: VisualBible;
 }
 
 export interface VideoScriptSubmitResult {
@@ -610,6 +703,68 @@ export function submitVideoScript(
   return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/video-script`, {
     method: "POST",
     body,
+    signal,
+  });
+}
+
+export interface VideoProjectRequest {
+  requestId: string;
+  model: "d2" | "g2" | string;
+  mode: "text" | "image" | string;
+  resolution: string;
+  aspectRatio: string;
+  totalDurationSec: number;
+  referenceAssetIds: number[];
+  visualBible?: VisualBible;
+  script: VideoScript;
+}
+
+export function fetchVideoModelCapabilities(signal?: AbortSignal): Promise<{ models: VideoModelCapability[] }> {
+  return apiFetch("/api/video-models/capabilities", { signal });
+}
+
+export function estimateVideoProject(
+  body: Pick<VideoProjectRequest, "model" | "resolution" | "totalDurationSec">,
+  signal?: AbortSignal,
+): Promise<{ model: string; resolution: string; totalDurationSec: number; clipDurations: number[]; credits: number }> {
+  return apiFetch("/api/video-projects/estimate", { method: "POST", body, signal });
+}
+
+export function createVideoProject(
+  brandId: number,
+  trendId: number,
+  ideaIndex: number,
+  body: VideoProjectRequest,
+  signal?: AbortSignal,
+): Promise<{ project: VideoProject; user?: SessionUser; generation?: Record<string, unknown> }> {
+  return apiFetch(`/api/brands/${brandId}/trends/${trendId}/ideas/${ideaIndex}/video-project`, {
+    method: "POST",
+    body,
+    signal,
+  });
+}
+
+export function fetchVideoProject(projectId: number, signal?: AbortSignal): Promise<{ project: VideoProject }> {
+  return apiFetch(`/api/video-projects/${projectId}`, { signal });
+}
+
+export function fetchActiveVideoProjects(signal?: AbortSignal): Promise<{ projects: VideoProject[] }> {
+  return apiFetch("/api/video-projects/active", { signal });
+}
+
+export function startVideoProject(projectId: number, signal?: AbortSignal): Promise<{ project: VideoProject }> {
+  return apiFetch(`/api/video-projects/${projectId}/start`, { method: "POST", body: {}, signal });
+}
+
+export function retryVideoProjectClip(
+  projectId: number,
+  clipIndex: number,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<{ project: VideoProject }> {
+  return apiFetch(`/api/video-projects/${projectId}/clips/${clipIndex}/retry`, {
+    method: "POST",
+    body: { requestId },
     signal,
   });
 }

@@ -17,7 +17,8 @@ const {
   findProductImageByOwner,
   touchProductImageUsed,
 } = require("../db/repositories/product-image-repository");
-const { generateVideoScript } = require("../ai/video-script-service");
+const { generateVideoScript, generateVisualBible } = require("../ai/video-script-service");
+const { getVideoModelConfig, normalizeModelId } = require("../video/video-model-registry");
 const { sanitizeGeneration, sanitizeUser } = require("../utils");
 const { CREDIT_COSTS, hasEnoughCredits } = require("./credits");
 
@@ -82,6 +83,10 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
 
     const payload = await collectBody(req);
     const requestId = String(payload.requestId || "").trim() || `vs-${user.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestedModel = String(payload.model || "").trim();
+    const model = requestedModel ? normalizeModelId(requestedModel) : "";
+    const modelConfig = model ? getVideoModelConfig(model) : null;
+    const mode = String(payload.mode || "text").trim().toLowerCase();
 
     // 幂等防线：相同用户、相同 requestId 返回已有 generation
     const existing = findGenerationByOwnerAndRequestId(user.id, requestId);
@@ -100,10 +105,17 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
 
     // 解析受控素材输入
     const resolvedImages = [];
+    const resolvedVideoReferenceIds = [];
 
     // 1. 产品图
-    if (payload.useProductImages !== false && Array.isArray(payload.productImages)) {
-      const productImagesToLoad = payload.productImages.slice(0, 10);
+    const requestedVideoReferenceIds = Array.isArray(payload.videoReferenceImageIds)
+      ? payload.videoReferenceImageIds
+      : (Array.isArray(payload.referenceAssetIds) ? payload.referenceAssetIds : null);
+    const productImageItems = model && requestedVideoReferenceIds
+      ? requestedVideoReferenceIds.map((id) => ({ id }))
+      : payload.productImages;
+    if (payload.useProductImages !== false && Array.isArray(productImageItems)) {
+      const productImagesToLoad = productImageItems.slice(0, modelConfig?.maxReferenceImages || 10);
       let pIdx = 1;
       for (const item of productImagesToLoad) {
         const imageId = Number(item?.id);
@@ -119,9 +131,10 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
                 roleDescription: `以下图片是产品参考图 ${pIdx}（${image.originalName}），只用于识别产品主体、外观、包装、材质、颜色和品牌元素。`,
                 mimeType: image.mimeType || "image/png",
                 dataBase64: buffer.toString("base64"),
-                name: image.originalName,
-              });
-              pIdx += 1;
+              name: image.originalName,
+            });
+            if (model) resolvedVideoReferenceIds.push(image.id);
+            pIdx += 1;
             } catch (_fileError) {
               // file read error
             }
@@ -171,6 +184,15 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     const styleCount = resolvedImages.filter((img) => img.role === "style").length;
     const logoCount = resolvedImages.filter((img) => img.role === "logo").length;
 
+    if (model && !["text", "image"].includes(mode)) {
+      badRequest(res, "当前视频生成方式不受支持。");
+      return true;
+    }
+    if (model && mode === "image" && resolvedVideoReferenceIds.length === 0) {
+      badRequest(res, "图生视频至少需要一张产品参考图。");
+      return true;
+    }
+
     const charged = trySpendCreditsWithEvent({
       userId: user.id,
       amount: CREDIT_COSTS.videoScript,
@@ -193,6 +215,9 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
           logoUsed: logoCount > 0,
           aspectRatio: payload.aspectRatioSelection || "9:16",
           videoDuration: payload.videoDuration || payload.durationSelection || "auto",
+          videoModel: model || undefined,
+          videoMode: model ? mode : undefined,
+          videoReferenceImageIds: model ? resolvedVideoReferenceIds : undefined,
         },
       },
     });
@@ -203,6 +228,9 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     }
 
     try {
+      const visualBible = model && mode === "image"
+        ? await generateVisualBible(appConfig, { brand, idea, images: resolvedImages })
+        : {};
       const script = await generateVideoScript(appConfig, {
         brand,
         trend,
@@ -210,6 +238,10 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         aspectRatio: payload.aspectRatioSelection || "9:16",
         durationSelection: payload.videoDuration || payload.durationSelection || "auto",
         images: resolvedImages,
+        model,
+        mode,
+        visualBible,
+        referenceAssetIds: resolvedVideoReferenceIds,
       });
 
       const generation = {
@@ -230,6 +262,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
           requestId,
           aspectRatio: script.aspectRatio || payload.aspectRatioSelection || "9:16",
           videoScript: script,
+          ...(model ? { videoModel: model, videoMode: mode, visualBible } : {}),
           referenceImageUsed: productCount > 0,
           referenceImageCount: productCount,
           styleReferenceImageUsed: styleCount > 0,

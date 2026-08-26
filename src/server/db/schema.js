@@ -196,6 +196,64 @@ function initializeDatabaseSchema() {
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS video_projects (
+      id INTEGER PRIMARY KEY,
+      owner_user_id INTEGER NOT NULL,
+      generation_id INTEGER NOT NULL UNIQUE,
+      request_id TEXT NOT NULL,
+      brand_id INTEGER NOT NULL,
+      trend_id INTEGER NOT NULL,
+      idea_index INTEGER NOT NULL,
+      video_model TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      resolution TEXT NOT NULL,
+      aspect_ratio TEXT NOT NULL,
+      total_duration_sec INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      reference_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+      visual_bible_json TEXT NOT NULL DEFAULT '{}',
+      script_json TEXT NOT NULL DEFAULT '{}',
+      estimated_credits INTEGER NOT NULL DEFAULT 0,
+      charged_credits INTEGER NOT NULL DEFAULT 0,
+      refunded_credits INTEGER NOT NULL DEFAULT 0,
+      credit_event_id INTEGER,
+      final_video_json TEXT NOT NULL DEFAULT '{}',
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE,
+      FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL,
+      UNIQUE (owner_user_id, request_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS video_clips (
+      id INTEGER PRIMARY KEY,
+      project_id INTEGER NOT NULL,
+      clip_index INTEGER NOT NULL,
+      start_sec INTEGER NOT NULL,
+      end_sec INTEGER NOT NULL,
+      duration_sec INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      depends_on_clip_index INTEGER,
+      prompt TEXT NOT NULL DEFAULT '',
+      provider TEXT NOT NULL DEFAULT '',
+      provider_task_id TEXT NOT NULL DEFAULT '',
+      continuity_mode TEXT NOT NULL DEFAULT '',
+      reference_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+      continuity_state_json TEXT NOT NULL DEFAULT '{}',
+      output_video_json TEXT NOT NULL DEFAULT '{}',
+      continuity_frame_json TEXT NOT NULL DEFAULT '{}',
+      credit_cost INTEGER NOT NULL DEFAULT 0,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES video_projects(id) ON DELETE CASCADE,
+      UNIQUE (project_id, clip_index)
+    );
+
     CREATE TABLE IF NOT EXISTS credit_events (
       id INTEGER PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -303,6 +361,9 @@ function ensureDatabaseIndexes() {
       ON excellent_content_remix_analysis_cache(expires_at);
     CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_user_id ON image_jobs(owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_created ON image_jobs(owner_user_id, created_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_video_projects_owner_created ON video_projects(owner_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_video_projects_status_updated ON video_projects(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_video_clips_project_status ON video_clips(project_id, status, clip_index);
     CREATE INDEX IF NOT EXISTS idx_trend_analysis_requests_user_status ON trend_analysis_requests(user_id, status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_trend_analysis_requests_active_bucket
       ON trend_analysis_requests(user_id, brand_id, bucket_key)

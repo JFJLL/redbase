@@ -28,6 +28,9 @@ export interface IdeaCreativeSettings {
   visualStylePreset: string;
   wechatTemplate: string;
   videoDuration?: string;
+  videoModel?: "d2" | "g2" | string;
+  videoMode?: "text" | "image" | string;
+  videoResolution?: string;
   useBrandLogo: boolean;
   selectedProductIds: number[];
   /** 内容选题页「使用这些产品图生成图片」开关（旧版 productImages[key].useImage）。
@@ -57,6 +60,9 @@ function defaultSettings(): IdeaCreativeSettings {
     visualStylePreset: "auto",
     wechatTemplate: "auto",
     videoDuration: "auto",
+    videoModel: "d2",
+    videoMode: "text",
+    videoResolution: "720p",
     useBrandLogo: false,
     selectedProductIds: [],
     useProductImages: true,
@@ -77,6 +83,11 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
     visualStylePreset: validStyle ? settings.visualStylePreset : "auto",
     wechatTemplate: validTemplate ? settings.wechatTemplate : "auto",
     videoDuration: validDuration ? (settings.videoDuration || "auto") : "auto",
+    videoModel: settings.videoModel === "g2" ? "g2" : "d2",
+    videoMode: settings.videoMode === "image" ? "image" : "text",
+    videoResolution: ["720p", "1080p", "2K"].includes(String(settings.videoResolution))
+      ? settings.videoResolution
+      : "720p",
     selectedProductIds: Array.isArray(settings.selectedProductIds) ? [...settings.selectedProductIds] : [],
     useProductImages: settings.useProductImages !== false,
   };

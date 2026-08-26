@@ -1,6 +1,14 @@
 const { callTextModelJson, callVisionModelJson } = require("./text-provider");
+const {
+  getVideoModelConfig,
+  normalizeModelId,
+  normalizeTotalDuration: normalizeVideoDuration,
+  resolveVideoAspectRatio,
+  segmentVideoDuration,
+  VIDEO_TOTAL_DURATION_OPTIONS,
+} = require("../video/video-model-registry");
 
-const ALLOWED_TOTAL_DURATIONS = [15, 30, 45, 60];
+const ALLOWED_TOTAL_DURATIONS = [10, 15, 30, 45, 60];
 const STRUCTURED_FIELD_MAX_LENGTH = 8000;
 
 function normalizeTotalDuration(duration) {
@@ -28,6 +36,30 @@ function normalizeReferenceAssets(referenceAssets) {
       label: compactString(asset.label, `参考素材${index + 1}`, 300),
       description: compactString(asset.description, "", STRUCTURED_FIELD_MAX_LENGTH),
     }));
+}
+
+function normalizeVisualBible(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    subject: compactString(source.subject || source.subjectDescription, "", 2000),
+    appearance: compactString(source.appearance || source.productAppearance, "", 4000),
+    materials: compactString(source.materials || source.material, "", 2000),
+    colors: compactString(source.colors || source.colorPalette, "", 2000),
+    logoAndText: compactString(source.logoAndText || source.brandElements, "", 2000),
+    environment: compactString(source.environment || source.background, "", 2500),
+    lighting: compactString(source.lighting || source.light, "", 2000),
+    camera: compactString(source.camera || source.composition, "", 2000),
+    continuity: compactString(source.continuity || source.identityAnchors, "", 3000),
+    exclusions: compactString(source.exclusions || source.avoid, "", 2500),
+  };
+}
+
+function formatVisualBible(visualBible) {
+  const bible = normalizeVisualBible(visualBible);
+  return Object.entries(bible)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}：${value}`)
+    .join("\n");
 }
 
 function formatReferenceAsset(asset, index) {
@@ -102,8 +134,14 @@ function compileVideoClipPrompt(clip, globalContext = {}) {
   return parts.join("\n\n");
 }
 
-function buildSystemPrompt() {
-  return `你是一位顶尖的 AI 视频创意总监与分镜提示词工程师（擅长 Kling / 可灵、Hailuo / 海螺、Sora、Runway Gen-3 等现代 AI 视频生成模型）。
+function buildSystemPrompt({ model = "", mode = "" } = {}) {
+  const modelConfig = model ? getVideoModelConfig(model) : null;
+  const modelRules = modelConfig
+    ? `\n【当前产品模型约束】\n- 目标模型：${modelConfig.displayName}（${modelConfig.provider}）\n- 生成方式：${mode === "image" ? "图生视频" : "文生视频"}\n- 单镜头时长必须遵循模型可用规则：${modelConfig.allowedClipDurations ? modelConfig.allowedClipDurations.join("、") : `${modelConfig.clipDurationRules.min}-${modelConfig.clipDurationRules.max}`} 秒。\n- 总时长必须拆成系统指定的可执行镜头，不要为了凑时长增加不可执行的短镜头。\n- 输出的每个镜头都要包含可直接执行的首帧、动作、运镜、环境动态、连续性描述。\n`
+    : "";
+  return `你是一位顶尖的 AI 视频创意总监与分镜提示词工程师（擅长现代 AI 视频生成模型）。
+
+${modelRules}
 
 【核心使命】
 根据用户提供的品牌档案、热点趋势、内容选题以及参考素材（产品图、风格图、品牌标识），生成一套面向现代 AI 视频生成模型使用的“结构化视频分镜脚本”。
@@ -111,7 +149,7 @@ function buildSystemPrompt() {
 【重要产品原则】
 1. 只生成面向 AI 视频生成模型的提示词与分镜描述，严禁生成真人实拍执行内容（禁止出现摄影师安排、相机/镜头/灯具型号、场地勘景、拍摄日程、演员通告、道具采购清单、摄制组分工、机位编号、真人拍摄预算等）。
 2. “镜头运动/运镜”“景别”“视角”属于 AI 视频提示词语言，应当保留并详细描述。
-3. 视频总时长必须确定为 15、30、45 或 60 秒之一（若用户指定了时长请严格遵循；未指定时由模型智能确定，推荐 15 秒或 30 秒）。
+3. 视频总时长必须确定为 10、15、30、45 或 60 秒之一（若用户指定了时长请严格遵循；未指定时由模型智能确定，推荐 10 秒或 30 秒）。
 4. 每个分镜片段（Clip）建议时长为 3 至 10 秒，相邻片段首尾时间必须严格连续（第1段从0秒开始，第N段结束时间等于总时长，无重叠、无空档）。
 5. 素材角色严格分离：
    - 有产品参考图时：分镜的主体参考（subjectReference）必须准确引用具体产品的造型、材质、包装、色彩与细节；
@@ -167,12 +205,13 @@ function buildSystemPrompt() {
 请开始生成完整的视频脚本 JSON 对象。clips[].prompt 可留空；最终完整提示词由系统根据结构化字段自动编译。`;
 }
 
-function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = null, images = [] }) {
+function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = null, images = [], model = "", mode = "", visualBible = null }) {
   const parts = [];
 
   parts.push("【任务目标】");
   parts.push("请根据以下品牌信息、选题视角与视频参数要求，创作一份完整的结构化 AI 视频生成脚本。请将全部可执行细节准确写入各个分镜结构化字段；兼容字段 prompt 可留空，系统会自动编译最终完整提示词。");
   parts.push(`要求输出视频比例：${aspectRatio || "9:16"}`);
+  if (model) parts.push(`当前视频模型：${getVideoModelConfig(model).displayName}；生成方式：${mode === "image" ? "图生视频" : "文生视频"}`);
   if (targetDuration) {
     parts.push(`指定视频总时长：${targetDuration} 秒（必须严格将所有分镜时长划分并保证总和为 ${targetDuration} 秒）`);
   }
@@ -221,18 +260,36 @@ function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = nul
     parts.push(`- 提供了 ${brand?.profileType === "personal" ? "个人头像" : "品牌 Logo"} 参考，注意在片尾或关键时刻保持品牌识别规范。`);
   }
 
+  const visualBibleText = formatVisualBible(visualBible);
+  if (visualBibleText) {
+    parts.push("\n【视觉理解 Visual Bible（必须作为全片一致性约束）】");
+    parts.push(visualBibleText);
+  }
+
   parts.push("\n请开始生成完整的视频脚本 JSON 对象，所有结构化描述必须为中文，clips[].prompt 可留空。");
   return parts.join("\n");
 }
 
-function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", targetDuration = null, idea = {} } = {}) {
+function validateAndNormalizeVideoScript(raw, {
+  requestedAspectRatio = "9:16",
+  targetDuration = null,
+  idea = {},
+  model = "",
+  mode = "text",
+  visualBible = null,
+  referenceAssetIds = [],
+} = {}) {
   if (!raw || typeof raw !== "object") {
     throw new Error("模型返回的不是有效的脚本对象。");
   }
 
   const title = compactString(raw.title, idea?.title || "AI 视频脚本", 120);
   const creativeConcept = compactString(raw.creativeConcept, idea?.summary || "视频创意方案", 500);
-  const totalDurationSec = targetDuration ? normalizeTotalDuration(targetDuration) : normalizeTotalDuration(raw.totalDurationSec);
+  const normalizedModel = model ? normalizeModelId(model) : "";
+  const modelConfig = normalizedModel ? getVideoModelConfig(normalizedModel) : null;
+  const totalDurationSec = normalizedModel
+    ? normalizeVideoDuration(targetDuration || raw.totalDurationSec, 30)
+    : targetDuration ? normalizeTotalDuration(targetDuration) : normalizeTotalDuration(raw.totalDurationSec);
   const aspectRatio = compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
 
   const globalSubjectReference = compactString(raw.globalSubjectReference, "保持全片主体特征与质感一致", STRUCTURED_FIELD_MAX_LENGTH);
@@ -247,33 +304,38 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", t
   };
 
   const rawClips = Array.isArray(raw.clips) ? raw.clips : [];
-  if (rawClips.length < 2) {
+  if (!normalizedModel && rawClips.length < 2) {
     throw new Error("视频脚本分镜片段数量不足（至少需要 2 个片段）。");
+  }
+
+  const modelDurations = normalizedModel ? segmentVideoDuration(normalizedModel, totalDurationSec) : null;
+  if (normalizedModel && !modelDurations.length) {
+    throw new Error(`视频总时长 ${totalDurationSec} 秒无法按 ${modelConfig.displayName} 的镜头时长规则拆分。`);
   }
 
   // 修复与标准化时间轴
   const clips = [];
   let currentStart = 0;
-  const clipCount = Math.min(rawClips.length, 10);
+  const clipCount = normalizedModel ? Math.min(modelDurations.length, 10) : Math.min(rawClips.length, 10);
 
   for (let i = 0; i < clipCount; i++) {
     const rawClip = rawClips[i] || {};
     const isLast = i === clipCount - 1;
 
-    let clipDuration = Number(rawClip.durationSec);
+    let clipDuration = normalizedModel ? Number(modelDurations[i]) : Number(rawClip.durationSec);
     if (!Number.isFinite(clipDuration) || clipDuration <= 0) {
       const rawDiff = Number(rawClip.endSec) - Number(rawClip.startSec);
       clipDuration = Number.isFinite(rawDiff) && rawDiff > 0 ? rawDiff : Math.round(totalDurationSec / clipCount);
     }
 
-    // 限制单段在 2-15 秒之间
-    clipDuration = Math.max(2, Math.min(15, clipDuration));
+    // legacy 脚本保持旧的时间轴规则；模型专用脚本使用 registry 已校验的时长。
+    if (!normalizedModel) clipDuration = Math.max(2, Math.min(15, clipDuration));
 
     let clipEnd = currentStart + clipDuration;
     if (isLast) {
       clipEnd = totalDurationSec;
       clipDuration = Math.max(1, clipEnd - currentStart);
-    } else if (clipEnd >= totalDurationSec) {
+    } else if (!normalizedModel && clipEnd >= totalDurationSec) {
       clipEnd = totalDurationSec - 2;
       clipDuration = Math.max(2, clipEnd - currentStart);
     }
@@ -285,6 +347,12 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", t
       durationSec: clipDuration,
       purpose: compactString(rawClip.purpose, `分镜 ${i + 1}`, 100),
       referenceAssets: normalizeReferenceAssets(rawClip.referenceAssets),
+      generationDurationSec: clipDuration,
+      dependsOnClipIndex: i > 0 ? i : null,
+      continuityMode: i === 0 ? mode : normalizedModel === "g2" ? "keyframe" : "image",
+      referenceAssetIds: normalizedModel
+        ? (i === 0 && mode === "image" ? referenceAssetIds.slice(0, modelConfig.maxReferenceImages) : [])
+        : [],
       subjectReference: compactString(rawClip.subjectReference, globalSubjectReference, STRUCTURED_FIELD_MAX_LENGTH),
       firstFrame: compactString(rawClip.firstFrame, "", STRUCTURED_FIELD_MAX_LENGTH),
       lastFrame: compactString(rawClip.lastFrame, "", STRUCTURED_FIELD_MAX_LENGTH),
@@ -330,6 +398,7 @@ function validateAndNormalizeVideoScript(raw, { requestedAspectRatio = "9:16", t
     globalContinuity,
     audioDirection,
     clips,
+    ...(normalizedModel ? { model: normalizedModel, mode, visualBible: normalizeVisualBible(visualBible) } : {}),
   };
 }
 
@@ -351,17 +420,44 @@ ${errorMessage}
   return validateAndNormalizeVideoScript(raw, context);
 }
 
+async function generateVisualBible(appConfig, { brand, idea, images = [] } = {}) {
+  if (!Array.isArray(images) || images.length === 0) return normalizeVisualBible({});
+  const raw = await callVisionModelJson(appConfig, {
+    systemPrompt: `你是视觉理解分析器。只输出纯 JSON，不要 Markdown。请把参考图片中的产品/主体身份锚点整理为后续 AI 视频生成可复用的 Visual Bible。不得臆造图片中不存在的文字、结构或品牌信息。Schema：{"subject":"主体身份","appearance":"外观结构","materials":"材质","colors":"颜色","logoAndText":"Logo与可读文字","environment":"适合延续的环境","lighting":"光线","camera":"构图与镜头锚点","continuity":"跨镜头必须保持的特征","exclusions":"不能改变或不能复制的内容"}`,
+    userPrompt: `品牌：${brand?.name || "未命名品牌"}\n选题：${idea?.title || ""}\n请分析随附参考图片并输出 Visual Bible。`,
+    images,
+    temperature: 0.1,
+    maxOutputTokens: 3000,
+    maxAttempts: 2,
+  });
+  return normalizeVisualBible(raw);
+}
+
 async function generateVideoScript(
   appConfig,
-  { brand, trend, idea, aspectRatio = "9:16", durationSelection = "auto", images = [] } = {},
+  {
+    brand,
+    trend,
+    idea,
+    aspectRatio = "9:16",
+    durationSelection = "auto",
+    images = [],
+    model = "",
+    mode = "text",
+    visualBible = null,
+    referenceAssetIds = [],
+  } = {},
 ) {
-  const safeAspectRatio = aspectRatio === "smart" || !aspectRatio ? "9:16" : aspectRatio;
+  const normalizedModel = model ? normalizeModelId(model) : "";
+  const safeAspectRatio = normalizedModel
+    ? resolveVideoAspectRatio(aspectRatio === "smart" ? "9:16" : aspectRatio, "9:16")
+    : (aspectRatio === "smart" || !aspectRatio ? "9:16" : aspectRatio);
   const targetDuration =
-    durationSelection && durationSelection !== "auto" && ALLOWED_TOTAL_DURATIONS.includes(Number(durationSelection))
+    durationSelection && durationSelection !== "auto" && (normalizedModel ? VIDEO_TOTAL_DURATION_OPTIONS : ALLOWED_TOTAL_DURATIONS).includes(Number(durationSelection))
       ? Number(durationSelection)
       : null;
 
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildSystemPrompt({ model: normalizedModel, mode });
   const userPrompt = buildUserPrompt({
     brand,
     trend,
@@ -369,6 +465,9 @@ async function generateVideoScript(
     aspectRatio: safeAspectRatio,
     targetDuration,
     images,
+    model: normalizedModel,
+    mode,
+    visualBible,
   });
 
   let rawScript;
@@ -397,6 +496,10 @@ async function generateVideoScript(
       targetDuration,
       brand,
       idea,
+      model: normalizedModel,
+      mode,
+      visualBible,
+      referenceAssetIds,
     });
   } catch (validationError) {
     // 允许一次模型修复尝试
@@ -406,6 +509,10 @@ async function generateVideoScript(
         targetDuration,
         brand,
         idea,
+        model: normalizedModel,
+        mode,
+        visualBible,
+        referenceAssetIds,
       });
     } catch (_repairError) {
       throw validationError;
@@ -421,6 +528,8 @@ module.exports = {
   compileVideoClipPrompt,
   buildSystemPrompt,
   buildUserPrompt,
+  normalizeVisualBible,
+  generateVisualBible,
   validateAndNormalizeVideoScript,
   generateVideoScript,
 };

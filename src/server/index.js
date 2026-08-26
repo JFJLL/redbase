@@ -15,6 +15,7 @@ const {
   recoverStagedProductImageDeletions,
 } = require("./assets/image-store");
 const { createGeneratedAssetStorage } = require("./assets/generated-asset-storage");
+const { createVideoProjectService } = require("./video/video-project-service");
 const { isBrandLogoStoredPathReferenced } = require("./db/repositories/brand-repository");
 const {
   isGeneratedAssetReferenced,
@@ -28,6 +29,7 @@ async function start() {
   const store = { ensureStore, readStore, writeStore };
   const ai = createAiServices(appConfig);
   const generatedAssetStorage = createGeneratedAssetStorage(appConfig);
+  const videoProjectService = createVideoProjectService({ appConfig, generatedAssetStorage });
   const cleanupStagedStoredAssets = ({ nowMs, ignoreGrace = false } = {}) => Promise.all([
     recoverStagedBrandLogoDeletions({ isReferenced: isBrandLogoStoredPathReferenced, nowMs, ignoreGrace }),
     recoverStagedProductImageDeletions({ isReferenced: isProductImageStoredPathReferenced, nowMs, ignoreGrace }),
@@ -39,7 +41,7 @@ async function start() {
     cleanupStagedStoredAssets,
     cleanupEmptyGeneratedImageDirs,
   });
-  const handleApi = createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner });
+  const handleApi = createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner, videoProjectService });
 
   console.log(`[asset-storage] generated images provider: ${generatedAssetStorage.provider}`);
   if (generatedAssetStorage.provider === "aliyun_oss") {
@@ -71,6 +73,7 @@ async function start() {
   });
 
   await ensureStore();
+  videoProjectService.start();
   try {
     await cleanupStagedStoredAssets({ nowMs: Date.now(), ignoreGrace: true });
   } catch (error) {
@@ -98,6 +101,7 @@ async function start() {
     cleanupRecovery: true,
   });
   server.once("close", () => historyCleanupScheduler.stop());
+  server.once("close", () => videoProjectService.stop());
 
   // Excellent content is cache-only on startup. Do not auto-call Pgy search_note_v2.
   // Manual ops: npm run warm:excellent-content (explicit maintenance only; not part of normal start).

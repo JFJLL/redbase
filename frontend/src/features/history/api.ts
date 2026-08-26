@@ -10,6 +10,7 @@ export const HISTORY_TYPE_LABELS = new Map<string, string>([
   ["wechat", "公众号长图"],
   ["xhsCarousel", "小红书组图"],
   ["videoScript", "视频脚本"],
+  ["videoProject", "AI 视频"],
   ["styleImage", "一键风格化"],
   ["imageEdit", "历史改图"],
 ]);
@@ -53,6 +54,15 @@ export interface HistorySlide {
 
 export interface HistoryPayload {
   videoScript?: VideoScript;
+  projectId?: number;
+  videoModel?: string;
+  videoMode?: string;
+  videoResolution?: string;
+  videoDuration?: number;
+  videoStatus?: string;
+  finalVideoUrl?: string;
+  videoClips?: Array<Record<string, unknown>>;
+  script?: VideoScript;
   caption?: string;
   visualDirection?: string;
   publishTitle?: string;

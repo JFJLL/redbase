@@ -22,6 +22,10 @@ export interface UseIdeaVideoScriptOptions {
   useProductImages: Ref<boolean>;
   selectedProductImageInputs: Ref<ProductImageInput[]>;
   selectedStyleReferenceInputs: Ref<Array<{ name?: string; dataUrl?: string }>>;
+  videoModel?: Ref<string | undefined>;
+  videoMode?: Ref<string | undefined>;
+  videoResolution?: Ref<string | undefined>;
+  videoReferenceImageIds?: Ref<number[]>;
   onUnauthorized?: (error: unknown) => boolean | Promise<boolean>;
 }
 
@@ -72,6 +76,10 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
       useProductImages: options.useProductImages.value,
       productImages: options.selectedProductImageInputs.value,
       styleReferenceImages: options.selectedStyleReferenceInputs.value,
+      model: options.videoModel?.value || "d2",
+      mode: options.videoMode?.value || "text",
+      resolution: options.videoResolution?.value || "720p",
+      videoReferenceImageIds: options.videoReferenceImageIds?.value || options.selectedProductImageInputs.value.map((item) => Number(item.id)).filter(Boolean),
     };
 
     try {

@@ -170,10 +170,25 @@ function asVideoScript(item: GenerationHistoryItem | null): VideoScript | null {
   if (payload?.videoScript && typeof payload.videoScript === "object") {
     return payload.videoScript as VideoScript;
   }
+  if (payload?.script && typeof payload.script === "object") {
+    return payload.script as VideoScript;
+  }
   if (payload && Array.isArray((payload as Record<string, unknown>).clips)) {
     return payload as unknown as VideoScript;
   }
   return null;
+}
+
+function videoProjectVideoUrl(item: GenerationHistoryItem | null): string {
+  return safeImageSrc(item?.payload?.finalVideoUrl || item?.previewUrl);
+}
+
+function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<string, unknown>> {
+  return Array.isArray(item?.payload?.videoClips) ? item.payload.videoClips : [];
+}
+
+function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
+  return ({ queued: "排队中", running: "生成中", partial_failed: "部分失败", completed: "已完成", failed: "失败" } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
 }
 
 function formatTime(value?: string): string {
@@ -209,7 +224,7 @@ async function removeItem(generationId: number) {
 
 function openDetail(item: GenerationHistoryItem, slideUrl = "") {
   detailItem.value = item;
-  if (item.type === "videoScript") {
+    if (item.type === "videoScript" || item.type === "videoProject") {
     detailSlideIndex.value = null;
     editEntryId.value = null;
     return;
@@ -336,12 +351,13 @@ onUnmounted(() => {
               <span class="brand-tag">{{ item.channelLabel }}</span>
               <span class="brand-tag">{{ typeLabel(item) }}</span>
               <span v-if="aspectRatioOf(item)" class="brand-tag">{{ aspectRatioOf(item) }}</span>
-              <span v-if="item.type === 'videoScript' && asVideoScript(item)?.totalDurationSec" class="brand-tag">
-                {{ asVideoScript(item)?.totalDurationSec }} 秒
+                <span v-if="(item.type === 'videoScript' || item.type === 'videoProject') && (asVideoScript(item)?.totalDurationSec || item.payload?.videoDuration)" class="brand-tag">
+                {{ asVideoScript(item)?.totalDurationSec || item.payload?.videoDuration }} 秒
               </span>
               <span v-if="item.type === 'videoScript' && asVideoScript(item)?.clips?.length" class="brand-tag">
                 {{ asVideoScript(item)?.clips?.length }} 个片段
               </span>
+              <span v-if="item.type === 'videoProject'" class="brand-tag">{{ item.payload?.videoModel?.toString().toUpperCase() }} · {{ videoProjectStatusLabel(item) }}</span>
               <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
               <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
                 已改图 {{ (item.payload?.editHistory || []).length }} 次
@@ -362,6 +378,15 @@ onUnmounted(() => {
               查看脚本
             </button>
             <button
+              v-else-if="item.type === 'videoProject'"
+              type="button"
+              class="secondary-btn"
+              data-test="history-detail"
+              @click="openDetail(item)"
+            >
+              查看视频
+            </button>
+            <button
               v-else-if="getGenerationPrimaryImageUrl(item)"
               type="button"
               class="secondary-btn"
@@ -379,6 +404,10 @@ onUnmounted(() => {
             <strong>核心创意：</strong>{{ asVideoScript(item)?.creativeConcept }}
           </p>
           <p v-else-if="item.summary"><strong>内容摘要：</strong>{{ item.summary }}</p>
+        </div>
+        <div v-else-if="item.type === 'videoProject'" class="history-copy">
+          <p><strong>生成状态：</strong>{{ videoProjectStatusLabel(item) }} · {{ item.payload?.videoModel?.toString().toUpperCase() || 'D2' }}</p>
+          <p v-if="item.summary"><strong>核心创意：</strong>{{ item.summary }}</p>
         </div>
         <div v-else-if="item.type === 'moments'" class="history-copy">
           <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
@@ -407,6 +436,14 @@ onUnmounted(() => {
                 共 {{ asVideoScript(item)?.clips?.length || 0 }} 个分镜提示词 · 时长 {{ asVideoScript(item)?.totalDurationSec || 30 }} 秒 · 比例 {{ item.payload?.aspectRatio || '9:16' }}
               </small>
             </div>
+          </div>
+        </div>
+        <div v-else-if="item.type === 'videoProject'" class="history-video-box" @click="openDetail(item)">
+          <video v-if="videoProjectVideoUrl(item)" :src="videoProjectVideoUrl(item)" muted playsinline preload="metadata"></video>
+          <div v-else class="history-video-placeholder">
+            <span class="script-icon">🎬</span>
+            <strong>{{ videoProjectStatusLabel(item) }}</strong>
+            <small>{{ videoProjectClips(item).length }} 个镜头 · 点击查看进度</small>
           </div>
         </div>
 
@@ -465,7 +502,7 @@ onUnmounted(() => {
 
     <!-- 详情弹窗 -->
     <div v-if="detailItem" class="history-modal" @click.self="closeDetail()">
-      <div class="history-modal-body" :class="{ 'is-video-script-modal': detailItem.type === 'videoScript' }">
+      <div class="history-modal-body" :class="{ 'is-video-script-modal': detailItem.type === 'videoScript' || detailItem.type === 'videoProject' }">
         <header class="history-modal-header">
           <h3>{{ detailItem.cardTitle || (detailItem.type === 'videoScript' ? '视频脚本' : '历史图片') }}</h3>
           <button type="button" class="secondary-btn" @click="closeDetail()">关闭</button>
@@ -482,6 +519,34 @@ onUnmounted(() => {
           />
           <div v-else class="history-script-empty" data-test="history-script-empty">
             <p>该历史记录中未包含有效的分镜脚本数据。</p>
+          </div>
+        </template>
+
+        <template v-else-if="detailItem.type === 'videoProject'">
+          <div class="video-project-detail" data-test="history-video-project-detail">
+            <div class="history-asset-header">
+              <p class="history-card-ref"><strong>模型：</strong>{{ detailItem.payload?.videoModel?.toString().toUpperCase() || 'D2' }} · <strong>状态：</strong>{{ videoProjectStatusLabel(detailItem) }}</p>
+              <p class="history-card-ref"><strong>参数：</strong>{{ detailItem.payload?.videoDuration || asVideoScript(detailItem)?.totalDurationSec || 30 }} 秒 · {{ detailItem.payload?.videoAspectRatio || detailItem.payload?.aspectRatio || '9:16' }}</p>
+            </div>
+            <video v-if="videoProjectVideoUrl(detailItem)" class="history-video-player" controls playsinline :src="videoProjectVideoUrl(detailItem)"></video>
+            <div v-else class="history-video-placeholder large">
+              <span class="script-icon">🎬</span>
+              <strong>{{ videoProjectStatusLabel(detailItem) }}</strong>
+              <small>视频完成后刷新历史记录即可播放。</small>
+            </div>
+            <div class="history-video-clips">
+              <div v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
+                <span>镜头 {{ clip.index }}</span>
+                <span>{{ clip.status }}</span>
+                <span>{{ clip.durationSec }} 秒</span>
+              </div>
+            </div>
+            <VideoScriptResult
+              v-if="asVideoScript(detailItem)"
+              :script="asVideoScript(detailItem)!"
+              :show-actions="false"
+              :show-regenerate="false"
+            />
           </div>
         </template>
 
@@ -727,6 +792,69 @@ onUnmounted(() => {
 .history-script-box:hover {
   border-color: var(--workspace-brand, #d83b46);
   background: #fff5f3;
+}
+
+.history-video-box {
+  min-height: 150px;
+  overflow: hidden;
+  border: 1px solid rgba(216, 68, 68, 0.14);
+  border-radius: var(--radius-md, 8px);
+  background: #211d1d;
+  cursor: pointer;
+}
+
+.history-video-box video {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: cover;
+}
+
+.history-video-placeholder {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #fff5f0;
+  text-align: center;
+}
+
+.history-video-placeholder small {
+  color: #d9c8c2;
+  font-size: 12px;
+}
+
+.history-video-placeholder.large {
+  min-height: 260px;
+  border-radius: var(--radius-md, 8px);
+  background: #211d1d;
+}
+
+.history-video-player {
+  display: block;
+  width: min(100%, 760px);
+  max-height: 66vh;
+  margin: 0 auto;
+  border-radius: var(--radius-md, 8px);
+  background: #211d1d;
+}
+
+.history-video-clips {
+  display: grid;
+  gap: 7px;
+}
+
+.history-video-clip {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  color: var(--color-text-secondary);
+  font-size: 12px;
 }
 
 .script-box-inner {

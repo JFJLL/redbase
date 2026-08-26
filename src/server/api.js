@@ -11,6 +11,7 @@ const { handleImageGenerationRoutes } = require("./api/image-generation-routes")
 const { handleExcellentContentRoutes } = require("./api/excellent-content-routes");
 const { handlePaymentRoutes } = require("./api/payment-routes");
 const { handleVideoScriptRoutes } = require("./api/video-script-routes");
+const { handleVideoProjectRoutes } = require("./api/video-project-routes");
 const { handleXingtuVideoRoutes } = require("./api/xingtu-video-routes");
 
 const imageStore = require("./assets/image-store");
@@ -30,11 +31,12 @@ const routeHandlers = [
   handleXingtuVideoRoutes,
   handleImageGenerationRoutes,
 
+  handleVideoProjectRoutes,
   handleVideoScriptRoutes,
   handlePaymentRoutes,
 ];
 
-function createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner }) {
+function createApiHandler({ appConfig, store, ai, generatedAssetStorage, historyCleanupRunner, videoProjectService }) {
   const {
     imageJobs,
     generateAiTrendSet,
@@ -49,6 +51,7 @@ function createApiHandler({ appConfig, store, ai, generatedAssetStorage, history
   const context = {
     appConfig,
     generatedAssetStorage: assetStorage,
+    videoProjectService,
     historyCleanupRunner,
     removeGenerationAssetsAndRows: (generation, options = {}) => generationDeletionService.removeGenerationAssetsAndRows(generation, {
       ...options,

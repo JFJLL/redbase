@@ -9,11 +9,13 @@ function getAssetSigningSecret(appConfig) {
 
 function isSignableAssetUrl(value) {
   const text = String(value || "");
-  return (
+  const legacyAsset = (
     text.startsWith("/api/product-images/") ||
     text.startsWith("/api/brands/") ||
     text.startsWith("/api/generated-images/")
   ) && text.includes("/file");
+  const videoAsset = text.startsWith("/api/video-projects/") && text.includes("/assets/");
+  return legacyAsset || videoAsset;
 }
 
 function canonicalizeAssetUrl(url) {

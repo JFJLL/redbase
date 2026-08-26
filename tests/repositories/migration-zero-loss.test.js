@@ -89,7 +89,7 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='payment_orders'").get().count, 1);
   assert.deepEqual(
     db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
-    [1, 2, 3],
+    [1, 2, 3, 4],
   );
 });
 

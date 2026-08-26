@@ -95,6 +95,27 @@ const DEFAULT_APP_CONFIG = {
     sendTextResolution: true,
     sendQuality: true,
   },
+  video: {
+    publicBaseUrl: "",
+    ffmpegPath: "",
+    ffmpegOverride: "",
+    pollIntervalMs: 2000,
+    schedulerIntervalMs: 500,
+    maxDownloadBytes: 60 * 1024 * 1024,
+    remoteTimeoutMs: 30000,
+    runninghub: {
+      baseUrl: "https://www.runninghub.ai/openapi/v2",
+      apiKey: "",
+      pollPath: "/query",
+    },
+    agnes: {
+      baseUrl: "https://api.agnes-ai.cn",
+      apiKeys: [],
+      pollPath: "/agnesapi",
+      rpmPerKey: 1,
+      pollIntervalMs: 2000,
+    },
+  },
   assetStorage: {
     provider: "",
     aliyunOss: {
@@ -533,6 +554,27 @@ function loadAppConfig() {
   const rechargePlans = parseRechargePlans(process.env.RECHARGE_PLANS_JSON, merged.billing?.rechargePlans);
 
   return {
+    video: {
+      publicBaseUrl: String(process.env.VIDEO_PUBLIC_BASE_URL || merged.video?.publicBaseUrl || process.env.BASE_URL || "").trim(),
+      ffmpegPath: String(process.env.VIDEO_FFMPEG_PATH || merged.video?.ffmpegPath || "").trim(),
+      ffmpegOverride: String(process.env.FFMPEG_PATH || merged.video?.ffmpegOverride || "").trim(),
+      pollIntervalMs: Math.max(250, Number(process.env.VIDEO_POLL_INTERVAL_MS || merged.video?.pollIntervalMs || 2000)),
+      schedulerIntervalMs: Math.max(100, Number(process.env.VIDEO_SCHEDULER_INTERVAL_MS || merged.video?.schedulerIntervalMs || 500)),
+      maxDownloadBytes: Math.max(1024 * 1024, Number(process.env.VIDEO_MAX_DOWNLOAD_BYTES || merged.video?.maxDownloadBytes || 60 * 1024 * 1024)),
+      remoteTimeoutMs: Math.max(1000, Number(process.env.VIDEO_REMOTE_TIMEOUT_MS || merged.video?.remoteTimeoutMs || 30000)),
+      runninghub: {
+        baseUrl: String(process.env.RUNNINGHUB_VIDEO_BASE_URL || merged.video?.runninghub?.baseUrl || "https://www.runninghub.ai/openapi/v2").replace(/\/+$/, ""),
+        apiKey: String(process.env.RUNNINGHUB_VIDEO_API_KEY || merged.video?.runninghub?.apiKey || "").trim(),
+        pollPath: String(merged.video?.runninghub?.pollPath || "/query").trim(),
+      },
+      agnes: {
+        baseUrl: String(process.env.AGNES_VIDEO_BASE_URL || merged.video?.agnes?.baseUrl || "https://api.agnes-ai.cn").replace(/\/+$/, ""),
+        apiKeys: parseListConfig(process.env.AGNES_VIDEO_API_KEYS, merged.video?.agnes?.apiKeys),
+        pollPath: String(merged.video?.agnes?.pollPath || "/agnesapi").trim(),
+        rpmPerKey: Math.max(1, Number(process.env.AGNES_VIDEO_RPM_PER_KEY || merged.video?.agnes?.rpmPerKey || 1)),
+        pollIntervalMs: Math.max(1000, Number(process.env.AGNES_VIDEO_POLL_INTERVAL_MS || merged.video?.agnes?.pollIntervalMs || 2000)),
+      },
+    },
     assetStorage: resolveAssetStorageConfig(localConfig),
     textProvider: {
       apiStyle: String(process.env.TEXT_API_STYLE || merged.textProvider.apiStyle || "google").trim(),

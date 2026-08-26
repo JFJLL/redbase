@@ -7,6 +7,9 @@ const GENERATED_IMAGE_MIME_EXTENSIONS = Object.freeze({
   "image/webp": "webp",
   "image/gif": "gif",
 });
+const GENERATED_VIDEO_MIME_EXTENSIONS = Object.freeze({
+  "video/mp4": "mp4",
+});
 
 function validateGeneratedAssetInput(input = {}) {
   const ownerUserId = Number(input.ownerUserId);
@@ -17,13 +20,13 @@ function validateGeneratedAssetInput(input = {}) {
   if (!Number.isSafeInteger(generationId) || generationId <= 0) throw new Error("Invalid generated asset generation");
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(variant)) throw new Error("Invalid generated asset variant");
   if (!Buffer.isBuffer(input.buffer)) throw new Error("Generated asset must be a Buffer");
-  if (!GENERATED_IMAGE_MIME_EXTENSIONS[mimeType]) throw new Error("Unsupported generated asset MIME type");
+  if (!GENERATED_IMAGE_MIME_EXTENSIONS[mimeType] && !GENERATED_VIDEO_MIME_EXTENSIONS[mimeType]) throw new Error("Unsupported generated asset MIME type");
   if (input.buffer.length > MAX_GENERATED_ASSET_BYTES) {
     const error = new Error("Generated asset exceeds the 60MB limit");
     error.code = "PAYLOAD_TOO_LARGE";
     throw error;
   }
-  if (!doesImageBufferMatchMimeType(input.buffer, mimeType)) {
+  if (!doesImageBufferMatchMimeType(input.buffer, mimeType) && !doesVideoBufferMatchMimeType(input.buffer, mimeType)) {
     throw new Error("Generated asset content does not match its MIME type");
   }
   return { ownerUserId, generationId, variant, mimeType, buffer: input.buffer };
@@ -47,8 +50,13 @@ function doesImageBufferMatchMimeType(buffer, mimeType) {
   return false;
 }
 
+function doesVideoBufferMatchMimeType(buffer, mimeType) {
+  if (!Buffer.isBuffer(buffer) || mimeType !== "video/mp4" || buffer.length < 12) return false;
+  return buffer.subarray(4, 8).toString("ascii") === "ftyp";
+}
+
 function buildGeneratedAssetFileName(generationId, variant, mimeType, randomId = crypto.randomBytes(8).toString("hex")) {
-  const extension = GENERATED_IMAGE_MIME_EXTENSIONS[mimeType];
+  const extension = GENERATED_IMAGE_MIME_EXTENSIONS[mimeType] || GENERATED_VIDEO_MIME_EXTENSIONS[mimeType];
   return `gi_${generationId}_${variant}_${randomId}.${extension}`;
 }
 
@@ -70,7 +78,9 @@ function isOssObjectNotFoundError(error) {
 module.exports = {
   MAX_GENERATED_ASSET_BYTES,
   GENERATED_IMAGE_MIME_EXTENSIONS,
+  GENERATED_VIDEO_MIME_EXTENSIONS,
   doesImageBufferMatchMimeType,
+  doesVideoBufferMatchMimeType,
   validateGeneratedAssetInput,
   buildGeneratedAssetFileName,
   inferGeneratedAssetProvider,

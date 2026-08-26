@@ -27,6 +27,7 @@ const title = computed(() => props.script.title || "AI 视频生成脚本");
 const totalDuration = computed(() => props.script.totalDurationSec || 30);
 const aspectRatio = computed(() => props.script.aspectRatio || "9:16");
 const clips = computed(() => (Array.isArray(props.script.clips) ? props.script.clips : []));
+const visualBibleEntries = computed(() => Object.entries(props.script.visualBible || {}).filter(([, value]) => value).slice(0, 6));
 
 function buildFullMarkdown(): string {
   const s = props.script;
@@ -143,6 +144,7 @@ function exportMarkdown() {
           <span class="meta-tag">{{ totalDuration }} 秒</span>
           <span class="meta-tag">{{ aspectRatio }}</span>
           <span class="meta-tag">{{ clips.length }} 个片段</span>
+          <span v-if="script.model" class="meta-tag model-tag">{{ script.model.toUpperCase() }}</span>
           <span v-if="script.audioDirection?.music" class="meta-tag audio-tag">
             🎵 {{ script.audioDirection.music }}
           </span>
@@ -165,6 +167,11 @@ function exportMarkdown() {
         <div v-if="script.globalContinuity" class="global-ctx-item">
           <strong>全片衔接：</strong><span>{{ script.globalContinuity }}</span>
         </div>
+      </div>
+
+      <div v-if="visualBibleEntries.length" class="visual-bible-box" data-test="visual-bible-box">
+        <strong>视觉理解 Bible</strong>
+        <span v-for="[key, value] in visualBibleEntries" :key="key">{{ key }}：{{ value }}</span>
       </div>
 
       <div class="script-notice" role="note">
@@ -269,6 +276,11 @@ function exportMarkdown() {
   border: 1px solid rgba(216, 68, 68, 0.2);
 }
 
+.model-tag {
+  background: #f0f4ff;
+  color: #3559a8;
+}
+
 .audio-tag {
   background: #f0f7ff;
   color: #2b5cb8;
@@ -310,6 +322,22 @@ function exportMarkdown() {
 
 .global-ctx-item span {
   color: var(--workspace-text, #31292b);
+}
+
+.visual-bible-box {
+  display: grid;
+  gap: 5px;
+  padding: 11px 14px;
+  border: 1px solid #e8ddc8;
+  border-radius: var(--workspace-radius-sm, 8px);
+  background: #fffaf0;
+  color: #755e35;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.visual-bible-box strong {
+  color: #8a4e2d;
 }
 
 .script-notice {
