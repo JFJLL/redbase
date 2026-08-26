@@ -1,5 +1,7 @@
 const XINGTU_CONTENT_MARKET_URL = "https://www.xingtu.cn/ad/creator/insight/content-market";
 const { normalizeCookieHeader } = require("../integrations/pgy-content-square");
+const fs = require("fs");
+const path = require("path");
 
 const XINGTU_TRANSCRIPT_ENDPOINT = "https://www.xingtu.cn/gw/api/aggregator/get_item_high_quality_text";
 const DOUYIN_MEDIA_REFERER = "https://www.douyin.com/";
@@ -128,11 +130,20 @@ function officialMediaUrl(videoId) {
   return `https://www.iesdouyin.com/aweme/v1/play/?video_id=${encodeURIComponent(normalized)}&ratio=720p&line=0`;
 }
 
-function xingtuCookie(value = "") {
-  return normalizeCookieHeader(value || process.env.XINGTU_COOKIE || "");
+function xingtuCookie(value = "", cookieFile = "") {
+  if (value) return normalizeCookieHeader(value);
+  if (process.env.XINGTU_COOKIE) return normalizeCookieHeader(process.env.XINGTU_COOKIE);
+  const resolvedFile = String(cookieFile || process.env.XINGTU_COOKIE_FILE || "").trim();
+  if (resolvedFile) {
+    try {
+      const content = fs.readFileSync(path.resolve(resolvedFile), "utf8");
+      return normalizeCookieHeader(content);
+    } catch (_e) {}
+  }
+  return "";
 }
 
-function xingtuRequestHeaders(targetUrl, { range = "", cookie = "" } = {}) {
+function xingtuRequestHeaders(targetUrl, { range = "", cookie = "", cookieFile = "" } = {}) {
   const target = new URL(targetUrl);
   const host = target.hostname.toLowerCase();
   const isDouyinMedia = host === "douyin.com"
@@ -152,7 +163,7 @@ function xingtuRequestHeaders(targetUrl, { range = "", cookie = "" } = {}) {
   // Cookie only ever goes to official xingtu.cn hosts. Redirected media/CDN
   // hosts never receive it, so the application cannot leak the session token.
   if (target.hostname === "xingtu.cn" || target.hostname.endsWith(".xingtu.cn")) {
-    const normalizedCookie = xingtuCookie(cookie);
+    const normalizedCookie = xingtuCookie(cookie, cookieFile);
     if (normalizedCookie) headers.Cookie = normalizedCookie;
   }
   return headers;

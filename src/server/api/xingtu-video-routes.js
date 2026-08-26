@@ -108,7 +108,10 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
     badRequest,
   } = bindRouteScope(context);
 
-  const xingtuRequestOptions = { cookie: String(context.appConfig?.xingtu?.cookie || "") };
+  const xingtuRequestOptions = {
+    cookie: String(context.appConfig?.xingtu?.cookie || ""),
+    cookieFile: String(context.appConfig?.xingtu?.cookieFile || ""),
+  };
 
   function requireUser() {
     const token = getSessionToken(req);

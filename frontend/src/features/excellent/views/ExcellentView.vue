@@ -421,9 +421,83 @@ const detail = reactive({
 });
 
 const xingtuPlayer = reactive({ failed: false });
+const capturedVideoPosters = reactive<Record<string, string>>({});
 
 function onXingtuPlayerError() {
   xingtuPlayer.failed = true;
+}
+
+function getXingtuCoverSrc(item: ExcellentNote): string {
+  const id = xingtuItemId(item);
+  if (id && capturedVideoPosters[id]) {
+    return capturedVideoPosters[id]!;
+  }
+  return String(item.coverUrl || "");
+}
+
+async function onXingtuCoverError(item: ExcellentNote) {
+  const id = xingtuItemId(item);
+  if (!id || capturedVideoPosters[id]) return;
+  const playerUrl = String(item.playerUrl || "");
+  if (!playerUrl) return;
+  try {
+    const poster = await captureVideoPoster(playerUrl);
+    if (poster) {
+      capturedVideoPosters[id] = poster;
+    }
+  } catch (_e) {}
+}
+
+function captureVideoPoster(mediaUrl: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = mediaUrl;
+
+    const cleanup = () => {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, 8000);
+
+    video.onloadeddata = () => {
+      video.currentTime = 0.1;
+    };
+
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 720;
+        canvas.height = video.videoHeight || 1280;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL("image/webp", 0.85);
+          clearTimeout(timeout);
+          cleanup();
+          resolve(dataUrl);
+          return;
+        }
+      } catch (_e) {}
+      clearTimeout(timeout);
+      cleanup();
+      resolve(null);
+    };
+
+    video.onerror = () => {
+      clearTimeout(timeout);
+      cleanup();
+      resolve(null);
+    };
+  });
 }
 
 const xingtuLearn = reactive({
@@ -1297,69 +1371,83 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div class="excellent-filters" :class="{ 'xingtu-filter-toolbar': activeBoard === 'xingtu' }">
+    <div class="excellent-filters unified-filter-toolbar">
       <template v-if="activeBoard === 'xingtu'">
-        <div class="xingtu-filter-fields" role="group" aria-label="视频筛选条件">
-          <label class="xingtu-filter-field">
-            <span>视频类型</span>
-            <select v-model="xingtuFilters.videoType" data-test="xingtu-video-type" @change="applyXingtuFilters()">
-              <option v-for="type in XINGTU_VIDEO_TYPES" :key="type" :value="type">{{ type === 'all' ? '全部' : type }}</option>
-            </select>
+        <div class="filter-fields-group xingtu-fields-group" role="group" aria-label="视频筛选条件">
+          <label class="custom-filter-field">
+            <span class="custom-filter-label">视频类型</span>
+            <div class="custom-select-wrapper">
+              <select v-model="xingtuFilters.videoType" data-test="xingtu-video-type" class="custom-styled-select" @change="applyXingtuFilters()">
+                <option v-for="type in XINGTU_VIDEO_TYPES" :key="type" :value="type">{{ type === 'all' ? '全部' : type }}</option>
+              </select>
+            </div>
           </label>
-          <label class="xingtu-filter-field">
-            <span>内容类型</span>
-            <select v-model="xingtuFilters.contentType" data-test="xingtu-content-type" @change="applyXingtuFilters()">
-              <option v-for="type in XINGTU_CONTENT_TYPES" :key="type" :value="type">{{ type === 'all' ? '不限' : type }}</option>
-            </select>
+          <label class="custom-filter-field">
+            <span class="custom-filter-label">内容类型</span>
+            <div class="custom-select-wrapper">
+              <select v-model="xingtuFilters.contentType" data-test="xingtu-content-type" class="custom-styled-select" @change="applyXingtuFilters()">
+                <option v-for="type in XINGTU_CONTENT_TYPES" :key="type" :value="type">{{ type === 'all' ? '不限' : type }}</option>
+              </select>
+            </div>
           </label>
-          <label class="xingtu-filter-field">
-            <span>数据筛选</span>
-            <select v-model="xingtuFilters.dataSort" data-test="xingtu-data-sort" @change="applyXingtuFilters()">
-              <option v-for="option in XINGTU_DATA_SORTS" :key="option.value" :value="option.value">{{ option.label }}</option>
-            </select>
+          <label class="custom-filter-field">
+            <span class="custom-filter-label">数据筛选</span>
+            <div class="custom-select-wrapper">
+              <select v-model="xingtuFilters.dataSort" data-test="xingtu-data-sort" class="custom-styled-select" @change="applyXingtuFilters()">
+                <option v-for="option in XINGTU_DATA_SORTS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </div>
           </label>
         </div>
         <button
           type="button"
-          class="xingtu-refresh-button"
+          class="primary-action-btn"
           data-test="refresh-button"
           :disabled="slice.refreshing"
           @click="refreshBoard('xingtu')"
         >
-          <span aria-hidden="true">↻</span>{{ slice.refreshing ? "正在刷新" : "刷新列表" }}
+          {{ slice.refreshing ? "正在刷新…" : "刷新列表" }}
         </button>
       </template>
       <template v-else>
-        <label>
-          <span>内容来源</span>
-          <select v-model="slice.draftContentSource" data-test="filter-source">
-            <option value="all">全部来源</option>
-            <option v-for="source in contentSources" :key="String(source.value)" :value="source.value">
-              {{ source.label || source.value }}
-            </option>
-          </select>
-        </label>
-        <label v-if="activeBoard === 'xhs_hot'">
-          <span>内容类目</span>
-          <select v-model="slice.draftCategoryPath" data-test="filter-category">
-            <option value="">全部类目</option>
-            <option v-for="option in taxonomyOptions.xhs_hot" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label v-else>
-          <span>所属行业</span>
-          <select v-model="slice.draftIndustryPath" data-test="filter-industry">
-            <option value="">全部行业</option>
-            <option v-for="option in taxonomyOptions.ecommerce_hot" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
+        <div class="filter-fields-group xhs-fields-group" role="group" aria-label="内容筛选条件">
+          <label class="custom-filter-field">
+            <span class="custom-filter-label">内容来源</span>
+            <div class="custom-select-wrapper">
+              <select v-model="slice.draftContentSource" data-test="filter-source" class="custom-styled-select">
+                <option value="all">全部来源</option>
+                <option v-for="source in contentSources" :key="String(source.value)" :value="source.value">
+                  {{ source.label || source.value }}
+                </option>
+              </select>
+            </div>
+          </label>
+          <label v-if="activeBoard === 'xhs_hot'" class="custom-filter-field">
+            <span class="custom-filter-label">内容类目</span>
+            <div class="custom-select-wrapper">
+              <select v-model="slice.draftCategoryPath" data-test="filter-category" class="custom-styled-select">
+                <option value="">全部类目</option>
+                <option v-for="option in taxonomyOptions.xhs_hot" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </div>
+          </label>
+          <label v-else class="custom-filter-field">
+            <span class="custom-filter-label">所属行业</span>
+            <div class="custom-select-wrapper">
+              <select v-model="slice.draftIndustryPath" data-test="filter-industry" class="custom-styled-select">
+                <option value="">全部行业</option>
+                <option v-for="option in taxonomyOptions.ecommerce_hot" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </div>
+          </label>
+        </div>
         <button
           type="button"
-          class="primary-btn"
+          class="primary-action-btn"
           data-test="refresh-button"
           :disabled="slice.refreshing || refreshCooldownSeconds > 0"
           @click="refreshBoard(activeBoard)"
@@ -1411,11 +1499,12 @@ onUnmounted(() => {
                 <button type="button" class="excellent-cover" :class="{ 'xingtu-video-cover': isXingtuBoard() }" @click="openDetail(item)">
           <template v-if="isXingtuBoard()">
             <img
-              v-if="item.coverUrl"
-              :src="String(item.coverUrl)"
+              v-if="getXingtuCoverSrc(item)"
+              :src="getXingtuCoverSrc(item)"
               :alt="item.title || ''"
               loading="lazy"
               referrerpolicy="no-referrer"
+              @error="onXingtuCoverError(item)"
             />
             <span v-else class="excellent-cover-fallback">视频预览暂不可用</span>
             <span class="xingtu-video-play" aria-hidden="true">▶</span>
@@ -4050,42 +4139,118 @@ onUnmounted(() => {
 }
 
 
-/* 巨量星图：视频详情与学习分析 */
-.xingtu-filter-toolbar {
-  display: grid;
-  grid-template-columns: minmax(170px, .8fr) minmax(0, 2.5fr) auto;
-  gap: 18px;
-  align-items: center;
-  margin: 4px 0 20px;
-  padding: 16px 18px;
+.unified-filter-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 12px 0 20px;
+  padding: 16px 20px;
   border: 1px solid #f1d8db;
   border-radius: 16px;
-  background: linear-gradient(118deg, #fffafa 0%, #fff 54%, #fff5f5 100%);
-  box-shadow: 0 8px 24px rgba(189, 45, 60, .06);
+  background: linear-gradient(118deg, #fffafa 0%, #ffffff 54%, #fff5f5 100%);
+  box-shadow: 0 8px 24px rgba(189, 45, 60, 0.06);
 }
-.xingtu-filter-intro { display: grid; gap: 4px; min-width: 0; }
-.xingtu-filter-kicker { color: #c53043; font-size: 11px; font-weight: 760; letter-spacing: .12em; }
-.xingtu-filter-intro p { margin: 0; color: #6d5b5e; font-size: 12px; line-height: 1.55; }
-.xingtu-filter-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.xingtu-filter-toolbar .xingtu-filter-field { display: grid; gap: 6px; min-width: 0; color: #7a6669; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
-.xingtu-filter-toolbar .xingtu-filter-field select {
-  width: 100%; min-width: 0; height: 38px; appearance: none;
-  padding: 0 34px 0 12px; border: 1px solid #ead7da; border-radius: 10px;
-  color: #2c2526; font-size: 13px; font-weight: 600;
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m1 1 5 5 5-5' fill='none' stroke='%23945a63' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 13px center;
-  transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+.filter-fields-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
 }
-.xingtu-filter-toolbar .xingtu-filter-field select:hover { border-color: #dca5ac; background-color: #fffafa; }
-.xingtu-filter-toolbar .xingtu-filter-field select:focus { outline: none; border-color: #d6394d; box-shadow: 0 0 0 3px rgba(214, 57, 77, .12); }
-.xingtu-refresh-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 38px;
-  padding: 0 15px; border: 1px solid #d6394d; border-radius: 10px; background: #d6394d;
-  color: #fff; font-size: 13px; font-weight: 700; white-space: nowrap; cursor: pointer;
-  box-shadow: 0 7px 14px rgba(198, 42, 59, .18); transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+.custom-filter-field {
+  display: grid;
+  gap: 6px;
+  min-width: 140px;
+  flex: 1 1 140px;
+  max-width: 220px;
 }
-.xingtu-refresh-button > span { font-size: 16px; line-height: 1; }
-.xingtu-refresh-button:hover:not(:disabled) { background: #bd2639; box-shadow: 0 10px 18px rgba(198, 42, 59, .24); transform: translateY(-1px); }
-.xingtu-refresh-button:disabled { opacity: .58; cursor: wait; box-shadow: none; }
+.custom-filter-label {
+  color: #7a6669;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.custom-select-wrapper {
+  position: relative;
+  width: 100%;
+}
+.custom-styled-select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding: 0 34px 0 12px;
+  border: 1px solid #ead7da;
+  border-radius: 10px;
+  color: #2c2526;
+  font-size: 13px;
+  font-weight: 600;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m1 1.5 5 5 5-5' fill='none' stroke='%23945a63' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 13px center;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+.custom-styled-select:hover {
+  border-color: #dca5ac;
+  background-color: #fffafa;
+}
+.custom-styled-select:focus {
+  border-color: #d6394d;
+  box-shadow: 0 0 0 3px rgba(214, 57, 77, 0.12);
+}
+.custom-styled-select option {
+  background: #fff;
+  color: #2c2526;
+  font-weight: 500;
+  padding: 6px 10px;
+}
+.primary-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 20px;
+  border: 1px solid #d6394d;
+  border-radius: 10px;
+  background: #d6394d;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(198, 42, 59, 0.18);
+  transition: transform 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+  flex-shrink: 0;
+}
+.primary-action-btn:hover:not(:disabled) {
+  background-color: #bd2639;
+  box-shadow: 0 8px 20px rgba(198, 42, 59, 0.24);
+  transform: translateY(-1px);
+}
+.primary-action-btn:disabled {
+  opacity: 0.58;
+  cursor: wait;
+  box-shadow: none;
+}
+.action-btn-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+@media (max-width: 860px) {
+  .unified-filter-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .primary-action-btn {
+    width: 100%;
+  }
+}
 .xingtu-card-actions { gap: 8px; }
 .xingtu-card-actions .xingtu-card-detail-action,
 .xingtu-card-actions .xingtu-card-learn-action { min-height: 36px; border-radius: 9px; font-size: 12px; font-weight: 700; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }

@@ -701,6 +701,7 @@ function loadAppConfig() {
     },
     xingtu: {
       cookie: String(process.env.XINGTU_COOKIE || merged.xingtu?.cookie || "").trim(),
+      cookieFile: String(process.env.XINGTU_COOKIE_FILE || merged.xingtu?.cookieFile || "").trim(),
     },
     pgy: {
       enabled: parseBooleanConfig(process.env.PGY_CONTENT_SQUARE_ENABLED, parseBooleanConfig(merged.pgy?.enabled, hasPgyCookieSource)),
