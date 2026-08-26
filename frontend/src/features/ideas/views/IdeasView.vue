@@ -1189,10 +1189,11 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
           <p data-test="library-delete-impact">
             {{
               libraryDeleteImpact > 0
-                ? `该图片正被 ${libraryDeleteImpact} 处选题引用，删除后将同时移除这些引用。`
+                ? `该图片正被 ${libraryDeleteImpact} 处选题引用，删除后将从相关图片/视频创作设置中移除这些引用。`
                 : "该图片未被任何选题引用。"
             }}
           </p>
+          <p>已经创建并冻结的视频项目不受影响。</p>
           <p>确定删除「{{ pendingDeleteImage.originalName }}」吗？此操作不可恢复。</p>
           <div class="idea-library-delete-actions">
             <button type="button" class="secondary-btn" data-test="library-delete-cancel" @click="cancelLibraryDelete">

@@ -230,10 +230,11 @@ async function confirmDelete() {
       <p data-test="product-delete-impact">
         {{
           deleteImpactCount > 0
-            ? `该图片正被 ${deleteImpactCount} 处选题引用，删除后将同时移除这些引用。`
+            ? `该图片正被 ${deleteImpactCount} 处选题引用，删除后将从相关图片/视频创作设置中移除这些引用。`
             : "该图片未被任何选题引用。"
         }}
       </p>
+      <p>已经创建并冻结的视频项目不受影响。</p>
       <p>确定删除「{{ pendingDelete.originalName }}」吗？此操作不可恢复。</p>
       <div class="product-delete-actions">
         <button type="button" class="secondary-btn" data-test="product-delete-cancel" @click="cancelDelete">取消</button>

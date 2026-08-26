@@ -126,7 +126,11 @@ export function saveIdeaCreativeSettings(key: string, settings: IdeaCreativeSett
 export function countProductImageReferences(imageId: number): number {
   let count = 0;
   for (const settings of settingsByKey.values()) {
-    if (settings.selectedProductIds.some((id) => Number(id) === Number(imageId))) count += 1;
+    const referenced = new Set([
+      ...settings.selectedProductIds.map(Number),
+      ...(settings.videoReferenceImageIds || []).map(Number),
+    ]);
+    if (referenced.has(Number(imageId))) count += 1;
   }
   return count;
 }
@@ -136,8 +140,13 @@ export function removeProductImageFromAllSettings(imageId: number): number {
   let cleaned = 0;
   for (const [key, settings] of [...settingsByKey]) {
     const next = settings.selectedProductIds.filter((id) => Number(id) !== Number(imageId));
-    if (next.length !== settings.selectedProductIds.length) {
-      settingsByKey.set(key, { ...settings, selectedProductIds: next });
+    const nextVideo = (settings.videoReferenceImageIds || []).filter((id) => Number(id) !== Number(imageId));
+    if (next.length !== settings.selectedProductIds.length || nextVideo.length !== (settings.videoReferenceImageIds || []).length) {
+      settingsByKey.set(key, {
+        ...settings,
+        selectedProductIds: next,
+        ...(settings.videoReferenceImageIds ? { videoReferenceImageIds: nextVideo } : {}),
+      });
       cleaned += 1;
     }
   }

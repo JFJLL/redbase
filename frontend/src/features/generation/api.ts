@@ -642,6 +642,8 @@ export interface VideoProjectClip {
   creditCost: number;
   attempt: number;
   retryCount: number;
+  submissionAttempt?: number;
+  lastSuccessfulPollAt?: string;
   error?: string;
   [key: string]: unknown;
 }
@@ -649,6 +651,7 @@ export interface VideoProjectClip {
 export interface VideoProject {
   id: number;
   generationId: number;
+  scriptGenerationId?: number | null;
   brandId: number;
   trendId: number;
   ideaIndex: number;
@@ -664,7 +667,15 @@ export interface VideoProject {
   estimatedCredits: number;
   chargedCredits: number;
   refundedCredits: number;
+  inputAssets?: Array<{
+    position: number;
+    sourceImageId: number;
+    originalName?: string;
+    mimeType?: string;
+    sizeBytes?: number;
+  }>;
   finalVideoUrl?: string;
+  assemblyAttempt?: number;
   clips: VideoProjectClip[];
   error?: string;
   createdAt: string;
@@ -710,14 +721,17 @@ export function submitVideoScript(
 
 export interface VideoProjectRequest {
   requestId: string;
+  videoScriptGenerationId: number;
   model: "d2" | "g2" | string;
   mode: "text" | "image" | string;
   resolution: string;
   aspectRatio: string;
   totalDurationSec: number;
   referenceAssetIds: number[];
+  /** Kept optional for compatibility with old callers; server ignores it. */
   visualBible?: VisualBible;
-  script: VideoScript;
+  /** Kept optional for compatibility with old callers; server ignores it. */
+  script?: VideoScript;
 }
 
 export function fetchVideoModelCapabilities(signal?: AbortSignal): Promise<{ models: VideoModelCapability[] }> {
@@ -749,8 +763,21 @@ export function fetchVideoProject(projectId: number, signal?: AbortSignal): Prom
   return apiFetch(`/api/video-projects/${projectId}`, { signal });
 }
 
-export function fetchActiveVideoProjects(signal?: AbortSignal): Promise<{ projects: VideoProject[] }> {
-  return apiFetch("/api/video-projects/active", { signal });
+export function fetchActiveVideoProjects(
+  filtersOrSignal?: { brandId?: number; trendId?: number; ideaIndex?: number } | AbortSignal,
+  signal?: AbortSignal,
+): Promise<{ projects: VideoProject[] }> {
+  const filters = filtersOrSignal && typeof (filtersOrSignal as AbortSignal).aborted === "boolean"
+    ? undefined
+    : filtersOrSignal as { brandId?: number; trendId?: number; ideaIndex?: number } | undefined;
+  const requestSignal = filtersOrSignal && typeof (filtersOrSignal as AbortSignal).aborted === "boolean"
+    ? filtersOrSignal as AbortSignal
+    : signal;
+  const params = new URLSearchParams();
+  if (filters?.brandId != null) params.set("brandId", String(filters.brandId));
+  if (filters?.trendId != null) params.set("trendId", String(filters.trendId));
+  if (filters?.ideaIndex != null) params.set("ideaIndex", String(filters.ideaIndex));
+  return apiFetch(`/api/video-projects/active${params.toString() ? `?${params}` : ""}`, { signal: requestSignal });
 }
 
 export function startVideoProject(projectId: number, signal?: AbortSignal): Promise<{ project: VideoProject }> {
@@ -764,6 +791,18 @@ export function retryVideoProjectClip(
   signal?: AbortSignal,
 ): Promise<{ project: VideoProject }> {
   return apiFetch(`/api/video-projects/${projectId}/clips/${clipIndex}/retry`, {
+    method: "POST",
+    body: { requestId },
+    signal,
+  });
+}
+
+export function retryVideoProjectAssembly(
+  projectId: number,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<{ project: VideoProject }> {
+  return apiFetch(`/api/video-projects/${projectId}/retry-assembly`, {
     method: "POST",
     body: { requestId },
     signal,

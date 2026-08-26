@@ -128,6 +128,16 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
     return generateScript(currentRequestId.value);
   }
 
+  function restoreScript(restoredScript: VideoScript | null, restoredGeneration?: GenerationHistoryItem | null): void {
+    script.value = restoredScript;
+    generation.value = restoredGeneration || null;
+    if (restoredGeneration?.payload && typeof restoredGeneration.payload === "object") {
+      const requestId = (restoredGeneration.payload as Record<string, unknown>).requestId;
+      if (typeof requestId === "string" && requestId) currentRequestId.value = requestId;
+    }
+    error.value = "";
+  }
+
   function reset(): void {
     currentRequestId.value = generateRequestId();
     script.value = null;
@@ -145,6 +155,7 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
     canGenerate,
     generateScript,
     retry,
+    restoreScript,
     reset,
   };
 }

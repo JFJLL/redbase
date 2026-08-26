@@ -15,10 +15,12 @@ import { useIdeaVideoScript } from "../composables/useIdeaVideoScript";
 import VideoScriptResult from "./VideoScriptResult.vue";
 import {
   createVideoProject,
+  fetchActiveVideoProjects,
   fetchVideoModelCapabilities,
   fetchVideoProject,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
   retryVideoProjectClip,
+  retryVideoProjectAssembly,
   uploadProductImage,
   VIDEO_ASPECT_RATIOS,
   VIDEO_DURATION_OPTIONS,
@@ -27,6 +29,7 @@ import {
   type VideoModelCapability,
   type VideoProject,
 } from "../api";
+import type { GenerationHistoryItem } from "@/features/history/api";
 import type { IdeaProductLibrary } from "../composables/useIdeaGeneration";
 
 const FALLBACK_VIDEO_CAPABILITIES: VideoModelCapability[] = [
@@ -101,9 +104,15 @@ const videoCapabilities = ref<VideoModelCapability[]>([]);
 const capabilitiesLoading = ref(false);
 const capabilitiesError = ref("");
 const videoReferenceUploadLoading = ref(false);
-const videoScriptBlockedError = ref("");
+const videoScriptBlockedError = ref(
+  videoModeRef.value === "image" && !videoReferenceImageIdsRef.value.length
+    ? "图生视频必须先选择或上传至少一张视频参考图，再生成脚本。"
+    : "",
+);
 const retryingClipIndex = ref<number | null>(null);
 let disposed = false;
+const createRequestIdRef = ref("");
+const actionRequestIds = new Map<string, string>();
 
 const project = ref<VideoProject | null>(null);
 const projectLoading = ref(false);
@@ -146,7 +155,7 @@ const selectedVideoReferenceImages = computed(() => {
 });
 const maxVideoReferences = computed(() => Number(activeVideoCapability.value?.maxReferenceImages || 0));
 const selectedVideoReferenceIds = computed(() =>
-  selectedVideoReferenceImages.value.map((image) => Number(image.id)).filter(Boolean).slice(0, maxVideoReferences.value),
+  videoReferenceImageIdsRef.value.slice(0, maxVideoReferences.value),
 );
 const selectedProductImageInputs = computed<ProductImageInput[]>(() =>
   selectedVideoReferenceImages.value.map((image) => ({ id: image.id, name: image.originalName })),
@@ -193,13 +202,16 @@ const projectStatusLabel = computed(() => ({
   queued: "排队中",
   running: "生成中",
   partial_failed: "部分失败，可重试",
+  uncertain: "待确认，需操作",
+  waiting_configuration: "等待生成通道配置",
+  assembling: "正在拼接成片",
+  assembly_failed: "片段已完成，成片拼接失败",
   completed: "已完成",
   failed: "生成失败",
 }[project.value?.status || ""] || "已提交"));
 const currentVideoSignature = computed(() => [
   videoModelRef.value,
   videoModeRef.value,
-  videoResolutionRef.value,
   videoDurationRef.value,
   videoAspectRatioRef.value,
   selectedVideoReferenceIds.value.join(","),
@@ -216,7 +228,9 @@ const {
   loading,
   error,
   script,
+  generation,
   generateScript,
+  restoreScript,
   reset,
 } = useIdeaVideoScript({
   brandId: brandIdRef,
@@ -292,8 +306,8 @@ async function loadVideoCapabilities() {
 
 onMounted(() => {
   void (async () => {
-    await loadVideoCapabilities();
-    if (!disposed) generateScriptWhenReady();
+    await restoreActiveProject();
+    if (!disposed) await loadVideoCapabilities();
   })();
 });
 
@@ -303,7 +317,6 @@ watch(script, (value) => {
 
 watch(videoModelRef, () => {
   applyVideoCapabilityDefaults();
-  project.value = null;
 });
 watch([videoModeRef, videoResolutionRef, videoDurationRef, videoAspectRatioRef, videoReferenceImageIdsRef, selectedVideoReferenceIds], () => {
   saveIdeaCreativeSettings(ideaKey.value, {
@@ -320,7 +333,6 @@ watch([videoModeRef, videoResolutionRef, videoDurationRef, videoAspectRatioRef, 
   } else if (selectedVideoReferenceIds.value.length) {
     videoScriptBlockedError.value = "";
   }
-  project.value = null;
 }, { deep: true });
 
 function generateScriptWhenReady() {
@@ -332,9 +344,19 @@ function generateScriptWhenReady() {
   return generateScript();
 }
 
-function projectRequestId() {
+function newRequestId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `vp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createProjectRequestId() {
+  if (!createRequestIdRef.value) createRequestIdRef.value = newRequestId();
+  return createRequestIdRef.value;
+}
+
+function actionRequestId(action: string) {
+  if (!actionRequestIds.has(action)) actionRequestIds.set(action, newRequestId());
+  return actionRequestIds.get(action)!;
 }
 
 function stopProjectPolling() {
@@ -342,11 +364,57 @@ function stopProjectPolling() {
   projectPollTimer = null;
 }
 
+async function restoreActiveProject() {
+  if (!brand.value?.id || !trend.value?.id || disposed) return;
+  try {
+    const response = await fetchActiveVideoProjects({
+      brandId: Number(brand.value.id),
+      trendId: Number(trend.value.id),
+      ideaIndex: props.ideaIndex,
+    }, scope.signalFor("video-project-active"));
+    const existing = response.projects?.[0];
+    if (!existing || disposed) return;
+    project.value = existing;
+    videoModelRef.value = existing.model;
+    videoModeRef.value = existing.mode;
+    videoResolutionRef.value = existing.resolution;
+    videoDurationRef.value = String(existing.totalDurationSec);
+    videoAspectRatioRef.value = existing.aspectRatio;
+    videoReferenceImageIdsRef.value = normalizeImageIds(existing.referenceAssetIds);
+    const restoredGeneration = existing.scriptGenerationId
+      ? {
+          id: existing.scriptGenerationId,
+          type: "videoScript",
+          brandId: existing.brandId,
+          ideaTitle: existing.script?.title || "",
+          payload: {
+            requestId: `restored-project-${existing.id}`,
+            videoModel: existing.model,
+            videoMode: existing.mode,
+            videoDuration: existing.totalDurationSec,
+            videoAspectRatio: existing.aspectRatio,
+            videoReferenceImageIds: existing.referenceAssetIds,
+            videoScript: existing.script,
+          },
+        } as GenerationHistoryItem
+      : null;
+    restoreScript(existing.script || null, restoredGeneration);
+    generatedVideoSignature.value = currentVideoSignature.value;
+    if (!["completed", "failed", "partial_failed", "cancelled", "assembly_failed", "uncertain"].includes(existing.status)) {
+      await pollProject(existing.id);
+    }
+  } catch (error) {
+    if (!isAbortError(error) && !isUnauthorized(error)) {
+      projectError.value = (error as Error).message || "暂时无法恢复视频项目。";
+    }
+  }
+}
+
 async function pollProject(projectId: number) {
   try {
     const response = await fetchVideoProject(projectId, scope.signalFor("video-project-poll"));
     project.value = response.project;
-    if (["completed", "failed", "partial_failed", "cancelled"].includes(response.project.status)) return;
+    if (["completed", "failed", "partial_failed", "cancelled", "assembly_failed", "uncertain"].includes(response.project.status)) return;
     projectPollTimer = setTimeout(() => pollProject(projectId), 2500);
   } catch (error) {
     if (isAbortError(error)) return;
@@ -356,6 +424,14 @@ async function pollProject(projectId: number) {
 
 async function generateRealVideo() {
   if (!script.value || !brand.value?.id || !trend.value?.id) return;
+  if (project.value) {
+    projectError.value = "当前选题已有视频项目，请在下方继续处理，避免重复生成。";
+    return;
+  }
+  if (!generation.value?.id) {
+    projectError.value = "这份脚本没有可绑定的服务端记录，请重新生成适配当前模型的视频脚本。";
+    return;
+  }
   if (controlsDirty.value) {
     projectError.value = "视频参数已变更，请先点击“重新生成”让脚本与当前参数同步。";
     return;
@@ -373,20 +449,38 @@ async function generateRealVideo() {
   stopProjectPolling();
   try {
     const response = await createVideoProject(Number(brand.value.id), Number(trend.value.id), props.ideaIndex, {
-      requestId: projectRequestId(),
+      requestId: createProjectRequestId(),
+      videoScriptGenerationId: Number(generation.value?.id || 0),
       model: videoModelRef.value,
       mode: videoModeRef.value,
       resolution: videoResolutionRef.value,
       aspectRatio: videoAspectRatioRef.value === "smart" ? "9:16" : videoAspectRatioRef.value,
       totalDurationSec: videoDurationRef.value === "auto" ? Number(script.value.totalDurationSec || 30) : Number(videoDurationRef.value),
       referenceAssetIds: selectedVideoReferenceIds.value.slice(0, maxVideoReferences.value),
-      visualBible: script.value.visualBible || {},
-      script: script.value,
     }, scope.signalFor("video-project-create"));
     project.value = response.project;
     if (project.value.status !== "completed") await pollProject(project.value.id);
   } catch (error) {
     projectError.value = (error as Error).message || "真实视频生成提交失败，请重试。";
+  } finally {
+    projectLoading.value = false;
+  }
+}
+
+async function retryAssembly() {
+  if (!project.value || project.value.status !== "assembly_failed" || projectLoading.value) return;
+  projectLoading.value = true;
+  projectError.value = "";
+  try {
+    const response = await retryVideoProjectAssembly(project.value.id, actionRequestId("assembly"), scope.signalFor("video-assembly-retry"));
+    project.value = response.project;
+    // The request has a known response, including a failed FFmpeg attempt.
+    // A later button click is a new free assembly attempt; only an unknown
+    // network outcome should retain the idempotency key for replay.
+    actionRequestIds.delete("assembly");
+    if (!["completed", "assembly_failed"].includes(response.project.status)) await pollProject(response.project.id);
+  } catch (error) {
+    if (!isAbortError(error)) projectError.value = (error as Error).message || "重新拼接失败，请稍后再试。";
   } finally {
     projectLoading.value = false;
   }
@@ -398,8 +492,9 @@ async function retryVideoClip(clipIndex: number) {
   projectError.value = "";
   stopProjectPolling();
   try {
-    const response = await retryVideoProjectClip(project.value.id, clipIndex, projectRequestId(), scope.signalFor(`video-clip-retry-${clipIndex}`));
+    const response = await retryVideoProjectClip(project.value.id, clipIndex, actionRequestId(`clip:${clipIndex}`), scope.signalFor(`video-clip-retry-${clipIndex}`));
     project.value = response.project;
+    actionRequestIds.delete(`clip:${clipIndex}`);
     if (!["completed", "failed"].includes(response.project.status)) await pollProject(response.project.id);
   } catch (error) {
     if (isAbortError(error)) return;
@@ -473,6 +568,11 @@ async function handleVideoReferenceUpload(event: Event) {
 }
 
 function handleRegenerate() {
+  stopProjectPolling();
+  project.value = null;
+  projectError.value = "";
+  createRequestIdRef.value = "";
+  actionRequestIds.clear();
   reset();
   generateScriptWhenReady();
 }
@@ -502,8 +602,8 @@ onUnmounted(() => {
     >
       <header class="dialog-header">
         <div class="dialog-title-group">
-          <span class="dialog-badge">AI 视频脚本</span>
-          <h2 id="videoScriptDialogTitle" class="dialog-title">一键生成脚本</h2>
+          <span class="dialog-badge">AI 视频创作</span>
+          <h2 id="videoScriptDialogTitle" class="dialog-title">AI 视频创作</h2>
         </div>
         <button
           type="button"
@@ -536,7 +636,7 @@ onUnmounted(() => {
                   type="button"
                   :class="{ active: videoModelRef === model.id }"
                   :data-test="`video-model-${model.id}`"
-                  @click="videoModelRef = model.id"
+                  @click.stop="videoModelRef = model.id"
                 >
                   {{ model.displayName }}
                 </button>
@@ -605,6 +705,24 @@ onUnmounted(() => {
             </label>
           </section>
           <p v-if="controlsDirty" class="stale-settings-warning" data-test="video-script-settings-stale">参数已变更，脚本尚未同步；请重新生成脚本后再生成真实视频。</p>
+          <p v-else-if="script && !generation?.id" class="stale-settings-warning" data-test="video-script-generation-required">这份历史脚本缺少服务端脚本记录，请重新生成后再创建真实视频。</p>
+        </section>
+
+        <section v-if="!script && !loading && !error && !videoScriptBlockedError" class="script-preparation-action" data-test="video-script-preparation">
+          <div>
+            <span class="control-eyebrow">脚本与分镜</span>
+            <h3>确认视频准备后，再生成付费脚本</h3>
+            <p>脚本会根据当前模型、生成方式、时长、画幅和参考图生成。</p>
+          </div>
+          <button
+            type="button"
+            class="primary-btn"
+            data-test="video-script-generate"
+            :disabled="videoModeRef === 'image' && !selectedVideoReferenceIds.length"
+            @click="generateScriptWhenReady"
+          >
+            生成视频脚本 · 1积分
+          </button>
         </section>
 
         <div v-if="loading" class="dialog-loading-state" data-test="video-script-loading">
@@ -642,8 +760,8 @@ onUnmounted(() => {
           <div class="error-icon" aria-hidden="true">!</div>
           <h3>先准备视频参考图</h3>
           <p class="error-text">{{ videoScriptBlockedError }}</p>
-          <button type="button" class="primary-btn" data-test="video-script-generate-after-reference" @click="handleRegenerate">
-            生成视频脚本
+          <button type="button" class="primary-btn" data-test="video-script-generate-after-reference" :disabled="videoModeRef === 'image' && !selectedVideoReferenceIds.length" @click="generateScriptWhenReady">
+            生成视频脚本 · 1积分
           </button>
         </div>
 
@@ -670,10 +788,10 @@ onUnmounted(() => {
               type="button"
               class="primary-btn generate-video-btn"
               data-test="generate-real-video"
-              :disabled="projectLoading || controlsDirty || !scriptCompatible"
+              :disabled="projectLoading || controlsDirty || !scriptCompatible || !generation?.id || Boolean(project)"
               @click="generateRealVideo"
             >
-              {{ projectLoading ? "提交中..." : "生成真实视频" }}
+              {{ projectLoading ? "提交中..." : `生成真实视频 · ${estimatedCredits}积分` }}
             </button>
           </section>
           <p v-if="projectError" class="project-error" data-test="video-project-error">{{ projectError }}</p>
@@ -683,12 +801,25 @@ onUnmounted(() => {
               <span>{{ project.model.toUpperCase() }} · {{ project.totalDurationSec }} 秒 · 已扣 {{ project.chargedCredits }} 积分</span>
             </div>
             <p v-if="project.refundedCredits" class="refund-summary">已退款 {{ project.refundedCredits }} 积分。</p>
+            <div v-if="project.status === 'assembly_failed'" class="assembly-failed-panel" data-test="assembly-failed">
+              <strong>视频片段均已生成完成</strong>
+              <span>最终成片拼接失败，重新拼接不扣积分。</span>
+              <button
+                type="button"
+                class="secondary-btn"
+                data-test="retry-assembly"
+                :disabled="projectLoading"
+                @click="retryAssembly"
+              >
+                {{ projectLoading ? '拼接中…' : '重新拼接成片 · 0积分' }}
+              </button>
+            </div>
             <video v-if="project.finalVideoUrl" class="final-video-player" controls playsinline :src="project.finalVideoUrl"></video>
             <div class="clip-progress-list">
               <article v-for="clip in project.clips" :key="clip.id" :class="['clip-progress', `clip-${clip.status}`]">
                 <div class="clip-progress-heading">
                   <strong>镜头 {{ clip.index }}</strong>
-                  <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : '排队' }}</span>
+                  <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'submitting' ? '提交中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'waiting_dependency' ? '等待上一镜头' : '排队' }}</span>
                 </div>
                 <video v-if="clip.videoUrl" class="clip-video-player" controls playsinline :src="clip.videoUrl"></video>
                 <small v-if="clip.error" class="clip-error">失败原因：{{ clip.error }}</small>
@@ -1024,6 +1155,47 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
+.script-preparation-action,
+.assembly-failed-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 16px 18px;
+  border: 1px solid #e5d8d3;
+  border-radius: 12px;
+  background: #fffaf8;
+}
+
+.script-preparation-action h3,
+.assembly-failed-panel strong {
+  display: block;
+  margin: 4px 0 0;
+  color: var(--workspace-text, #31292b);
+  font-size: 15px;
+}
+
+.script-preparation-action p,
+.assembly-failed-panel span {
+  display: block;
+  margin: 6px 0 0;
+  color: #6d5e60;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.assembly-failed-panel {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  border-color: #f0c7bc;
+  background: #fff5f2;
+}
+
+.assembly-failed-panel button {
+  margin-left: auto;
+}
+
 .script-compatibility {
   display: flex;
   flex-wrap: wrap;
@@ -1218,6 +1390,16 @@ onUnmounted(() => {
   .real-video-panel {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .script-preparation-action {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .script-preparation-action button,
+  .assembly-failed-panel button {
+    margin-left: 0;
   }
 }
 
