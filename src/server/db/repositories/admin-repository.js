@@ -48,41 +48,47 @@ function insertCreditEvent(input) {
   return mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(id));
 }
 
-function trySpendCreditsWithEvent({ userId, amount, event }) {
-  return runTransaction(() => {
-    const cost = Number(amount || 0);
-    if (!Number.isFinite(cost) || cost <= 0) {
-      return { spent: false, user: findUserById(userId), creditEvent: null };
-    }
+function spendCreditsWithEventInTransaction({ userId, amount, event }) {
+  const cost = Number(amount || 0);
+  if (!Number.isFinite(cost) || cost <= 0) {
+    return { spent: false, user: findUserById(userId), creditEvent: null };
+  }
 
-    const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
-    const excellentReservationCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-    const result = db.prepare(`
-      UPDATE users
-      SET credits = credits - ?
-      WHERE id = ?
-        AND credits - COALESCE((
-          SELECT SUM(credit_cost)
-          FROM trend_analysis_requests
-          WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-        ), 0) - COALESCE((
-          SELECT SUM(credit_cost)
-          FROM excellent_remix_billing_requests
-          WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-        ), 0) >= ?
-    `).run(cost, Number(userId), reservationCutoff, excellentReservationCutoff, cost);
-    if (result.changes !== 1) {
-      return { spent: false, user: findUserById(userId), creditEvent: null };
-    }
+  const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
+  const excellentReservationCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
+  const result = db.prepare(`
+    UPDATE users
+    SET credits = credits - ?
+    WHERE id = ?
+      AND credits - COALESCE((
+        SELECT SUM(credit_cost)
+        FROM trend_analysis_requests
+        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
+      ), 0) - COALESCE((
+        SELECT SUM(credit_cost)
+        FROM excellent_remix_billing_requests
+        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
+      ), 0) - COALESCE((
+        SELECT SUM(credit_cost)
+        FROM video_project_billing_requests
+        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
+      ), 0) >= ?
+  `).run(cost, Number(userId), reservationCutoff, excellentReservationCutoff, reservationCutoff, cost);
+  if (result.changes !== 1) {
+    return { spent: false, user: findUserById(userId), creditEvent: null };
+  }
 
-    const creditEvent = insertCreditEvent({
-      ...(event || {}),
-      userId,
-      creditDelta: -cost,
-      creditCost: cost,
-    });
-    return { spent: true, user: findUserById(userId), creditEvent };
+  const creditEvent = insertCreditEvent({
+    ...(event || {}),
+    userId,
+    creditDelta: -cost,
+    creditCost: cost,
   });
+  return { spent: true, user: findUserById(userId), creditEvent };
+}
+
+function trySpendCreditsWithEvent({ userId, amount, event }) {
+  return runTransaction(() => spendCreditsWithEventInTransaction({ userId, amount, event }));
 }
 
 function findCreditEventById(creditEventId) {
@@ -502,6 +508,7 @@ function deleteUserCascadeRows(userId) {
 
 module.exports = {
   insertCreditEvent,
+  spendCreditsWithEventInTransaction,
   trySpendCreditsWithEvent,
   findCreditEventById,
   listAllUsers,

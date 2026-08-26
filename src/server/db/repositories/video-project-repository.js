@@ -1,6 +1,9 @@
 const { getDbProxy } = require("../connection");
 const { safeParseArray, safeParseObject } = require("../snapshot-utils");
 const { allocateCounter, runTransaction } = require("./core-repository");
+const { findGenerationById, upsertGeneration } = require("./generation-repository");
+const { findUserById } = require("./auth-repository");
+const { spendCreditsWithEventInTransaction } = require("./admin-repository");
 
 const db = getDbProxy();
 
@@ -8,7 +11,8 @@ const PROJECT_COLUMNS = `
   id, owner_user_id, generation_id, request_id, brand_id, trend_id, idea_index,
   video_model, mode, resolution, aspect_ratio, total_duration_sec, status,
   reference_asset_ids_json, visual_bible_json, script_json, estimated_credits,
-  charged_credits, refunded_credits, credit_event_id, final_video_json, error,
+  charged_credits, refunded_credits, credit_event_id, script_generation_id,
+  input_assets_json, assembly_request_id, assembly_attempt, final_video_json, error,
   created_at, updated_at
 `;
 
@@ -16,7 +20,9 @@ const CLIP_COLUMNS = `
   id, project_id, clip_index, start_sec, end_sec, duration_sec, status,
   depends_on_clip_index, prompt, provider, provider_task_id, continuity_mode,
   reference_asset_ids_json, continuity_state_json, output_video_json,
-  continuity_frame_json, credit_cost, attempt, retry_count, error, created_at, updated_at
+  continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
+  reservation_credit_event_id, submission_attempt, last_successful_poll_at,
+  poll_failure_count, error, created_at, updated_at
 `;
 
 function parseJsonObject(value) {
@@ -50,6 +56,11 @@ function mapClipRow(row) {
     creditCost: Number(row.credit_cost || 0),
     attempt: Number(row.attempt || 0),
     retryCount: Number(row.retry_count || 0),
+    providerKeyRef: String(row.provider_key_ref || ""),
+    reservationCreditEventId: row.reservation_credit_event_id == null ? null : Number(row.reservation_credit_event_id),
+    submissionAttempt: Number(row.submission_attempt || 0),
+    lastSuccessfulPollAt: String(row.last_successful_poll_at || ""),
+    pollFailureCount: Number(row.poll_failure_count || 0),
     error: String(row.error || ""),
     createdAt: String(row.created_at || ""),
     updatedAt: String(row.updated_at || ""),
@@ -80,6 +91,10 @@ function mapProjectRow(row, clips = null) {
     chargedCredits: Number(row.charged_credits || 0),
     refundedCredits: Number(row.refunded_credits || 0),
     creditEventId: row.credit_event_id == null ? null : Number(row.credit_event_id),
+    scriptGenerationId: row.script_generation_id == null ? null : Number(row.script_generation_id),
+    inputAssets: safeParseArray(row.input_assets_json),
+    assemblyRequestId: String(row.assembly_request_id || ""),
+    assemblyAttempt: Number(row.assembly_attempt || 0),
     finalVideo: parseJsonObject(row.final_video_json),
     error: String(row.error || ""),
     createdAt: String(row.created_at || ""),
@@ -116,6 +131,21 @@ function findProjectByOwnerAndRequestId(ownerUserId, requestId) {
   return row ? mapProjectRow(row) : null;
 }
 
+function findActiveProjectByContext({ ownerUserId, brandId, trendId, ideaIndex } = {}) {
+  const row = db.prepare(`
+    SELECT ${PROJECT_COLUMNS}
+    FROM video_projects
+    WHERE owner_user_id = ?
+      AND brand_id = ?
+      AND trend_id = ?
+      AND idea_index = ?
+      AND status IN ('preparing', 'queued', 'running', 'partial_failed', 'uncertain', 'waiting_configuration', 'assembling', 'assembly_failed')
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(Number(ownerUserId), Number(brandId), Number(trendId), Number(ideaIndex));
+  return row ? mapProjectRow(row) : null;
+}
+
 function findProjectByGenerationId(generationId, ownerUserId = null) {
   const row = ownerUserId == null
     ? db.prepare(`SELECT ${PROJECT_COLUMNS} FROM video_projects WHERE generation_id = ?`).get(Number(generationId))
@@ -123,11 +153,29 @@ function findProjectByGenerationId(generationId, ownerUserId = null) {
   return row ? mapProjectRow(row) : null;
 }
 
-function listProjectsByOwner(ownerUserId, { activeOnly = false, limit = 100 } = {}) {
-  const statuses = ["preparing", "queued", "running", "partial_failed", "failed", "completed", "cancelled"];
-  const activeStatuses = statuses.slice(0, 4);
-  const where = activeOnly ? `AND status IN (${activeStatuses.map(() => "?").join(",")})` : "";
-  const params = activeOnly ? [Number(ownerUserId), ...activeStatuses, Math.max(1, Number(limit) || 100)] : [Number(ownerUserId), Math.max(1, Number(limit) || 100)];
+function listProjectsByOwner(ownerUserId, { activeOnly = false, limit = 100, brandId, trendId, ideaIndex } = {}) {
+  const statuses = ["preparing", "queued", "running", "partial_failed", "uncertain", "waiting_configuration", "assembling", "assembly_failed", "failed", "completed", "cancelled"];
+  const activeStatuses = statuses.slice(0, 8);
+  const conditions = [];
+  const params = [Number(ownerUserId)];
+  if (activeOnly) {
+    conditions.push(`status IN (${activeStatuses.map(() => "?").join(",")})`);
+    params.push(...activeStatuses);
+  }
+  if (brandId != null && Number.isSafeInteger(Number(brandId)) && Number(brandId) > 0) {
+    conditions.push("brand_id = ?");
+    params.push(Number(brandId));
+  }
+  if (trendId != null && Number.isSafeInteger(Number(trendId)) && Number(trendId) > 0) {
+    conditions.push("trend_id = ?");
+    params.push(Number(trendId));
+  }
+  if (ideaIndex != null && Number.isSafeInteger(Number(ideaIndex)) && Number(ideaIndex) >= 0) {
+    conditions.push("idea_index = ?");
+    params.push(Number(ideaIndex));
+  }
+  const where = conditions.length ? `AND ${conditions.join(" AND ")}` : "";
+  params.push(Math.max(1, Number(limit) || 100));
   const rows = db.prepare(`
     SELECT ${PROJECT_COLUMNS}
     FROM video_projects
@@ -142,11 +190,311 @@ function listRecoverableProjects({ limit = 100 } = {}) {
   const rows = db.prepare(`
     SELECT ${PROJECT_COLUMNS}
     FROM video_projects
-    WHERE status IN ('preparing', 'queued', 'running', 'partial_failed')
+    WHERE status IN ('preparing', 'queued', 'running', 'waiting_configuration', 'assembling')
     ORDER BY updated_at ASC, id ASC
     LIMIT ?
   `).all(Math.max(1, Number(limit) || 100));
   return rows.map((row) => mapProjectRow(row));
+}
+
+const BILLING_COLUMNS = `
+  id, request_id, user_id, project_id, generation_id, operation, status,
+  credit_cost, credit_event_id, error, created_at, updated_at
+`;
+
+function mapBillingRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    requestId: String(row.request_id || ""),
+    userId: Number(row.user_id),
+    projectId: Number(row.project_id),
+    generationId: Number(row.generation_id),
+    operation: String(row.operation || "create"),
+    status: String(row.status || "reserved"),
+    creditCost: Number(row.credit_cost || 0),
+    creditEventId: row.credit_event_id == null ? null : Number(row.credit_event_id),
+    error: String(row.error || ""),
+    createdAt: String(row.created_at || ""),
+    updatedAt: String(row.updated_at || ""),
+  };
+}
+
+function findVideoBillingRequestByOwnerRequestId(ownerUserId, requestId) {
+  const row = db.prepare(`
+    SELECT ${BILLING_COLUMNS}
+    FROM video_project_billing_requests
+    WHERE user_id = ? AND request_id = ?
+    LIMIT 1
+  `).get(Number(ownerUserId), String(requestId || "").trim());
+  return mapBillingRow(row);
+}
+
+function insertVideoBillingRequest(input) {
+  const now = input.createdAt || nowIso();
+  const id = input.id ?? allocateCounter("nextVideoBillingReservationId", 1);
+  db.prepare(`
+    INSERT INTO video_project_billing_requests (
+      id, request_id, user_id, project_id, generation_id, operation, status,
+      credit_cost, credit_event_id, error, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+    Number(id), String(input.requestId || ""), Number(input.userId), Number(input.projectId),
+    Number(input.generationId), String(input.operation || "create"), String(input.status || "reserved"),
+    Number(input.creditCost || 0), input.creditEventId ?? null, String(input.error || ""), now, now,
+  );
+  return mapBillingRow(db.prepare(`SELECT ${BILLING_COLUMNS} FROM video_project_billing_requests WHERE id = ?`).get(Number(id)));
+}
+
+function updateVideoBillingRequest(id, patch = {}) {
+  const current = mapBillingRow(db.prepare(`SELECT ${BILLING_COLUMNS} FROM video_project_billing_requests WHERE id = ?`).get(Number(id)));
+  if (!current) return null;
+  const next = { ...current, ...patch };
+  db.prepare(`
+    UPDATE video_project_billing_requests
+    SET status = ?, credit_cost = ?, credit_event_id = ?, error = ?, updated_at = ?
+    WHERE id = ?
+  `).run(String(next.status), Number(next.creditCost || 0), next.creditEventId ?? null, String(next.error || ""), nowIso(), Number(id));
+  return mapBillingRow(db.prepare(`SELECT ${BILLING_COLUMNS} FROM video_project_billing_requests WHERE id = ?`).get(Number(id)));
+}
+
+function createProjectWithBilling({ project, clips, generation, billing, preventDuplicateActiveProject = true }) {
+  return runTransaction(() => {
+    const existing = findProjectByOwnerAndRequestId(project.ownerUserId, project.requestId);
+    if (existing) {
+      const existingProject = getProject(existing.id, { ownerUserId: project.ownerUserId });
+      return {
+        reused: true,
+        project: existingProject,
+        generation: existingProject ? findGenerationById(existingProject.generationId) : null,
+        user: findUserById(project.ownerUserId),
+        billingRequest: findVideoBillingRequestByOwnerRequestId(project.ownerUserId, project.requestId),
+      };
+    }
+    if (preventDuplicateActiveProject) {
+      const active = findActiveProjectByContext(project);
+      if (active) {
+        return {
+          reused: true,
+          project: getProject(active.id, { ownerUserId: project.ownerUserId }),
+          generation: findGenerationById(active.generationId),
+          user: findUserById(project.ownerUserId),
+          billingRequest: findVideoBillingRequestByOwnerRequestId(project.ownerUserId, active.requestId),
+        };
+      }
+    }
+
+    const projectId = project.id ?? allocateCounter("nextVideoProjectId", 1);
+    const generationId = project.generationId ?? generation?.id ?? allocateCounter("nextGenerationId", 1);
+    const createdGeneration = upsertGeneration({ ...generation, id: generationId });
+    if (!createdGeneration) throw new Error("视频脚本生成记录创建失败");
+    const createdProject = insertProject({ ...project, id: projectId, generationId, creditEventId: null });
+    if (!createdProject) throw new Error("视频项目创建失败");
+    const createdClips = (clips || []).map((clip) => insertClip({ ...clip, projectId, reservationCreditEventId: null }));
+
+    const charged = spendCreditsWithEventInTransaction({
+      userId: project.ownerUserId,
+      amount: billing.creditCost,
+      event: {
+        ...(billing.event || {}),
+        generationId,
+        payload: { ...(billing.event?.payload || {}), projectId, generationId, requestId: project.requestId },
+      },
+    });
+    if (!charged?.spent || !charged.creditEvent?.id) {
+      const error = new Error("积分不足或扣除失败");
+      error.code = "INSUFFICIENT_CREDITS";
+      throw error;
+    }
+
+    const reservation = insertVideoBillingRequest({
+      requestId: project.requestId,
+      userId: project.ownerUserId,
+      projectId,
+      generationId,
+      operation: "create",
+      status: "reserved",
+      creditCost: billing.creditCost,
+      creditEventId: charged.creditEvent.id,
+    });
+    if (!reservation) throw new Error("视频计费 reservation 创建失败");
+    updateProject(projectId, { creditEventId: charged.creditEvent.id, chargedCredits: billing.creditCost });
+    for (const clip of createdClips) updateClip(clip.id, { reservationCreditEventId: charged.creditEvent.id });
+    updateVideoBillingRequest(reservation.id, { status: "committed" });
+    const finalProject = getProject(projectId, { ownerUserId: project.ownerUserId });
+    return {
+      reused: false,
+      project: finalProject,
+      generation: findGenerationById(generationId),
+      user: findUserById(project.ownerUserId),
+      billingRequest: findVideoBillingRequestByOwnerRequestId(project.ownerUserId, project.requestId),
+    };
+  });
+}
+
+function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId, creditCost, event }) {
+  return runTransaction(() => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId) {
+      const error = new Error("缺少视频重试 requestId");
+      error.code = "VIDEO_REQUEST_ID_REQUIRED";
+      throw error;
+    }
+    const existingReservation = findVideoBillingRequestByOwnerRequestId(ownerUserId, normalizedRequestId);
+    if (existingReservation) {
+      return {
+        reused: true,
+        project: getProject(existingReservation.projectId, { ownerUserId }),
+        user: findUserById(ownerUserId),
+        billingRequest: existingReservation,
+      };
+    }
+    const project = getProject(projectId, { ownerUserId });
+    if (!project) {
+      const error = new Error("视频项目不存在");
+      error.code = "VIDEO_PROJECT_NOT_FOUND";
+      throw error;
+    }
+    const target = project.clips.find((clip) => clip.index === Number(clipIndex));
+    if (!target) {
+      const error = new Error("视频镜头不存在");
+      error.code = "VIDEO_CLIP_NOT_FOUND";
+      throw error;
+    }
+    if (!["failed", "uncertain_submission", "cancelled"].includes(target.status)) {
+      const error = new Error("只有失败、待确认或已取消的镜头才能重新生成");
+      error.code = "VIDEO_CLIP_RETRY_NOT_ALLOWED";
+      throw error;
+    }
+    const targetDependency = target.dependsOnClipIndex == null
+      ? null
+      : project.clips.find((clip) => clip.index === target.dependsOnClipIndex);
+    if (targetDependency && targetDependency.status !== "completed") {
+      const error = new Error("请先完成前置镜头后再重试当前镜头");
+      error.code = "VIDEO_CLIP_RETRY_NOT_ALLOWED";
+      throw error;
+    }
+    const retryableClips = project.clips.filter((clip) => clip.index >= target.index && clip.status !== "completed");
+    const cost = Number(creditCost || retryableClips.reduce((sum, clip) => sum + Number(clip.creditCost || 0), 0));
+    if (!Number.isFinite(cost) || cost <= 0) {
+      const error = new Error("没有需要重新计费的镜头");
+      error.code = "VIDEO_CLIP_RETRY_NOT_NEEDED";
+      throw error;
+    }
+    const charged = spendCreditsWithEventInTransaction({
+      userId: ownerUserId,
+      amount: cost,
+      event: {
+        ...(event || {}),
+        generationId: project.generationId,
+        payload: { ...(event?.payload || {}), projectId: project.id, clipIndex: target.index, requestId: normalizedRequestId },
+      },
+    });
+    if (!charged?.spent || !charged.creditEvent?.id) {
+      const error = new Error("积分不足，无法重试剩余镜头");
+      error.code = "INSUFFICIENT_CREDITS";
+      throw error;
+    }
+    const reservation = insertVideoBillingRequest({
+      requestId: normalizedRequestId,
+      userId: ownerUserId,
+      projectId: project.id,
+      generationId: project.generationId,
+      operation: "retry",
+      status: "reserved",
+      creditCost: cost,
+      creditEventId: charged.creditEvent.id,
+    });
+    if (!reservation) throw new Error("视频重试计费 reservation 创建失败");
+    for (const clip of retryableClips) {
+      const dependency = clip.dependsOnClipIndex == null ? null : project.clips.find((item) => item.index === clip.dependsOnClipIndex);
+      updateClip(clip.id, {
+        status: clip.index === target.index && (!dependency || dependency.status === "completed") ? "queued" : "waiting_dependency",
+        providerTaskId: "",
+        providerKeyRef: "",
+        outputVideo: {},
+        continuityFrame: {},
+        error: "",
+        retryCount: Number(clip.retryCount || 0) + (clip.index === target.index ? 1 : 0),
+        reservationCreditEventId: charged.creditEvent.id,
+        pollFailureCount: 0,
+        lastSuccessfulPollAt: "",
+      });
+    }
+    updateProject(project.id, {
+      status: "queued",
+      error: "",
+      chargedCredits: project.chargedCredits + cost,
+    });
+    updateVideoBillingRequest(reservation.id, { status: "committed" });
+    return {
+      reused: false,
+      project: getProject(project.id, { ownerUserId }),
+      user: findUserById(ownerUserId),
+      billingRequest: findVideoBillingRequestByOwnerRequestId(ownerUserId, normalizedRequestId),
+    };
+  });
+}
+
+function claimAssemblyRetry({ projectId, ownerUserId, requestId }) {
+  return runTransaction(() => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId) {
+      const error = new Error("缺少成片拼接 requestId");
+      error.code = "VIDEO_REQUEST_ID_REQUIRED";
+      throw error;
+    }
+    const project = getProject(projectId, { ownerUserId });
+    if (!project) {
+      const error = new Error("视频项目不存在");
+      error.code = "VIDEO_PROJECT_NOT_FOUND";
+      throw error;
+    }
+    if (project.status === "completed") return { shouldRun: false, project };
+    if (project.status === "assembling") return { shouldRun: false, project };
+    if (project.status !== "assembly_failed") {
+      const error = new Error("只有最终成片拼接失败的项目才能重新拼接");
+      error.code = "VIDEO_ASSEMBLY_RETRY_NOT_ALLOWED";
+      throw error;
+    }
+    if (!(project.clips || []).length || !(project.clips || []).every((clip) => clip.status === "completed")) {
+      const error = new Error("所有视频片段完成后才能重新拼接");
+      error.code = "VIDEO_ASSEMBLY_RETRY_NOT_ALLOWED";
+      throw error;
+    }
+    if (project.assemblyRequestId && project.assemblyRequestId === normalizedRequestId) {
+      return { shouldRun: false, project };
+    }
+    const next = updateProject(project.id, {
+      status: "assembling",
+      assemblyRequestId: normalizedRequestId,
+      assemblyAttempt: project.assemblyAttempt + 1,
+      error: "",
+    });
+    return { shouldRun: true, project: next };
+  });
+}
+
+function claimAssemblyStart(projectId) {
+  return runTransaction(() => {
+    const project = getProject(projectId);
+    if (!project) return { shouldRun: false, project: null };
+    if (project.status === "completed" || project.status === "assembling" || project.status === "assembly_failed") {
+      return { shouldRun: false, project };
+    }
+    if (!(project.clips || []).length || !(project.clips || []).every((clip) => clip.status === "completed")) {
+      return { shouldRun: false, project };
+    }
+    const result = db.prepare(`
+      UPDATE video_projects
+      SET status = 'assembling', assembly_attempt = assembly_attempt + 1, error = '', updated_at = ?
+      WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'partial_failed')
+    `).run(nowIso(), Number(projectId));
+    return {
+      shouldRun: result.changes === 1,
+      project: getProject(projectId),
+    };
+  });
 }
 
 function insertProject(input) {
@@ -157,9 +505,10 @@ function insertProject(input) {
       id, owner_user_id, generation_id, request_id, brand_id, trend_id, idea_index,
       video_model, mode, resolution, aspect_ratio, total_duration_sec, status,
       reference_asset_ids_json, visual_bible_json, script_json, estimated_credits,
-      charged_credits, refunded_credits, credit_event_id, final_video_json, error,
+      charged_credits, refunded_credits, credit_event_id, script_generation_id,
+      input_assets_json, assembly_request_id, assembly_attempt, final_video_json, error,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     Number(id), Number(input.ownerUserId), Number(input.generationId), String(input.requestId),
     Number(input.brandId), Number(input.trendId), Number(input.ideaIndex), String(input.model || "d2"),
@@ -167,7 +516,8 @@ function insertProject(input) {
     Number(input.totalDurationSec), String(input.status || "preparing"), JSON.stringify(input.referenceAssetIds || []),
     JSON.stringify(input.visualBible || {}), JSON.stringify(input.script || {}), Number(input.estimatedCredits || 0),
     Number(input.chargedCredits || 0), Number(input.refundedCredits || 0), input.creditEventId ?? null,
-    JSON.stringify(input.finalVideo || {}), String(input.error || ""), now, now,
+    input.scriptGenerationId ?? null, JSON.stringify(input.inputAssets || []), String(input.assemblyRequestId || ""),
+    Number(input.assemblyAttempt || 0), JSON.stringify(input.finalVideo || {}), String(input.error || ""), now, now,
   );
   return getProject(id);
 }
@@ -180,8 +530,14 @@ function insertClip(input) {
       id, project_id, clip_index, start_sec, end_sec, duration_sec, status,
       depends_on_clip_index, prompt, provider, provider_task_id, continuity_mode,
       reference_asset_ids_json, continuity_state_json, output_video_json,
-      continuity_frame_json, credit_cost, attempt, retry_count, error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
+      reservation_credit_event_id, submission_attempt, last_successful_poll_at,
+      poll_failure_count, error, created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?
+    )
   `).run(
     Number(id), Number(input.projectId), Number(input.clipIndex), Number(input.startSec), Number(input.endSec),
     Number(input.durationSec), String(input.status || "waiting_dependency"), input.dependsOnClipIndex ?? null,
@@ -189,7 +545,9 @@ function insertClip(input) {
     String(input.continuityMode || ""), JSON.stringify(input.referenceAssetIds || []),
     JSON.stringify(input.continuityState || {}), JSON.stringify(input.outputVideo || {}),
     JSON.stringify(input.continuityFrame || {}), Number(input.creditCost || 0), Number(input.attempt || 0),
-    Number(input.retryCount || 0), String(input.error || ""), now, now,
+    Number(input.retryCount || 0), String(input.providerKeyRef || ""), input.reservationCreditEventId ?? null,
+    Number(input.submissionAttempt || 0), String(input.lastSuccessfulPollAt || ""), Number(input.pollFailureCount || 0),
+    String(input.error || ""), now, now,
   );
   return getClip(id);
 }
@@ -224,6 +582,7 @@ function updateProject(projectId, patch = {}) {
     UPDATE video_projects SET
       status = ?, reference_asset_ids_json = ?, visual_bible_json = ?, script_json = ?,
       estimated_credits = ?, charged_credits = ?, refunded_credits = ?, credit_event_id = ?,
+      script_generation_id = ?, input_assets_json = ?, assembly_request_id = ?, assembly_attempt = ?,
       final_video_json = ?, error = ?, updated_at = ?
     WHERE id = ?
   `).run(
@@ -231,6 +590,8 @@ function updateProject(projectId, patch = {}) {
     JSON.stringify(next.visualBible || existing.visualBible || {}), JSON.stringify(next.script || existing.script || {}),
     Number(next.estimatedCredits ?? existing.estimatedCredits ?? 0), Number(next.chargedCredits ?? existing.chargedCredits ?? 0),
     Number(next.refundedCredits ?? existing.refundedCredits ?? 0), next.creditEventId ?? existing.creditEventId ?? null,
+    next.scriptGenerationId ?? existing.scriptGenerationId ?? null, JSON.stringify(next.inputAssets || existing.inputAssets || []),
+    String(next.assemblyRequestId ?? existing.assemblyRequestId ?? ""), Number(next.assemblyAttempt ?? existing.assemblyAttempt ?? 0),
     JSON.stringify(next.finalVideo || existing.finalVideo || {}), String(next.error ?? existing.error ?? ""), updatedAt,
     Number(projectId),
   );
@@ -246,7 +607,8 @@ function updateClip(clipId, patch = {}) {
       status = ?, depends_on_clip_index = ?, prompt = ?, provider = ?, provider_task_id = ?,
       continuity_mode = ?, reference_asset_ids_json = ?, continuity_state_json = ?,
       output_video_json = ?, continuity_frame_json = ?, credit_cost = ?, attempt = ?,
-      retry_count = ?, error = ?, updated_at = ?
+      retry_count = ?, provider_key_ref = ?, reservation_credit_event_id = ?, submission_attempt = ?,
+      last_successful_poll_at = ?, poll_failure_count = ?, error = ?, updated_at = ?
     WHERE id = ?
   `).run(
     String(next.status || existing.status), next.dependsOnClipIndex ?? null, String(next.prompt ?? (existing.prompt || "")),
@@ -255,7 +617,9 @@ function updateClip(clipId, patch = {}) {
     JSON.stringify(next.continuityState || existing.continuityState || {}), JSON.stringify(next.outputVideo || existing.outputVideo || {}),
     JSON.stringify(next.continuityFrame || existing.continuityFrame || {}), Number(next.creditCost ?? existing.creditCost ?? 0),
     Number(next.attempt ?? existing.attempt ?? 0), Number(next.retryCount ?? existing.retryCount ?? 0),
-    String(next.error ?? existing.error ?? ""), nowIso(), Number(clipId),
+    String(next.providerKeyRef ?? existing.providerKeyRef ?? ""), next.reservationCreditEventId ?? existing.reservationCreditEventId ?? null,
+    Number(next.submissionAttempt ?? existing.submissionAttempt ?? 0), String(next.lastSuccessfulPollAt ?? existing.lastSuccessfulPollAt ?? ""),
+    Number(next.pollFailureCount ?? existing.pollFailureCount ?? 0), String(next.error ?? existing.error ?? ""), nowIso(), Number(clipId),
   );
   return getClip(clipId);
 }
@@ -280,6 +644,7 @@ module.exports = {
   mapClipRow,
   getProject,
   findProjectByOwnerAndRequestId,
+  findActiveProjectByContext,
   findProjectByGenerationId,
   listProjectsByOwner,
   listRecoverableProjects,
@@ -291,4 +656,13 @@ module.exports = {
   updateClip,
   updateClipByProjectIndex,
   createProjectWithClips,
+  BILLING_COLUMNS,
+  mapBillingRow,
+  findVideoBillingRequestByOwnerRequestId,
+  insertVideoBillingRequest,
+  updateVideoBillingRequest,
+  createProjectWithBilling,
+  retryProjectWithBilling,
+  claimAssemblyRetry,
+  claimAssemblyStart,
 };

@@ -18,7 +18,12 @@ const {
   touchProductImageUsed,
 } = require("../db/repositories/product-image-repository");
 const { generateVideoScript, generateVisualBible } = require("../ai/video-script-service");
-const { getVideoModelConfig, normalizeModelId } = require("../video/video-model-registry");
+const {
+  getVideoModelConfig,
+  normalizeModelId,
+  normalizeTotalDuration,
+  resolveVideoAspectRatio,
+} = require("../video/video-model-registry");
 const { sanitizeGeneration, sanitizeUser } = require("../utils");
 const { CREDIT_COSTS, hasEnoughCredits } = require("./credits");
 
@@ -87,6 +92,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     const model = requestedModel ? normalizeModelId(requestedModel) : "";
     const modelConfig = model ? getVideoModelConfig(model) : null;
     const mode = String(payload.mode || "text").trim().toLowerCase();
+    const requestedVideoAspectRatio = resolveVideoAspectRatio(payload.aspectRatioSelection || "9:16", "9:16");
 
     // 幂等防线：相同用户、相同 requestId 返回已有 generation
     const existing = findGenerationByOwnerAndRequestId(user.id, requestId);
@@ -213,7 +219,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
           styleReferenceImageUsed: styleCount > 0,
           styleReferenceImageCount: styleCount,
           logoUsed: logoCount > 0,
-          aspectRatio: payload.aspectRatioSelection || "9:16",
+          aspectRatio: requestedVideoAspectRatio,
           videoDuration: payload.videoDuration || payload.durationSelection || "auto",
           videoModel: model || undefined,
           videoMode: model ? mode : undefined,
@@ -235,7 +241,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         brand,
         trend,
         idea,
-        aspectRatio: payload.aspectRatioSelection || "9:16",
+        aspectRatio: requestedVideoAspectRatio,
         durationSelection: payload.videoDuration || payload.durationSelection || "auto",
         images: resolvedImages,
         model,
@@ -260,9 +266,25 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         summary: script.creativeConcept || idea.summary || "",
         payload: {
           requestId,
-          aspectRatio: script.aspectRatio || payload.aspectRatioSelection || "9:16",
+          ideaIndex,
+          aspectRatio: script.aspectRatio || requestedVideoAspectRatio,
+          videoAspectRatio: script.aspectRatio || requestedVideoAspectRatio,
+          videoDuration: script.totalDurationSec || normalizeTotalDuration(payload.videoDuration || payload.durationSelection || "auto", 30),
           videoScript: script,
-          ...(model ? { videoModel: model, videoMode: mode, visualBible } : {}),
+          ...(model ? {
+            videoModel: model,
+            videoMode: mode,
+            videoResolution: String(payload.resolution || "720p"),
+            videoReferenceImageIds: resolvedVideoReferenceIds,
+            semanticInput: {
+              model,
+              mode,
+              totalDurationSec: script.totalDurationSec,
+              aspectRatio: script.aspectRatio || requestedVideoAspectRatio,
+              referenceImageIds: resolvedVideoReferenceIds,
+            },
+            visualBible,
+          } : {}),
           referenceImageUsed: productCount > 0,
           referenceImageCount: productCount,
           styleReferenceImageUsed: styleCount > 0,

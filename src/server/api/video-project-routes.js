@@ -23,13 +23,20 @@ function normalizeReferenceAssetIds(value, ownerUserId, max) {
 }
 
 function respondVideoError(res, error, badRequest) {
-  const status = error?.code === "VIDEO_PROJECT_NOT_FOUND" || error?.code === "VIDEO_CLIP_NOT_FOUND" ? 404 : 400;
-  if (status === 404) {
-    res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ error: error.message }));
-  } else {
-    badRequest(res, error.message || "视频项目请求失败");
-  }
+  const notFoundCodes = new Set(["VIDEO_PROJECT_NOT_FOUND", "VIDEO_CLIP_NOT_FOUND"]);
+  const conflictCodes = new Set([
+    "VIDEO_CLIP_RETRY_NOT_ALLOWED",
+    "VIDEO_CLIP_RETRY_NOT_NEEDED",
+    "VIDEO_ASSEMBLY_RETRY_NOT_ALLOWED",
+    "VIDEO_SCRIPT_GENERATION_REQUIRED",
+    "VIDEO_SCRIPT_GENERATION_INVALID",
+    "VIDEO_SCRIPT_INCOMPATIBLE",
+    "VIDEO_SCRIPT_CONTEXT_MISMATCH",
+  ]);
+  const status = notFoundCodes.has(error?.code) ? 404 : conflictCodes.has(error?.code) ? 409 :
+    ["VIDEO_ASSET_SIGNING_REQUIRED", "VIDEO_PUBLIC_BASE_URL_REQUIRED", "VIDEO_PROVIDER_NOT_CONFIGURED"].includes(error?.code) ? 503 : 400;
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ error: error?.message || "视频项目请求失败", code: error?.code || "VIDEO_PROJECT_ERROR" }));
 }
 
 async function handleVideoProjectRoutes(context, req, res, pathname) {
@@ -67,7 +74,14 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/video-projects/active") {
     const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    json(res, 200, { projects: service.listActiveProjects(user.id) });
+    const query = new URL(req.url, "http://redbase.local").searchParams;
+    json(res, 200, {
+      projects: service.listActiveProjects(user.id, {
+        brandId: query.get("brandId") || undefined,
+        trendId: query.get("trendId") || undefined,
+        ideaIndex: query.get("ideaIndex") || undefined,
+      }),
+    });
     return true;
   }
 
@@ -106,8 +120,12 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
         badRequest(res, "当前视频模型不可用。");
         return true;
       }
-      const referenceAssetIds = normalizeReferenceAssetIds(payload.referenceAssetIds, user.id, capabilities.maxReferenceImages);
-      const projectResult = service.createProject({
+      const videoScriptGenerationId = Number(payload.videoScriptGenerationId || 0);
+      if (!Number.isSafeInteger(videoScriptGenerationId) || videoScriptGenerationId <= 0) {
+        respondVideoError(res, Object.assign(new Error("请先生成当前视频模型对应的视频脚本。"), { code: "VIDEO_SCRIPT_GENERATION_REQUIRED" }), badRequest);
+        return true;
+      }
+      const projectResult = await service.createProject({
         ownerUserId: user.id,
         requestId,
         brand,
@@ -121,9 +139,7 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
         resolution: payload.resolution,
         aspectRatio: payload.aspectRatio,
         totalDurationSec: payload.totalDurationSec,
-        referenceAssetIds,
-        visualBible: payload.visualBible,
-        script: payload.script,
+        videoScriptGenerationId,
       });
       json(res, 200, { ...projectResult, user: sanitizeUser(projectResult.user || user) });
     } catch (error) {
@@ -168,14 +184,32 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
         badRequest(res, "缺少 requestId，请重试。");
         return true;
       }
-      json(res, 200, { project: service.retryClip(Number(retryMatch[1]), user.id, Number(retryMatch[2]), requestId) });
+      json(res, 200, { project: await service.retryClip(Number(retryMatch[1]), user.id, Number(retryMatch[2]), requestId) });
     } catch (error) {
       respondVideoError(res, error, badRequest);
     }
     return true;
   }
 
-  const assetMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/assets\/(final|clip|continuity-frame)(?:\/(\d+))?$/);
+  const assemblyRetryMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/retry-assembly$/);
+  if (req.method === "POST" && assemblyRetryMatch) {
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    try {
+      const payload = await collectBody(req);
+      const requestId = String(payload.requestId || "").trim();
+      if (!requestId) {
+        badRequest(res, "缺少 requestId，请重试。");
+        return true;
+      }
+      json(res, 200, { project: await service.retryAssembly(Number(assemblyRetryMatch[1]), user.id, requestId) });
+    } catch (error) {
+      respondVideoError(res, error, badRequest);
+    }
+    return true;
+  }
+
+  const assetMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/assets\/(final|input|clip|continuity-frame)(?:\/(\d+))?$/);
   if (req.method === "GET" && assetMatch) {
     if (!verifySignedAssetRequest(appConfig, req)) {
       unauthorized(res, "视频链接已失效，请刷新页面后重试");

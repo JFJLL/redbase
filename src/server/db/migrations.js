@@ -162,6 +162,56 @@ const VERSIONED_MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 5,
+    name: "harden-video-project-billing-and-recovery",
+    apply() {
+      const projectColumns = db.prepare("PRAGMA table_info(video_projects)").all().map((row) => row.name);
+      const clipColumns = db.prepare("PRAGMA table_info(video_clips)").all().map((row) => row.name);
+      const addProjectColumn = (name, definition) => {
+        if (!projectColumns.includes(name)) db.exec(`ALTER TABLE video_projects ADD COLUMN ${name} ${definition}`);
+      };
+      const addClipColumn = (name, definition) => {
+        if (!clipColumns.includes(name)) db.exec(`ALTER TABLE video_clips ADD COLUMN ${name} ${definition}`);
+      };
+
+      addProjectColumn("script_generation_id", "INTEGER");
+      addProjectColumn("input_assets_json", "TEXT NOT NULL DEFAULT '[]'");
+      addProjectColumn("assembly_request_id", "TEXT NOT NULL DEFAULT ''");
+      addProjectColumn("assembly_attempt", "INTEGER NOT NULL DEFAULT 0");
+      addClipColumn("provider_key_ref", "TEXT NOT NULL DEFAULT ''");
+      addClipColumn("reservation_credit_event_id", "INTEGER");
+      addClipColumn("submission_attempt", "INTEGER NOT NULL DEFAULT 0");
+      addClipColumn("last_successful_poll_at", "TEXT NOT NULL DEFAULT ''");
+      addClipColumn("poll_failure_count", "INTEGER NOT NULL DEFAULT 0");
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS video_project_billing_requests (
+          id INTEGER PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          generation_id INTEGER NOT NULL,
+          operation TEXT NOT NULL DEFAULT 'create',
+          status TEXT NOT NULL DEFAULT 'reserved',
+          credit_cost INTEGER NOT NULL DEFAULT 0,
+          credit_event_id INTEGER,
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES video_projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE,
+          FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL,
+          UNIQUE (user_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_video_project_billing_project
+          ON video_project_billing_requests(project_id, operation, status);
+        CREATE INDEX IF NOT EXISTS idx_video_project_billing_event
+          ON video_project_billing_requests(credit_event_id);
+      `);
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {
