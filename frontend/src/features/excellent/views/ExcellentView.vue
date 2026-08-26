@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import RemixBrandSelect from "../components/RemixBrandSelect.vue";
+import CustomSelect from "../components/CustomSelect.vue";
 
 import { ApiError, isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
@@ -245,6 +246,7 @@ async function loadBoard(board: ExcellentBoard) {
       // 巨量星图仅保留当次页面内的官方元数据；不会写入本地媒体或缓存。
       boardSlice.hasCache = false;
       boardSlice.needsUpdate = false;
+      void preloadXingtuPosters(boardSlice.items);
     }
 
     // 首次/切回未加载榜单：列表就绪后恢复该榜单的浏览位置。
@@ -302,6 +304,7 @@ async function refreshBoard(board: ExcellentBoard) {
       boardSlice.hasCache = false;
       boardSlice.needsUpdate = false;
       showToast("已刷新巨量星图公开视频目录");
+      void preloadXingtuPosters(boardSlice.items);
       return;
     }
     const result = await refreshExcellentContents(requestFilters, scope.signalFor(`refresh-${board}`));
@@ -446,6 +449,18 @@ async function onXingtuCoverError(item: ExcellentNote) {
       capturedVideoPosters[id] = poster;
     }
   } catch (_e) {}
+}
+
+async function preloadXingtuPosters(items: readonly ExcellentNote[]) {
+  for (const item of items) {
+    const id = xingtuItemId(item);
+    if (!id || capturedVideoPosters[id]) continue;
+    const cover = String(item.coverUrl || "");
+    // If cover is placeholder SVG or missing, extract real frame
+    if (!cover || cover.includes("cover") || cover.endsWith(".svg")) {
+      void onXingtuCoverError(item);
+    }
+  }
 }
 
 function captureVideoPoster(mediaUrl: string): Promise<string | null> {
@@ -1374,30 +1389,27 @@ onUnmounted(() => {
     <div class="excellent-filters unified-filter-toolbar">
       <template v-if="activeBoard === 'xingtu'">
         <div class="filter-fields-group xingtu-fields-group" role="group" aria-label="视频筛选条件">
-          <label class="custom-filter-field">
-            <span class="custom-filter-label">视频类型</span>
-            <div class="custom-select-wrapper">
-              <select v-model="xingtuFilters.videoType" data-test="xingtu-video-type" class="custom-styled-select" @change="applyXingtuFilters()">
-                <option v-for="type in XINGTU_VIDEO_TYPES" :key="type" :value="type">{{ type === 'all' ? '全部' : type }}</option>
-              </select>
-            </div>
-          </label>
-          <label class="custom-filter-field">
-            <span class="custom-filter-label">内容类型</span>
-            <div class="custom-select-wrapper">
-              <select v-model="xingtuFilters.contentType" data-test="xingtu-content-type" class="custom-styled-select" @change="applyXingtuFilters()">
-                <option v-for="type in XINGTU_CONTENT_TYPES" :key="type" :value="type">{{ type === 'all' ? '不限' : type }}</option>
-              </select>
-            </div>
-          </label>
-          <label class="custom-filter-field">
-            <span class="custom-filter-label">数据筛选</span>
-            <div class="custom-select-wrapper">
-              <select v-model="xingtuFilters.dataSort" data-test="xingtu-data-sort" class="custom-styled-select" @change="applyXingtuFilters()">
-                <option v-for="option in XINGTU_DATA_SORTS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </div>
-          </label>
+          <CustomSelect
+            v-model="xingtuFilters.videoType"
+            label="视频类型"
+            :options="XINGTU_VIDEO_TYPES"
+            test-id="xingtu-video-type"
+            @change="applyXingtuFilters()"
+          />
+          <CustomSelect
+            v-model="xingtuFilters.contentType"
+            label="内容类型"
+            :options="XINGTU_CONTENT_TYPES"
+            test-id="xingtu-content-type"
+            @change="applyXingtuFilters()"
+          />
+          <CustomSelect
+            v-model="xingtuFilters.dataSort"
+            label="数据筛选"
+            :options="XINGTU_DATA_SORTS"
+            test-id="xingtu-data-sort"
+            @change="applyXingtuFilters()"
+          />
         </div>
         <button
           type="button"
@@ -1411,39 +1423,26 @@ onUnmounted(() => {
       </template>
       <template v-else>
         <div class="filter-fields-group xhs-fields-group" role="group" aria-label="内容筛选条件">
-          <label class="custom-filter-field">
-            <span class="custom-filter-label">内容来源</span>
-            <div class="custom-select-wrapper">
-              <select v-model="slice.draftContentSource" data-test="filter-source" class="custom-styled-select">
-                <option value="all">全部来源</option>
-                <option v-for="source in contentSources" :key="String(source.value)" :value="source.value">
-                  {{ source.label || source.value }}
-                </option>
-              </select>
-            </div>
-          </label>
-          <label v-if="activeBoard === 'xhs_hot'" class="custom-filter-field">
-            <span class="custom-filter-label">内容类目</span>
-            <div class="custom-select-wrapper">
-              <select v-model="slice.draftCategoryPath" data-test="filter-category" class="custom-styled-select">
-                <option value="">全部类目</option>
-                <option v-for="option in taxonomyOptions.xhs_hot" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-          </label>
-          <label v-else class="custom-filter-field">
-            <span class="custom-filter-label">所属行业</span>
-            <div class="custom-select-wrapper">
-              <select v-model="slice.draftIndustryPath" data-test="filter-industry" class="custom-styled-select">
-                <option value="">全部行业</option>
-                <option v-for="option in taxonomyOptions.ecommerce_hot" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-          </label>
+          <CustomSelect
+            v-model="slice.draftContentSource"
+            label="内容来源"
+            :options="[{ value: 'all', label: '全部来源' }, ...contentSources]"
+            test-id="filter-source"
+          />
+          <CustomSelect
+            v-if="activeBoard === 'xhs_hot'"
+            v-model="slice.draftCategoryPath"
+            label="内容类目"
+            :options="[{ value: '', label: '全部类目' }, ...taxonomyOptions.xhs_hot]"
+            test-id="filter-category"
+          />
+          <CustomSelect
+            v-else
+            v-model="slice.draftIndustryPath"
+            label="所属行业"
+            :options="[{ value: '', label: '全部行业' }, ...taxonomyOptions.ecommerce_hot]"
+            test-id="filter-industry"
+          />
         </div>
         <button
           type="button"
@@ -4150,83 +4149,6 @@ onUnmounted(() => {
   border-radius: 16px;
   background: linear-gradient(118deg, #fffafa 0%, #ffffff 54%, #fff5f5 100%);
   box-shadow: 0 8px 24px rgba(189, 45, 60, 0.06);
-}
-.filter-fields-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 14px;
-  flex: 1;
-  min-width: 0;
-}
-.custom-filter-field {
-  display: grid;
-  gap: 6px;
-  min-width: 140px;
-  flex: 1 1 140px;
-  max-width: 220px;
-}
-.custom-filter-label {
-  color: #7a6669;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  user-select: none;
-}
-.custom-select-wrapper {
-  position: relative;
-  width: 100%;
-}
-.custom-styled-select {
-  width: 100%;
-  min-width: 0;
-  height: 38px;
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  padding: 0 34px 0 12px;
-  border: 1px solid #ead7da;
-  border-radius: 10px;
-  color: #2c2526;
-  font-size: 13px;
-  font-weight: 600;
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m1 1.5 5 5 5-5' fill='none' stroke='%23945a63' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 13px center;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
-}
-.custom-styled-select:hover {
-  border-color: #dca5ac;
-  background-color: #fffafa;
-}
-.custom-styled-select:focus {
-  border-color: #d6394d;
-  box-shadow: 0 0 0 3px rgba(214, 57, 77, 0.12);
-}
-.custom-styled-select option {
-  background: #fff;
-  color: #2c2526;
-  font-weight: 500;
-  padding: 6px 10px;
-}
-.primary-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 38px;
-  padding: 0 20px;
-  border: 1px solid #d6394d;
-  border-radius: 10px;
-  background: #d6394d;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: pointer;
-  box-shadow: 0 6px 16px rgba(198, 42, 59, 0.18);
-  transition: transform 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
-  flex-shrink: 0;
 }
 .primary-action-btn:hover:not(:disabled) {
   background-color: #bd2639;

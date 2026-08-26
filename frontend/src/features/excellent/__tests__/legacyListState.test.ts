@@ -475,7 +475,7 @@ describe("excellent list state (legacy contract)", () => {
       ["slice.draftCategoryPath", "filter-category"],
       ["slice.draftIndustryPath", "filter-industry"],
     ]) {
-      const tagMatch = viewSource.match(new RegExp(`<select[^>]*data-test="${testId}"[^>]*>`));
+      const tagMatch = viewSource.match(new RegExp(`<CustomSelect[^>]*test-id="${testId}"[^>]*/>`));
       expect(tagMatch, `select ${testId} must exist`).not.toBeNull();
       const tag = tagMatch?.[0] ?? "";
       expect(tag.includes(`v-model="${model}"`)).toBe(true);
