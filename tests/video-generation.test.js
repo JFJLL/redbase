@@ -150,7 +150,7 @@ function makeService(provider, storage = makeStorage(), overrides = {}) {
   return createVideoProjectService({
     appConfig: overrides.appConfig || {
       security: { assetSigningSecret: "video-test-secret" },
-      video: { publicBaseUrl: "https://redbase.example", schedulerIntervalMs: 1000, pollIntervalMs: 1, agnes: { apiKeys: [] } },
+      video: { publicBaseUrl: "https://redbase.example", schedulerIntervalMs: 1000, pollIntervalMs: 1, agnes: { apiKeys: [], pollIntervalMs: 1 } },
     },
     generatedAssetStorage: storage,
     providers: overrides.providers || { d2: provider, g2: provider },
@@ -160,6 +160,7 @@ function makeService(provider, storage = makeStorage(), overrides = {}) {
     }),
     now: overrides.now || (() => Date.now()),
     fetchImpl: overrides.fetchImpl,
+    allowLegacyScript: true,
   });
 }
 
@@ -167,7 +168,7 @@ async function settleProject(service, projectId, ownerUserId, maxIterations = 30
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     await service.pump();
     const project = service.getProject(projectId, ownerUserId);
-    if (["completed", "partial_failed", "failed", "cancelled"].includes(project?.status)) return project;
+    if (["completed", "partial_failed", "uncertain", "assembly_failed", "failed", "cancelled"].includes(project?.status)) return project;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`项目 ${projectId} 未在测试窗口内结束`);
@@ -268,11 +269,10 @@ test("D2 and G2 provider adapters send only the approved product contract fields
   const d2Body = JSON.parse(calls[0].options.body);
   const g2Body = JSON.parse(calls[1].options.body);
   assert.deepEqual(d2Body, {
-    prompt: "d2 prompt",
+    prompt: "d2 prompt\n\n【D2 参考图对应关系】\n@Image 1：产品参考图\n请严格保持上述 @Image 编号与实际参考图顺序一致，不引用不存在的图片编号。",
     resolution: "720p",
     duration: "10",
     generateAudio: true,
-    watermark: false,
     ratio: "9:16",
     realPersonMode: true,
     conversionSlots: ["all"],
@@ -376,7 +376,7 @@ test("provider native last frame wins and is persisted without an unnecessary FF
       await fsp.writeFile(args[args.length - 1], MP4_BUFFER);
     },
   });
-  const result = service.createProject({
+  const result = await service.createProject({
     ownerUserId: 906,
     requestId: "video-native-last-frame",
     brand: { id: 1, name: "Test Brand" },
@@ -415,7 +415,7 @@ test("G2 falls back to FFmpeg for a stable continuity frame", async () => {
       await fsp.writeFile(args[args.length - 1], String(args[args.length - 1]).endsWith(".jpg") ? JPEG_BUFFER : MP4_BUFFER);
     },
   });
-  const result = service.createProject({
+  const result = await service.createProject({
     ownerUserId: 905,
     requestId: "video-g2-ffmpeg-fallback",
     brand: { id: 1, name: "Test Brand" },
@@ -454,7 +454,7 @@ test("D2 projects run clips sequentially and carry the previous continuity frame
     },
   };
   const service = makeService(provider, storage);
-  const result = service.createProject({
+  const result = await service.createProject({
     ownerUserId: 902,
     requestId: "video-d2-sequential",
     brand: { id: 1, name: "Test Brand" },
@@ -509,7 +509,7 @@ test("separate D2 projects submit in parallel while each project remains indepen
     },
   };
   const service = makeService(provider, storage);
-  const first = service.createProject({
+  const first = await service.createProject({
     ownerUserId: 903,
     requestId: "video-d2-parallel-a",
     brand: { id: 1, name: "Test Brand" },
@@ -525,7 +525,7 @@ test("separate D2 projects submit in parallel while each project remains indepen
     totalDurationSec: 10,
     script: makeScript(),
   });
-  const second = service.createProject({
+  const second = await service.createProject({
     ownerUserId: 908,
     requestId: "video-d2-parallel-b",
     brand: { id: 1, name: "Test Brand" },
@@ -569,7 +569,7 @@ test("G2 maps text, reference, and keyframe modes while rotating submission keys
     now: () => clock,
     keyPool: createAgnesKeyPool({ keys: ["g2-test-a", "g2-test-b"], rpmPerKey: 60, now: () => clock }),
   });
-  const result = service.createProject({
+  const result = await service.createProject({
     ownerUserId: 907,
     requestId: "video-g2-mode-sequence",
     brand: { id: 1, name: "Test Brand" },
@@ -618,7 +618,7 @@ test("G2 maps text, reference, and keyframe modes while rotating submission keys
     now: () => imageClock,
     keyPool: createAgnesKeyPool({ keys: ["g2-reference-only"], rpmPerKey: 60, now: () => imageClock }),
   });
-  const imageResult = imageService.createProject({
+  const imageResult = await imageService.createProject({
     ownerUserId: 904,
     requestId: "video-g2-reference-mode",
     brand: { id: 1, name: "Test Brand" },
@@ -661,7 +661,7 @@ test("video recovery polls persisted tasks, marks ambiguous submissions, and ret
     },
   };
   const firstService = makeService(provider, storage);
-  const restartProject = firstService.createProject({
+  const restartProject = await firstService.createProject({
     ownerUserId: 905,
     requestId: "video-restart-recovery",
     brand: { id: 1, name: "Test Brand" },
@@ -684,7 +684,7 @@ test("video recovery polls persisted tasks, marks ambiguous submissions, and ret
   assert.equal(submissions.length, 1, "recovery must poll instead of resubmitting a persisted task");
 
   const uncertainService = makeService(provider);
-  const uncertainProject = uncertainService.createProject({
+  const uncertainProject = await uncertainService.createProject({
     ownerUserId: 909,
     requestId: "video-uncertain-submission",
     brand: { id: 1, name: "Test Brand" },
@@ -703,7 +703,7 @@ test("video recovery polls persisted tasks, marks ambiguous submissions, and ret
   updateClip(uncertainProject.project.clips[0].id, { status: "submitting", providerTaskId: "" });
   await uncertainService.recover();
   const uncertain = uncertainService.getProject(uncertainProject.project.id, 909);
-  assert.equal(uncertain.status, "partial_failed");
+  assert.equal(uncertain.status, "uncertain");
   assert.equal(uncertain.clips[0].status, "uncertain_submission");
   assert.equal(findUserById(909).credits, 300);
 
@@ -721,7 +721,7 @@ test("video recovery polls persisted tasks, marks ambiguous submissions, and ret
     },
   };
   const retryService = makeService(retryProvider);
-  const retryProject = retryService.createProject({
+  const retryProject = await retryService.createProject({
     ownerUserId: 910,
     requestId: "video-retry-billing",
     brand: { id: 1, name: "Test Brand" },
@@ -750,7 +750,7 @@ test("video recovery polls persisted tasks, marks ambiguous submissions, and ret
 test("video project charges once, runs clips sequentially, assembles final video, and retains private cleanup handles", async () => {
   const storage = makeStorage();
   const service = makeService(makeProvider(), storage);
-  const result = service.createProject({
+  const result = await service.createProject({
     ownerUserId: 901,
     requestId: "video-project-idempotent",
     brand: { id: 1, name: "Test Brand" },
@@ -768,7 +768,7 @@ test("video project charges once, runs clips sequentially, assembles final video
   });
   assert.equal(result.project.status, "queued");
   assert.equal(findUserById(901).credits, 80);
-  assert.equal(service.createProject({ ownerUserId: 901, requestId: "video-project-idempotent", script: makeScript(), model: "d2" }).project.id, result.project.id);
+  assert.equal((await service.createProject({ ownerUserId: 901, requestId: "video-project-idempotent", script: makeScript(), model: "d2" })).project.id, result.project.id);
 
   await service.pump();
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -781,7 +781,8 @@ test("video project charges once, runs clips sequentially, assembles final video
 
   const rawGeneration = require("../src/server/db/repositories/generation-repository").findGenerationById(completed.generationId);
   assert.ok(rawGeneration.payload.videoAssets.final);
-  assert.ok(collectGenerationAssets(rawGeneration).length >= 3);
+  assert.ok(collectGenerationAssets(rawGeneration).length >= 2);
+  assert.equal(rawGeneration.payload.videoAssets.final.storedPath, rawGeneration.payload.videoAssets.clips[0].video.storedPath);
   assert.equal(sanitizeGeneration(rawGeneration).payload.videoAssets, undefined);
   const historyGeneration = sanitizeGeneration(rawGeneration, { security: { assetSigningSecret: "video-test-secret" } });
   assert.match(historyGeneration.payload.finalVideoUrl, /assetExpires=\d+/);
@@ -791,7 +792,7 @@ test("video project charges once, runs clips sequentially, assembles final video
 
 test("failed video clip refunds the unexecuted reservation once", async () => {
   const service = makeService(makeProvider({ failNext: true }));
-  const result = service.createProject({
+  const result = await service.createProject({
     ownerUserId: 901,
     requestId: "video-project-failure",
     brand: { id: 1, name: "Test Brand" },

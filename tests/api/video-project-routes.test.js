@@ -90,10 +90,11 @@ function makeProject(id = 7001) {
 function makeService() {
   let project = makeProject();
   let createdInput = null;
+  let activeArgs = null;
   return {
     getCapabilities: () => [{ id: "d2", displayName: "D2", maxReferenceImages: 9 }, { id: "g2", displayName: "G2", maxReferenceImages: 5 }],
     estimateCost: (input) => ({ model: input.model || "d2", resolution: input.resolution || "720p", totalDurationSec: Number(input.totalDurationSec || 10), clipDurations: [10], credits: 2 }),
-    listActiveProjects: () => [project],
+    listActiveProjects: (...args) => { activeArgs = args; return [project]; },
     createProject: (input) => {
       createdInput = input;
       return { project, user: { id: 951, credits: 98 }, generation: { id: project.generationId } };
@@ -101,8 +102,10 @@ function makeService() {
     getProject: (id, ownerUserId) => Number(id) === project.id && (!ownerUserId || Number(ownerUserId) === 951) ? project : null,
     startProject: () => { project = { ...project, status: "running" }; return project; },
     retryClip: () => project,
+    retryAssembly: () => ({ ...project, status: "completed" }),
     serveAsset: async (_id, _owner, _kind, _index, res) => { res.writeHead(200, { "Content-Type": "video/mp4" }); res.end("video"); return true; },
     getCreatedInput: () => createdInput,
+    getActiveArgs: () => activeArgs,
   };
 }
 
@@ -158,6 +161,7 @@ test("video project routes expose capabilities, enforce ownership, and map selec
     headers: { Cookie: "redbase_session=route-video-session" },
   }, {
     requestId: "route-project-1",
+    videoScriptGenerationId: 8801,
     model: "g2",
     mode: "image",
     resolution: "720p",
@@ -168,8 +172,18 @@ test("video project routes expose capabilities, enforce ownership, and map selec
     script: { title: "测试", clips: [] },
   });
   assert.equal(created.status, 200);
-  assert.deepEqual(service.getCreatedInput().referenceAssetIds, [9911]);
+  assert.equal(service.getCreatedInput().videoScriptGenerationId, 8801);
+  assert.equal("script" in service.getCreatedInput(), false);
+  assert.equal("visualBible" in service.getCreatedInput(), false);
+  assert.equal("referenceAssetIds" in service.getCreatedInput(), false);
   assert.equal(service.getCreatedInput().ownerUserId, 951);
+
+  const active = await request(server, {
+    path: "/api/video-projects/active?brandId=91&trendId=991&ideaIndex=0",
+    headers: { Cookie: "redbase_session=route-video-session" },
+  });
+  assert.equal(active.status, 200);
+  assert.deepEqual(service.getActiveArgs(), [951, { brandId: "91", trendId: "991", ideaIndex: "0" }]);
 
   const forbidden = await request(server, { path: "/api/video-projects/7001", headers: { Cookie: "redbase_session=route-video-other-session" } });
   assert.equal(forbidden.status, 404);

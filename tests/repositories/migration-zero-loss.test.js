@@ -66,6 +66,11 @@ const usersBefore = snapshot("users", "id, name, phone, password, account_type, 
 const sessionsBefore = snapshot("sessions", "token, user_id, created_at", "token");
 const eventsBefore = snapshot("credit_events", "id, user_id, action_type, action_label, credit_delta, credit_cost, created_at, admin_user_id, admin_user_name, brand_id, brand_name, trend_id, trend_title, idea_title, generation_id, channel_label, summary, payload_json", "id");
 
+function expectColumns(tableName, expectedColumns) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all().map((row) => row.name);
+  for (const column of expectedColumns) assert.ok(columns.includes(column), `${tableName}.${column} should exist after migration`);
+}
+
 test("versioned migrations preserve users/sessions/credit_events exactly and clear legacy plaintext codes", async () => {
   await ensureStore();
   await ensureStore(); // idempotent second run
@@ -89,8 +94,11 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='payment_orders'").get().count, 1);
   assert.deepEqual(
     db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
-    [1, 2, 3, 4],
+    [1, 2, 3, 4, 5],
   );
+  expectColumns("video_projects", ["script_generation_id", "input_assets_json", "assembly_request_id", "assembly_attempt"]);
+  expectColumns("video_clips", ["provider_key_ref", "reservation_credit_event_id", "submission_attempt", "last_successful_poll_at", "poll_failure_count"]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='video_project_billing_requests'").get().count, 1);
 });
 
 test("the backup copy stays byte-identical and untouched", () => {

@@ -138,6 +138,26 @@ function baseOptions(): IdeasFlowOptions {
   };
 }
 
+async function openVideoDialog(options: IdeasFlowOptions = baseOptions()) {
+  const fetchMock = installFlowFetch(options);
+  vi.stubGlobal("fetch", fetchMock);
+  const router = makeIdeasRouter();
+  await router.push({ name: "ideas", query: { brandId: "1", trendId: "5", ideaIndex: "0" } });
+  await router.isReady();
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const auth = useAuthStore();
+  auth.user = { id: "1", name: "测试用户", credits: 5 };
+  auth.sessionLoaded = true;
+  const wrapper = mount(IdeasView, { global: { plugins: [pinia, router] } });
+  await flushPromises();
+  await flushPromises();
+  await wrapper.find('[data-test="idea-generate-script-0"]').trigger("click");
+  await flushPromises();
+  await flushPromises();
+  return { wrapper, fetchMock, auth };
+}
+
 describe("video script generation flow", () => {
   beforeEach(() => {
     clearIdeaCreativeSettings();
@@ -149,7 +169,7 @@ describe("video script generation flow", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders exact button text 一键生成脚本 with 1 credit cost", async () => {
+  it("does not auto-charge on open and renders the explicit 1-credit script action", async () => {
     const fetchMock = installFlowFetch(baseOptions());
     vi.stubGlobal("fetch", fetchMock);
     const router = makeIdeasRouter();
@@ -167,8 +187,15 @@ describe("video script generation flow", () => {
 
     const scriptButton = wrapper.find('[data-test="idea-generate-script-0"]');
     expect(scriptButton.exists()).toBe(true);
-    expect(scriptButton.text()).toContain("一键生成脚本");
-    expect(scriptButton.text()).toContain("1 积分");
+    await scriptButton.trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    expect(dialog.find('[data-test="video-script-preparation"]').exists()).toBe(true);
+    expect(dialog.text()).toContain("AI 视频创作");
+    expect(dialog.text()).toContain("生成视频脚本 · 1积分");
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
   });
 
   it("generates structured video script and renders results without model or platform options", async () => {
@@ -192,9 +219,14 @@ describe("video script generation flow", () => {
     await flushPromises();
     await flushPromises();
 
-    // 验证弹窗打开
+    // 验证弹窗打开，但打开本身不产生付费脚本请求
     const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
     expect(dialog.exists()).toBe(true);
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
+
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
 
     // 验证没有模型或平台选择器（不可修改产品决策）
     expect(dialog.text()).not.toContain("可灵");
@@ -282,6 +314,10 @@ describe("video script generation flow", () => {
     await flushPromises();
     await flushPromises();
 
+    await wrapper.find('[data-test="idea-video-script-dialog"] [data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
     const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
     expect(dialog.find('[data-test="video-model-studio-x"]').exists()).toBe(true);
     expect(dialog.find('[data-test="video-model-d2"]').exists()).toBe(false);
@@ -321,8 +357,136 @@ describe("video script generation flow", () => {
     await flushPromises();
 
     const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
-    expect(dialog.find('[data-test="video-script-reference-required"]').exists()).toBe(true);
+    const prepareButton = dialog.find('[data-test="video-script-generate-after-reference"]');
+    expect(prepareButton.exists()).toBe(true);
+    expect((prepareButton.element as HTMLButtonElement).disabled).toBe(true);
     expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
     expect(dialog.text()).toContain("这里只影响本次视频创作，不会修改当前图片生成设置");
+  });
+
+  it("restores the filtered active project without generating another script or project", async () => {
+    const activeProject = {
+      id: 701,
+      generationId: 702,
+      scriptGenerationId: 703,
+      brandId: 1,
+      trendId: 5,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 10,
+      status: "running",
+      referenceAssetIds: [],
+      visualBible: {},
+      script: { ...FIXTURE_SCRIPT, totalDurationSec: 10 },
+      estimatedCredits: 20,
+      chargedCredits: 20,
+      refundedCredits: 0,
+      clips: [{ id: 704, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "running", prompt: "", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0 }],
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    };
+    const options = baseOptions();
+    const originalOverride = options.overrides;
+    options.overrides = (url, init) => {
+      const path = String(url).split("?")[0];
+      const method = String(init?.method || "GET");
+      if (method === "GET" && path === "/api/video-projects/active") return jsonResponse(200, { projects: [activeProject] });
+      if (method === "GET" && path === "/api/video-projects/701") return jsonResponse(200, { project: activeProject });
+      return originalOverride?.(url, init);
+    };
+
+    const { wrapper, fetchMock } = await openVideoDialog(options);
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    expect(dialog.find('[data-test="video-project-status"]').exists()).toBe(true);
+    expect(dialog.text()).toContain("生成中");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/video-projects/active?brandId=1&trendId=5&ideaIndex=0"))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/video-projects/701"))).toBe(true);
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-project")).toHaveLength(0);
+  });
+
+  it("does not mark the script stale when only resolution changes, and shows the real price", async () => {
+    const { wrapper, fetchMock } = await openVideoDialog();
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const realVideoButton = dialog.find('[data-test="generate-real-video"]');
+    expect(realVideoButton.text()).toMatch(/生成真实视频 · \d+积分/);
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(false);
+    await dialog.find('[data-test="video-resolution-select"]').setValue("1080p");
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(false);
+    expect((realVideoButton.element as HTMLButtonElement).disabled).toBe(false);
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(1);
+  });
+
+  it("marks model, mode, duration, ratio, and reference changes as script-stale", async () => {
+    const { wrapper } = await openVideoDialog();
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    await dialog.find('[data-test="video-model-g2"]').trigger("click");
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(true);
+
+    await dialog.find('[data-test="video-mode-select"]').setValue("image");
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(true);
+    await dialog.find('[data-test="video-duration-select"]').setValue("10");
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(true);
+    await dialog.find('[data-test="video-aspect-select"]').setValue("16:9");
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(true);
+    const reference = dialog.find('.video-reference-option input');
+    expect(reference.exists()).toBe(true);
+    await reference.setValue(true);
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(true);
+  });
+
+  it("shows assembly_failed as a free assembly action and never offers retry for completed clips", async () => {
+    const failedProject = {
+      id: 801,
+      generationId: 802,
+      scriptGenerationId: 803,
+      brandId: 1,
+      trendId: 5,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 10,
+      status: "assembly_failed",
+      referenceAssetIds: [],
+      visualBible: {},
+      script: { ...FIXTURE_SCRIPT, totalDurationSec: 10 },
+      estimatedCredits: 20,
+      chargedCredits: 20,
+      refundedCredits: 0,
+      clips: [{ id: 804, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0 }],
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    };
+    const options = baseOptions();
+    const originalOverride = options.overrides;
+    options.overrides = (url, init) => {
+      const path = String(url).split("?")[0];
+      if (String(init?.method || "GET") === "GET" && path === "/api/video-projects/active") return jsonResponse(200, { projects: [failedProject] });
+      return originalOverride?.(url, init);
+    };
+    const { wrapper } = await openVideoDialog(options);
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    expect(dialog.find('[data-test="assembly-failed"]').text()).toContain("视频片段均已生成完成");
+    expect(dialog.find('[data-test="retry-assembly"]').text()).toContain("0积分");
+    expect(dialog.find('.clip-retry-btn').exists()).toBe(false);
   });
 });

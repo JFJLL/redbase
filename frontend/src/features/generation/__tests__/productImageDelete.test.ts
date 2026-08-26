@@ -34,6 +34,7 @@ describe("ProductImagePanel delete confirmation and cross-idea reference cleanup
       wechatTemplate: "auto",
       useBrandLogo: false,
       selectedProductIds: [11, 12],
+      videoReferenceImageIds: [11],
       useProductImages: true,
       styleReference: null,
     });
@@ -43,6 +44,7 @@ describe("ProductImagePanel delete confirmation and cross-idea reference cleanup
       wechatTemplate: "auto",
       useBrandLogo: false,
       selectedProductIds: [11],
+      videoReferenceImageIds: [11],
       useProductImages: true,
       styleReference: null,
     });
@@ -98,7 +100,9 @@ describe("ProductImagePanel delete confirmation and cross-idea reference cleanup
     expect(calls.some((call) => call.url === "/api/product-images/11" && call.init?.method === "DELETE")).toBe(false);
     expect(wrapper.find('[data-test="product-image-check-11"]').exists()).toBe(true);
     expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 501, 0)).selectedProductIds).toEqual([11, 12]);
+    expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 501, 0)).videoReferenceImageIds).toEqual([11]);
     expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 502, 1)).selectedProductIds).toEqual([11]);
+    expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 502, 1)).videoReferenceImageIds).toEqual([11]);
   });
 
   it("confirm deletes the image and cleans the reference from every idea settings key", async () => {
@@ -112,6 +116,8 @@ describe("ProductImagePanel delete confirmation and cross-idea reference cleanup
     expect(calls.some((call) => call.url === "/api/product-images/11" && call.init?.method === "DELETE")).toBe(true);
     expect(wrapper.find('[data-test="product-image-check-11"]').exists()).toBe(false);
     expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 501, 0)).selectedProductIds).toEqual([12]);
+    expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 501, 0)).videoReferenceImageIds).toEqual([]);
     expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 502, 1)).selectedProductIds).toEqual([]);
+    expect(getIdeaCreativeSettings(getIdeaSettingsKey(7, 502, 1)).videoReferenceImageIds).toEqual([]);
   });
 });
