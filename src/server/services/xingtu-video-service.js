@@ -1,9 +1,12 @@
 const XINGTU_CONTENT_MARKET_URL = "https://www.xingtu.cn/ad/creator/insight/content-market";
 const { normalizeCookieHeader } = require("../integrations/pgy-content-square");
+const crypto = require("crypto");
 const fs = require("fs");
+const fsPromises = require("fs/promises");
 const path = require("path");
 
 const XINGTU_TRANSCRIPT_ENDPOINT = "https://www.xingtu.cn/gw/api/aggregator/get_item_high_quality_text";
+const XINGTU_ITEM_METADATA_ENDPOINT = "https://www.xingtu.cn/gw/api/data_sp/external_multi_get_item";
 const DOUYIN_MEDIA_REFERER = "https://www.douyin.com/";
 const XINGTU_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -12,6 +15,20 @@ const MAX_TRANSCRIPT_TEXT_LENGTH = 300000;
 const TRANSCRIPT_TIMEOUT_MS = 12000;
 const MEDIA_TIMEOUT_MS = 25000;
 const MAX_MEDIA_REDIRECTS = 4;
+const MAX_COOKIE_FILE_BYTES = 1024 * 1024;
+
+let xingtuCookieSourceCache = {
+  key: "",
+  expiresAt: 0,
+  cookie: "",
+  pending: null,
+};
+
+let xingtuSignedCoverCache = {
+  expiresAt: 0,
+  urlsByMediaKey: new Map(),
+  pending: null,
+};
 
 /**
  * A public, display-only catalogue sampled from the official content market.
@@ -143,6 +160,164 @@ function xingtuCookie(value = "", cookieFile = "") {
   return "";
 }
 
+function normalizeXingtuCookieConfig(value = {}) {
+  return {
+    cookie: String(value.cookie || "").trim(),
+    cookieFile: String(value.cookieFile || "").trim(),
+    cacheTtlMs: Math.max(1000, Number(value.cacheTtlMs || 10 * 60 * 1000)),
+    ossEndpoint: String(value.ossEndpoint || "").trim(),
+    ossBucket: String(value.ossBucket || "").trim(),
+    ossObjectKey: String(value.ossObjectKey || "").trim(),
+    ossAccessKeyId: String(value.ossAccessKeyId || "").trim(),
+    ossAccessKeySecret: String(value.ossAccessKeySecret || "").trim(),
+  };
+}
+
+function isXingtuOssCookieSourceConfigured(config) {
+  return Boolean(
+    config.ossEndpoint
+      && config.ossBucket
+      && config.ossObjectKey
+      && config.ossAccessKeyId
+      && config.ossAccessKeySecret,
+  );
+}
+
+function xingtuCookieSourceError(message, code = "XINGTU_COOKIE_SOURCE_UNAVAILABLE") {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = 502;
+  return error;
+}
+
+function buildXingtuOssObjectUrl(config) {
+  let endpoint;
+  try {
+    endpoint = new URL(config.ossEndpoint);
+  } catch (_error) {
+    throw xingtuCookieSourceError("巨量星图 OSS Token 地址配置无效。", "XINGTU_COOKIE_SOURCE_INVALID");
+  }
+  if (endpoint.protocol !== "https:") {
+    throw xingtuCookieSourceError("巨量星图 OSS Token 必须使用 HTTPS。", "XINGTU_COOKIE_SOURCE_INVALID");
+  }
+  const host = endpoint.hostname.startsWith(`${config.ossBucket}.`)
+    ? endpoint.hostname
+    : `${config.ossBucket}.${endpoint.hostname}`;
+  const objectPath = config.ossObjectKey.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return `${endpoint.protocol}//${host}/${objectPath}`;
+}
+
+async function fetchXingtuOssCookieText(config, fetchImpl = global.fetch) {
+  if (typeof fetchImpl !== "function") {
+    throw xingtuCookieSourceError("当前运行环境不支持读取巨量星图 OSS Token。");
+  }
+  const date = new Date().toUTCString();
+  const canonicalResource = `/${config.ossBucket}/${config.ossObjectKey}`;
+  const stringToSign = `GET\n\n\n${date}\n${canonicalResource}`;
+  const signature = crypto.createHmac("sha1", config.ossAccessKeySecret).update(stringToSign).digest("base64");
+  const response = await fetchImpl(buildXingtuOssObjectUrl(config), {
+    method: "GET",
+    headers: {
+      Date: date,
+      Authorization: `OSS ${config.ossAccessKeyId}:${signature}`,
+    },
+  });
+  if (!response.ok) {
+    throw xingtuCookieSourceError(`巨量星图 OSS Token 暂时不可用（${response.status}）。`);
+  }
+  const contentLength = Number(response.headers?.get?.("content-length") || 0);
+  if (contentLength > MAX_COOKIE_FILE_BYTES) {
+    throw xingtuCookieSourceError("巨量星图 OSS Token 文件超过大小限制。", "XINGTU_COOKIE_SOURCE_TOO_LARGE");
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text, "utf8") > MAX_COOKIE_FILE_BYTES) {
+    throw xingtuCookieSourceError("巨量星图 OSS Token 文件超过大小限制。", "XINGTU_COOKIE_SOURCE_TOO_LARGE");
+  }
+  return text;
+}
+
+async function readXingtuCookieFile(cookieFile) {
+  return fsPromises.readFile(path.resolve(cookieFile), "utf8");
+}
+
+async function writeXingtuCookieFile(cookieFile, tokenText) {
+  if (!cookieFile || !tokenText) return;
+  const resolvedPath = path.resolve(cookieFile);
+  await fsPromises.mkdir(path.dirname(resolvedPath), { recursive: true });
+  await fsPromises.writeFile(resolvedPath, tokenText, { encoding: "utf8", mode: 0o600 });
+}
+
+function buildXingtuCookieSourceKey(config) {
+  return JSON.stringify({
+    cookieHash: config.cookie ? crypto.createHash("sha256").update(config.cookie).digest("hex") : "",
+    cookieFile: config.cookieFile,
+    ossEndpoint: config.ossEndpoint,
+    ossBucket: config.ossBucket,
+    ossObjectKey: config.ossObjectKey,
+    ossAccessKeyId: config.ossAccessKeyId ? "configured" : "",
+  });
+}
+
+async function loadXingtuCookieSource(config, fetchImpl) {
+  const directCookie = normalizeCookieHeader(config.cookie || process.env.XINGTU_COOKIE || "");
+  if (directCookie) return directCookie;
+
+  let tokenText = "";
+  let ossError = null;
+  if (isXingtuOssCookieSourceConfigured(config)) {
+    try {
+      tokenText = await fetchXingtuOssCookieText(config, fetchImpl);
+      const normalized = normalizeCookieHeader(tokenText);
+      if (!normalized) throw xingtuCookieSourceError("巨量星图 OSS Token 内容为空。", "XINGTU_COOKIE_SOURCE_INVALID");
+      await writeXingtuCookieFile(config.cookieFile, tokenText);
+      return normalized;
+    } catch (error) {
+      ossError = error;
+    }
+  }
+
+  if (config.cookieFile) {
+    try {
+      tokenText = await readXingtuCookieFile(config.cookieFile);
+      const normalized = normalizeCookieHeader(tokenText);
+      if (normalized) return normalized;
+    } catch (_error) {
+      // A failed OSS refresh may use the last successfully persisted local copy.
+    }
+  }
+  if (ossError) throw ossError;
+  return "";
+}
+
+async function resolveXingtuCookie(value = {}, options = {}) {
+  const config = normalizeXingtuCookieConfig(value);
+  const key = buildXingtuCookieSourceKey(config);
+  if (xingtuCookieSourceCache.key === key) {
+    if (xingtuCookieSourceCache.cookie && xingtuCookieSourceCache.expiresAt > Date.now()) {
+      return xingtuCookieSourceCache.cookie;
+    }
+    if (xingtuCookieSourceCache.pending) return xingtuCookieSourceCache.pending;
+  }
+
+  const pending = loadXingtuCookieSource(config, options.fetchImpl || global.fetch);
+  xingtuCookieSourceCache = { key, expiresAt: 0, cookie: "", pending };
+  try {
+    const cookie = await pending;
+    xingtuCookieSourceCache = {
+      key,
+      expiresAt: Date.now() + config.cacheTtlMs,
+      cookie,
+      pending: null,
+    };
+    return cookie;
+  } catch (error) {
+    if (xingtuCookieSourceCache.key === key && xingtuCookieSourceCache.pending === pending) {
+      xingtuCookieSourceCache = { key, expiresAt: 0, cookie: "", pending: null };
+    }
+    throw error;
+  }
+}
+
 function xingtuRequestHeaders(targetUrl, { range = "", cookie = "", cookieFile = "" } = {}) {
   const target = new URL(targetUrl);
   const host = target.hostname.toLowerCase();
@@ -196,7 +371,7 @@ function upstreamMediaError(message, code = "XINGTU_MEDIA_UPSTREAM_ERROR") {
   return error;
 }
 
-async function requestOfficialResource(targetUrl, { fetchImpl = global.fetch, range = "", cookie = "" } = {}) {
+async function requestOfficialResource(targetUrl, { fetchImpl = global.fetch, range = "", cookie = "", cookieFile = "" } = {}) {
   if (typeof fetchImpl !== "function") {
     const error = new Error("当前运行环境不支持读取官方媒体资源。");
     error.code = "XINGTU_FETCH_UNAVAILABLE";
@@ -213,7 +388,7 @@ async function requestOfficialResource(targetUrl, { fetchImpl = global.fetch, ra
       const response = await fetchImpl(currentUrl, {
         method: "GET",
         redirect: "manual",
-        headers: xingtuRequestHeaders(currentUrl, { range, cookie }),
+        headers: xingtuRequestHeaders(currentUrl, { range, cookie, cookieFile }),
         signal: controller.signal,
       });
       if (response.status >= 300 && response.status < 400) {
@@ -244,7 +419,106 @@ async function requestOfficialCover(item, options = {}) {
     error.statusCode = 404;
     throw error;
   }
-  return requestOfficialResource(url, options);
+  try {
+    return await requestOfficialResource(url, options);
+  } catch (originalError) {
+    // Private Xingtu TOS buckets reject the stable URI with 403. The official
+    // market resolves those URIs to short-lived signed CDN URLs through its own
+    // metadata API. The Xingtu cookie is sent only to that API, never the CDN.
+    try {
+      const signedUrl = await resolveOfficialSignedCoverUrl(item, options);
+      return await requestOfficialResource(signedUrl, options);
+    } catch (_signedError) {
+      throw originalError;
+    }
+  }
+}
+
+function officialItemMetadataUrl() {
+  const itemIds = XINGTU_PUBLIC_VIDEO_CATALOG.map((item) => normalizeItemId(item.id)).join(",");
+  const query = new URLSearchParams({
+    item_ids: itemIds,
+    platform_source: "1",
+    need_cover_url: "true",
+  });
+  return `${XINGTU_ITEM_METADATA_ENDPOINT}?${query.toString()}`;
+}
+
+function signedCoverCacheExpiry(urlsByMediaKey) {
+  const now = Date.now();
+  const expiries = [...new Set(urlsByMediaKey.values())]
+    .map((value) => Number(new URL(value).searchParams.get("x-expires") || 0) * 1000)
+    .filter((value) => value > now + 60000);
+  return Math.min(now + 10 * 60 * 1000, expiries.length ? Math.min(...expiries) - 60000 : now + 5 * 60 * 1000);
+}
+
+async function fetchOfficialSignedCoverUrls({ fetchImpl = global.fetch, cookie = "", cookieFile = "" } = {}) {
+  const url = officialItemMetadataUrl();
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: {
+      ...xingtuRequestHeaders(url, { cookie, cookieFile }),
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) throw upstreamMediaError(`官方封面签名暂时不可用（${response.status}）。`);
+  const rawText = await response.text();
+  if (Buffer.byteLength(rawText, "utf8") > MAX_TRANSCRIPT_TEXT_LENGTH * 8) {
+    throw upstreamMediaError("官方封面签名响应过大。", "XINGTU_COVER_METADATA_TOO_LARGE");
+  }
+  let payload;
+  try {
+    payload = JSON.parse(rawText);
+  } catch (_error) {
+    throw upstreamMediaError("官方封面签名返回格式异常。", "XINGTU_COVER_METADATA_INVALID");
+  }
+  if (Number(payload?.base_resp?.status_code || 0) !== 0) {
+    throw upstreamMediaError("官方封面签名暂时不可用。", "XINGTU_COVER_METADATA_UNAVAILABLE");
+  }
+  const urlsByMediaKey = new Map();
+  for (const item of Array.isArray(payload?.items) ? payload.items : []) {
+    const coverUri = String(item?.cover_uri || "").replace(/^\/+/, "");
+    const videoId = String(item?.video_id || "").trim();
+    const coverUrl = String(item?.cover_url || "").trim();
+    if ((!coverUri && !videoId) || !isAllowedOfficialResourceUrl(coverUrl)) continue;
+    const parsed = new URL(coverUrl);
+    if (!parsed.searchParams.get("x-expires") || !parsed.searchParams.get("x-signature")) continue;
+    if (videoId) urlsByMediaKey.set(`video:${videoId}`, coverUrl);
+    if (coverUri) urlsByMediaKey.set(`cover:${coverUri}`, coverUrl);
+  }
+  if (!urlsByMediaKey.size) {
+    throw upstreamMediaError("官方未返回可用封面签名。", "XINGTU_COVER_METADATA_EMPTY");
+  }
+  return urlsByMediaKey;
+}
+
+async function resolveOfficialSignedCoverUrl(item, options = {}) {
+  const coverUri = String(item?.coverUri || "").replace(/^\/+/, "");
+  const videoId = String(item?.videoId || "").trim();
+  const mediaKeys = [videoId ? `video:${videoId}` : "", coverUri ? `cover:${coverUri}` : ""].filter(Boolean);
+  if (!mediaKeys.length) throw upstreamMediaError("该视频暂无可用封面。", "XINGTU_COVER_UNAVAILABLE");
+  const cachedKey = mediaKeys.find((key) => xingtuSignedCoverCache.urlsByMediaKey.has(key));
+  if (xingtuSignedCoverCache.expiresAt > Date.now() && cachedKey) {
+    return xingtuSignedCoverCache.urlsByMediaKey.get(cachedKey);
+  }
+  if (!xingtuSignedCoverCache.pending) {
+    xingtuSignedCoverCache.pending = fetchOfficialSignedCoverUrls(options);
+  }
+  try {
+    const urlsByMediaKey = await xingtuSignedCoverCache.pending;
+    xingtuSignedCoverCache = {
+      expiresAt: signedCoverCacheExpiry(urlsByMediaKey),
+      urlsByMediaKey,
+      pending: null,
+    };
+  } catch (error) {
+    xingtuSignedCoverCache.pending = null;
+    throw error;
+  }
+  const resolvedKey = mediaKeys.find((key) => xingtuSignedCoverCache.urlsByMediaKey.has(key));
+  const signedUrl = resolvedKey ? xingtuSignedCoverCache.urlsByMediaKey.get(resolvedKey) : "";
+  if (!signedUrl) throw upstreamMediaError("官方未返回该视频的可用封面签名。", "XINGTU_COVER_METADATA_EMPTY");
+  return signedUrl;
 }
 
 function escapeSvgText(value) {
@@ -340,7 +614,7 @@ function normalizeTranscriptSegments(rawTexts) {
   return segments.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 }
 
-async function requestOfficialTranscript(itemId, { fetchImpl = global.fetch, cookie = "" } = {}) {
+async function requestOfficialTranscript(itemId, { fetchImpl = global.fetch, cookie = "", cookieFile = "" } = {}) {
   const normalizedId = normalizeItemId(itemId);
   if (typeof fetchImpl !== "function") {
     const error = new Error("当前运行环境不支持读取官方视频文稿。");
@@ -353,7 +627,7 @@ async function requestOfficialTranscript(itemId, { fetchImpl = global.fetch, coo
     const response = await fetchImpl(officialTranscriptUrl(normalizedId), {
       method: "GET",
       headers: {
-        ...xingtuRequestHeaders(officialTranscriptUrl(normalizedId), { cookie }),
+        ...xingtuRequestHeaders(officialTranscriptUrl(normalizedId), { cookie, cookieFile }),
         Accept: "application/json",
       },
       signal: controller.signal,
@@ -481,5 +755,6 @@ module.exports = {
   buildXingtuPreviewCover,
   requestOfficialResource,
   requestOfficialTranscript,
+  resolveXingtuCookie,
   buildTranscriptLearningAnalysis,
 };

@@ -181,6 +181,13 @@ const DEFAULT_APP_CONFIG = {
   },
   xingtu: {
     cookie: "",
+    cookieFile: "",
+    cacheTtlMs: 600000,
+    ossEndpoint: "",
+    ossBucket: "",
+    ossObjectKey: "KOL/xingtu.txt",
+    ossAccessKeyId: "",
+    ossAccessKeySecret: "",
   },
   pgy: {
     enabled: false,
@@ -702,6 +709,22 @@ function loadAppConfig() {
     xingtu: {
       cookie: String(process.env.XINGTU_COOKIE || merged.xingtu?.cookie || "").trim(),
       cookieFile: String(process.env.XINGTU_COOKIE_FILE || merged.xingtu?.cookieFile || "").trim(),
+      cacheTtlMs: Number(process.env.XINGTU_COOKIE_CACHE_TTL_MS || merged.xingtu?.cacheTtlMs || 10 * 60 * 1000),
+      // Xingtu and Pgy tokens live in the same private OSS bucket in production.
+      // Reuse the Pgy connection credentials unless Xingtu-specific values are set.
+      ossEndpoint: String(
+        process.env.XINGTU_OSS_ENDPOINT || merged.xingtu?.ossEndpoint || process.env.PGY_OSS_ENDPOINT || merged.pgy?.ossEndpoint || "",
+      ).trim(),
+      ossBucket: String(
+        process.env.XINGTU_OSS_BUCKET || merged.xingtu?.ossBucket || process.env.PGY_OSS_BUCKET || merged.pgy?.ossBucket || "",
+      ).trim(),
+      ossObjectKey: String(process.env.XINGTU_OSS_OBJECT_KEY || merged.xingtu?.ossObjectKey || "KOL/xingtu.txt").trim(),
+      ossAccessKeyId: String(
+        process.env.XINGTU_OSS_ACCESS_KEY_ID || merged.xingtu?.ossAccessKeyId || process.env.PGY_OSS_ACCESS_KEY_ID || merged.pgy?.ossAccessKeyId || "",
+      ).trim(),
+      ossAccessKeySecret: String(
+        process.env.XINGTU_OSS_ACCESS_KEY_SECRET || merged.xingtu?.ossAccessKeySecret || process.env.PGY_OSS_ACCESS_KEY_SECRET || merged.pgy?.ossAccessKeySecret || "",
+      ).trim(),
     },
     pgy: {
       enabled: parseBooleanConfig(process.env.PGY_CONTENT_SQUARE_ENABLED, parseBooleanConfig(merged.pgy?.enabled, hasPgyCookieSource)),

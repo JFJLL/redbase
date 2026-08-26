@@ -9,6 +9,7 @@ const {
   requestOfficialMedia,
   buildXingtuPreviewCover,
   requestOfficialTranscript,
+  resolveXingtuCookie,
   buildTranscriptLearningAnalysis,
 } = require("../services/xingtu-video-service");
 
@@ -108,10 +109,15 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
     badRequest,
   } = bindRouteScope(context);
 
-  const xingtuRequestOptions = {
-    cookie: String(context.appConfig?.xingtu?.cookie || ""),
-    cookieFile: String(context.appConfig?.xingtu?.cookieFile || ""),
-  };
+  const xingtuConfig = context.appConfig?.xingtu || {};
+
+  async function getXingtuRequestOptions(extra = {}) {
+    return {
+      ...extra,
+      cookie: await resolveXingtuCookie(xingtuConfig),
+      cookieFile: String(xingtuConfig.cookieFile || ""),
+    };
+  }
 
   function requireUser() {
     const token = getSessionToken(req);
@@ -146,7 +152,7 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
       return true;
     }
     try {
-      sendOfficialResource(res, await requestOfficialCover(item, xingtuRequestOptions));
+      sendOfficialResource(res, await requestOfficialCover(item, await getXingtuRequestOptions()));
     } catch (_error) {
       sendXingtuPreviewCover(res, item);
     }
@@ -161,7 +167,7 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
       return true;
     }
     try {
-      sendOfficialResource(res, await requestOfficialMedia(item, { ...xingtuRequestOptions, range: req.headers.range || "" }));
+      sendOfficialResource(res, await requestOfficialMedia(item, await getXingtuRequestOptions({ range: req.headers.range || "" })));
     } catch (error) {
       writeXingtuError(json, badRequest, res, error, "视频暂时无法播放。");
     }
@@ -173,7 +179,7 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
     if (!requireUser()) return true;
     try {
       const itemId = normalizeItemId(decodeURIComponent(transcriptMatch[1] || ""));
-      const transcript = await requestOfficialTranscript(itemId, xingtuRequestOptions);
+      const transcript = await requestOfficialTranscript(itemId, await getXingtuRequestOptions());
       json(res, 200, transcript);
     } catch (_error) {
       json(res, 200, unavailableTranscript(normalizeItemId(decodeURIComponent(transcriptMatch[1] || ""))));
@@ -199,7 +205,7 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
       let transcript;
       let unavailableReason = "";
       try {
-        transcript = await requestOfficialTranscript(itemId, xingtuRequestOptions);
+        transcript = await requestOfficialTranscript(itemId, await getXingtuRequestOptions());
       } catch (_error) {
         transcript = unavailableTranscript(itemId);
         unavailableReason = transcript.unavailableReason;

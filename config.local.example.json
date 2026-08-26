@@ -165,7 +165,14 @@
     "credentials": true
   },
   "xingtu": {
-    "cookie": ""
+    "cookie": "",
+    "cookieFile": "data/xingtu-token.txt",
+    "cacheTtlMs": 600000,
+    "ossEndpoint": "",
+    "ossBucket": "",
+    "ossObjectKey": "KOL/xingtu.txt",
+    "ossAccessKeyId": "",
+    "ossAccessKeySecret": ""
   },
   "pgy": {
     "enabled": false,
