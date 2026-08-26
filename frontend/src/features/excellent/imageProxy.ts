@@ -35,13 +35,15 @@ export function buildExcellentImageProxyPath(
   }`;
 }
 
-/** Remote http(s) URLs become proxy paths; relative URLs pass through unchanged. */
+/**
+ * Preserve the upstream-provided image URL. Excellent-content cards are
+ * display-only, so the browser must load the original platform image directly
+ * instead of routing it through this application's image endpoint.
+ */
 export function excellentImageSrc(
   value: unknown,
-  imageIndex: number,
-  params: ExcellentImageProxyParams,
+  _imageIndex: number,
+  _params: ExcellentImageProxyParams,
 ): string {
-  if (typeof value !== "string" || !value) return "";
-  if (!isRemoteHttpUrl(value)) return value;
-  return buildExcellentImageProxyPath(params.noteId || "", imageIndex, params);
+  return typeof value === "string" ? value : "";
 }

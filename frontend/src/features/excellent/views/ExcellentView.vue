@@ -17,7 +17,6 @@ import {
   fetchExcellentContents,
     fetchExcellentTaxonomy,
   fetchXingtuLearning,
-  fetchXingtuTranscript,
   fetchXingtuVideos,
   fetchFusionPlan,
 
@@ -84,7 +83,6 @@ import type {
   RemixBillingInfo,
   TaxonomyNode,
   XingtuLearnResult,
-  XingtuTranscriptResult,
   XingtuVideoFilters,
 } from "../types";
 
@@ -422,13 +420,6 @@ const detail = reactive({
   requestId: 0,
 });
 
-const xingtuTranscript = reactive({
-  loading: false,
-  error: "",
-  itemId: "",
-  data: null as XingtuTranscriptResult | null,
-});
-
 const xingtuPlayer = reactive({ failed: false });
 
 function onXingtuPlayerError() {
@@ -459,11 +450,6 @@ function formatVideoDuration(seconds: unknown): string {
 function formatPercent(value: unknown): string {
   const numeric = Number(value || 0) * 100;
   return `${numeric.toFixed(numeric >= 10 ? 0 : 1)}%`;
-}
-
-function formatTranscriptTime(milliseconds: unknown): string {
-  const total = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 const detailImages = computed(() => (Array.isArray(detail.item?.imageUrls) ? detail.item.imageUrls.filter(Boolean) : []));
@@ -504,10 +490,6 @@ async function openDetail(item: ExcellentNote) {
   detail.error = "";
     detail.item = { ...item };
   detail.activeImageIndex = 0;
-  xingtuTranscript.loading = false;
-  xingtuTranscript.error = "";
-  xingtuTranscript.itemId = "";
-  xingtuTranscript.data = null;
   xingtuPlayer.failed = false;
   if (isXingtuBoard(board)) {
     detail.loading = false;
@@ -543,28 +525,7 @@ function closeDetail() {
   detail.open = false;
   detail.item = null;
   detail.requestId += 1;
-  xingtuTranscript.loading = false;
-  xingtuTranscript.error = "";
-  xingtuTranscript.itemId = "";
-  xingtuTranscript.data = null;
   xingtuPlayer.failed = false;
-}
-
-async function loadXingtuTranscript(item: ExcellentNote | null | undefined) {
-  const itemId = xingtuItemId(item);
-  if (!itemId || !isXingtuBoard()) return;
-  xingtuTranscript.loading = true;
-  xingtuTranscript.error = "";
-  xingtuTranscript.itemId = itemId;
-  try {
-    xingtuTranscript.data = await fetchXingtuTranscript(itemId, scope.signalFor("xingtu-transcript"));
-  } catch (error) {
-    if (isAbortError(error)) return;
-    if (await handleUnauthorizedError(error)) return;
-    xingtuTranscript.error = (error as Error).message || "官方视频文稿读取失败";
-  } finally {
-    xingtuTranscript.loading = false;
-  }
 }
 
 async function openXingtuLearn(item: ExcellentNote) {
@@ -1338,10 +1299,6 @@ onUnmounted(() => {
 
     <div class="excellent-filters" :class="{ 'xingtu-filter-toolbar': activeBoard === 'xingtu' }">
       <template v-if="activeBoard === 'xingtu'">
-        <div class="xingtu-filter-intro">
-          <span class="xingtu-filter-kicker">内容检索</span>
-          <p>按视频形式、内容题材和数据表现筛选</p>
-        </div>
         <div class="xingtu-filter-fields" role="group" aria-label="视频筛选条件">
           <label class="xingtu-filter-field">
             <span>视频类型</span>
@@ -1458,6 +1415,7 @@ onUnmounted(() => {
               :src="String(item.coverUrl)"
               :alt="item.title || ''"
               loading="lazy"
+              referrerpolicy="no-referrer"
             />
             <span v-else class="excellent-cover-fallback">视频预览暂不可用</span>
             <span class="xingtu-video-play" aria-hidden="true">▶</span>
@@ -1649,18 +1607,13 @@ onUnmounted(() => {
                 controls
                 playsinline
                 preload="metadata"
+                referrerpolicy="no-referrer"
                 :poster="String(detail.item?.coverUrl || '')"
                 :src="String(detail.item.playerUrl)"
                 @error="onXingtuPlayerError()"
               ></video>
               <div v-else class="excellent-cover-fallback">视频暂不可用</div>
             </div>
-            <a
-              class="xingtu-open-official"
-              :href="String(detail.item?.videoUrl || detail.item?.officialContentMarketUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')"
-              target="_blank"
-              rel="noopener noreferrer"
-            >查看原视频</a>
           </section>
           <aside class="excellent-detail-copy xingtu-video-copy">
             <h2>{{ detail.item?.title || '未命名视频' }}</h2>
@@ -1677,18 +1630,6 @@ onUnmounted(() => {
               <div><strong>{{ formatPercent(detail.item?.metrics?.finishRate) }}</strong><span>完播率</span></div>
               <div><strong>{{ formatPercent(detail.item?.metrics?.interactRate) }}</strong><span>互动率</span></div>
             </div>
-            <section class="xingtu-transcript-panel">
-              <div class="xingtu-transcript-head"><h3>视频文稿</h3></div>
-              <div v-if="xingtuTranscript.loading" class="xingtu-transcript-loading">正在读取视频文稿…</div>
-              <div v-else-if="xingtuTranscript.error" class="xingtu-transcript-empty">{{ xingtuTranscript.error }}</div>
-              <div v-else-if="xingtuTranscript.data?.available" class="xingtu-transcript-list">
-                <div v-for="segment in xingtuTranscript.data.segments || []" :key="`${segment.startMs}-${segment.endMs}-${segment.text}`" class="xingtu-transcript-segment">
-                  <time>{{ formatTranscriptTime(segment.startMs) }}</time><p>{{ segment.text }}</p>
-                </div>
-              </div>
-              <div v-else-if="xingtuTranscript.data" class="xingtu-transcript-empty">暂无可用视频文稿。</div>
-              <button v-else type="button" class="secondary-btn xingtu-transcript-trigger" @click="loadXingtuTranscript(detail.item)">查看视频文稿</button>
-            </section>
             <div class="excellent-detail-actions">
               <a :href="String(detail.item?.videoUrl || 'https://www.xingtu.cn/ad/creator/insight/content-market')" target="_blank" rel="noopener noreferrer">查看原视频</a>
               <button type="button" class="primary-btn excellent-detail-remix" @click="detail.item && openXingtuLearn(detail.item)">一键仿视频</button>
@@ -4172,20 +4113,8 @@ onUnmounted(() => {
 .xingtu-player-frame { width: min(100%, 400px); margin: 0 auto; overflow: hidden; border-radius: 14px; background: #10141c; box-shadow: 0 16px 42px rgba(19,29,48,.2); }
 .xingtu-video-player { display: block; width: 100%; max-height: min(68vh,680px); background: #10141c; }
 .xingtu-player-note, .xingtu-learn-disclaimer { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.65; }
-.xingtu-open-official { color: var(--accent); font-size: 13px; font-weight: 700; text-decoration: none; }
 .xingtu-detail-chip { display: inline-flex; margin-bottom: 10px; padding: 4px 9px; border-radius: 999px; background: #fff0f1; color: #c53043; font-size: 12px; font-weight: 700; }
 .xingtu-detail-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
-.xingtu-transcript-panel { margin-top: 20px; overflow: hidden; border: 1px solid #e7eaf0; border-radius: 12px; background: #fbfcfe; }
-.xingtu-transcript-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #e7eaf0; }
-.xingtu-transcript-head h3 { margin: 0; color: #293244; font-size: 14px; }
-.xingtu-transcript-head span { color: #8a94a6; font-size: 12px; }
-.xingtu-transcript-trigger { margin: 14px; }
-.xingtu-transcript-loading, .xingtu-transcript-empty { padding: 16px 14px; color: #697386; font-size: 13px; line-height: 1.65; }
-.xingtu-transcript-list { max-height: 260px; overflow-y: auto; }
-.xingtu-transcript-segment { display: grid; grid-template-columns: 44px minmax(0,1fr); gap: 10px; padding: 10px 14px; border-bottom: 1px solid #eef0f4; }
-.xingtu-transcript-segment:last-child { border-bottom: 0; }
-.xingtu-transcript-segment time { color: #c53043; font-size: 12px; font-variant-numeric: tabular-nums; }
-.xingtu-transcript-segment p { margin: 0; color: #3e4859; font-size: 13px; line-height: 1.6; }
 .xingtu-video-learn-modal-panel { width: min(820px,calc(100vw - 28px)); max-height: min(88vh,880px); overflow-y: auto; }
 .xingtu-video-learn-head { padding-bottom: 8px; }
 .xingtu-video-learn-body { padding: 0 28px 28px; }

@@ -60,9 +60,10 @@ function buildExcellentImageProxyPath(
   }`;
 }
 
-function rewriteExcellentImageUrl(value, imageIndex, params) {
-  if (typeof value !== "string" || !/^https?:\/\//i.test(value.trim())) return value;
-  return buildExcellentImageProxyPath(params.noteId, imageIndex, params);
+function rewriteExcellentImageUrl(value, _imageIndex, _params) {
+  // Keep the official platform image URL unchanged. The browser loads display
+  // images directly, without relaying them through this application's server.
+  return value;
 }
 
 /**
@@ -93,11 +94,9 @@ function normalizeExcellentImageSequence(item) {
 }
 
 /**
- * Rewrite cached remote image URLs to the same-origin SSRF-safe proxy path so
- * the browser never hits the XHS CDN hotlink wall directly. Relative URLs stay
- * untouched; non-image remote links (noteUrl, videoUrl) are never rewritten.
- * Every image field is rewritten against the unified sequence index so a
- * cover-only record resolves to index 0 and duplicated covers never shift.
+ * Preserve cached image URLs exactly as supplied by their original platforms.
+ * Image fields remain distinct from noteUrl and videoUrl, but none of them are
+ * rewritten to this application's server path.
  */
 function rewriteExcellentNoteImageUrls(note, params) {
   if (!note || typeof note !== "object") return note;

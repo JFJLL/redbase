@@ -1,12 +1,8 @@
-const { Readable } = require("stream");
 const { bindRouteScope } = require("./route-scope");
 const { findUserBySessionToken } = require("../db/repositories/auth-repository");
 const {
   getXingtuPublicVideoCatalog,
-  getXingtuVideoMediaSource,
   normalizeItemId,
-  buildXingtuPreviewCover,
-  requestOfficialMedia,
   requestOfficialTranscript,
   buildTranscriptLearningAnalysis,
 } = require("../services/xingtu-video-service");
@@ -14,14 +10,6 @@ const {
 function findCatalogVideo(itemId) {
   const target = String(itemId || "");
   return getXingtuPublicVideoCatalog().find((item) => String(item.itemId || item.id) === target) || null;
-}
-
-function findVideoMediaSource(itemId) {
-  try {
-    return getXingtuVideoMediaSource(itemId);
-  } catch (_error) {
-    return null;
-  }
 }
 
 function parseXingtuFilters(req) {
@@ -48,33 +36,6 @@ function filterXingtuCatalog(items, filters) {
     const rightValue = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
     return rightValue - leftValue;
   });
-}
-
-function sendXingtuPreviewCover(res, item) {
-  const body = Buffer.from(buildXingtuPreviewCover(item), "utf8");
-  res.writeHead(200, {
-    "content-type": "image/svg+xml; charset=utf-8",
-    "content-length": body.length,
-    "cache-control": "public, max-age=3600",
-  });
-  res.end(body);
-}
-
-function sendOfficialResource(res, response) {
-  const headers = {};
-  for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control", "etag", "last-modified"]) {
-    const value = response.headers.get(name);
-    if (value) headers[name] = value;
-  }
-  headers["cache-control"] = headers["cache-control"] || "private, max-age=300";
-  res.writeHead(response.status === 206 ? 206 : 200, headers);
-  if (!response.body) {
-    res.end();
-    return;
-  }
-  Readable.fromWeb(response.body)
-    .on("error", () => res.destroy())
-    .pipe(res);
 }
 
 function unavailableTranscript(itemId) {
@@ -131,32 +92,6 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
       updatedAt: new Date().toISOString(),
       persisted: false,
     });
-    return true;
-  }
-
-  const coverMatch = pathname.match(/^\/api\/xingtu\/videos\/([^/]+)\/cover$/);
-  if (req.method === "GET" && coverMatch) {
-    const item = findVideoMediaSource(decodeURIComponent(coverMatch[1] || ""));
-    if (!item) {
-      json(res, 404, { error: "未找到该视频封面。", code: "XINGTU_VIDEO_NOT_FOUND" });
-      return true;
-    }
-    sendXingtuPreviewCover(res, item);
-    return true;
-  }
-
-  const mediaMatch = pathname.match(/^\/api\/xingtu\/videos\/([^/]+)\/media$/);
-  if (req.method === "GET" && mediaMatch) {
-    const item = findVideoMediaSource(decodeURIComponent(mediaMatch[1] || ""));
-    if (!item) {
-      json(res, 404, { error: "未找到该视频。", code: "XINGTU_VIDEO_NOT_FOUND" });
-      return true;
-    }
-    try {
-      sendOfficialResource(res, await requestOfficialMedia(item, { ...xingtuRequestOptions, range: req.headers.range || "" }));
-    } catch (error) {
-      writeXingtuError(json, badRequest, res, error, "视频暂时无法播放。");
-    }
     return true;
   }
 

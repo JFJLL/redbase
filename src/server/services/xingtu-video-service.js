@@ -113,7 +113,9 @@ function normalizeItemId(value) {
 
 function officialCoverUrl(coverUri) {
   const uri = String(coverUri || "").replace(/^\/+/, "");
-  return uri ? `https://p3-star.byteimg.com/img/${uri}~tplv-resize:640:0.webp` : "";
+  // Match the public content-market card URL exactly. The browser requests this
+  // official image URL directly; it is neither proxied nor persisted by RedBase.
+  return uri ? `https://p3-star.byteimg.com/img/${uri}~tplv-resize:400:0.webp` : "";
 }
 
 function officialVideoPageUrl(itemId) {
@@ -290,10 +292,10 @@ function normalizeCatalogItem(item, index) {
     duration: Number(item.duration || 0),
     author: { ...item.author },
     metrics: { ...item.metrics },
-    coverUrl: `/api/xingtu/videos/${encodeURIComponent(id)}/cover`,
+    coverUrl: officialCoverUrl(item.coverUri),
     videoId: item.videoId,
     videoType: String(item.videoType || "自然视频"),
-    playerUrl: `/api/xingtu/videos/${encodeURIComponent(id)}/media`,
+    playerUrl: officialMediaUrl(item.videoId),
     videoUrl: officialVideoPageUrl(id),
     officialContentMarketUrl: XINGTU_CONTENT_MARKET_URL,
     transcriptUrl: officialTranscriptUrl(id),

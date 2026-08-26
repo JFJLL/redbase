@@ -729,7 +729,7 @@ describe("ExcellentView", () => {
     expect(wrapper.text()).not.toContain("旧第1页");
   });
 
-  it("renders proxy paths for remote image URLs and keeps relative URLs unchanged", async () => {
+  it("keeps upstream image URLs direct and leaves relative URLs unchanged", async () => {
     const remoteItems = [
       { noteId: "r1", title: "远程图", imageUrls: ["https://cdn.example/r1/a.jpg", "https://cdn.example/r1/b.jpg"], metrics: { readCount: 1 } },
       { noteId: "r2", title: "相对图", imageUrls: ["/img/rel.jpg"], metrics: { readCount: 2 } },
@@ -747,9 +747,7 @@ describe("ExcellentView", () => {
       return defaultHandlers(url);
     });
 
-    expect(
-      wrapper.find('img[src="/api/excellent-contents/r1/images/0/file?board=xhs_hot&contentSource=all"]').exists(),
-    ).toBe(true);
+    expect(wrapper.find('img[src="https://cdn.example/r1/a.jpg"]').exists()).toBe(true);
     expect(wrapper.find('img[src="/img/rel.jpg"]').exists()).toBe(true);
   });
 
@@ -774,8 +772,8 @@ describe("ExcellentView", () => {
       category: "剧情",
       videoType: "自然视频",
       duration: 32,
-      coverUrl: "/api/xingtu/videos/7675709137612013818/cover",
-      playerUrl: "/api/xingtu/videos/7675709137612013818/media",
+      coverUrl: "https://p3-star.byteimg.com/img/tos-cn-p-0015c000-ce/owOFfegCfAI2SLCjCD7VXMDOmEJQFBQKhy1Iok~tplv-resize:400:0.webp",
+      playerUrl: "https://www.iesdouyin.com/aweme/v1/play/?video_id=v2800fgi0000da2p2vvog65i8assau70&ratio=720p&line=0",
       videoUrl: "https://www.douyin.com/video/7675709137612013818",
       author: { nickname: "作者", followerCount: 12 },
       metrics: { viewCount: 100, likeCount: 10, commentCount: 2, shareCount: 1, interactCount: 13, finishRate: 0.1, interactRate: 0.13 },
@@ -799,7 +797,7 @@ describe("ExcellentView", () => {
     expect(wrapper.find('[data-test="xingtu-video-type"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="xingtu-content-type"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="xingtu-data-sort"]').exists()).toBe(true);
-    expect(wrapper.find('img[src="/api/xingtu/videos/7675709137612013818/cover"]').exists()).toBe(true);
+    expect(wrapper.find('img[src^="https://p3-star.byteimg.com/img/"]').exists()).toBe(true);
     expect(wrapper.find('video.xingtu-card-preview').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("视频范围");
     expect(wrapper.text()).not.toContain("媒体策略");
@@ -810,7 +808,12 @@ describe("ExcellentView", () => {
 
     await wrapper.find(".excellent-cover").trigger("click");
     await flushPromises();
-    expect(wrapper.find(".xingtu-open-official").text()).toBe("查看原视频");
+    expect(wrapper.find(".xingtu-video-player").attributes("src")).toContain("https://www.iesdouyin.com/aweme/v1/play/");
+    expect(wrapper.find(".xingtu-video-player").attributes("referrerpolicy")).toBe("no-referrer");
+    expect(wrapper.find(".xingtu-open-official").exists()).toBe(false);
+    expect(wrapper.find(".excellent-detail-actions a").text()).toBe("查看原视频");
+    expect(wrapper.text()).not.toContain("视频文稿");
+    expect(wrapper.text()).not.toContain("查看视频文稿");
     expect(wrapper.text()).not.toContain("来源：巨量星图");
     expect(wrapper.text()).not.toContain("从官方链接播放");
 

@@ -21,14 +21,12 @@ describe("excellent image proxy helpers", () => {
     expect(built).toContain(encodeURIComponent(industryPath));
   });
 
-  it("rewrites remote http(s) URLs to proxy paths and leaves relative URLs untouched", () => {
+  it("keeps remote http(s) URLs direct and leaves relative URLs untouched", () => {
     const params = { noteId: "n1", board: "xhs_hot", contentSource: "all" };
     expect(isRemoteHttpUrl("https://cdn.example/1.jpg")).toBe(true);
     expect(isRemoteHttpUrl("http://cdn.example/1.jpg")).toBe(true);
     expect(isRemoteHttpUrl("/img/a.jpg")).toBe(false);
-    expect(excellentImageSrc("https://cdn.example/1.jpg", 1, params)).toBe(
-      "/api/excellent-contents/n1/images/1/file?board=xhs_hot&contentSource=all",
-    );
+    expect(excellentImageSrc("https://cdn.example/1.jpg", 1, params)).toBe("https://cdn.example/1.jpg");
     expect(excellentImageSrc("/img/a.jpg", 0, params)).toBe("/img/a.jpg");
     expect(excellentImageSrc("", 0, params)).toBe("");
     expect(excellentImageSrc(undefined, 0, params)).toBe("");
