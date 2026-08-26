@@ -56,20 +56,28 @@
     "ffmpegPath": "",
     "ffmpegOverride": "",
     "pollIntervalMs": 2000,
+    "pollMaxBackoffMs": 30000,
+    "submitTimeoutMs": 45000,
+    "pollTimeoutMs": 20000,
     "schedulerIntervalMs": 500,
     "maxDownloadBytes": 62914560,
     "remoteTimeoutMs": 30000,
+    "d2MaxConcurrentSubmissions": 4,
+    "mediaMaxConcurrency": 3,
+    "ffmpegMaxConcurrency": 1,
     "runninghub": {
       "baseUrl": "https://www.runninghub.ai/openapi/v2",
       "apiKey": "",
-      "pollPath": "/query"
+      "pollPath": "/query",
+      "outputHosts": ["runninghub.ai", "runninghub.cn"]
     },
     "agnes": {
       "baseUrl": "https://api.agnes-ai.cn",
       "apiKeys": [],
       "pollPath": "/agnesapi",
       "rpmPerKey": 1,
-      "pollIntervalMs": 2000
+      "pollIntervalMs": 2000,
+      "outputHosts": ["platform-outputs.agnes-ai.space"]
     }
   },
   "assetStorage": {

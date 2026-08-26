@@ -1,4 +1,7 @@
 const { getVideoModelConfig } = require("../video-model-registry");
+const { requestProviderJson } = require("../video-provider-http");
+
+const DEFAULT_OUTPUT_HOSTS = ["platform-outputs.agnes-ai.space"];
 
 function joinUrl(base, path) {
   return `${String(base || "").replace(/\/+$/, "")}/${String(path || "").replace(/^\/+/, "")}`;
@@ -18,7 +21,8 @@ function normalizeStatus(value, hasVideoUrl = false) {
 function readMetadataUrl(payload) {
   return String(
     payload?.metadata?.url || payload?.data?.metadata?.url || payload?.metadata?.video_url ||
-    payload?.data?.url || payload?.video_url || payload?.videoUrl || "",
+    payload?.url || payload?.video_url || payload?.videoUrl || payload?.output_url ||
+    payload?.data?.url || payload?.data?.video_url || payload?.data?.videoUrl || payload?.data?.output_url || "",
   ).trim();
 }
 
@@ -26,6 +30,11 @@ function createG2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
   const config = getVideoModelConfig("g2");
   const providerConfig = appConfig.video?.agnes || {};
   const baseUrl = String(providerConfig.baseUrl || "https://api.agnes-ai.cn").replace(/\/+$/, "");
+  const outputHosts = Array.isArray(providerConfig.outputHosts) && providerConfig.outputHosts.length
+    ? providerConfig.outputHosts
+    : DEFAULT_OUTPUT_HOSTS;
+  const submitTimeoutMs = Number(appConfig.video?.submitTimeoutMs || 45000);
+  const pollTimeoutMs = Number(appConfig.video?.pollTimeoutMs || 20000);
 
   async function request(url, apiKey, options = {}) {
     if (!apiKey) {
@@ -33,24 +42,13 @@ function createG2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
       error.code = "VIDEO_PROVIDER_NOT_CONFIGURED";
       throw error;
     }
-    let response;
-    try {
-      response = await fetchImpl(url, {
-        ...options,
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...(options.headers || {}) },
-      });
-    } catch (error) {
-      error.uncertainSubmission = true;
-      throw error;
-    }
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const error = new Error(payload?.error?.message || payload?.message || `Agnes 视频请求失败：HTTP ${response.status}`);
-      error.statusCode = response.status;
-      error.payload = payload;
-      throw error;
-    }
-    return payload;
+    return requestProviderJson(fetchImpl, url, {
+      ...options,
+      phase: options.phase || "poll",
+      timeoutMs: options.phase === "submit" ? submitTimeoutMs : pollTimeoutMs,
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...(options.headers || {}) },
+      errorMessage: (payload, status) => payload?.error?.message || payload?.message || `Agnes 视频请求失败：HTTP ${status}`,
+    });
   }
 
   return {
@@ -58,9 +56,11 @@ function createG2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
     provider: "agnes",
     modelConfig: config,
     getAllowedHosts() {
-      return [new URL(baseUrl).hostname, "agnes-ai.cn", "agnes-ai.com"];
+      // The API host is not implicitly an output host. Keep the download
+      // allowlist narrow and independently configurable.
+      return [...new Set(outputHosts.map((host) => String(host || "").trim()).filter(Boolean))];
     },
-    async submitClip({ apiKey, prompt, durationSec, aspectRatio, mode = "text", referenceUrls = [], firstFrameUrl = "" } = {}) {
+    async submitClip({ apiKey, prompt, durationSec, aspectRatio, mode = "text", referenceUrls = [], firstFrameUrl = "", signal } = {}) {
       const body = {
         model: "agnes-video-2.5-flash",
         prompt: String(prompt || "").slice(0, 12000),
@@ -73,19 +73,19 @@ function createG2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
       };
       if (body.mode === "reference") body.images = referenceUrls.slice(0, config.maxReferenceImages);
       if (body.mode === "keyframe") body.first_frame = String(firstFrameUrl || "");
-      const payload = await request(joinUrl(baseUrl, "/v1/videos"), apiKey, { method: "POST", body: JSON.stringify(body) });
+      const payload = await request(joinUrl(baseUrl, "/v1/videos"), apiKey, { method: "POST", body: JSON.stringify(body), signal, phase: "submit" });
       const videoId = pickVideoId(payload);
       if (!videoId) throw Object.assign(new Error("Agnes 未返回 video_id"), { uncertainSubmission: true });
       return { taskId: videoId, payload, requestBody: body };
     },
-    async getTaskStatus({ taskId, apiKey } = {}) {
+    async getTaskStatus({ taskId, apiKey, signal } = {}) {
       const query = new URLSearchParams({ video_id: String(taskId || ""), model_name: "agnes-video-2.5-flash" });
-      const payload = await request(`${baseUrl}${providerConfig.pollPath || "/agnesapi"}?${query}`, apiKey, { method: "GET" });
+      const payload = await request(`${baseUrl}${providerConfig.pollPath || "/agnesapi"}?${query}`, apiKey, { method: "GET", signal, phase: "poll" });
       return this.normalizeResult(payload);
     },
     normalizeResult(payload) {
       const videoUrl = readMetadataUrl(payload);
-      const status = normalizeStatus(payload?.status || payload?.data?.status, Boolean(videoUrl));
+      const status = normalizeStatus(payload?.status || payload?.data?.status || payload?.state || payload?.data?.state, Boolean(videoUrl));
       return {
         status,
         videoUrl,

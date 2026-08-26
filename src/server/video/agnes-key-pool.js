@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 function normalizeKeys(values = []) {
   const source = Array.isArray(values) ? values : String(values || "").split(",");
   return source.map((value) => String(value || "").trim()).filter(Boolean).filter((value, index, all) => all.indexOf(value) === index);
@@ -7,6 +9,7 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
   const slots = normalizeKeys(keys).map((key, index) => ({
     slot: index + 1,
     key,
+    keyRef: crypto.createHash("sha256").update(key).digest("hex").slice(0, 16),
     nextAvailableAt: 0,
     inFlight: 0,
     errorCount: 0,
@@ -22,18 +25,20 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
     return { ...safe };
   }
 
-  function acquire({ rateLimit = true } = {}) {
+  function acquire({ rateLimit = true, keyRef = "" } = {}) {
     const timestamp = now();
     const cursor = rateLimit ? submissionCursor : pollingCursor;
+    const requestedRef = String(keyRef || "").trim();
     for (let offset = 0; offset < slots.length; offset += 1) {
       const index = (cursor + offset) % slots.length;
       const slot = slots[index];
+      if (requestedRef && slot.keyRef !== requestedRef) continue;
       if (slot.disabledUntil > timestamp || slot.inFlight > 0 || (rateLimit && slot.nextAvailableAt > timestamp)) continue;
       slot.inFlight += 1;
       if (rateLimit) slot.nextAvailableAt = timestamp + intervalMs;
       if (rateLimit) submissionCursor = (index + 1) % slots.length;
       else pollingCursor = (index + 1) % slots.length;
-      return { slot: slot.slot, key: slot.key, nextAvailableAt: slot.nextAvailableAt };
+      return { slot: slot.slot, key: slot.key, keyRef: slot.keyRef, nextAvailableAt: slot.nextAvailableAt };
     }
     return null;
   }
@@ -61,8 +66,11 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
   return {
     hasKeys: () => slots.length > 0,
     acquire,
+    acquireByRef: (keyRef, options = {}) => acquire({ ...options, keyRef }),
     release,
     getKey: (slotNumber) => slots.find((item) => item.slot === Number(slotNumber))?.key || slots[0]?.key || "",
+    getKeyRef: (slotNumber) => slots.find((item) => item.slot === Number(slotNumber))?.keyRef || "",
+    hasKeyRef: (keyRef) => slots.some((item) => item.keyRef === String(keyRef || "")),
     getAvailableKey: () => slots.find((item) => item.disabledUntil <= now())?.key || slots[0]?.key || "",
     snapshot: () => slots.map(publicSlot),
     get intervalMs() { return intervalMs; },
