@@ -26,7 +26,9 @@ describe("excellent image proxy helpers", () => {
     expect(isRemoteHttpUrl("https://cdn.example/1.jpg")).toBe(true);
     expect(isRemoteHttpUrl("http://cdn.example/1.jpg")).toBe(true);
     expect(isRemoteHttpUrl("/img/a.jpg")).toBe(false);
-    expect(excellentImageSrc("https://cdn.example/1.jpg", 1, params)).toBe("https://cdn.example/1.jpg");
+    expect(excellentImageSrc("https://cdn.example/1.jpg", 1, params)).toBe(
+      "/api/excellent-contents/n1/images/1/file?board=xhs_hot&contentSource=all",
+    );
     expect(excellentImageSrc("/img/a.jpg", 0, params)).toBe("/img/a.jpg");
     expect(excellentImageSrc("", 0, params)).toBe("");
     expect(excellentImageSrc(undefined, 0, params)).toBe("");

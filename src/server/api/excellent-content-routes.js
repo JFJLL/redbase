@@ -60,10 +60,9 @@ function buildExcellentImageProxyPath(
   }`;
 }
 
-function rewriteExcellentImageUrl(value, _imageIndex, _params) {
-  // Keep the official platform image URL unchanged. The browser loads display
-  // images directly, without relaying them through this application's server.
-  return value;
+function rewriteExcellentImageUrl(value, imageIndex, params) {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value.trim())) return value;
+  return buildExcellentImageProxyPath(params.noteId, imageIndex, params);
 }
 
 /**

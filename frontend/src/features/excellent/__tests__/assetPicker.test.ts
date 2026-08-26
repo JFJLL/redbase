@@ -244,7 +244,8 @@ describe("excellent remix asset picker (unassigned claim + in-modal upload)", ()
 
     void wrapper.find('[data-test="claim-unassigned-22"]').trigger("click");
     await flushPromises();
-    await wrapper.find('[data-test="remix-brand"]').setValue("8");
+    await wrapper.find('[data-test="remix-brand"]').trigger("click");
+    await wrapper.find('[data-test="remix-brand-option-8"]').trigger("click");
     await flushPromises();
 
     resolveClaim(jsonResponse(200, { image: UNASSIGNED_IMAGES[0], brandId: 7 }));
