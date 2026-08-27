@@ -369,13 +369,44 @@ function createVideoProjectService(options = {}) {
     }
   }
 
-  function getFrozenInputAsset(project, sourceImageId) {
-    return (project.inputAssets || []).find((asset) => Number(asset.sourceImageId) === Number(sourceImageId)) || null;
+ function getFrozenInputAsset(project, sourceImageId) {
+   return (project.inputAssets || []).find((asset) => Number(asset.sourceImageId) === Number(sourceImageId)) || null;
+ }
+
+  async function generatedAssetExists(asset) {
+    if (!asset || !storage) return false;
+    if (!asset.storedPath && !asset.objectKey) return false;
+    try {
+      if (typeof storage.stat === "function") {
+        const stat = await storage.stat(asset);
+        return Number(stat?.size) > 0;
+      }
+      return true;
+    } catch (error) {
+      if (
+        error?.code === "ENOENT" ||
+        error?.name === "NoSuchKey" ||
+        error?.code === "NoSuchKey" ||
+        error?.status === 404 ||
+        error?.statusCode === 404 ||
+        ["NoSuchKey", "NotFound", "NoSuchObject"].includes(String(error?.code || error?.name || ""))
+      ) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async function ensureContinuityFrameReady(project, dependencyClip) {
-    if (dependencyClip?.continuityFrame?.asset) return dependencyClip;
+    if (dependencyClip?.continuityFrame?.asset) {
+      const exists = await generatedAssetExists(dependencyClip.continuityFrame.asset);
+      if (exists) return dependencyClip;
+    }
     if (dependencyClip?.outputVideo?.asset) {
+      const videoExists = await generatedAssetExists(dependencyClip.outputVideo.asset);
+      if (!videoExists) {
+        throw createProjectError("前置镜头视频画面丢失，无法自动恢复连续性画面", "VIDEO_CONTINUITY_UNRECOVERABLE");
+      }
       return mediaSemaphore.run(() => withVideoTempDir(async (tempDir) => {
         const videoPath = path.join(tempDir, `dep-${dependencyClip.index}.mp4`);
         if (typeof storage.copyToFile === "function") {
@@ -387,43 +418,88 @@ function createVideoProjectService(options = {}) {
         const framePath = path.join(tempDir, `continuity-${dependencyClip.index}.jpg`);
         await ffmpegSemaphore.run(() => extractStableLastFrame({ videoPath, outputPath: framePath, appConfig, executor }));
         const frameBuffer = await fsp.readFile(framePath);
+        const oldFrameAsset = dependencyClip?.continuityFrame?.asset || null;
         const continuityFrameAsset = await saveAsset(project, `continuity-frame-${dependencyClip.index}`, "image/jpeg", frameBuffer);
-        const updated = updateClip(dependencyClip.id, {
-          continuityFrame: { asset: continuityFrameAsset, mimeType: "image/jpeg", sizeBytes: frameBuffer.length },
-        });
-        updateGenerationSnapshot(getProject(project.id));
+        let updated;
+        try {
+          updated = updateClip(dependencyClip.id, {
+            continuityFrame: { asset: continuityFrameAsset, mimeType: "image/jpeg", sizeBytes: frameBuffer.length },
+          });
+          updateGenerationSnapshot(getProject(project.id));
+        } catch (dbErr) {
+          await cleanupAssets([continuityFrameAsset]).catch(() => {});
+          throw dbErr;
+        }
+        if (oldFrameAsset && oldFrameAsset !== continuityFrameAsset) {
+          cleanupAssets([oldFrameAsset]).catch(() => {});
+        }
         return updated || dependencyClip;
       }));
     }
     throw createProjectError("前置镜头视频画面丢失，无法自动恢复连续性画面", "VIDEO_CONTINUITY_UNRECOVERABLE");
   }
 
-  async function ensureFrozenInputAssetReady(project, sourceImageId) {
-    const existing = getFrozenInputAsset(project, sourceImageId);
-    if (existing?.asset) return existing;
+ async function ensureFrozenInputAssetReady(project, sourceImageId) {
+    const currentInputAssets = project.inputAssets || [];
+    const existingIndex = currentInputAssets.findIndex(
+      (item) => Number(item?.sourceImageId) === Number(sourceImageId)
+    );
+    const existing = existingIndex >= 0 ? currentInputAssets[existingIndex] : null;
+    const oldAsset = existing?.asset || null;
+
+    if (oldAsset) {
+      const exists = await generatedAssetExists(oldAsset);
+      if (exists) return existing;
+    }
+
     const image = findProductImageByOwner(Number(sourceImageId), project.ownerUserId);
     if (image) {
+      let buffer = null;
       try {
         const filePath = resolveProductImagePath(image);
-        const buffer = await fsp.readFile(filePath);
-        const position = (project.inputAssets || []).length + 1;
-        const asset = await saveAsset(project, `input-${position}`, image.mimeType || "image/png", buffer);
-        const nextInputAssets = [
-          ...(project.inputAssets || []),
-          {
-            position,
-            sourceImageId: Number(image.id),
-            originalName: String(image.originalName || ""),
-            mimeType: String(image.mimeType || "image/png"),
-            sizeBytes: Number(image.sizeBytes || buffer.length),
-            asset,
-          },
-        ];
-        updateProject(project.id, { inputAssets: nextInputAssets });
-        updateGenerationSnapshot(getProject(project.id));
-        return nextInputAssets.find((a) => Number(a.sourceImageId) === Number(sourceImageId)) || null;
+        buffer = await fsp.readFile(filePath);
       } catch (_err) {
-        // file unreadable
+        buffer = null;
+      }
+      if (buffer && buffer.length > 0) {
+        const position = existing?.position || currentInputAssets.length + 1;
+        const newAsset = await saveAsset(project, `input-${position}`, image.mimeType || "image/png", buffer);
+        const recovered = {
+          position,
+          sourceImageId: Number(image.id),
+          originalName: String(image.originalName || ""),
+          mimeType: String(image.mimeType || "image/png"),
+          sizeBytes: Number(image.sizeBytes || buffer.length),
+          asset: newAsset,
+        };
+
+        let nextInputAssets = [...currentInputAssets];
+        if (existingIndex >= 0) {
+          nextInputAssets[existingIndex] = recovered;
+        } else {
+          nextInputAssets.push(recovered);
+        }
+        const seen = new Set();
+        nextInputAssets = nextInputAssets.filter((item) => {
+          const sid = Number(item.sourceImageId);
+          if (seen.has(sid)) return false;
+          seen.add(sid);
+          return true;
+        });
+
+        try {
+          updateProject(project.id, { inputAssets: nextInputAssets });
+          updateGenerationSnapshot(getProject(project.id));
+        } catch (dbError) {
+          await cleanupAssets([newAsset]).catch(() => {});
+          throw dbError;
+        }
+
+        if (oldAsset && oldAsset !== newAsset) {
+          cleanupAssets([oldAsset]).catch(() => {});
+        }
+
+        return recovered;
       }
     }
     throw createProjectError("视频项目参考素材不可用，未执行镜头已自动退款。", "VIDEO_INPUT_SNAPSHOT_UNRECOVERABLE");
@@ -432,10 +508,11 @@ function createVideoProjectService(options = {}) {
   async function getReferenceBundle(project, clip, provider) {
     const config = getVideoModelConfig(project.model);
     const references = [];
-    const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
-    if (previous && project.model === "d2") {
-      let readyPrevious = previous;
-      if (!readyPrevious.continuityFrame?.asset) {
+   const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
+   if (previous && project.model === "d2") {
+     let readyPrevious = previous;
+      const prevFrameExists = readyPrevious.continuityFrame?.asset ? await generatedAssetExists(readyPrevious.continuityFrame.asset) : false;
+      if (!readyPrevious.continuityFrame?.asset || !prevFrameExists) {
         readyPrevious = await ensureContinuityFrameReady(project, previous);
       }
       const previousPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", readyPrevious.index));
@@ -447,8 +524,24 @@ function createVideoProjectService(options = {}) {
     const ids = clip.referenceAssetIds || [];
     for (const id of ids) {
       let frozen = getFrozenInputAsset(project, id);
-      if (!frozen?.asset && provider.provider !== "fake") {
-        frozen = await ensureFrozenInputAssetReady(project, id);
+      const exists = frozen?.asset ? await generatedAssetExists(frozen.asset) : false;
+      if (!frozen?.asset || !exists) {
+        try {
+          frozen = await ensureFrozenInputAssetReady(project, id);
+        } catch (freezeErr) {
+          if (provider.provider === "fake") {
+            const image = findProductImageByOwner(Number(id), project.ownerUserId);
+            if (image) {
+              const signedPath = signAssetUrl(appConfig, `/api/product-images/${image.id}/file`, { ttlMs: DAY_MS });
+              references.push({
+                url: toPublicUrl(signedPath),
+                label: `产品参考图（${image.originalName || image.id}）`,
+              });
+              continue;
+            }
+          }
+          throw freezeErr;
+        }
       }
       if (frozen?.asset) {
         const inputPath = signVideoPath(videoAssetPath(project.id, "input", frozen.position));
@@ -475,7 +568,8 @@ function createVideoProjectService(options = {}) {
   async function getFirstFrameUrl(project, clip, provider) {
     const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
     let readyPrevious = previous;
-    if (readyPrevious && !readyPrevious.continuityFrame?.asset) {
+    const prevFrameExists = readyPrevious?.continuityFrame?.asset ? await generatedAssetExists(readyPrevious.continuityFrame.asset) : false;
+    if (readyPrevious && (!readyPrevious.continuityFrame?.asset || !prevFrameExists)) {
       readyPrevious = await ensureContinuityFrameReady(project, previous);
     }
     if (!readyPrevious?.continuityFrame?.asset) throw createProjectError("上一镜头的连续性画面尚未准备好", "VIDEO_CONTINUITY_UNRECOVERABLE");
@@ -940,105 +1034,117 @@ function createVideoProjectService(options = {}) {
       return;
     }
 
-    const processingClip = updateClip(clip.id, {
+   const processingClip = updateClip(clip.id, {
+     status: "processing_result",
+     lastSuccessfulPollAt: successAt,
+     pollFailureCount: 0,
+     error: "",
+   });
+    updateProject(project.id, {
       status: "processing_result",
-      lastSuccessfulPollAt: successAt,
-      pollFailureCount: 0,
       error: "",
     });
-    await processClipResult(project, processingClip || clip, provider, result);
-  }
+   await processClipResult(project, processingClip || clip, provider, result);
+ }
 
-  async function processClipResult(project, clip, provider, initialResult = null) {
-    let result = initialResult;
-    let pollLease = null;
-    let releaseResult = {};
-    if (!result || (!result.videoUrl && !result.videoBuffer)) {
-      if (project.model === "g2" && clip.providerKeyRef && typeof keyPool.hasKeyRef === "function" && keyPool.hasKeyRef(clip.providerKeyRef)) {
-        pollLease = keyPool.acquireByRef(clip.providerKeyRef, { rateLimit: false });
-      }
-      try {
-        result = await provider.getTaskStatus({
-          taskId: clip.providerTaskId,
-          apiKey: pollLease?.key,
-          signal: undefined,
-        });
-      } catch (error) {
-        releaseResult = { error: true, statusCode: error.statusCode };
-        const failureCount = Number(clip.resultProcessingFailureCount || 0) + 1;
-        const errMsg = error.message || "重新获取供应商生成结果失败";
-        if (failureCount >= MAX_RESULT_PROCESSING_RETRIES) {
-          updateClip(clip.id, {
-            status: "result_processing_failed",
-            resultProcessingFailureCount: failureCount,
-            lastResultProcessingError: errMsg,
-            lastResultProcessingAt: new Date(now()).toISOString(),
-            error: "视频模型已生成完成，但生成结果暂未保存成功。",
-          });
+ async function processClipResult(project, clip, provider, initialResult = null) {
+   let result = initialResult;
+   let pollLease = null;
+   let releaseResult = {};
+   if (!result || (!result.videoUrl && !result.videoBuffer)) {
+     if (project.model === "g2" && clip.providerKeyRef && typeof keyPool.hasKeyRef === "function" && keyPool.hasKeyRef(clip.providerKeyRef)) {
+       pollLease = keyPool.acquireByRef(clip.providerKeyRef, { rateLimit: false });
+     }
+     try {
+       result = await provider.getTaskStatus({
+         taskId: clip.providerTaskId,
+         apiKey: pollLease?.key,
+         signal: undefined,
+       });
+     } catch (error) {
+       releaseResult = { error: true, statusCode: error.statusCode };
+       const failureCount = Number(clip.resultProcessingFailureCount || 0) + 1;
+       const errMsg = error.message || "重新获取供应商生成结果失败";
+       if (failureCount >= MAX_RESULT_PROCESSING_RETRIES) {
+         updateClip(clip.id, {
+           status: "result_processing_failed",
+           resultProcessingFailureCount: failureCount,
+           lastResultProcessingError: errMsg,
+           lastResultProcessingAt: new Date(now()).toISOString(),
+           error: "视频模型已生成完成，但生成结果暂未保存成功。",
+         });
+         updateProject(project.id, {
+           status: "result_processing_failed",
+           error: "视频模型已生成完成，但生成结果暂未保存成功。",
+         });
+         updateGenerationSnapshot(getProject(project.id));
+       } else {
+         updateClip(clip.id, {
+           status: "processing_result",
+           resultProcessingFailureCount: failureCount,
+           lastResultProcessingError: errMsg,
+           lastResultProcessingAt: new Date(now()).toISOString(),
+           error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
+         });
           updateProject(project.id, {
-            status: "result_processing_failed",
-            error: "视频模型已生成完成，但生成结果暂未保存成功。",
-          });
-          updateGenerationSnapshot(getProject(project.id));
-        } else {
-          updateClip(clip.id, {
             status: "processing_result",
-            resultProcessingFailureCount: failureCount,
-            lastResultProcessingError: errMsg,
-            lastResultProcessingAt: new Date(now()).toISOString(),
             error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
           });
-          scheduleResultProcessingRetry(clip, failureCount);
-        }
-        return;
-      } finally {
-        if (pollLease) keyPool.release(pollLease.slot, releaseResult);
-      }
-    }
+         scheduleResultProcessingRetry(clip, failureCount);
+       }
+       return;
+     } finally {
+       if (pollLease) keyPool.release(pollLease.slot, releaseResult);
+     }
+   }
 
-    if (String(result?.status || "").toLowerCase() === "failed") {
-      updateClip(clip.id, { pollFailureCount: 0 });
-      await failClip(project, clip, result.error || "供应商生成失败");
-      return;
-    }
+   if (String(result?.status || "").toLowerCase() === "failed") {
+     updateClip(clip.id, { pollFailureCount: 0 });
+     await failClip(project, clip, result.error || "供应商生成失败");
+     return;
+   }
 
-    let persisted;
-    try {
-      persisted = await persistClipResult(project, clip, result, provider);
-    } catch (error) {
-      log.warn?.("[video-project] result processing attempt failed", {
-        projectId: project.id,
-        clipIndex: clip.index,
-        error: error.message,
-      });
-      const failureCount = Number(clip.resultProcessingFailureCount || 0) + 1;
-      const errMsg = error.message || "生成结果保存失败";
-      if (failureCount >= MAX_RESULT_PROCESSING_RETRIES) {
-        updateClip(clip.id, {
-          status: "result_processing_failed",
-          resultProcessingFailureCount: failureCount,
-          lastResultProcessingError: errMsg,
-          lastResultProcessingAt: new Date(now()).toISOString(),
-          error: "视频模型已生成完成，但生成结果暂未保存成功。",
-        });
-        const failedProject = updateProject(project.id, {
-          status: "result_processing_failed",
-          error: "视频模型已生成完成，但生成结果暂未保存成功。",
-        });
-        updateGenerationSnapshot(failedProject);
-        return;
-      }
+   let persisted;
+   try {
+     persisted = await persistClipResult(project, clip, result, provider);
+   } catch (error) {
+     log.warn?.("[video-project] result processing attempt failed", {
+       projectId: project.id,
+       clipIndex: clip.index,
+       error: error.message,
+     });
+     const failureCount = Number(clip.resultProcessingFailureCount || 0) + 1;
+     const errMsg = error.message || "生成结果保存失败";
+     if (failureCount >= MAX_RESULT_PROCESSING_RETRIES) {
+       updateClip(clip.id, {
+         status: "result_processing_failed",
+         resultProcessingFailureCount: failureCount,
+         lastResultProcessingError: errMsg,
+         lastResultProcessingAt: new Date(now()).toISOString(),
+         error: "视频模型已生成完成，但生成结果暂未保存成功。",
+       });
+       const failedProject = updateProject(project.id, {
+         status: "result_processing_failed",
+         error: "视频模型已生成完成，但生成结果暂未保存成功。",
+       });
+       updateGenerationSnapshot(failedProject);
+       return;
+     }
 
-      updateClip(clip.id, {
+     updateClip(clip.id, {
+       status: "processing_result",
+       resultProcessingFailureCount: failureCount,
+       lastResultProcessingError: errMsg,
+       lastResultProcessingAt: new Date(now()).toISOString(),
+       error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
+     });
+      updateProject(project.id, {
         status: "processing_result",
-        resultProcessingFailureCount: failureCount,
-        lastResultProcessingError: errMsg,
-        lastResultProcessingAt: new Date(now()).toISOString(),
         error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
       });
-      scheduleResultProcessingRetry(clip, failureCount);
-      return;
-    }
+     scheduleResultProcessingRetry(clip, failureCount);
+     return;
+   }
 
     const updatedClip = updateClip(clip.id, {
       status: "completed",
@@ -1598,14 +1704,14 @@ function createVideoProjectService(options = {}) {
       .map((project) => serializeProject(reconcileProjectRefundedCredits(getProject(project.id, { ownerUserId }))));
   }
 
-  function startProject(projectId, ownerUserId) {
-    const project = getProject(projectId, { ownerUserId });
-    if (!project) throw createProjectError("视频项目不存在", "VIDEO_PROJECT_NOT_FOUND");
-    if (["completed", "assembly_failed", "uncertain", "partial_failed"].includes(project.status)) return serializeProject(project);
-    const next = updateProject(project.id, { status: "queued", error: "" });
-    pump().catch((error) => log.warn?.("[video-project] immediate pump failed", { projectId, error: error.message }));
-    return serializeProject(next);
-  }
+ function startProject(projectId, ownerUserId) {
+   const project = getProject(projectId, { ownerUserId });
+   if (!project) throw createProjectError("视频项目不存在", "VIDEO_PROJECT_NOT_FOUND");
+    if (!["preparing", "queued"].includes(project.status)) return serializeProject(project);
+   const next = updateProject(project.id, { status: "queued", error: "" });
+   pump().catch((error) => log.warn?.("[video-project] immediate pump failed", { projectId, error: error.message }));
+   return serializeProject(next);
+ }
 
   async function retryClip(projectId, ownerUserId, clipIndex, requestId) {
     const project = getProject(projectId, { ownerUserId });
@@ -1663,10 +1769,49 @@ function createVideoProjectService(options = {}) {
     if (clip) nextPollAt.delete(clip.id);
     pump().catch((error) => log.warn?.("[video-project] retry-result pump failed", { projectId, error: error.message }));
 
-    return {
-      project: serializeProject(getProject(projectId, { ownerUserId })),
-      user: findUserById(ownerUserId),
+   return {
+     project: serializeProject(getProject(projectId, { ownerUserId })),
+     user: findUserById(ownerUserId),
+   };
+ }
+
+  function pipeVideoStream({ stream, req, res }) {
+    let cleanedUp = false;
+
+    const onError = (streamErr) => {
+      cleanup();
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "视频流读取失败" }));
+      } else {
+        res.destroy(streamErr);
+      }
     };
+
+    const onClose = () => {
+      cleanup();
+      if (stream && !stream.destroyed && typeof stream.destroy === "function") {
+        stream.destroy();
+      }
+    };
+
+    const onFinish = () => {
+      cleanup();
+    };
+
+    function cleanup() {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      stream.removeListener("error", onError);
+      res.removeListener("close", onClose);
+      res.removeListener("finish", onFinish);
+    }
+
+    stream.on("error", onError);
+    res.on("close", onClose);
+    res.on("finish", onFinish);
+
+    stream.pipe(res);
   }
 
   async function serveAsset(projectId, ownerUserId, kind, position, res, req = null) {
@@ -1715,7 +1860,7 @@ function createVideoProjectService(options = {}) {
           "Accept-Ranges": "bytes",
         });
         const stream = storage.createReadStream(asset);
-        stream.pipe(res);
+        pipeVideoStream({ stream, req, res });
         return true;
       }
 
@@ -1769,15 +1914,7 @@ function createVideoProjectService(options = {}) {
         "Cache-Control": "private, max-age=300",
       });
       const stream = storage.createReadStream(asset, { start, end });
-      stream.on("error", (streamErr) => {
-        if (!res.headersSent) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "视频流读取失败" }));
-        } else {
-          res.destroy(streamErr);
-        }
-      });
-      stream.pipe(res);
+      pipeVideoStream({ stream, req, res });
       return true;
     }
 

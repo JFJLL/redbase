@@ -211,7 +211,7 @@ function listProjectsForRefundReconciliation({ limit = 100 } = {}) {
   const rows = db.prepare(`
     SELECT ${PROJECT_COLUMNS}
     FROM video_projects
-    WHERE status IN ('partial_failed', 'uncertain', 'failed', 'completed', 'assembly_failed')
+    WHERE status IN ('partial_failed', 'uncertain', 'failed', 'completed', 'assembly_failed', 'project_data_failed')
     ORDER BY updated_at ASC, id ASC
     LIMIT ?
   `).all(Math.max(1, Number(limit) || 100));
@@ -539,21 +539,21 @@ function claimVideoResultRetry({ userId, requestId, projectId, clipIndex }) {
       generationId: project.generationId,
       operation: "retry_result",
       status: "committed",
-      creditCost: 0,
-      creditEventId: null,
-      clipIndex: clip.index,
-    });
-    updateClip(clip.id, {
+     creditCost: 0,
+     creditEventId: null,
+     clipIndex: clip.index,
+   });
+   updateClip(clip.id, {
+     status: "processing_result",
+     resultProcessingFailureCount: 0,
+     lastResultProcessingError: "",
+     error: "",
+   });
+   updateProject(project.id, {
       status: "processing_result",
-      resultProcessingFailureCount: 0,
-      lastResultProcessingError: "",
-      error: "",
-    });
-    updateProject(project.id, {
-      status: "running",
-      error: "",
-    });
-    return {
+     error: "",
+   });
+   return {
       reused: false,
       project: getProject(projectId, { ownerUserId: userId }),
       user: findUserById(userId),
@@ -614,7 +614,7 @@ function claimAssemblyStart(projectId) {
     const result = db.prepare(`
       UPDATE video_projects
       SET status = 'assembling', assembly_attempt = assembly_attempt + 1, error = '', updated_at = ?
-      WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'partial_failed')
+      WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'processing_result', 'partial_failed')
     `).run(nowIso(), Number(projectId));
     return {
       shouldRun: result.changes === 1,
