@@ -24,7 +24,7 @@ const {
 const { createD2Provider } = require("./providers/d2-provider");
 const { createG2Provider } = require("./providers/g2-provider");
 const { createAgnesKeyPool } = require("./agnes-key-pool");
-const { downloadProviderMedia } = require("./video-remote");
+const { downloadProviderMedia, downloadProviderMediaToFile } = require("./video-remote");
 const { extractStableLastFrame, withVideoTempDir, defaultExecutor } = require("./video-frame-extractor");
 const { assembleVideoClips } = require("./video-assembler");
 const {
@@ -52,15 +52,20 @@ const ACTIVE_PROJECT_STATUSES = new Set([
   "preparing",
   "queued",
   "running",
+  "processing_result",
+  "result_processing_failed",
   "partial_failed",
   "uncertain",
   "waiting_configuration",
+  "project_data_failed",
   "assembling",
   "assembly_failed",
 ]);
-const TERMINAL_PROJECT_STATUSES = new Set(["completed", "failed", "cancelled", "assembly_failed"]);
+const TERMINAL_PROJECT_STATUSES = new Set(["completed", "failed", "cancelled", "assembly_failed", "result_processing_failed", "project_data_failed"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const POLL_BACKOFF_STEPS_MS = [2000, 4000, 8000, 15000, 30000];
+const RESULT_PROCESSING_BACKOFF_STEPS_MS = [2000, 4000, 8000, 15000, 30000, 60000];
+const MAX_RESULT_PROCESSING_RETRIES = 6;
 
 function toSafeIdList(value, max = 9) {
   const source = Array.isArray(value) ? value : [];
@@ -256,6 +261,9 @@ function createVideoProjectService(options = {}) {
       retryCount: clip.retryCount,
       submissionAttempt: clip.submissionAttempt,
       lastSuccessfulPollAt: clip.lastSuccessfulPollAt,
+      resultProcessingFailureCount: clip.resultProcessingFailureCount,
+      lastResultProcessingError: clip.lastResultProcessingError,
+      lastResultProcessingAt: clip.lastResultProcessingAt,
       error: clip.error,
     };
   }
@@ -446,7 +454,7 @@ function createVideoProjectService(options = {}) {
     return downloadProviderMedia(url, {
       allowedHosts: provider.getAllowedHosts ? provider.getAllowedHosts() : [],
       maxBytes,
-      timeoutMs: Number(appConfig.video?.remoteTimeoutMs || 30000),
+      timeoutMs: Number(appConfig.video?.remoteTimeoutMs || 120000),
       fetchImpl,
       expected,
     });
@@ -544,9 +552,27 @@ function createVideoProjectService(options = {}) {
       const savedAssets = [];
       try {
         const videoPath = path.join(tempDir, `clip-${clip.index}.mp4`);
-        const video = await downloadMedia(result.videoUrl, result, "video", provider);
-        await fsp.writeFile(videoPath, video.buffer);
-        const videoAsset = await saveAssetFile(project, `clip-${clip.index}`, "video/mp4", videoPath, video.buffer.length);
+        let videoSizeBytes = 0;
+        if (Buffer.isBuffer(result.videoBuffer)) {
+          if (result.videoBuffer.length > videoClipMaxBytes) {
+            const error = new Error("供应商媒体超过单 Clip 大小限制");
+            error.code = "PAYLOAD_TOO_LARGE";
+            throw error;
+          }
+          await fsp.writeFile(videoPath, result.videoBuffer);
+          videoSizeBytes = result.videoBuffer.length;
+        } else {
+          const downloadResult = await downloadProviderMediaToFile(result.videoUrl, {
+            targetPath: videoPath,
+            allowedHosts: provider.getAllowedHosts ? provider.getAllowedHosts() : [],
+            maxBytes: videoClipMaxBytes,
+            timeoutMs: Number(appConfig.video?.remoteTimeoutMs || 120000),
+            fetchImpl,
+            expected: "video",
+          });
+          videoSizeBytes = downloadResult.sizeBytes;
+        }
+        const videoAsset = await saveAssetFile(project, `clip-${clip.index}`, "video/mp4", videoPath, videoSizeBytes);
         savedAssets.push(videoAsset);
 
         // The final clip has no downstream dependency. Its continuity frame is
@@ -559,7 +585,7 @@ function createVideoProjectService(options = {}) {
               const continuityFrame = await saveAsset(project, `continuity-frame-${clip.index}`, frame.contentType || "image/jpeg", frame.buffer);
               savedAssets.push(continuityFrame);
               return {
-                outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: video.buffer.length },
+                outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes },
                 continuityFrame: { asset: continuityFrame, mimeType: frame.contentType || "image/jpeg", sizeBytes: frame.buffer.length },
               };
             } catch (error) {
@@ -571,14 +597,25 @@ function createVideoProjectService(options = {}) {
             }
           }
           return {
-            outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: video.buffer.length },
+            outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes },
             continuityFrame: {},
           };
         }
 
         let frame;
         if (result.nativeLastFrameUrl || result.frameBuffer) {
-          frame = await downloadMedia(result.nativeLastFrameUrl, result, "image", provider);
+          try {
+            frame = await downloadMedia(result.nativeLastFrameUrl, result, "image", provider);
+          } catch (nativeFrameError) {
+            log.warn?.("[video-project] native last frame download failed, falling back to FFmpeg", {
+              projectId: project.id,
+              clipIndex: clip.index,
+              error: nativeFrameError.message,
+            });
+            const framePath = path.join(tempDir, `continuity-${clip.index}.jpg`);
+            await ffmpegSemaphore.run(() => extractStableLastFrame({ videoPath, outputPath: framePath, appConfig, executor }));
+            frame = { buffer: await fsp.readFile(framePath), contentType: "image/jpeg", url: "" };
+          }
         } else {
           const framePath = path.join(tempDir, `continuity-${clip.index}.jpg`);
           await ffmpegSemaphore.run(() => extractStableLastFrame({ videoPath, outputPath: framePath, appConfig, executor }));
@@ -587,7 +624,7 @@ function createVideoProjectService(options = {}) {
         const continuityFrame = await saveAsset(project, `continuity-frame-${clip.index}`, frame.contentType || "image/jpeg", frame.buffer);
         savedAssets.push(continuityFrame);
         return {
-          outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: video.buffer.length },
+          outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes },
           continuityFrame: { asset: continuityFrame, mimeType: frame.contentType || "image/jpeg", sizeBytes: frame.buffer.length },
         };
       } catch (error) {
@@ -602,9 +639,13 @@ function createVideoProjectService(options = {}) {
       const clipPaths = [];
       for (const clip of project.clips || []) {
         if (!clip.outputVideo?.asset) throw new Error(`Clip ${clip.index} 缺少视频资产`);
-        const buffer = await storage.readBuffer(clip.outputVideo.asset);
         const clipPath = path.join(tempDir, `clip-${clip.index}.mp4`);
-        await fsp.writeFile(clipPath, buffer);
+        if (typeof storage.copyToFile === "function") {
+          await storage.copyToFile(clip.outputVideo.asset, clipPath);
+        } else {
+          const buffer = await storage.readBuffer(clip.outputVideo.asset);
+          await fsp.writeFile(clipPath, buffer);
+        }
         clipPaths.push(clipPath);
       }
       const outputPath = path.join(tempDir, "final.mp4");
@@ -663,8 +704,8 @@ function createVideoProjectService(options = {}) {
   function nextProjectClip(project) {
     for (const clip of project.clips || []) {
       if (clipIsReady(project, clip)) return getProject(project.id);
-      if (["submitting", "running"].includes(clip.status)) return project;
-      if (["failed", "uncertain_submission", "cancelled", "waiting_configuration"].includes(clip.status)) return project;
+      if (["submitting", "running", "processing_result"].includes(clip.status)) return project;
+      if (["failed", "uncertain_submission", "cancelled", "waiting_configuration", "result_processing_failed"].includes(clip.status)) return project;
     }
     return project;
   }
@@ -681,6 +722,15 @@ function createVideoProjectService(options = {}) {
     const delay = failureCount > 0
       ? Math.min(POLL_BACKOFF_STEPS_MS[Math.min(failureCount - 1, POLL_BACKOFF_STEPS_MS.length - 1)], Number(appConfig.video?.pollMaxBackoffMs || 30000))
       : base;
+    nextPollAt.set(clip.id, now() + delay);
+  }
+
+  function scheduleResultProcessingRetry(clip, failureCount) {
+    const maxBackoff = Number(appConfig.video?.pollMaxBackoffMs ?? appConfig.video?.resultProcessingMaxBackoffMs ?? 60000);
+    const delay = Math.min(
+      RESULT_PROCESSING_BACKOFF_STEPS_MS[Math.min(failureCount - 1, RESULT_PROCESSING_BACKOFF_STEPS_MS.length - 1)],
+      maxBackoff,
+    );
     nextPollAt.set(clip.id, now() + delay);
   }
 
@@ -839,19 +889,114 @@ function createVideoProjectService(options = {}) {
       return;
     }
 
+    const processingClip = updateClip(clip.id, {
+      status: "processing_result",
+      lastSuccessfulPollAt: successAt,
+      pollFailureCount: 0,
+      error: "",
+    });
+    await processClipResult(project, processingClip || clip, provider, result);
+  }
+
+  async function processClipResult(project, clip, provider, initialResult = null) {
+    let result = initialResult;
+    let pollLease = null;
+    let releaseResult = {};
+    if (!result || (!result.videoUrl && !result.videoBuffer)) {
+      if (project.model === "g2" && clip.providerKeyRef && typeof keyPool.hasKeyRef === "function" && keyPool.hasKeyRef(clip.providerKeyRef)) {
+        pollLease = keyPool.acquireByRef(clip.providerKeyRef, { rateLimit: false });
+      }
+      try {
+        result = await provider.getTaskStatus({
+          taskId: clip.providerTaskId,
+          apiKey: pollLease?.key,
+          signal: undefined,
+        });
+      } catch (error) {
+        releaseResult = { error: true, statusCode: error.statusCode };
+        const failureCount = Number(clip.resultProcessingFailureCount || 0) + 1;
+        const errMsg = error.message || "重新获取供应商生成结果失败";
+        if (failureCount >= MAX_RESULT_PROCESSING_RETRIES) {
+          updateClip(clip.id, {
+            status: "result_processing_failed",
+            resultProcessingFailureCount: failureCount,
+            lastResultProcessingError: errMsg,
+            lastResultProcessingAt: new Date(now()).toISOString(),
+            error: "视频模型已生成完成，但生成结果暂未保存成功。",
+          });
+          updateProject(project.id, {
+            status: "result_processing_failed",
+            error: "视频模型已生成完成，但生成结果暂未保存成功。",
+          });
+          updateGenerationSnapshot(getProject(project.id));
+        } else {
+          updateClip(clip.id, {
+            status: "processing_result",
+            resultProcessingFailureCount: failureCount,
+            lastResultProcessingError: errMsg,
+            lastResultProcessingAt: new Date(now()).toISOString(),
+            error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
+          });
+          scheduleResultProcessingRetry(clip, failureCount);
+        }
+        return;
+      } finally {
+        if (pollLease) keyPool.release(pollLease.slot, releaseResult);
+      }
+    }
+
+    if (String(result?.status || "").toLowerCase() === "failed") {
+      updateClip(clip.id, { pollFailureCount: 0 });
+      await failClip(project, clip, result.error || "供应商生成失败");
+      return;
+    }
+
     let persisted;
     try {
       persisted = await persistClipResult(project, clip, result, provider);
     } catch (error) {
-      await failClip(project, clip, error.message || "视频资产保存失败");
+      log.warn?.("[video-project] result processing attempt failed", {
+        projectId: project.id,
+        clipIndex: clip.index,
+        error: error.message,
+      });
+      const failureCount = Number(clip.resultProcessingFailureCount || 0) + 1;
+      const errMsg = error.message || "生成结果保存失败";
+      if (failureCount >= MAX_RESULT_PROCESSING_RETRIES) {
+        updateClip(clip.id, {
+          status: "result_processing_failed",
+          resultProcessingFailureCount: failureCount,
+          lastResultProcessingError: errMsg,
+          lastResultProcessingAt: new Date(now()).toISOString(),
+          error: "视频模型已生成完成，但生成结果暂未保存成功。",
+        });
+        const failedProject = updateProject(project.id, {
+          status: "result_processing_failed",
+          error: "视频模型已生成完成，但生成结果暂未保存成功。",
+        });
+        updateGenerationSnapshot(failedProject);
+        return;
+      }
+
+      updateClip(clip.id, {
+        status: "processing_result",
+        resultProcessingFailureCount: failureCount,
+        lastResultProcessingError: errMsg,
+        lastResultProcessingAt: new Date(now()).toISOString(),
+        error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
+      });
+      scheduleResultProcessingRetry(clip, failureCount);
       return;
     }
+
     const updatedClip = updateClip(clip.id, {
       status: "completed",
       ...persisted,
       providerTaskId: "",
-      lastSuccessfulPollAt: successAt,
+      lastSuccessfulPollAt: new Date(now()).toISOString(),
       pollFailureCount: 0,
+      resultProcessingFailureCount: 0,
+      lastResultProcessingError: "",
       error: "",
     });
     nextPollAt.delete(clip.id);
@@ -985,8 +1130,14 @@ function createVideoProjectService(options = {}) {
     }
 
     const project = nextProjectClip(getProject(projectId));
-    const active = (project.clips || []).find((candidate) => ["submitting", "running"].includes(candidate.status));
+    const active = (project.clips || []).find((candidate) => ["submitting", "running", "processing_result"].includes(candidate.status));
     if (active) {
+      if (active.status === "processing_result") {
+        if (Number(nextPollAt.get(active.id) || 0) <= now()) {
+          await processClipResult(project, active, getProvider(project), null);
+        }
+        return;
+      }
       await pollRunningClip(project, active, getProvider(project));
       return;
     }
@@ -1006,8 +1157,6 @@ function createVideoProjectService(options = {}) {
         "VIDEO_PROVIDER_NOT_CONFIGURED",
         "VIDEO_PUBLIC_BASE_URL_REQUIRED",
         "VIDEO_ASSET_SIGNING_REQUIRED",
-        "VIDEO_INPUT_SNAPSHOT_UNAVAILABLE",
-        "VIDEO_CONTINUITY_FRAME_REQUIRED",
       ]);
       if (configurationCodes.has(error.code)) {
         if (fresh.model === "d2") d2WaitingConfiguration.add(fresh.id);
@@ -1015,6 +1164,18 @@ function createVideoProjectService(options = {}) {
         const latestClip = latest?.clips.find((candidate) => candidate.id === queued.id);
         if (latestClip?.status === "submitting") updateClip(queued.id, { status: "queued", providerKeyRef: "", error: error.message });
         updateProject(project.id, { status: "waiting_configuration", error: error.message });
+        return;
+      }
+      if (error.code === "VIDEO_INPUT_SNAPSHOT_UNAVAILABLE") {
+        updateClip(queued.id, { status: "result_processing_failed", error: "视频项目参考素材不可用。" });
+        updateProject(project.id, { status: "project_data_failed", error: "视频项目参考素材不可用。" });
+        updateGenerationSnapshot(getProject(project.id));
+        return;
+      }
+      if (error.code === "VIDEO_CONTINUITY_FRAME_REQUIRED") {
+        updateClip(queued.id, { status: "result_processing_failed", error: error.message || "连续性画面准备失败" });
+        updateProject(project.id, { status: "result_processing_failed", error: error.message || "连续性画面准备失败" });
+        updateGenerationSnapshot(getProject(project.id));
         return;
       }
       if (Number(error.statusCode) === 429) {
@@ -1159,6 +1320,18 @@ function createVideoProjectService(options = {}) {
     if (!requestId) throw createProjectError("缺少视频项目 requestId", "VIDEO_REQUEST_ID_REQUIRED");
     const existing = findProjectByOwnerAndRequestId(input.ownerUserId, requestId);
     if (existing) {
+      const match = (input.brandId == null || Number(existing.brandId) === Number(input.brandId)) &&
+        (input.trendId == null || Number(existing.trendId) === Number(input.trendId)) &&
+        (input.ideaIndex == null || Number(existing.ideaIndex) === Number(input.ideaIndex)) &&
+        (input.videoScriptGenerationId == null || Number(existing.scriptGenerationId) === Number(input.videoScriptGenerationId)) &&
+        (input.model == null || String(existing.model || "").toLowerCase() === String(input.model).toLowerCase()) &&
+        (input.mode == null || String(existing.mode || "").toLowerCase() === String(input.mode).toLowerCase()) &&
+        (input.resolution == null || String(existing.resolution || "") === String(normalizeResolution(input.model, input.resolution))) &&
+        (input.aspectRatio == null || String(existing.aspectRatio || "") === String(resolveVideoAspectRatio(input.aspectRatio, "9:16"))) &&
+        (input.totalDurationSec == null || Number(existing.totalDurationSec) === Number(normalizeTotalDuration(input.totalDurationSec, 30)));
+      if (!match) {
+        throw createProjectError("视频项目请求已被使用但参数不一致", "VIDEO_IDEMPOTENCY_CONFLICT");
+      }
       const existingProject = getProject(existing.id);
       return {
         project: serializeProject(existingProject),
@@ -1380,6 +1553,9 @@ function createVideoProjectService(options = {}) {
     if (!project) throw createProjectError("视频项目不存在", "VIDEO_PROJECT_NOT_FOUND");
     const clip = project.clips.find((candidate) => candidate.index === Number(clipIndex));
     if (!clip) throw createProjectError("视频镜头不存在", "VIDEO_CLIP_NOT_FOUND");
+    if (["result_processing_failed", "processing_result"].includes(clip.status)) {
+      throw createProjectError("该镜头模型已生成成功，请使用「重新处理结果」操作，无需重新扣费生成。", "VIDEO_CLIP_RETRY_NOT_ALLOWED");
+    }
     const result = retryProjectWithBilling({
       projectId,
       ownerUserId,
@@ -1416,8 +1592,50 @@ function createVideoProjectService(options = {}) {
     return serializeProject(getProject(projectId, { ownerUserId }));
   }
 
-  async function serveAsset(projectId, ownerUserId, kind, position, res) {
+  async function retryClipResult(projectId, ownerUserId, clipIndex, requestId) {
     const project = getProject(projectId, { ownerUserId });
+    if (!project) throw createProjectError("视频项目不存在", "VIDEO_PROJECT_NOT_FOUND");
+    const clip = project.clips.find((candidate) => candidate.index === Number(clipIndex));
+    if (!clip) throw createProjectError("视频镜头不存在", "VIDEO_CLIP_NOT_FOUND");
+    if (clip.status === "completed") {
+      return {
+        project: serializeProject(project),
+        user: findUserById(ownerUserId),
+      };
+    }
+    if (!["result_processing_failed", "processing_result"].includes(clip.status)) {
+      throw createProjectError("当前镜头状态不支持重新处理结果", "VIDEO_CLIP_RETRY_RESULT_NOT_ALLOWED");
+    }
+    if (!clip.providerTaskId) {
+      throw createProjectError("缺少供应商任务标识，无法重新处理结果", "VIDEO_CLIP_RETRY_RESULT_NOT_ALLOWED");
+    }
+
+    const resetClip = updateClip(clip.id, {
+      status: "processing_result",
+      resultProcessingFailureCount: 0,
+      lastResultProcessingError: "",
+      error: "",
+    });
+    updateProject(project.id, {
+      status: "running",
+      error: "",
+    });
+    nextPollAt.delete(clip.id);
+
+    try {
+      await processClipResult(getProject(projectId), resetClip || clip, getProvider(project), null);
+    } catch (error) {
+      log.warn?.("[video-project] retry-result immediate processing failed", { projectId, clipIndex, error: error.message });
+    }
+
+    return {
+      project: serializeProject(getProject(projectId, { ownerUserId })),
+      user: findUserById(ownerUserId),
+    };
+  }
+
+  async function serveAsset(projectId, ownerUserId, kind, position, res, req = null) {
+    const project = getProject(projectId, ownerUserId ? { ownerUserId } : {});
     if (!project) return false;
     let asset = null;
     let contentType = "video/mp4";
@@ -1441,6 +1659,85 @@ function createVideoProjectService(options = {}) {
       res.end();
       return true;
     }
+
+    const isVideo = contentType.startsWith("video/");
+    if (isVideo && typeof storage.createReadStream === "function" && typeof storage.stat === "function") {
+      let stat;
+      try {
+        stat = await storage.stat(asset);
+      } catch (error) {
+        if (error?.code === "ENOENT") return false;
+        throw error;
+      }
+      const totalSize = Number(stat.size);
+      const rangeHeader = req?.headers?.range;
+
+      if (!rangeHeader) {
+        res.writeHead(200, {
+          "Content-Type": contentType,
+          "Cache-Control": "private, max-age=300",
+          "Content-Length": totalSize,
+          "Accept-Ranges": "bytes",
+        });
+        const stream = storage.createReadStream(asset);
+        stream.pipe(res);
+        return true;
+      }
+
+      const match = String(rangeHeader).trim().match(/^bytes=(\d*)-(\d*)$/);
+      if (!match) {
+        res.writeHead(416, {
+          "Content-Range": `bytes */${totalSize}`,
+          "Accept-Ranges": "bytes",
+        });
+        res.end();
+        return true;
+      }
+
+      const [, rawStart, rawEnd] = match;
+      let start;
+      let end;
+      if (rawStart && rawEnd) {
+        start = Number(rawStart);
+        end = Number(rawEnd);
+      } else if (rawStart) {
+        start = Number(rawStart);
+        end = totalSize - 1;
+      } else if (rawEnd) {
+        start = Math.max(0, totalSize - Number(rawEnd));
+        end = totalSize - 1;
+      } else {
+        res.writeHead(416, {
+          "Content-Range": `bytes */${totalSize}`,
+          "Accept-Ranges": "bytes",
+        });
+        res.end();
+        return true;
+      }
+
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= totalSize || start < 0) {
+        res.writeHead(416, {
+          "Content-Range": `bytes */${totalSize}`,
+          "Accept-Ranges": "bytes",
+        });
+        res.end();
+        return true;
+      }
+
+      end = Math.min(end, totalSize - 1);
+      const chunkSize = end - start + 1;
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunkSize,
+        "Content-Type": contentType,
+        "Cache-Control": "private, max-age=300",
+      });
+      const stream = storage.createReadStream(asset, { start, end });
+      stream.pipe(res);
+      return true;
+    }
+
     const buffer = await storage.readBuffer(asset);
     res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "private, max-age=300", "Content-Length": buffer.length });
     res.end(buffer);
@@ -1465,6 +1762,7 @@ function createVideoProjectService(options = {}) {
     listActiveProjects,
     startProject,
     retryClip,
+    retryClipResult,
     retryAssembly,
     serveAsset,
     serializeProject,

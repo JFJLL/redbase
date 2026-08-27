@@ -25,8 +25,10 @@ function normalizeReferenceAssetIds(value, ownerUserId, max) {
 function respondVideoError(res, error, badRequest) {
   const notFoundCodes = new Set(["VIDEO_PROJECT_NOT_FOUND", "VIDEO_CLIP_NOT_FOUND"]);
   const conflictCodes = new Set([
+    "VIDEO_IDEMPOTENCY_CONFLICT",
     "VIDEO_CLIP_RETRY_NOT_ALLOWED",
     "VIDEO_CLIP_RETRY_NOT_NEEDED",
+    "VIDEO_CLIP_RETRY_RESULT_NOT_ALLOWED",
     "VIDEO_ASSEMBLY_RETRY_NOT_ALLOWED",
     "VIDEO_SCRIPT_GENERATION_REQUIRED",
     "VIDEO_SCRIPT_GENERATION_INVALID",
@@ -195,6 +197,24 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
     return true;
   }
 
+  const retryResultMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/clips\/(\d+)\/retry-result$/);
+  if (req.method === "POST" && retryResultMatch) {
+    const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
+    if (!user) return true;
+    try {
+      const payload = await collectBody(req);
+      const requestId = String(payload?.requestId || "").trim();
+      const result = await service.retryClipResult(Number(retryResultMatch[1]), user.id, Number(retryResultMatch[2]), requestId);
+      json(res, 200, {
+        project: result?.project || result,
+        user: sanitizeUser(result?.user || user),
+      });
+    } catch (error) {
+      respondVideoError(res, error, badRequest);
+    }
+    return true;
+  }
+
   const assemblyRetryMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/retry-assembly$/);
   if (req.method === "POST" && assemblyRetryMatch) {
     const user = requireRouteUser(req, res, { getSessionToken, buildApiUserLog, unauthorized });
@@ -221,7 +241,7 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
     }
     // The HMAC-signed URL is the bearer credential here. Provider callbacks
     // cannot carry a RedBase session cookie when fetching continuity frames.
-    const served = await service.serveAsset(Number(assetMatch[1]), null, assetMatch[2], assetMatch[3], res);
+    const served = await service.serveAsset(Number(assetMatch[1]), null, assetMatch[2], assetMatch[3], res, req);
     if (!served && !res.writableEnded) notFound(res);
     return true;
   }

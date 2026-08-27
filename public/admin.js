@@ -554,6 +554,32 @@ function renderPayloadContent(item, payload) {
     `;
   }
 
+  if (item.type === "videoScript") {
+    return `
+      <section class="detail-block">
+        <h3>视频脚本内容</h3>
+        <p><strong>视频标题：</strong>${escapeHtml(payload.videoScript?.title || item.cardTitle || "")}</p>
+        <p><strong>创意概念：</strong>${escapeHtml(payload.videoScript?.creativeConcept || "")}</p>
+        <p><strong>时长：</strong>${escapeHtml(payload.videoDuration || payload.videoScript?.totalDurationSec || "")} 秒</p>
+        <p><strong>比例：</strong>${escapeHtml(payload.videoAspectRatio || payload.aspectRatio || "9:16")}</p>
+      </section>
+    `;
+  }
+
+  if (item.type === "videoProject") {
+    return `
+      <section class="detail-block">
+        <h3>AI 视频项目</h3>
+        <p><strong>模型：</strong>${escapeHtml(payload.videoModel || "")}</p>
+        <p><strong>生成方式：</strong>${escapeHtml(payload.videoMode || "")}</p>
+        <p><strong>状态：</strong>${escapeHtml(payload.videoStatus || payload.status || "")}</p>
+        <p><strong>时长：</strong>${escapeHtml(payload.videoDuration || "")} 秒</p>
+        <p><strong>比例：</strong>${escapeHtml(payload.videoAspectRatio || "")}</p>
+        ${payload.finalVideoUrl ? `<p><strong>最终成片：</strong><a href="${escapeHtml(payload.finalVideoUrl)}" target="_blank" rel="noopener noreferrer">查看视频</a></p>` : ""}
+      </section>
+    `;
+  }
+
   const slides = Array.isArray(payload.slides) ? payload.slides : [];
   return `
     <section class="detail-block">

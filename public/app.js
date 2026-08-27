@@ -134,7 +134,39 @@ const HISTORY_TYPE_LABELS = new Map([
   ["xhsCarousel", "小红书组图"],
   ["styleImage", "一键风格化"],
   ["imageEdit", "历史改图"],
+  ["videoScript", "视频脚本"],
+  ["videoProject", "AI 视频"],
 ]);
+
+const VIDEO_PROJECT_STATUS_LABELS = Object.freeze({
+  queued: "排队中",
+  running: "生成中",
+  processing_result: "正在处理生成结果",
+  result_processing_failed: "结果处理失败",
+  assembling: "正在拼接成片",
+  assembly_failed: "成片拼接失败",
+  completed: "已完成",
+  failed: "生成失败",
+  partial_failed: "部分镜头失败",
+  uncertain: "待确认",
+  waiting_configuration: "等待生成通道配置",
+  project_data_failed: "素材不可用",
+  cancelled: "已取消",
+});
+
+const VIDEO_CLIP_STATUS_LABELS = Object.freeze({
+  waiting_dependency: "等待前置镜头",
+  queued: "排队中",
+  submitting: "提交中",
+  running: "生成中",
+  processing_result: "处理生成结果中",
+  result_processing_failed: "生成结果暂未保存成功",
+  completed: "已完成",
+  failed: "生成失败",
+  uncertain_submission: "待确认",
+  waiting_configuration: "等待生成通道配置",
+  cancelled: "已取消",
+});
 
 async function init() {
   bindLandingEntry();
@@ -3687,6 +3719,18 @@ function renderGenerationHistory() {
           <div class="history-generate-copy"><strong>发布标题：</strong>${escapeHtml(getDisplayXhsPublishTitle(item, payload))}</div>
           <div class="history-generate-copy"><strong>发布文案：</strong>${escapeHtml(getDisplayXhsPublishCaption(item, payload))}</div>
         `;
+      } else if (item.type === "videoScript") {
+        contentHtml = `
+          <div class="history-generate-copy"><strong>视频主题：</strong>${escapeHtml(item.summary || payload.videoScript?.title || "")}</div>
+          <div class="history-generate-copy"><strong>创意概念：</strong>${escapeHtml(payload.videoScript?.creativeConcept || "")}</div>
+        `;
+      } else if (item.type === "videoProject") {
+        const videoStatus = payload.videoStatus || payload.status || "queued";
+        const statusLabel = VIDEO_PROJECT_STATUS_LABELS[videoStatus] || "已提交";
+        contentHtml = `
+          <div class="history-generate-copy"><strong>视频状态：</strong><span class="brand-tag">${escapeHtml(statusLabel)}</span></div>
+          <div class="history-generate-copy"><strong>创意概念：</strong>${escapeHtml(payload.videoScript?.creativeConcept || item.summary || "")}</div>
+        `;
       } else {
         contentHtml = `
           <div class="history-generate-copy"><strong>发布标题：</strong>${escapeHtml(payload.publishTitle || "")}</div>
@@ -3719,6 +3763,7 @@ function renderGenerationHistory() {
               <div class="history-generate-meta">
                 <span class="brand-tag">${escapeHtml(item.channelLabel)}</span>
                 <span class="brand-tag">${escapeHtml(HISTORY_TYPE_LABELS.get(item.type) || item.type)}</span>
+                ${item.type === "videoProject" ? `<span class="brand-tag">${escapeHtml(VIDEO_PROJECT_STATUS_LABELS[payload.videoStatus || payload.status] || "已提交")}</span>` : ""}
                 ${aspectRatio ? `<span class="brand-tag history-aspect-ratio"><i class="aspect-shape" style="${getAspectRatioShapeStyle(aspectRatio)}"></i>${escapeHtml(aspectRatio)}</span>` : ""}
                 <span class="panel-subtitle">${escapeHtml(new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false }))}</span>
                 ${editHistory.length ? `<span class="brand-tag">已改图 ${editHistory.length} 次</span>` : ""}

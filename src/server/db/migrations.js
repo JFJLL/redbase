@@ -245,6 +245,39 @@ const VERSIONED_MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 7,
+    name: "video-result-persistence-and-semantic-idempotency",
+    apply() {
+      const clipColumns = db.prepare("PRAGMA table_info(video_clips)").all().map((row) => row.name);
+      const scriptColumns = db.prepare("PRAGMA table_info(video_script_requests)").all().map((row) => row.name);
+      const billingColumns = db.prepare("PRAGMA table_info(video_project_billing_requests)").all().map((row) => row.name);
+
+      const addClipColumn = (name, definition) => {
+        if (!clipColumns.includes(name)) db.exec(`ALTER TABLE video_clips ADD COLUMN ${name} ${definition}`);
+      };
+      const addScriptColumn = (name, definition) => {
+        if (!scriptColumns.includes(name)) db.exec(`ALTER TABLE video_script_requests ADD COLUMN ${name} ${definition}`);
+      };
+      const addBillingColumn = (name, definition) => {
+        if (!billingColumns.includes(name)) db.exec(`ALTER TABLE video_project_billing_requests ADD COLUMN ${name} ${definition}`);
+      };
+
+      addClipColumn("result_processing_failure_count", "INTEGER NOT NULL DEFAULT 0");
+      addClipColumn("last_result_processing_error", "TEXT NOT NULL DEFAULT ''");
+      addClipColumn("last_result_processing_at", "TEXT NOT NULL DEFAULT ''");
+
+      addScriptColumn("input_signature", "TEXT NOT NULL DEFAULT ''");
+
+      addBillingColumn("input_signature", "TEXT NOT NULL DEFAULT ''");
+      addBillingColumn("clip_index", "INTEGER");
+
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_video_script_requests_signature
+          ON video_script_requests(user_id, input_signature);
+      `);
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

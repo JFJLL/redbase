@@ -22,7 +22,8 @@ const CLIP_COLUMNS = `
   reference_asset_ids_json, continuity_state_json, output_video_json,
   continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
   reservation_credit_event_id, submission_attempt, last_successful_poll_at,
-  poll_failure_count, error, created_at, updated_at
+  poll_failure_count, error, result_processing_failure_count,
+  last_result_processing_error, last_result_processing_at, created_at, updated_at
 `;
 
 function parseJsonObject(value) {
@@ -62,6 +63,9 @@ function mapClipRow(row) {
     lastSuccessfulPollAt: String(row.last_successful_poll_at || ""),
     pollFailureCount: Number(row.poll_failure_count || 0),
     error: String(row.error || ""),
+    resultProcessingFailureCount: Number(row.result_processing_failure_count || 0),
+    lastResultProcessingError: String(row.last_result_processing_error || ""),
+    lastResultProcessingAt: String(row.last_result_processing_at || ""),
     createdAt: String(row.created_at || ""),
     updatedAt: String(row.updated_at || ""),
   };
@@ -210,7 +214,7 @@ function listProjectsForRefundReconciliation({ limit = 100 } = {}) {
 
 const BILLING_COLUMNS = `
   id, request_id, user_id, project_id, generation_id, operation, status,
-  credit_cost, credit_event_id, error, created_at, updated_at
+  credit_cost, credit_event_id, error, input_signature, clip_index, created_at, updated_at
 `;
 
 function mapBillingRow(row) {
@@ -226,6 +230,8 @@ function mapBillingRow(row) {
     creditCost: Number(row.credit_cost || 0),
     creditEventId: row.credit_event_id == null ? null : Number(row.credit_event_id),
     error: String(row.error || ""),
+    inputSignature: String(row.input_signature || ""),
+    clipIndex: row.clip_index == null ? null : Number(row.clip_index),
     createdAt: String(row.created_at || ""),
     updatedAt: String(row.updated_at || ""),
   };
@@ -247,12 +253,13 @@ function insertVideoBillingRequest(input) {
   db.prepare(`
     INSERT INTO video_project_billing_requests (
       id, request_id, user_id, project_id, generation_id, operation, status,
-      credit_cost, credit_event_id, error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      credit_cost, credit_event_id, error, input_signature, clip_index, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
     Number(id), String(input.requestId || ""), Number(input.userId), Number(input.projectId),
     Number(input.generationId), String(input.operation || "create"), String(input.status || "reserved"),
-    Number(input.creditCost || 0), input.creditEventId ?? null, String(input.error || ""), now, now,
+    Number(input.creditCost || 0), input.creditEventId ?? null, String(input.error || ""),
+    String(input.inputSignature || ""), input.clipIndex == null ? null : Number(input.clipIndex), now, now,
   );
   return mapBillingRow(db.prepare(`SELECT ${BILLING_COLUMNS} FROM video_project_billing_requests WHERE id = ?`).get(Number(id)));
 }
@@ -263,9 +270,9 @@ function updateVideoBillingRequest(id, patch = {}) {
   const next = { ...current, ...patch };
   db.prepare(`
     UPDATE video_project_billing_requests
-    SET status = ?, credit_cost = ?, credit_event_id = ?, error = ?, updated_at = ?
+    SET status = ?, credit_cost = ?, credit_event_id = ?, error = ?, input_signature = ?, clip_index = ?, updated_at = ?
     WHERE id = ?
-  `).run(String(next.status), Number(next.creditCost || 0), next.creditEventId ?? null, String(next.error || ""), nowIso(), Number(id));
+  `).run(String(next.status), Number(next.creditCost || 0), next.creditEventId ?? null, String(next.error || ""), String(next.inputSignature || ""), next.clipIndex == null ? null : Number(next.clipIndex), nowIso(), Number(id));
   return mapBillingRow(db.prepare(`SELECT ${BILLING_COLUMNS} FROM video_project_billing_requests WHERE id = ?`).get(Number(id)));
 }
 
@@ -273,6 +280,21 @@ function createProjectWithBilling({ project, clips, generation, billing, prevent
   return runTransaction(() => {
     const existing = findProjectByOwnerAndRequestId(project.ownerUserId, project.requestId);
     if (existing) {
+      const match = (project.brandId == null || Number(existing.brandId) === Number(project.brandId)) &&
+        (project.trendId == null || Number(existing.trendId) === Number(project.trendId)) &&
+        (project.ideaIndex == null || Number(existing.ideaIndex) === Number(project.ideaIndex)) &&
+        (project.scriptGenerationId == null || Number(existing.scriptGenerationId) === Number(project.scriptGenerationId)) &&
+        (project.model == null || String(existing.model || "").toLowerCase() === String(project.model).toLowerCase()) &&
+        (project.mode == null || String(existing.mode || "").toLowerCase() === String(project.mode).toLowerCase()) &&
+        (project.resolution == null || String(existing.resolution || "") === String(project.resolution)) &&
+        (project.aspectRatio == null || String(existing.aspectRatio || "") === String(project.aspectRatio)) &&
+        (project.totalDurationSec == null || Number(existing.totalDurationSec) === Number(project.totalDurationSec));
+
+      if (!match) {
+        const error = new Error("视频项目请求已被使用但参数不一致");
+        error.code = "VIDEO_IDEMPOTENCY_CONFLICT";
+        throw error;
+      }
       const existingProject = getProject(existing.id, { ownerUserId: project.ownerUserId });
       return {
         reused: true,
@@ -353,6 +375,13 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
     }
     const existingReservation = findVideoBillingRequestByOwnerRequestId(ownerUserId, normalizedRequestId);
     if (existingReservation) {
+      if (existingReservation.operation !== "retry" ||
+          Number(existingReservation.projectId) !== Number(projectId) ||
+          (existingReservation.clipIndex != null && Number(existingReservation.clipIndex) !== Number(clipIndex))) {
+        const error = new Error("视频重试请求已被使用但参数不一致");
+        error.code = "VIDEO_IDEMPOTENCY_CONFLICT";
+        throw error;
+      }
       return {
         reused: true,
         project: getProject(existingReservation.projectId, { ownerUserId }),
@@ -415,6 +444,7 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
       status: "reserved",
       creditCost: cost,
       creditEventId: charged.creditEvent.id,
+      clipIndex: target.index,
     });
     if (!reservation) throw new Error("视频重试计费 reservation 创建失败");
     for (const clip of retryableClips) {
@@ -543,11 +573,12 @@ function insertClip(input) {
       reference_asset_ids_json, continuity_state_json, output_video_json,
       continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
       reservation_credit_event_id, submission_attempt, last_successful_poll_at,
-      poll_failure_count, error, created_at, updated_at
+      poll_failure_count, error, result_processing_failure_count,
+      last_result_processing_error, last_result_processing_at, created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).run(
     Number(id), Number(input.projectId), Number(input.clipIndex), Number(input.startSec), Number(input.endSec),
@@ -558,7 +589,8 @@ function insertClip(input) {
     JSON.stringify(input.continuityFrame || {}), Number(input.creditCost || 0), Number(input.attempt || 0),
     Number(input.retryCount || 0), String(input.providerKeyRef || ""), input.reservationCreditEventId ?? null,
     Number(input.submissionAttempt || 0), String(input.lastSuccessfulPollAt || ""), Number(input.pollFailureCount || 0),
-    String(input.error || ""), now, now,
+    String(input.error || ""), Number(input.resultProcessingFailureCount || 0),
+    String(input.lastResultProcessingError || ""), String(input.lastResultProcessingAt || ""), now, now,
   );
   return getClip(id);
 }
@@ -619,7 +651,9 @@ function updateClip(clipId, patch = {}) {
       continuity_mode = ?, reference_asset_ids_json = ?, continuity_state_json = ?,
       output_video_json = ?, continuity_frame_json = ?, credit_cost = ?, attempt = ?,
       retry_count = ?, provider_key_ref = ?, reservation_credit_event_id = ?, submission_attempt = ?,
-      last_successful_poll_at = ?, poll_failure_count = ?, error = ?, updated_at = ?
+      last_successful_poll_at = ?, poll_failure_count = ?, error = ?,
+      result_processing_failure_count = ?, last_result_processing_error = ?,
+      last_result_processing_at = ?, updated_at = ?
     WHERE id = ?
   `).run(
     String(next.status || existing.status), next.dependsOnClipIndex ?? null, String(next.prompt ?? (existing.prompt || "")),
@@ -630,7 +664,11 @@ function updateClip(clipId, patch = {}) {
     Number(next.attempt ?? existing.attempt ?? 0), Number(next.retryCount ?? existing.retryCount ?? 0),
     String(next.providerKeyRef ?? existing.providerKeyRef ?? ""), next.reservationCreditEventId ?? existing.reservationCreditEventId ?? null,
     Number(next.submissionAttempt ?? existing.submissionAttempt ?? 0), String(next.lastSuccessfulPollAt ?? existing.lastSuccessfulPollAt ?? ""),
-    Number(next.pollFailureCount ?? existing.pollFailureCount ?? 0), String(next.error ?? existing.error ?? ""), nowIso(), Number(clipId),
+    Number(next.pollFailureCount ?? existing.pollFailureCount ?? 0), String(next.error ?? existing.error ?? ""),
+    Number(next.resultProcessingFailureCount ?? existing.resultProcessingFailureCount ?? 0),
+    String(next.lastResultProcessingError ?? existing.lastResultProcessingError ?? ""),
+    String(next.lastResultProcessingAt ?? existing.lastResultProcessingAt ?? ""),
+    nowIso(), Number(clipId),
   );
   return getClip(clipId);
 }
