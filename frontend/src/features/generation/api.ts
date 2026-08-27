@@ -789,7 +789,7 @@ export function retryVideoProjectClip(
   clipIndex: number,
   requestId: string,
   signal?: AbortSignal,
-): Promise<{ project: VideoProject }> {
+): Promise<{ project: VideoProject; user?: SessionUser }> {
   return apiFetch(`/api/video-projects/${projectId}/clips/${clipIndex}/retry`, {
     method: "POST",
     body: { requestId },

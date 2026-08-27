@@ -175,7 +175,7 @@ async function confirmDelete() {
     );
     emit("images-loaded", images.value);
     if (cleaned > 0) {
-      message.value = `已删除，并清理 ${cleaned} 处选题中的图片引用。`;
+      message.value = `已删除，并从相关图片/视频创作设置中清理 ${cleaned} 处素材引用。`;
     }
   } catch (error) {
     if (isAbortError(error)) return;

@@ -400,7 +400,7 @@ test("provider native last frame wins and is persisted without an unnecessary FF
   assert.ok([...storage.buffers.values()].some((buffer) => buffer.equals(JPEG_BUFFER)));
 });
 
-test("G2 falls back to FFmpeg for a stable continuity frame", async () => {
+test("G2 falls back to FFmpeg for a stable continuity frame before the final clip", async () => {
   const storage = makeStorage();
   const ffmpegCalls = [];
   const provider = {
@@ -428,13 +428,11 @@ test("G2 falls back to FFmpeg for a stable continuity frame", async () => {
     mode: "text",
     resolution: "720p",
     aspectRatio: "9:16",
-    totalDurationSec: 10,
-    script: makeScript(),
+    totalDurationSec: 15,
+    script: makeScript(15, 2),
   });
-  await service.pump();
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await service.pump();
-  assert.equal(service.getProject(result.project.id, 905).status, "completed");
+  const completed = await settleProject(service, result.project.id, 905);
+  assert.equal(completed.status, "completed");
   assert.ok(ffmpegCalls.some((args) => args.includes("-sseof") && args.includes("-0.300")));
   assert.ok([...storage.buffers.values()].some((buffer) => buffer.equals(JPEG_BUFFER)));
 });

@@ -136,6 +136,55 @@ test("OSS save uploads a Buffer with safe key and forbid-overwrite header", asyn
   assert.equal(JSON.stringify(asset).includes("placeholder"), false);
 });
 
+test("image, clip, and final video limits are independent for local and OSS storage", async () => {
+  const image150 = Buffer.concat([PNG_BUFFER, Buffer.alloc(141)]);
+  const video150 = Buffer.concat([Buffer.alloc(4), Buffer.from("ftyp"), Buffer.alloc(142)]);
+  const localDir = await fsp.mkdtemp(path.join(os.tmpdir(), "redbase-video-size-limits-"));
+  const limits = { imageMaxBytes: 100, videoClipMaxBytes: 300, videoFinalMaxBytes: 800 };
+  const local = createLocalGeneratedAssetStorage({ dataDir: localDir, ...limits, randomId: () => "local-size" });
+  const ossCalls = [];
+  const oss = createAliyunOssGeneratedAssetStorage(ossConfig(), {
+    ...limits,
+    randomId: () => "oss-size",
+    client: {
+      async put(...args) { ossCalls.push({ method: "put", args }); },
+      async putStream(...args) {
+        const chunks = [];
+        for await (const chunk of args[1]) chunks.push(chunk);
+        ossCalls.push({ method: "putStream", key: args[0], bytes: Buffer.concat(chunks).length });
+      },
+    },
+  });
+  try {
+    for (const storage of [local, oss]) {
+      await assert.rejects(
+        storage.save({ ownerUserId: 1, generationId: 2, variant: "image", mimeType: "image/png", buffer: image150 }),
+        (error) => error.code === "PAYLOAD_TOO_LARGE" && error.maxBytes === 100,
+      );
+      const clip = await storage.save({ ownerUserId: 1, generationId: 2, variant: "clip-1", mimeType: "video/mp4", buffer: video150 });
+      const final = await storage.save({ ownerUserId: 1, generationId: 2, variant: "final", mimeType: "video/mp4", buffer: Buffer.concat([video150, Buffer.alloc(350)]) });
+      assert.equal(clip.sizeBytes, 150);
+      assert.equal(final.sizeBytes, 500);
+      await assert.rejects(
+        storage.save({ ownerUserId: 1, generationId: 2, variant: "clip-too-large", mimeType: "video/mp4", buffer: Buffer.concat([video150, Buffer.alloc(151)]) }),
+        (error) => error.code === "PAYLOAD_TOO_LARGE" && error.maxBytes === 300,
+      );
+    }
+
+    const sourcePath = path.join(localDir, "source.mp4");
+    await fsp.writeFile(sourcePath, video150);
+    const localFile = await local.saveFile({ ownerUserId: 1, generationId: 3, variant: "clip-file", mimeType: "video/mp4", filePath: sourcePath });
+    assert.equal(localFile.sizeBytes, 150);
+    assert.deepEqual(await local.readBuffer(localFile), video150);
+    const ossFile = await oss.saveFile({ ownerUserId: 1, generationId: 3, variant: "clip-file", mimeType: "video/mp4", filePath: sourcePath });
+    assert.equal(ossFile.sizeBytes, 150);
+    assert.equal(ossCalls.at(-1).method, "putStream");
+    assert.equal(ossCalls.at(-1).bytes, 150);
+  } finally {
+    await fsp.rm(localDir, { recursive: true, force: true });
+  }
+});
+
 test("OSS upload failure rejects without manufacturing asset metadata", async () => {
   const storage = createAliyunOssGeneratedAssetStorage(ossConfig(), {
     client: { put: async () => { throw Object.assign(new Error("upload unavailable"), { status: 500 }); } },

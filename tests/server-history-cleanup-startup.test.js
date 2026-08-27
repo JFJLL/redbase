@@ -18,6 +18,7 @@ process.env.ALIYUN_OSS_ACCESS_KEY_SECRET = "";
 const { ensureStore } = require("../src/server/store");
 const { insertUser } = require("../src/server/db/repositories/auth-repository");
 const { upsertGeneration, findGenerationById } = require("../src/server/db/repositories/generation-repository");
+const { beginVideoScriptRequest, findVideoScriptRequest } = require("../src/server/db/repositories/video-script-billing-repository");
 const { start } = require("../src/server/index");
 
 // 网络守卫：start() 期间任何出站请求都直接让测试失败。即使本地存在真实
@@ -61,6 +62,23 @@ test("server startup removes expired generation history before listening", async
     credits: 1,
     createdAt: "2020-01-01T00:00:00.000Z",
   });
+  beginVideoScriptRequest({
+    userId: 8801,
+    requestId: "startup-stale-video-script",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    creditCost: 1,
+    createdAt: "2020-01-01T00:00:00.000Z",
+    event: {
+      actionType: "videoScript",
+      actionLabel: "视频脚本生成",
+      channelLabel: "视频脚本",
+      payload: { requestId: "startup-stale-video-script" },
+    },
+  });
   upsertGeneration({
     id: 8801,
     ownerUserId: 8801,
@@ -81,6 +99,7 @@ test("server startup removes expired generation history before listening", async
   const server = await start();
   try {
     assert.equal(findGenerationById(8801), null);
+    assert.equal(findVideoScriptRequest(8801, "startup-stale-video-script").status, "refunded");
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

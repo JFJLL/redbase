@@ -9,14 +9,22 @@ process.env.REDBASE_DB_FILE = ":memory:";
 const { openDatabase, getDbProxy } = require("../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/server/db/schema");
 const { insertUser, findUserById } = require("../src/server/db/repositories/auth-repository");
-const { insertGeneration } = require("../src/server/db/repositories/generation-repository");
+const { insertGeneration, findGenerationById } = require("../src/server/db/repositories/generation-repository");
 const { insertProductImage, markProductImageDeleted } = require("../src/server/db/repositories/product-image-repository");
-const { updateClip } = require("../src/server/db/repositories/video-project-repository");
+const { updateProject, updateClip } = require("../src/server/db/repositories/video-project-repository");
 const { createVideoProjectService } = require("../src/server/video/video-project-service");
 const { createAgnesKeyPool } = require("../src/server/video/agnes-key-pool");
 const { createD2Provider, compileD2Prompt } = require("../src/server/video/providers/d2-provider");
 const { createG2Provider, readMetadataUrl } = require("../src/server/video/providers/g2-provider");
 const { requestProviderJson } = require("../src/server/video/video-provider-http");
+const { refundVideoCredits } = require("../src/server/video/video-billing");
+const {
+  beginVideoScriptRequest,
+  completeVideoScriptRequest,
+  failVideoScriptRequest,
+  findVideoScriptRequest,
+  recoverStaleVideoScriptRequests,
+} = require("../src/server/db/repositories/video-script-billing-repository");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -37,6 +45,18 @@ for (let id = 980; id <= 991; id += 1) {
     password: "hash",
     accountType: "customer",
     credits: 1000,
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+}
+
+function addReviewUser(id, credits = 1000) {
+  return insertUser({
+    id,
+    name: `视频 Review 额外用户 ${id}`,
+    phone: `1390000${String(id).padStart(4, "0")}`,
+    password: "hash",
+    accountType: "customer",
+    credits,
     createdAt: "2026-08-27T00:00:00.000Z",
   });
 }
@@ -76,20 +96,26 @@ function makeStorage() {
 }
 
 function makeAppConfig(overrides = {}) {
+  const baseVideo = {
+    publicBaseUrl: "https://redbase.review.example",
+    pollIntervalMs: 1,
+    pollMaxBackoffMs: 30000,
+    submitTimeoutMs: 20,
+    pollTimeoutMs: 20,
+    d2MaxConcurrentSubmissions: 4,
+    mediaMaxConcurrency: 3,
+    ffmpegMaxConcurrency: 1,
+    runninghub: { outputHosts: ["runninghub.ai", "runninghub.cn"] },
+    agnes: { apiKeys: [], pollIntervalMs: 1, outputHosts: ["platform-outputs.agnes-ai.space"] },
+  };
+  const overrideVideo = overrides.video || {};
   return {
     security: { assetSigningSecret: "video-review-stable-secret" },
     video: {
-      publicBaseUrl: "https://redbase.review.example",
-      pollIntervalMs: 1,
-      pollMaxBackoffMs: 30000,
-      submitTimeoutMs: 20,
-      pollTimeoutMs: 20,
-      d2MaxConcurrentSubmissions: 4,
-      mediaMaxConcurrency: 3,
-      ffmpegMaxConcurrency: 1,
-      runninghub: { outputHosts: ["runninghub.ai", "runninghub.cn"] },
-      agnes: { apiKeys: [], pollIntervalMs: 1, outputHosts: ["platform-outputs.agnes-ai.space"] },
-      ...(overrides.video || {}),
+      ...baseVideo,
+      ...overrideVideo,
+      runninghub: { ...baseVideo.runninghub, ...(overrideVideo.runninghub || {}) },
+      agnes: { ...baseVideo.agnes, ...(overrideVideo.agnes || {}) },
     },
     ...(overrides.security ? { security: { ...overrides.security } } : {}),
   };
@@ -385,6 +411,156 @@ test("a failed clip marker is reconciled after a crash before the refund transac
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE user_id = ? AND action_type = 'videoProjectRefund'").get(ownerUserId).count, 1);
 });
 
+test("video project refund totals are rebuilt from the ledger after a post-refund crash", async () => {
+  const ownerUserId = 1000;
+  addReviewUser(ownerUserId, 100);
+  const source = insertVideoScript({ id: 4022, ownerUserId });
+  const service = makeService();
+  const created = await createProject(service, { ownerUserId, requestId: "review-refund-ledger-reconcile", generationId: source.id });
+  const chargedBalance = findUserById(ownerUserId).credits;
+  const refund = refundVideoCredits({
+    userId: ownerUserId,
+    amount: created.project.chargedCredits,
+    reservationCreditEventId: created.project.creditEventId,
+    refundRange: "1-1",
+    reason: "fixture post-refund crash",
+    generationId: created.project.generationId,
+    projectId: created.project.id,
+  });
+  assert.equal(refund.refunded, true);
+  updateProject(created.project.id, { status: "partial_failed", refundedCredits: 0 });
+  assert.equal(findGenerationById(created.project.generationId).payload.refundedCredits, 0);
+
+  const recoveredService = makeService();
+  await recoveredService.recover();
+  const recovered = recoveredService.getProject(created.project.id, ownerUserId);
+  assert.equal(recovered.refundedCredits, created.project.chargedCredits);
+  assert.equal(findGenerationById(created.project.generationId).payload.refundedCredits, created.project.chargedCredits);
+  assert.equal(findUserById(ownerUserId).credits, chargedBalance + created.project.chargedCredits);
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("video script billing reserves one credit atomically and replays or refunds safely", async () => {
+  const ownerUserId = 1001;
+  addReviewUser(ownerUserId, 20);
+  const oldCreatedAt = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+  const event = {
+    actionType: "videoScript",
+    actionLabel: "视频脚本生成",
+    brandId: 1,
+    brandName: "Review Brand",
+    trendId: 2,
+    trendTitle: "Review Trend",
+    ideaTitle: "脚本幂等测试",
+    channelLabel: "视频脚本",
+    payload: { requestId: "review-script-crash-safe" },
+  };
+  const started = beginVideoScriptRequest({
+    userId: ownerUserId,
+    requestId: "review-script-crash-safe",
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    creditCost: 1,
+    event,
+    createdAt: oldCreatedAt,
+  });
+  assert.equal(started.started, true);
+  assert.equal(findUserById(ownerUserId).credits, 19);
+
+  const atomicFailureOwner = 1002;
+  addReviewUser(atomicFailureOwner, 20);
+  db.exec(`
+    CREATE TRIGGER review_fail_script_reservation
+    BEFORE INSERT ON video_script_requests
+    BEGIN SELECT RAISE(ABORT, 'forced script reservation failure'); END;
+  `);
+  try {
+    assert.throws(() => beginVideoScriptRequest({
+      userId: atomicFailureOwner,
+      requestId: "review-script-reservation-failure",
+      brandId: 1,
+      trendId: 2,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      creditCost: 1,
+      event: { ...event, payload: { requestId: "review-script-reservation-failure" } },
+    }), /forced script reservation failure/);
+  } finally {
+    db.exec("DROP TRIGGER review_fail_script_reservation");
+  }
+  assert.equal(findUserById(atomicFailureOwner).credits, 20);
+  assert.equal(findVideoScriptRequest(atomicFailureOwner, "review-script-reservation-failure"), null);
+
+  const recovered = recoverStaleVideoScriptRequests({ nowMs: Date.now() + 16 * 60 * 1000 });
+  assert.equal(recovered.length, 1);
+  assert.equal(findVideoScriptRequest(ownerUserId, "review-script-crash-safe").status, "refunded");
+  assert.equal(findUserById(ownerUserId).credits, 20);
+  assert.equal(recoverStaleVideoScriptRequests({ nowMs: Date.now() + 16 * 60 * 1000 }).length, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE user_id = ? AND action_type = 'videoScriptRefund'").get(ownerUserId).count, 1);
+
+  const replayOwner = 1003;
+  addReviewUser(replayOwner, 20);
+  const replayRequestId = "review-script-replay";
+  const replay = beginVideoScriptRequest({
+    userId: replayOwner,
+    requestId: replayRequestId,
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    creditCost: 1,
+    event: { ...event, payload: { requestId: replayRequestId } },
+  });
+  const completed = completeVideoScriptRequest({
+    userId: replayOwner,
+    requestId: replayRequestId,
+    generation: {
+      id: 4501,
+      ownerUserId: replayOwner,
+      type: "videoScript",
+      channelLabel: "视频脚本",
+      brandId: 1,
+      brandName: "Review Brand",
+      trendId: 2,
+      trendTitle: "Review Trend",
+      ideaTitle: "脚本幂等测试",
+      cardTitle: "脚本幂等测试",
+      createdAt: new Date().toISOString(),
+      previewUrl: "",
+      summary: "测试",
+      payload: {
+        requestId: replayRequestId,
+        ideaIndex: 0,
+        videoModel: "d2",
+        videoMode: "text",
+        videoReferenceImageIds: [],
+        videoScript: { title: "脚本幂等测试", totalDurationSec: 10, aspectRatio: "9:16", clips: [] },
+      },
+    },
+  });
+  assert.equal(replay.started, true);
+  assert.equal(completed.generation.id, 4501);
+  const replayed = beginVideoScriptRequest({
+    userId: replayOwner,
+    requestId: replayRequestId,
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    creditCost: 1,
+    event,
+  });
+  assert.equal(replayed.started, false);
+  assert.equal(replayed.request.status, "completed");
+  assert.equal(findUserById(replayOwner).credits, 19);
+});
+
 test("assembly_failed is not scheduled again, completed clips cannot be charged for retry, and assembly retry is free", async () => {
   const ownerUserId = 983;
   const source = insertVideoScript({ id: 4004, ownerUserId, totalDurationSec: 15, clipCount: 2 });
@@ -459,6 +635,207 @@ test("G2 polling keeps the submission key affinity across reordered configuratio
   const completed = await pumpUntil(reorderedService, created.project.id, ownerUserId, (project) => project.status === "completed");
   assert.equal(completed.status, "completed");
   assert.equal(polledKeys[0], submittedKeys[0]);
+});
+
+test("D2 waiting_configuration is sticky within a process and resumes only after configuration recovery", async () => {
+  const ownerUserId = 994;
+  addReviewUser(ownerUserId);
+  const source = insertVideoScript({ id: 4015, ownerUserId });
+  const initial = await createProject(makeService(), {
+    ownerUserId,
+    requestId: "review-d2-waiting-create",
+    generationId: source.id,
+  });
+  updateProject(initial.project.id, { status: "waiting_configuration", error: "RunningHub 视频 API Key 未配置" });
+
+  let missingSubmitCount = 0;
+  const missingProvider = makeProvider({
+    provider: "runninghub",
+    async submitClip() {
+      missingSubmitCount += 1;
+      return { taskId: "must-not-submit" };
+    },
+  });
+  const waitingService = makeService({
+    provider: missingProvider,
+    providers: { d2: missingProvider, g2: missingProvider },
+    appConfig: makeAppConfig({ video: { runninghub: { apiKey: "" } } }),
+  });
+  await waitingService.recover();
+  const before = db.prepare("SELECT status, updated_at FROM video_projects WHERE id = ?").get(initial.project.id);
+  for (let index = 0; index < 10; index += 1) await waitingService.pump();
+  const after = db.prepare("SELECT status, updated_at FROM video_projects WHERE id = ?").get(initial.project.id);
+  assert.equal(missingSubmitCount, 0);
+  assert.equal(after.status, "waiting_configuration");
+  assert.equal(after.updated_at, before.updated_at);
+
+  let resumedSubmitCount = 0;
+  const configuredProvider = makeProvider({
+    provider: "runninghub",
+    async submitClip() {
+      resumedSubmitCount += 1;
+      return { taskId: "review-d2-resumed" };
+    },
+  });
+  const resumedService = makeService({
+    provider: configuredProvider,
+    providers: { d2: configuredProvider, g2: configuredProvider },
+    appConfig: makeAppConfig({ video: { runninghub: { apiKey: "configured-placeholder" } } }),
+  });
+  await resumedService.recover();
+  assert.equal(resumedService.getProject(initial.project.id, ownerUserId).status, "queued");
+  await resumedService.pump();
+  assert.equal(resumedSubmitCount, 1);
+  assert.equal(resumedService.getProject(initial.project.id, ownerUserId).status, "running");
+  // Keep this deterministic fixture out of the next service's global scheduler
+  // sweep; production services intentionally pump all recoverable projects.
+  updateProject(initial.project.id, { status: "completed" });
+});
+
+test("G2 without an RPM slot stays queued and does not rewrite updated_at on every pump", async () => {
+  const ownerUserId = 995;
+  addReviewUser(ownerUserId);
+  const firstSource = insertVideoScript({ id: 4016, ownerUserId, ideaIndex: 0, model: "g2" });
+  const secondSource = insertVideoScript({ id: 4017, ownerUserId, ideaIndex: 1, model: "g2" });
+  const provider = makeProvider({ provider: "fake" });
+  const keyPool = createAgnesKeyPool({ keys: ["review-single-rpm-key"], rpmPerKey: 1 });
+  const service = makeService({ provider, keyPool });
+  const first = await createProject(service, { ownerUserId, requestId: "review-g2-queue-first", generationId: firstSource.id, model: "g2", ideaIndex: 0 });
+  const second = await createProject(service, { ownerUserId, requestId: "review-g2-queue-second", generationId: secondSource.id, model: "g2", ideaIndex: 1 });
+
+  await service.pump();
+  const queued = service.getProject(second.project.id, ownerUserId);
+  assert.equal(queued.status, "queued");
+  assert.equal(queued.clips[0].status, "queued");
+  const before = db.prepare("SELECT updated_at FROM video_projects WHERE id = ?").get(second.project.id).updated_at;
+  for (let index = 0; index < 5; index += 1) await service.pump();
+  const after = db.prepare("SELECT updated_at FROM video_projects WHERE id = ?").get(second.project.id).updated_at;
+  assert.equal(after, before);
+  assert.equal(service.getProject(first.project.id, ownerUserId).clips[0].submissionAttempt, 1);
+  // The RPM slot is intentionally not advanced in this test. Mark both
+  // fixtures terminal after asserting queue semantics so later tests cannot
+  // process them with a different storage instance.
+  updateProject(first.project.id, { status: "completed" });
+  updateProject(second.project.id, { status: "completed" });
+});
+
+test("only clips with downstream dependents require continuity frames, and failed frame persistence cleans saved video", async () => {
+  const multiOwner = 996;
+  addReviewUser(multiOwner);
+  const multiSource = insertVideoScript({ id: 4018, ownerUserId: multiOwner, totalDurationSec: 15, clipCount: 2 });
+  const multiStorage = makeStorage();
+  let multiFfmpegCalls = 0;
+  const multiProvider = makeProvider({
+    async getTaskStatus() { return { status: "completed", videoBuffer: MP4_BUFFER }; },
+  });
+  const multiService = makeService({
+    provider: multiProvider,
+    storage: multiStorage,
+    executor: async () => {
+      multiFfmpegCalls += 1;
+      throw new Error("continuity extraction failed");
+    },
+  });
+  const multi = await createProject(multiService, {
+    ownerUserId: multiOwner,
+    requestId: "review-continuity-cleanup-multi",
+    generationId: multiSource.id,
+    totalDurationSec: 15,
+  });
+  const failed = await pumpUntil(multiService, multi.project.id, multiOwner, (project) => project.status === "partial_failed");
+  assert.equal(failed.clips[0].status, "failed");
+  assert.equal(failed.clips[1].status, "cancelled");
+  assert.ok(multiFfmpegCalls > 0);
+  assert.equal(multiStorage.buffers.size, 0, `video saved before frame failure must be cleaned up: ${JSON.stringify([...multiStorage.buffers.keys()])}`);
+
+  const singleOwner = 997;
+  addReviewUser(singleOwner);
+  const singleSource = insertVideoScript({ id: 4019, ownerUserId: singleOwner });
+  const singleStorage = makeStorage();
+  let singleFfmpegCalls = 0;
+  const singleProvider = makeProvider({
+    async getTaskStatus() { return { status: "completed", videoBuffer: MP4_BUFFER }; },
+  });
+  const singleService = makeService({
+    provider: singleProvider,
+    storage: singleStorage,
+    executor: async () => {
+      singleFfmpegCalls += 1;
+      throw new Error("FFmpeg must not run for the last clip");
+    },
+  });
+  const single = await createProject(singleService, {
+    ownerUserId: singleOwner,
+    requestId: "review-continuity-cleanup-single",
+    generationId: singleSource.id,
+  });
+  const completed = await pumpUntil(singleService, single.project.id, singleOwner, (project) => project.status === "completed");
+  assert.equal(completed.status, "completed");
+  assert.equal(singleFfmpegCalls, 0);
+  assert.equal(singleStorage.buffers.size, 1);
+});
+
+test("submit HTTP 5xx becomes uncertain without an automatic resubmit, while poll HTTP 5xx stays transient", async () => {
+  const ownerUserId = 998;
+  addReviewUser(ownerUserId);
+  const source = insertVideoScript({ id: 4020, ownerUserId });
+  let submitCalls = 0;
+  const appConfig = makeAppConfig({ video: { runninghub: { apiKey: "configured-placeholder" } } });
+  const d2 = createD2Provider({
+    appConfig,
+    fetchImpl: async () => {
+      submitCalls += 1;
+      return { ok: false, status: 500, async json() { return { message: "gateway failure" }; } };
+    },
+  });
+  const service = makeService({ provider: d2, providers: { d2, g2: d2 }, appConfig });
+  const created = await createProject(service, { ownerUserId, requestId: "review-submit-500", generationId: source.id });
+  await service.pump();
+  assert.equal(service.getProject(created.project.id, ownerUserId).status, "uncertain");
+  assert.equal(submitCalls, 1);
+  const creditsAfterRefund = findUserById(ownerUserId).credits;
+  await service.pump();
+  assert.equal(submitCalls, 1);
+  assert.equal(findUserById(ownerUserId).credits, creditsAfterRefund);
+
+  let pollSubmitCalls = 0;
+  let pollCalls = 0;
+  const g2AppConfig = makeAppConfig({ video: { agnes: { apiKeys: ["configured-placeholder"], pollIntervalMs: 1 } } });
+  const g2 = createG2Provider({
+    appConfig: g2AppConfig,
+    fetchImpl: async (url) => {
+      if (String(url).includes("/v1/videos")) {
+        pollSubmitCalls += 1;
+        return { ok: true, status: 200, async json() { return { video_id: "review-poll-500" }; } };
+      }
+      pollCalls += 1;
+      return { ok: false, status: 500, async json() { return { message: "temporary poll failure" }; } };
+    },
+  });
+  const pollOwner = 999;
+  addReviewUser(pollOwner);
+  const pollSource = insertVideoScript({ id: 4021, ownerUserId: pollOwner, model: "g2" });
+  const pollKeyPool = createAgnesKeyPool({ keys: ["review-poll-key"], rpmPerKey: 60 });
+  const pollService = makeService({
+    provider: g2,
+    providers: { d2: g2, g2 },
+    appConfig: g2AppConfig,
+    keyPool: pollKeyPool,
+  });
+  const pollProject = await createProject(pollService, { ownerUserId: pollOwner, requestId: "review-poll-500", generationId: pollSource.id, model: "g2" });
+  await pollService.pump();
+  const charged = findUserById(pollOwner).credits;
+  await new Promise((resolve) => setTimeout(resolve, 3));
+  await pollService.pump();
+  const pollState = pollService.getProject(pollProject.project.id, pollOwner);
+  assert.equal(pollState.status, "running");
+  assert.equal(pollState.clips[0].status, "running");
+  assert.equal(pollSubmitCalls, 1);
+  assert.equal(pollCalls, 1);
+  assert.equal(findUserById(pollOwner).credits, charged);
+  await pollService.pump();
+  assert.equal(pollSubmitCalls, 1);
+  updateProject(pollProject.project.id, { status: "completed" });
 });
 
 test("provider timeout classification is phase-specific and polling remains recoverable", async () => {

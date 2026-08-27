@@ -5,7 +5,7 @@ import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
-import { retryVideoProjectClip, type VideoScript } from "@/features/generation/api";
+import { retryVideoProjectAssembly, retryVideoProjectClip, type VideoScript } from "@/features/generation/api";
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
 import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
@@ -37,6 +37,7 @@ const detailItem = ref<GenerationHistoryItem | null>(null);
 const detailSlideIndex = ref<number | null>(null);
 const editEntryId = ref<string | null>(null);
 const retryingVideoClip = ref<string | null>(null);
+const retryingVideoAssembly = ref(false);
 
 // 图片加载失败：明确错误态 + 重试；签名过期只刷新一次列表拿新签名，不无限循环。
 const failedImageUrls = reactive(new Set<string>());
@@ -194,7 +195,7 @@ function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<str
 }
 
 function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
-  return ({ queued: "排队中", running: "生成中", partial_failed: "部分失败", completed: "已完成", failed: "失败" } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
+  return ({ queued: "排队中", running: "生成中", partial_failed: "部分失败", assembly_failed: "片段已完成，成片拼接失败", completed: "已完成", failed: "失败" } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
 }
 
 function videoRequestId(): string {
@@ -210,6 +211,8 @@ async function retryHistoryVideoClip(clip: Record<string, unknown>): Promise<voi
   retryingVideoClip.value = String(clipIndex);
   try {
     const response = await retryVideoProjectClip(projectId, clipIndex, videoRequestId(), scope.signalFor(`history-video-retry-${clipIndex}`));
+    if (response.user) auth.user = { ...auth.user, ...response.user };
+    else await auth.refreshUser().catch(() => {});
     const project = response.project;
     detailItem.value = {
       ...item,
@@ -235,6 +238,43 @@ async function retryHistoryVideoClip(clip: Record<string, unknown>): Promise<voi
     alert(`当前镜头重试失败：${(error as Error).message}`);
   } finally {
     retryingVideoClip.value = null;
+  }
+}
+
+async function retryHistoryVideoAssembly(): Promise<void> {
+  const item = detailItem.value;
+  const projectId = Number(item?.payload?.projectId);
+  if (!item || !Number.isSafeInteger(projectId) || projectId <= 0 || retryingVideoAssembly.value) return;
+  retryingVideoAssembly.value = true;
+  try {
+    const response = await retryVideoProjectAssembly(projectId, videoRequestId(), scope.signalFor("history-video-assembly-retry"));
+    const project = response.project;
+    detailItem.value = {
+      ...item,
+      payload: {
+        ...(item.payload || {}),
+        projectId: project.id,
+        videoModel: project.model,
+        videoMode: project.mode,
+        videoResolution: project.resolution,
+        videoDuration: project.totalDurationSec,
+        videoAspectRatio: project.aspectRatio,
+        videoStatus: project.status,
+        refundedCredits: project.refundedCredits,
+        finalVideoUrl: project.finalVideoUrl || "",
+        videoClips: project.clips,
+        script: project.script,
+      },
+    };
+    await historyStore.refresh();
+    const refreshed = historyStore.items.find((candidate) => Number(candidate.id) === Number(item.id));
+    if (refreshed) detailItem.value = refreshed;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    alert(`重新拼接失败：${(error as Error).message}`);
+  } finally {
+    retryingVideoAssembly.value = false;
   }
 }
 
@@ -576,6 +616,13 @@ onUnmounted(() => {
               <p class="history-card-ref"><strong>模型：</strong>{{ detailItem.payload?.videoModel?.toString().toUpperCase() || 'D2' }} · <strong>状态：</strong>{{ videoProjectStatusLabel(detailItem) }}</p>
               <p class="history-card-ref"><strong>参数：</strong>{{ detailItem.payload?.videoDuration || asVideoScript(detailItem)?.totalDurationSec || 30 }} 秒 · {{ detailItem.payload?.videoAspectRatio || detailItem.payload?.aspectRatio || '9:16' }}</p>
             </div>
+            <div v-if="detailItem.payload?.videoStatus === 'assembly_failed'" class="history-assembly-failed" data-test="history-assembly-failed">
+              <strong>视频片段均已生成完成</strong>
+              <span>最终成片拼接失败，重新拼接不扣积分。</span>
+              <button type="button" class="secondary-btn" data-test="history-retry-assembly" :disabled="retryingVideoAssembly" @click="retryHistoryVideoAssembly">
+                {{ retryingVideoAssembly ? '拼接中…' : '重新拼接成片 · 0积分' }}
+              </button>
+            </div>
             <video v-if="videoProjectVideoUrl(detailItem)" class="history-video-player" controls playsinline :src="videoProjectVideoUrl(detailItem)"></video>
             <div v-else class="history-video-placeholder large">
               <span class="script-icon">🎬</span>
@@ -913,6 +960,26 @@ onUnmounted(() => {
   margin: 0 auto;
   border-radius: var(--radius-md, 8px);
   background: #211d1d;
+}
+
+.history-assembly-failed {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #ead7c8;
+  border-radius: var(--radius-md, 8px);
+  background: #fff8f1;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.history-assembly-failed strong {
+  color: var(--color-text-primary);
+}
+
+.history-assembly-failed .secondary-btn {
+  justify-self: start;
 }
 
 .history-video-clips {

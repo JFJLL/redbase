@@ -32,6 +32,7 @@ export interface IdeasFlowOptions {
   brandSummaries?: unknown;
   productImages?: unknown;
   credits?: number;
+  videoScriptUserCredits?: number;
   /** 命中优先：返回 Response 则短路；返回 undefined 继续走默认契约。 */
   overrides?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 }

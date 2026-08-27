@@ -120,6 +120,20 @@ const projectError = ref("");
 const generatedVideoSignature = ref("");
 let projectPollTimer: ReturnType<typeof setTimeout> | null = null;
 
+function applyProjectUpdate(next: VideoProject | null) {
+  const previousRefunded = project.value ? Number(project.value.refundedCredits || 0) : 0;
+  project.value = next;
+  const nextRefunded = next ? Number(next.refundedCredits || 0) : 0;
+  if (nextRefunded > previousRefunded) {
+    void auth.refreshUser().catch(() => {});
+  }
+}
+
+function mergeAuthUser(user?: typeof auth.user) {
+  if (user) auth.user = { ...auth.user, ...user };
+  else void auth.refreshUser().catch(() => {});
+}
+
 function normalizeImageIds(value: unknown): number[] {
   return Array.isArray(value)
     ? [...new Set(value.map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0))]
@@ -150,17 +164,23 @@ const visibleVideoDurationOptions = computed(() => {
 });
 
 const selectedVideoReferenceImages = computed(() => {
+  if (videoModeRef.value !== "image") return [];
   const selectedIds = new Set(videoReferenceImageIdsRef.value);
   return availableProductImages.value.filter((image) => selectedIds.has(Number(image.id)));
 });
 const maxVideoReferences = computed(() => Number(activeVideoCapability.value?.maxReferenceImages || 0));
-const selectedVideoReferenceIds = computed(() =>
-  videoReferenceImageIdsRef.value.slice(0, maxVideoReferences.value),
+const effectiveVideoReferenceIds = computed(() =>
+  videoModeRef.value === "image" ? videoReferenceImageIdsRef.value.slice(0, maxVideoReferences.value) : [],
 );
+const selectedVideoReferenceIds = effectiveVideoReferenceIds;
 const selectedProductImageInputs = computed<ProductImageInput[]>(() =>
   selectedVideoReferenceImages.value.map((image) => ({ id: image.id, name: image.originalName })),
 );
-const useVideoProductImagesRef = computed(() => selectedProductImageInputs.value.length > 0);
+// The numeric IDs are the authoritative image selection. The library may
+// still be loading when the user clicks Generate, so do not turn a valid
+// image-mode selection into `useProductImages: false` merely because its
+// preview objects have not arrived yet.
+const useVideoProductImagesRef = computed(() => effectiveVideoReferenceIds.value.length > 0);
 
 function segmentVideoDuration(capability: VideoModelCapability, total: number): number[] {
   const min = Number(capability.clipDurationRules?.min || 1);
@@ -262,6 +282,7 @@ const scriptCompatible = computed(() => {
 });
 
 function applyVideoCapabilityDefaults() {
+  if (project.value) return;
   const capability = activeVideoCapability.value;
   if (!capability) return;
   if (!capability.supportedModes.includes(videoModeRef.value)) {
@@ -287,7 +308,7 @@ async function loadVideoCapabilities() {
     const models = Array.isArray(response.models) ? response.models.filter((model) => model && model.id) : [];
     if (models.length) {
       videoCapabilities.value = models;
-      if (!models.some((model) => model.id === videoModelRef.value)) videoModelRef.value = models[0].id;
+      if (!project.value && !models.some((model) => model.id === videoModelRef.value)) videoModelRef.value = models[0].id;
     } else {
       capabilitiesError.value = "暂时无法读取视频模型能力，已使用安全默认值。";
     }
@@ -330,12 +351,16 @@ watch([videoModeRef, videoResolutionRef, videoDurationRef, videoAspectRatioRef, 
   });
   if (videoModeRef.value === "image" && !selectedVideoReferenceIds.value.length) {
     videoScriptBlockedError.value = "图生视频必须先选择或上传至少一张视频参考图，再生成脚本。";
-  } else if (selectedVideoReferenceIds.value.length) {
+  } else {
     videoScriptBlockedError.value = "";
   }
 }, { deep: true });
 
 function generateScriptWhenReady() {
+  if (project.value) {
+    projectError.value = "当前视频项目已创建，生成参数已锁定。请先关闭工作台后再创建新视频。";
+    return null;
+  }
   if (videoModeRef.value === "image" && !selectedVideoReferenceIds.value.length) {
     videoScriptBlockedError.value = "图生视频必须先选择或上传至少一张视频参考图，再生成脚本。";
     return null;
@@ -374,7 +399,7 @@ async function restoreActiveProject() {
     }, scope.signalFor("video-project-active"));
     const existing = response.projects?.[0];
     if (!existing || disposed) return;
-    project.value = existing;
+    applyProjectUpdate(existing);
     videoModelRef.value = existing.model;
     videoModeRef.value = existing.mode;
     videoResolutionRef.value = existing.resolution;
@@ -413,7 +438,7 @@ async function restoreActiveProject() {
 async function pollProject(projectId: number) {
   try {
     const response = await fetchVideoProject(projectId, scope.signalFor("video-project-poll"));
-    project.value = response.project;
+    applyProjectUpdate(response.project);
     if (["completed", "failed", "partial_failed", "cancelled", "assembly_failed", "uncertain"].includes(response.project.status)) return;
     projectPollTimer = setTimeout(() => pollProject(projectId), 2500);
   } catch (error) {
@@ -458,8 +483,9 @@ async function generateRealVideo() {
       totalDurationSec: videoDurationRef.value === "auto" ? Number(script.value.totalDurationSec || 30) : Number(videoDurationRef.value),
       referenceAssetIds: selectedVideoReferenceIds.value.slice(0, maxVideoReferences.value),
     }, scope.signalFor("video-project-create"));
-    project.value = response.project;
-    if (project.value.status !== "completed") await pollProject(project.value.id);
+    applyProjectUpdate(response.project);
+    mergeAuthUser(response.user);
+    if (response.project.status !== "completed") await pollProject(response.project.id);
   } catch (error) {
     projectError.value = (error as Error).message || "真实视频生成提交失败，请重试。";
   } finally {
@@ -473,7 +499,7 @@ async function retryAssembly() {
   projectError.value = "";
   try {
     const response = await retryVideoProjectAssembly(project.value.id, actionRequestId("assembly"), scope.signalFor("video-assembly-retry"));
-    project.value = response.project;
+    applyProjectUpdate(response.project);
     // The request has a known response, including a failed FFmpeg attempt.
     // A later button click is a new free assembly attempt; only an unknown
     // network outcome should retain the idempotency key for replay.
@@ -493,7 +519,8 @@ async function retryVideoClip(clipIndex: number) {
   stopProjectPolling();
   try {
     const response = await retryVideoProjectClip(project.value.id, clipIndex, actionRequestId(`clip:${clipIndex}`), scope.signalFor(`video-clip-retry-${clipIndex}`));
-    project.value = response.project;
+    applyProjectUpdate(response.project);
+    mergeAuthUser(response.user);
     actionRequestIds.delete(`clip:${clipIndex}`);
     if (!["completed", "failed"].includes(response.project.status)) await pollProject(response.project.id);
   } catch (error) {
@@ -568,6 +595,10 @@ async function handleVideoReferenceUpload(event: Event) {
 }
 
 function handleRegenerate() {
+  if (project.value) {
+    projectError.value = "当前视频项目已创建，生成参数已锁定。请先关闭工作台后再创建新视频。";
+    return;
+  }
   stopProjectPolling();
   project.value = null;
   projectError.value = "";
@@ -578,6 +609,10 @@ function handleRegenerate() {
 }
 
 function handleRetry() {
+  if (project.value) {
+    projectError.value = "当前视频项目已创建，生成参数已锁定。请先关闭工作台后再创建新视频。";
+    return;
+  }
   generateScriptWhenReady();
 }
 
@@ -636,6 +671,7 @@ onUnmounted(() => {
                   type="button"
                   :class="{ active: videoModelRef === model.id }"
                   :data-test="`video-model-${model.id}`"
+                  :disabled="Boolean(project)"
                   @click.stop="videoModelRef = model.id"
                 >
                   {{ model.displayName }}
@@ -644,7 +680,7 @@ onUnmounted(() => {
             </label>
             <label class="studio-field">
               <span>生成方式</span>
-              <select v-model="videoModeRef" data-test="video-mode-select">
+              <select v-model="videoModeRef" data-test="video-mode-select" :disabled="Boolean(project)">
                 <option v-for="mode in availableVideoModes" :key="mode" :value="mode">
                   {{ mode === 'image' ? '图生视频' : '文生视频' }}
                 </option>
@@ -652,24 +688,25 @@ onUnmounted(() => {
             </label>
             <label class="studio-field">
               <span>总时长</span>
-              <select v-model="videoDurationRef" data-test="video-duration-select">
+              <select v-model="videoDurationRef" data-test="video-duration-select" :disabled="Boolean(project)">
                 <option v-for="option in visibleVideoDurationOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
               </select>
             </label>
             <label class="studio-field">
               <span>画幅</span>
-              <select v-model="videoAspectRatioRef" data-test="video-aspect-select">
+              <select v-model="videoAspectRatioRef" data-test="video-aspect-select" :disabled="Boolean(project)">
                 <option value="smart">智能竖屏（9:16）</option>
                 <option v-for="ratio in availableVideoRatios" :key="ratio" :value="ratio">{{ ratio }}</option>
               </select>
             </label>
             <label class="studio-field">
               <span>清晰度</span>
-              <select v-model="videoResolutionRef" data-test="video-resolution-select">
+              <select v-model="videoResolutionRef" data-test="video-resolution-select" :disabled="Boolean(project)">
                 <option v-for="resolution in availableResolutions" :key="resolution" :value="resolution">{{ resolution }}</option>
               </select>
             </label>
           </div>
+          <p v-if="project" class="capability-hint" data-test="video-project-controls-locked">当前视频项目已创建，生成参数已锁定。</p>
           <p v-if="capabilitiesLoading" class="capability-hint">正在读取模型能力配置…</p>
           <p v-else-if="capabilitiesError" class="capability-hint">{{ capabilitiesError }}</p>
           <p class="reference-summary">
@@ -689,10 +726,10 @@ onUnmounted(() => {
             </div>
             <div v-else class="video-reference-options">
               <label v-for="image in availableProductImages" :key="image.id" class="video-reference-option">
-                <input
-                  type="checkbox"
-                  :checked="videoReferenceImageIdsRef.includes(image.id)"
-                  :disabled="!videoReferenceImageIdsRef.includes(image.id) && selectedVideoReferenceIds.length >= maxVideoReferences"
+                  <input
+                    type="checkbox"
+                    :checked="videoReferenceImageIdsRef.includes(image.id)"
+                    :disabled="Boolean(project) || (!videoReferenceImageIdsRef.includes(image.id) && selectedVideoReferenceIds.length >= maxVideoReferences)"
                   @change="handleVideoReferenceToggle(image.id, $event)"
                 />
                 <img :src="image.url" :alt="image.originalName" loading="lazy" />
@@ -700,7 +737,7 @@ onUnmounted(() => {
               </label>
             </div>
             <label class="video-reference-upload">
-              <input type="file" accept="image/*" :disabled="videoReferenceUploadLoading" @change="handleVideoReferenceUpload" />
+              <input type="file" accept="image/*" :disabled="Boolean(project) || videoReferenceUploadLoading" @change="handleVideoReferenceUpload" />
               {{ videoReferenceUploadLoading ? '上传中…' : '上传新的参考图' }}
             </label>
           </section>
@@ -769,7 +806,7 @@ onUnmounted(() => {
           <VideoScriptResult
             :script="script"
             :show-actions="true"
-            :show-regenerate="true"
+            :show-regenerate="!project"
             @regenerate="handleRegenerate"
             @close="handleClose"
           />

@@ -393,7 +393,9 @@ async function confirmLibraryDelete(): Promise<void> {
     const cleaned = removeProductImageFromAllSettings(image.id);
     libraryImages.value = libraryImages.value.filter((item) => item.id !== image.id);
     libraryMessage.value =
-      cleaned > 0 ? `已删除，并清理 ${cleaned} 处选题中的图片引用。` : "图片已删除。";
+      cleaned > 0
+        ? `已删除，并从相关图片/视频创作设置中清理 ${cleaned} 处素材引用。`
+        : "图片已删除。";
   } catch (error) {
     if (isAbortError(error)) return;
     if (handleUnauthorized(error)) return;

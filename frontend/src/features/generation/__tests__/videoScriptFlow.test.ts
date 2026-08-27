@@ -111,7 +111,7 @@ const PRODUCT_IMAGES = {
 };
 
 function baseOptions(): IdeasFlowOptions {
-  return {
+  const options: IdeasFlowOptions = {
     brandId: 1,
     brandDetail: BRAND_DETAIL,
     productImages: PRODUCT_IMAGES,
@@ -130,12 +130,13 @@ function baseOptions(): IdeasFlowOptions {
             previewUrl: "",
             payload: { videoScript: FIXTURE_SCRIPT },
           },
-          user: { id: "1", credits: 4 },
+          user: { id: "1", credits: options.videoScriptUserCredits ?? 4 },
         });
       }
       return undefined;
     },
   };
+  return options;
 }
 
 async function openVideoDialog(options: IdeasFlowOptions = baseOptions()) {
@@ -166,6 +167,7 @@ describe("video script generation flow", () => {
   afterEach(() => {
     clearIdeaCreativeSettings();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -373,18 +375,18 @@ describe("video script generation flow", () => {
       trendId: 5,
       ideaIndex: 0,
       model: "d2",
-      mode: "text",
+      mode: "image",
       resolution: "720p",
       aspectRatio: "9:16",
       totalDurationSec: 10,
       status: "running",
-      referenceAssetIds: [],
+      referenceAssetIds: [11],
       visualBible: {},
       script: { ...FIXTURE_SCRIPT, totalDurationSec: 10 },
       estimatedCredits: 20,
       chargedCredits: 20,
       refundedCredits: 0,
-      clips: [{ id: 704, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "running", prompt: "", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0 }],
+      clips: [{ id: 704, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "running", prompt: "", continuityMode: "image", referenceAssetIds: [11], creditCost: 20, attempt: 1, retryCount: 0 }],
       createdAt: "2026-08-27T00:00:00.000Z",
       updatedAt: "2026-08-27T00:00:00.000Z",
     };
@@ -406,6 +408,57 @@ describe("video script generation flow", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/video-projects/701"))).toBe(true);
     expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
     expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-project")).toHaveLength(0);
+    expect((dialog.find('[data-test="video-mode-select"]').element as HTMLSelectElement).disabled).toBe(true);
+    expect((dialog.find('[data-test="video-duration-select"]').element as HTMLSelectElement).disabled).toBe(true);
+    expect((dialog.find('[data-test="video-aspect-select"]').element as HTMLSelectElement).disabled).toBe(true);
+    expect((dialog.find('[data-test="video-resolution-select"]').element as HTMLSelectElement).disabled).toBe(true);
+    expect((dialog.find('[data-test="video-model-d2"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect((dialog.find('[data-test="video-reference-picker"] input[type="checkbox"]').element as HTMLInputElement).disabled).toBe(true);
+    expect(dialog.find('[data-test="video-script-regenerate"]').exists()).toBe(false);
+    expect(dialog.find('[data-test="video-project-controls-locked"]').text()).toContain("参数已锁定");
+  });
+
+  it("clears the image reference error when switching to text mode", async () => {
+    const key = getIdeaSettingsKey(1, 5, 0);
+    saveIdeaCreativeSettings(key, {
+      ...getIdeaCreativeSettings(key),
+      videoMode: "image",
+      videoReferenceImageIds: [],
+    });
+    const { wrapper } = await openVideoDialog();
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    expect(dialog.find('[data-test="video-script-reference-required"]').exists()).toBe(true);
+    await dialog.find('[data-test="video-mode-select"]').setValue("text");
+    await flushPromises();
+    expect(dialog.find('[data-test="video-script-reference-required"]').exists()).toBe(false);
+    expect(dialog.find('[data-test="video-script-preparation"]').exists()).toBe(true);
+  });
+
+  it("sends no product or video references in text mode and restores image references after switching back", async () => {
+    const key = getIdeaSettingsKey(1, 5, 0);
+    saveIdeaCreativeSettings(key, {
+      ...getIdeaCreativeSettings(key),
+      videoMode: "image",
+      videoReferenceImageIds: [11],
+    });
+    const { wrapper, fetchMock } = await openVideoDialog();
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    await dialog.find('[data-test="video-mode-select"]').setValue("text");
+    await flushPromises();
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const scriptCall = postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")[0];
+    expect(scriptCall.mode).toBe("text");
+    expect(scriptCall.videoReferenceImageIds).toEqual([]);
+    expect(scriptCall.productImages).toEqual([]);
+    expect(scriptCall.useProductImages).toBe(false);
+
+    await dialog.find('[data-test="video-mode-select"]').setValue("image");
+    await flushPromises();
+    const referenceCheckbox = dialog.find('[data-test="video-reference-picker"] input[type="checkbox"]');
+    expect((referenceCheckbox.element as HTMLInputElement).checked).toBe(true);
   });
 
   it("does not mark the script stale when only resolution changes, and shows the real price", async () => {
@@ -423,6 +476,89 @@ describe("video script generation flow", () => {
     expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(false);
     expect((realVideoButton.element as HTMLButtonElement).disabled).toBe(false);
     expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(1);
+  });
+
+  it("keeps the global balance in sync after project charge, refund, and paid retry", async () => {
+    vi.useFakeTimers();
+    let sessionCredits = 100;
+    let projectPollCount = 0;
+    const queuedProject = {
+      id: 900,
+      generationId: 901,
+      scriptGenerationId: 88,
+      brandId: 1,
+      trendId: 5,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 10,
+      status: "queued",
+      referenceAssetIds: [],
+      visualBible: {},
+      script: { ...FIXTURE_SCRIPT, totalDurationSec: 10, clips: [{ ...FIXTURE_SCRIPT.clips[0], endSec: 10, durationSec: 10 }] },
+      estimatedCredits: 20,
+      chargedCredits: 20,
+      refundedCredits: 0,
+      clips: [{ id: 902, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "queued", prompt: "", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 0, retryCount: 0 }],
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    };
+    const refundedProject = {
+      ...queuedProject,
+      status: "partial_failed",
+      refundedCredits: 20,
+      clips: [{ ...queuedProject.clips[0], status: "failed", error: "provider failed" }],
+    };
+    const completedProject = {
+      ...refundedProject,
+      status: "completed",
+      clips: [{ ...refundedProject.clips[0], status: "completed", error: "" }],
+      finalVideoUrl: "/api/video-projects/900/assets/final",
+    };
+    const options = baseOptions();
+    options.videoScriptUserCredits = 100;
+    const originalOverride = options.overrides;
+    options.overrides = (url, init) => {
+      const path = String(url).split("?")[0];
+      const method = String(init?.method || "GET");
+      if (method === "GET" && path === "/api/session") return jsonResponse(200, { user: { id: "1", credits: sessionCredits } });
+      if (method === "GET" && path === "/api/video-projects/active") return jsonResponse(200, { projects: [] });
+      if (method === "POST" && path === "/api/brands/1/trends/5/ideas/0/video-project") {
+        return jsonResponse(200, { project: queuedProject, user: { id: "1", credits: 80 } });
+      }
+      if (method === "GET" && path === "/api/video-projects/900") {
+        projectPollCount += 1;
+        return jsonResponse(200, { project: projectPollCount === 1 ? queuedProject : projectPollCount === 2 ? refundedProject : completedProject });
+      }
+      if (method === "POST" && path === "/api/video-projects/900/clips/1/retry") {
+        return jsonResponse(200, { project: { ...refundedProject, status: "queued", clips: [{ ...refundedProject.clips[0], status: "queued", error: "" }] }, user: { id: "1", credits: 80 } });
+      }
+      return originalOverride?.(url, init);
+    };
+
+    const { wrapper, auth } = await openVideoDialog(options);
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+    expect(auth.user?.credits).toBe(100);
+
+    await dialog.find('[data-test="generate-real-video"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+    expect(auth.user?.credits).toBe(80);
+
+    await vi.advanceTimersByTimeAsync(2500);
+    await flushPromises();
+    expect(auth.user?.credits).toBe(100);
+    expect(dialog.find('.clip-retry-btn').exists()).toBe(true);
+
+    await dialog.find('.clip-retry-btn').trigger("click");
+    await flushPromises();
+    await flushPromises();
+    expect(auth.user?.credits).toBe(80);
   });
 
   it("marks model, mode, duration, ratio, and reference changes as script-stale", async () => {

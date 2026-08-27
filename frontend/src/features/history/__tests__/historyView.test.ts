@@ -257,6 +257,71 @@ describe("HistoryView", () => {
     expect(calls.some((call) => call.url === "/api/video-projects/77/clips/2/retry")).toBe(true);
   });
 
+  it("renders assembly_failed separately and retries assembly without clip billing", async () => {
+    let assemblyRetried = false;
+    const failedGeneration = {
+      id: 78,
+      type: "videoProject",
+      cardTitle: "露营咖啡视频",
+      brandName: "品牌A",
+      brandId: 7,
+      trendTitle: "五一露营潮",
+      ideaTitle: "户外手冲咖啡指南",
+      channelLabel: "AI 视频",
+      createdAt: "2026-07-23T08:00:00.000Z",
+      previewUrl: "",
+      payload: {
+        projectId: 78,
+        videoModel: "d2",
+        videoMode: "text",
+        videoResolution: "720p",
+        videoDuration: 10,
+        videoAspectRatio: "9:16",
+        videoStatus: "assembly_failed",
+        refundedCredits: 0,
+        finalVideoUrl: "",
+        videoClips: [{ id: 7801, index: 1, durationSec: 10, status: "completed", videoUrl: "/api/video-projects/78/assets/clip/1" }],
+        script: GENERATIONS[2].payload?.videoScript,
+      },
+    };
+    const completedProject = {
+      id: 78,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      totalDurationSec: 10,
+      aspectRatio: "9:16",
+      status: "completed",
+      refundedCredits: 0,
+      finalVideoUrl: "/api/video-projects/78/assets/final",
+      clips: failedGeneration.payload.videoClips,
+      script: GENERATIONS[2].payload?.videoScript,
+    };
+    const { wrapper, calls } = await mountView((url, init) => {
+      if (url.startsWith("/api/history")) {
+        return jsonResponse(200, { generations: [assemblyRetried ? { ...failedGeneration, payload: { ...failedGeneration.payload, videoStatus: "completed", finalVideoUrl: completedProject.finalVideoUrl } } : failedGeneration] });
+      }
+      if (url === "/api/video-projects/78/retry-assembly" && init?.method === "POST") {
+        assemblyRetried = true;
+        return jsonResponse(200, { project: completedProject });
+      }
+      return undefined;
+    });
+
+    const card = wrapper.find('[data-test="history-card"]');
+    await card.find('[data-test="history-detail"]').trigger("click");
+    await flushPromises();
+    const detail = wrapper.find('[data-test="history-video-project-detail"]');
+    expect(detail.find('[data-test="history-assembly-failed"]').text()).toContain("视频片段均已生成完成");
+    expect(detail.find('[data-test="history-retry-assembly"]').text()).toContain("0积分");
+    expect(detail.find('.history-video-clip-actions button').exists()).toBe(false);
+
+    await detail.find('[data-test="history-retry-assembly"]').trigger("click");
+    await flushPromises();
+    expect(calls.some((call) => call.url === "/api/video-projects/78/retry-assembly" && call.init?.method === "POST")).toBe(true);
+    expect(wrapper.find('[data-test="history-assembly-failed"]').exists()).toBe(false);
+  });
+
   it("sends DELETE /api/history/:id after confirm and removes the card from store", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const { wrapper, calls } = await mountView((url, init) => {

@@ -312,6 +312,13 @@ test("POST /video-script generates script, deducts 1 credit, is idempotent with 
     {
       requestId,
       aspectRatioSelection: "9:16",
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      videoDuration: "30",
+      useProductImages: true,
+      productImages: [{ id: 999999 }],
+      videoReferenceImageIds: [999999],
       styleReferenceImages: [
         {
           name: "style-ref.png",
@@ -327,7 +334,10 @@ test("POST /video-script generates script, deducts 1 credit, is idempotent with 
   assert.equal(res1.body.generation.channelLabel, "视频脚本");
   assert.equal(res1.body.videoScript.title, "山野清晨手冲咖啡视频脚本");
   assert.equal(res1.body.videoScript.totalDurationSec, 30);
-  assert.equal(res1.body.videoScript.clips.length, 2);
+  assert.equal(res1.body.videoScript.clips.length, 3);
+  const storedGeneration = findGenerationByOwner(res1.body.generation.id, TEST_USER.id);
+  assert.deepEqual(storedGeneration.payload.videoReferenceImageIds, []);
+  assert.deepEqual(storedGeneration.payload.semanticInput.referenceImageIds, []);
 
   // Verifies 1 credit deducted
   assert.equal(findUserById(TEST_USER.id).credits, initialCredits - 1);
