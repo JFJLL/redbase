@@ -197,6 +197,17 @@ function listRecoverableProjects({ limit = 100 } = {}) {
   return rows.map((row) => mapProjectRow(row));
 }
 
+function listProjectsForRefundReconciliation({ limit = 100 } = {}) {
+  const rows = db.prepare(`
+    SELECT ${PROJECT_COLUMNS}
+    FROM video_projects
+    WHERE status IN ('partial_failed', 'uncertain', 'failed', 'completed', 'assembly_failed')
+    ORDER BY updated_at ASC, id ASC
+    LIMIT ?
+  `).all(Math.max(1, Number(limit) || 100));
+  return rows.map((row) => mapProjectRow(row));
+}
+
 const BILLING_COLUMNS = `
   id, request_id, user_id, project_id, generation_id, operation, status,
   credit_cost, credit_event_id, error, created_at, updated_at
@@ -648,6 +659,7 @@ module.exports = {
   findProjectByGenerationId,
   listProjectsByOwner,
   listRecoverableProjects,
+  listProjectsForRefundReconciliation,
   insertProject,
   insertClip,
   getClip,

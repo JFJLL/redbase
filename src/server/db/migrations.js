@@ -212,6 +212,39 @@ const VERSIONED_MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 6,
+    name: "idempotent-video-script-billing",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS video_script_requests (
+          id INTEGER PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          brand_id INTEGER NOT NULL,
+          trend_id INTEGER NOT NULL,
+          idea_index INTEGER NOT NULL,
+          model TEXT NOT NULL DEFAULT '',
+          mode TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'running',
+          credit_cost INTEGER NOT NULL DEFAULT 1,
+          credit_event_id INTEGER,
+          generation_id INTEGER,
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL,
+          FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE SET NULL,
+          UNIQUE (user_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_video_script_requests_status_updated
+          ON video_script_requests(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_video_script_requests_generation
+          ON video_script_requests(generation_id);
+      `);
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

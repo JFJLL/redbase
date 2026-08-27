@@ -3,10 +3,15 @@ const { createAliyunOssGeneratedAssetStorage } = require("./aliyun-oss-generated
 const { inferGeneratedAssetProvider } = require("./generated-asset-utils");
 
 function createGeneratedAssetStorage(appConfig = {}, dependencies = {}) {
-  const local = createLocalGeneratedAssetStorage(dependencies.local || dependencies);
+  const limits = {
+    imageMaxBytes: appConfig.video?.imageMaxBytes,
+    videoClipMaxBytes: appConfig.video?.maxClipBytes,
+    videoFinalMaxBytes: appConfig.video?.maxFinalBytes,
+  };
+  const local = createLocalGeneratedAssetStorage({ ...(dependencies.local || dependencies), ...limits });
   const configuredProvider = appConfig?.assetStorage?.provider === "aliyun_oss" ? "aliyun_oss" : "local";
   const aliyunOss = configuredProvider === "aliyun_oss"
-    ? createAliyunOssGeneratedAssetStorage(appConfig.assetStorage.aliyunOss, dependencies.aliyunOss || dependencies)
+    ? createAliyunOssGeneratedAssetStorage(appConfig.assetStorage.aliyunOss, { ...(dependencies.aliyunOss || dependencies), ...limits })
     : null;
   const selected = aliyunOss || local;
 
@@ -18,6 +23,7 @@ function createGeneratedAssetStorage(appConfig = {}, dependencies = {}) {
     provider: selected.provider,
     isConfigured: () => selected.isConfigured(),
     save: (input) => selected.save(input),
+    saveFile: (input) => selected.saveFile(input),
     async delete(asset) {
       const backend = backendFor(asset);
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");
@@ -78,10 +84,10 @@ function createGeneratedAssetStorage(appConfig = {}, dependencies = {}) {
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");
       return backend.createReadUrl(asset, options);
     },
-    async readBuffer(asset) {
+    async readBuffer(asset, options) {
       const backend = backendFor(asset);
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");
-      return backend.readBuffer(asset);
+      return backend.readBuffer(asset, options);
     },
   };
 }

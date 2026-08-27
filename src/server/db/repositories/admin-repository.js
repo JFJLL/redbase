@@ -342,51 +342,53 @@ function findRefundForCreditEvent(creditEventId, userId) {
   `).get(Number(userId), Number(creditEventId)));
 }
 
-function refundCreditEventIfNeeded({ creditEventId, userId, reason }) {
-  return runTransaction(() => {
-    const originalEvent = findCreditEventById(creditEventId);
-    if (!originalEvent || Number(originalEvent.userId) !== Number(userId) || Number(originalEvent.creditDelta || 0) >= 0) {
-      return { refunded: false, originalEvent: originalEvent || null, refundEvent: null, user: findUserById(userId) };
-    }
+function refundCreditEventIfNeededInTransaction({ creditEventId, userId, reason }) {
+  const originalEvent = findCreditEventById(creditEventId);
+  if (!originalEvent || Number(originalEvent.userId) !== Number(userId) || Number(originalEvent.creditDelta || 0) >= 0) {
+    return { refunded: false, originalEvent: originalEvent || null, refundEvent: null, user: findUserById(userId) };
+  }
 
-    const existingRefund = findRefundForCreditEvent(originalEvent.id, userId);
-    if (existingRefund) {
-      return { refunded: false, originalEvent, refundEvent: existingRefund, user: findUserById(userId) };
-    }
+  const existingRefund = findRefundForCreditEvent(originalEvent.id, userId);
+  if (existingRefund) {
+    return { refunded: false, originalEvent, refundEvent: existingRefund, user: findUserById(userId) };
+  }
 
-    const refundAmount = Math.abs(Number(originalEvent.creditDelta || originalEvent.creditCost || 0));
-    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
-      return { refunded: false, originalEvent, refundEvent: null, user: findUserById(userId) };
-    }
+  const refundAmount = Math.abs(Number(originalEvent.creditDelta || originalEvent.creditCost || 0));
+  if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+    return { refunded: false, originalEvent, refundEvent: null, user: findUserById(userId) };
+  }
 
-    const user = findUserById(userId);
-    if (!user) {
-      return { refunded: false, originalEvent, refundEvent: null, user: null };
-    }
+  const user = findUserById(userId);
+  if (!user) {
+    return { refunded: false, originalEvent, refundEvent: null, user: null };
+  }
 
-    updateUserCredits(user.id, Number(user.credits || 0) + refundAmount);
-    const refundEvent = insertCreditEvent({
-      userId: user.id,
-      actionType: `${originalEvent.actionType}Refund`,
-      actionLabel: `${originalEvent.actionLabel || "积分扣除"}退款`,
-      creditDelta: refundAmount,
-      creditCost: 0,
-      brandId: originalEvent.brandId,
-      brandName: originalEvent.brandName,
-      trendId: originalEvent.trendId,
-      trendTitle: originalEvent.trendTitle,
-      ideaTitle: originalEvent.ideaTitle,
-      generationId: originalEvent.generationId,
-      channelLabel: originalEvent.channelLabel,
-      summary: `${originalEvent.actionLabel || "积分扣除"}失败，自动退还 ${refundAmount} 积分`,
-      payload: {
-        refundForCreditEventId: originalEvent.id,
-        refundReason: String(reason || "image job failed").slice(0, 500),
-        refundedAt: new Date().toISOString(),
-      },
-    });
-    return { refunded: true, originalEvent, refundEvent, user: findUserById(user.id) };
+  updateUserCredits(user.id, Number(user.credits || 0) + refundAmount);
+  const refundEvent = insertCreditEvent({
+    userId: user.id,
+    actionType: `${originalEvent.actionType}Refund`,
+    actionLabel: `${originalEvent.actionLabel || "积分扣除"}退款`,
+    creditDelta: refundAmount,
+    creditCost: 0,
+    brandId: originalEvent.brandId,
+    brandName: originalEvent.brandName,
+    trendId: originalEvent.trendId,
+    trendTitle: originalEvent.trendTitle,
+    ideaTitle: originalEvent.ideaTitle,
+    generationId: originalEvent.generationId,
+    channelLabel: originalEvent.channelLabel,
+    summary: `${originalEvent.actionLabel || "积分扣除"}失败，自动退还 ${refundAmount} 积分`,
+    payload: {
+      refundForCreditEventId: originalEvent.id,
+      refundReason: String(reason || "image job failed").slice(0, 500),
+      refundedAt: new Date().toISOString(),
+    },
   });
+  return { refunded: true, originalEvent, refundEvent, user: findUserById(user.id) };
+}
+
+function refundCreditEventIfNeeded({ creditEventId, userId, reason }) {
+  return runTransaction(() => refundCreditEventIfNeededInTransaction({ creditEventId, userId, reason }));
 }
 
 function findGenerationForCreditEvent(creditEventId, userId) {
@@ -521,6 +523,7 @@ module.exports = {
   readAdminOverviewStore,
   readUserDeletionAssets,
   findRefundForCreditEvent,
+  refundCreditEventIfNeededInTransaction,
   refundCreditEventIfNeeded,
   findGenerationForCreditEvent,
   updateCreditEventGeneration,

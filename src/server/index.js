@@ -16,6 +16,7 @@ const {
 } = require("./assets/image-store");
 const { createGeneratedAssetStorage } = require("./assets/generated-asset-storage");
 const { createVideoProjectService } = require("./video/video-project-service");
+const { recoverStaleVideoScriptRequests } = require("./db/repositories/video-script-billing-repository");
 const { isBrandLogoStoredPathReferenced } = require("./db/repositories/brand-repository");
 const {
   isGeneratedAssetReferenced,
@@ -73,6 +74,14 @@ async function start() {
   });
 
   await ensureStore();
+  try {
+    const recoveredVideoScriptRequests = recoverStaleVideoScriptRequests();
+    if (recoveredVideoScriptRequests.length) {
+      console.log(`[video-script] recovered ${recoveredVideoScriptRequests.length} stale billing request(s)`);
+    }
+  } catch (error) {
+    console.warn("[video-script] failed to recover stale billing requests", { error: error.message });
+  }
   videoProjectService.start();
   try {
     await cleanupStagedStoredAssets({ nowMs: Date.now(), ignoreGrace: true });

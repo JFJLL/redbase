@@ -1,4 +1,5 @@
 const net = require("net");
+const { DEFAULT_GENERATED_IMAGE_ASSET_BYTES, DEFAULT_VIDEO_CLIP_ASSET_BYTES } = require("../assets/generated-asset-utils");
 
 function isPrivateHostname(hostname) {
   const host = String(hostname || "").toLowerCase().replace(/[\[\]]/g, "");
@@ -42,7 +43,10 @@ async function readResponseWithLimit(response, maxBytes) {
   return buffer;
 }
 
-async function downloadProviderMedia(url, { allowedHosts = [], maxBytes = 60 * 1024 * 1024, timeoutMs = 30000, fetchImpl = fetch, expected = "video" } = {}) {
+async function downloadProviderMedia(url, { allowedHosts = [], maxBytes, timeoutMs = 30000, fetchImpl = fetch, expected = "video" } = {}) {
+  const effectiveMaxBytes = Number.isFinite(Number(maxBytes)) && Number(maxBytes) > 0
+    ? Math.floor(Number(maxBytes))
+    : expected === "image" ? DEFAULT_GENERATED_IMAGE_ASSET_BYTES : DEFAULT_VIDEO_CLIP_ASSET_BYTES;
   let nextUrl = String(url || "");
   for (let redirect = 0; redirect <= 2; redirect += 1) {
     const parsed = assertSafeProviderUrl(nextUrl, { allowedHosts });
@@ -51,25 +55,25 @@ async function downloadProviderMedia(url, { allowedHosts = [], maxBytes = 60 * 1
     let response;
     try {
       response = await fetchImpl(parsed, { redirect: "manual", signal: controller.signal });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers?.get?.("location");
+        if (!location) throw new Error("供应商重定向缺少 Location");
+        nextUrl = new URL(location, parsed).toString();
+        continue;
+      }
+      if (!response.ok) throw new Error(`供应商媒体下载失败：HTTP ${response.status}`);
+      const contentType = String(response.headers?.get?.("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+      if (expected === "video" && contentType && contentType !== "video/mp4" && !contentType.startsWith("video/")) {
+        throw new Error("供应商响应不是 MP4 视频");
+      }
+      if (expected === "image" && contentType && !contentType.startsWith("image/")) {
+        throw new Error("供应商响应不是图片");
+      }
+      const buffer = await readResponseWithLimit(response, effectiveMaxBytes);
+      return { buffer, contentType: contentType || (expected === "video" ? "video/mp4" : "image/jpeg"), url: parsed.toString() };
     } finally {
       clearTimeout(timeout);
     }
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = response.headers?.get?.("location");
-      if (!location) throw new Error("供应商重定向缺少 Location");
-      nextUrl = new URL(location, parsed).toString();
-      continue;
-    }
-    if (!response.ok) throw new Error(`供应商媒体下载失败：HTTP ${response.status}`);
-    const contentType = String(response.headers?.get?.("content-type") || "").split(";", 1)[0].trim().toLowerCase();
-    if (expected === "video" && contentType && contentType !== "video/mp4" && !contentType.startsWith("video/")) {
-      throw new Error("供应商响应不是 MP4 视频");
-    }
-    if (expected === "image" && contentType && !contentType.startsWith("image/")) {
-      throw new Error("供应商响应不是图片");
-    }
-    const buffer = await readResponseWithLimit(response, maxBytes);
-    return { buffer, contentType: contentType || (expected === "video" ? "video/mp4" : "image/jpeg"), url: parsed.toString() };
   }
   throw new Error("供应商媒体重定向次数过多");
 }

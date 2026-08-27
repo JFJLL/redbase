@@ -1,18 +1,19 @@
 const fsp = require("fs/promises");
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
-const { allocateCounter } = require("../db/repositories/core-repository");
-const {
-  trySpendCreditsWithEvent,
-  updateCreditEventGeneration,
-  refundCreditEventIfNeeded,
-} = require("../db/repositories/admin-repository");
 const brandRepository = require("../db/repositories/brand-repository");
 const findBrandByOwner = (...args) => brandRepository.findBrandByOwner(...args);
 const {
   findGenerationByOwnerAndRequestId,
-  insertGeneration,
+  findGenerationByOwner,
 } = require("../db/repositories/generation-repository");
+const {
+  findVideoScriptRequest,
+  beginVideoScriptRequest,
+  completeVideoScriptRequest,
+  failVideoScriptRequest,
+  recoverStaleVideoScriptRequests,
+} = require("../db/repositories/video-script-billing-repository");
 const {
   findProductImageByOwner,
   touchProductImageUsed,
@@ -25,7 +26,7 @@ const {
   resolveVideoAspectRatio,
 } = require("../video/video-model-registry");
 const { sanitizeGeneration, sanitizeUser } = require("../utils");
-const { CREDIT_COSTS, hasEnoughCredits } = require("./credits");
+const { CREDIT_COSTS } = require("./credits");
 
 function requireRouteUser(req, res, helpers) {
   return requireSqlAuth(req, res, {
@@ -87,7 +88,12 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     }
 
     const payload = await collectBody(req);
-    const requestId = String(payload.requestId || "").trim() || `vs-${user.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestId = String(payload.requestId || "").trim();
+    if (!requestId) {
+      badRequest(res, "缺少 requestId，请重试。");
+      return true;
+    }
+    recoverStaleVideoScriptRequests();
     const requestedModel = String(payload.model || "").trim();
     const model = requestedModel ? normalizeModelId(requestedModel) : "";
     const modelConfig = model ? getVideoModelConfig(model) : null;
@@ -105,7 +111,23 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       return true;
     }
 
-    if (!hasEnoughCredits(user, CREDIT_COSTS.videoScript, res)) {
+    const existingRequest = findVideoScriptRequest(user.id, requestId);
+    if (existingRequest) {
+      if (existingRequest.status === "completed" && existingRequest.generationId) {
+        const completedGeneration = findGenerationByOwner(existingRequest.generationId, user.id);
+        if (completedGeneration) {
+          json(res, 200, {
+            generation: sanitizeGeneration(completedGeneration, appConfig),
+            videoScript: completedGeneration.payload?.videoScript || null,
+            user: sanitizeUser(user),
+          });
+          return true;
+        }
+      }
+      const stateMessage = existingRequest.status === "running"
+        ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
+        : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。";
+      badRequest(res, stateMessage);
       return true;
     }
 
@@ -114,12 +136,12 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     const resolvedVideoReferenceIds = [];
 
     // 1. 产品图
-    const requestedVideoReferenceIds = Array.isArray(payload.videoReferenceImageIds)
+    const requestedVideoReferenceIds = mode === "image" && Array.isArray(payload.videoReferenceImageIds)
       ? payload.videoReferenceImageIds
-      : (Array.isArray(payload.referenceAssetIds) ? payload.referenceAssetIds : null);
-    const productImageItems = model && requestedVideoReferenceIds
+      : (mode === "image" && Array.isArray(payload.referenceAssetIds) ? payload.referenceAssetIds : null);
+    const productImageItems = model && mode === "image" && requestedVideoReferenceIds
       ? requestedVideoReferenceIds.map((id) => ({ id }))
-      : payload.productImages;
+      : model ? [] : payload.productImages;
     if (payload.useProductImages !== false && Array.isArray(productImageItems)) {
       const productImagesToLoad = productImageItems.slice(0, modelConfig?.maxReferenceImages || 10);
       let pIdx = 1;
@@ -137,10 +159,10 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
                 roleDescription: `以下图片是产品参考图 ${pIdx}（${image.originalName}），只用于识别产品主体、外观、包装、材质、颜色和品牌元素。`,
                 mimeType: image.mimeType || "image/png",
                 dataBase64: buffer.toString("base64"),
-              name: image.originalName,
-            });
-            if (model) resolvedVideoReferenceIds.push(image.id);
-            pIdx += 1;
+                name: image.originalName,
+              });
+              if (model && mode === "image") resolvedVideoReferenceIds.push(image.id);
+              pIdx += 1;
             } catch (_fileError) {
               // file read error
             }
@@ -199,37 +221,50 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const charged = trySpendCreditsWithEvent({
-      userId: user.id,
-      amount: CREDIT_COSTS.videoScript,
-      event: {
-        actionType: "videoScript",
-        actionLabel: "视频脚本生成",
-        brandId: brand.id,
-        brandName: brand.name,
-        trendId: trend.id,
-        trendTitle: trend.title || "",
-        ideaTitle: idea.title || "",
-        channelLabel: "视频脚本",
-        summary: idea.title,
-        payload: {
-          requestId,
-          referenceImageUsed: productCount > 0,
-          referenceImageCount: productCount,
-          styleReferenceImageUsed: styleCount > 0,
-          styleReferenceImageCount: styleCount,
-          logoUsed: logoCount > 0,
-          aspectRatio: requestedVideoAspectRatio,
-          videoDuration: payload.videoDuration || payload.durationSelection || "auto",
-          videoModel: model || undefined,
-          videoMode: model ? mode : undefined,
-          videoReferenceImageIds: model ? resolvedVideoReferenceIds : undefined,
-        },
+    const billingEvent = {
+      actionType: "videoScript",
+      actionLabel: "视频脚本生成",
+      brandId: brand.id,
+      brandName: brand.name,
+      trendId: trend.id,
+      trendTitle: trend.title || "",
+      ideaTitle: idea.title || "",
+      channelLabel: "视频脚本",
+      summary: idea.title,
+      payload: {
+        requestId,
+        referenceImageUsed: productCount > 0,
+        referenceImageCount: productCount,
+        styleReferenceImageUsed: styleCount > 0,
+        styleReferenceImageCount: styleCount,
+        logoUsed: logoCount > 0,
+        aspectRatio: requestedVideoAspectRatio,
+        videoDuration: payload.videoDuration || payload.durationSelection || "auto",
+        videoModel: model || undefined,
+        videoMode: model ? mode : undefined,
+        videoReferenceImageIds: model ? resolvedVideoReferenceIds : undefined,
       },
+    };
+    const billing = beginVideoScriptRequest({
+      userId: user.id,
+      requestId,
+      brandId: brand.id,
+      trendId: trend.id,
+      ideaIndex,
+      model,
+      mode,
+      creditCost: CREDIT_COSTS.videoScript,
+      event: billingEvent,
     });
 
-    if (!charged || !charged.spent) {
+    if (!billing.started && billing.insufficient) {
       badRequest(res, "积分不足或扣除积分失败，请刷新页面重试。");
+      return true;
+    }
+    if (!billing.started) {
+      badRequest(res, billing.request?.status === "running"
+        ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
+        : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。");
       return true;
     }
 
@@ -251,7 +286,6 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       });
 
       const generation = {
-        id: allocateCounter("nextGenerationId", 1),
         ownerUserId: user.id,
         type: "videoScript",
         channelLabel: "视频脚本",
@@ -293,23 +327,18 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         },
       };
 
-      const created = insertGeneration(generation);
-      updateCreditEventGeneration(charged.creditEvent.id, created, created.payload);
+      const completed = completeVideoScriptRequest({ userId: user.id, requestId, generation });
+      const created = completed.generation;
+      if (!created) throw new Error("视频脚本生成记录创建失败");
 
       json(res, 200, {
         generation: sanitizeGeneration(created, appConfig),
         videoScript: script,
-        user: sanitizeUser(charged.user),
+        user: sanitizeUser(completed.user || user),
       });
       return true;
     } catch (error) {
-      if (charged?.creditEvent?.id) {
-        refundCreditEventIfNeeded({
-          creditEventId: charged.creditEvent.id,
-          userId: user.id,
-          reason: error.message || "video script generation failed",
-        });
-      }
+      failVideoScriptRequest({ userId: user.id, requestId, reason: error.message || "video script generation failed" });
       badRequest(res, `视频脚本生成失败：${error.message || "模型服务异常"}，已退还积分。`);
       return true;
     }

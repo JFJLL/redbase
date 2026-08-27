@@ -1,10 +1,16 @@
 const path = require("path");
 const crypto = require("crypto");
+const fs = require("fs");
+const fsp = require("fs/promises");
 const {
   validateGeneratedAssetInput,
+  validateGeneratedAssetMetadata,
   buildGeneratedAssetFileName,
   isOssObjectNotFoundError,
-  MAX_GENERATED_ASSET_BYTES,
+  resolveGeneratedAssetMaxBytes,
+  createAssetTooLargeError,
+  doesImageBufferMatchMimeType,
+  doesVideoBufferMatchMimeType,
 } = require("./generated-asset-utils");
 
 const OSS_DELETE_BATCH_LIMIT = 1000;
@@ -47,12 +53,42 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
   const client = createAliyunOssClient(config, dependencies);
   const now = dependencies.now || (() => new Date());
   const randomId = dependencies.randomId;
+  const limits = {
+    imageMaxBytes: dependencies.imageMaxBytes,
+    videoClipMaxBytes: dependencies.videoClipMaxBytes,
+    videoFinalMaxBytes: dependencies.videoFinalMaxBytes,
+  };
+  const createReadStream = dependencies.createReadStream || fs.createReadStream;
+
+  async function readFileHeader(filePath) {
+    const handle = await fsp.open(filePath, "r");
+    try {
+      const header = Buffer.alloc(12);
+      const result = await handle.read(header, 0, header.length, 0);
+      return header.subarray(0, result.bytesRead);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async function validateFileInput(input) {
+    const filePath = String(input?.filePath || "").trim();
+    if (!filePath) throw new Error("Generated asset source file is required");
+    const stat = await fsp.stat(filePath);
+    const metadata = validateGeneratedAssetMetadata(input, limits);
+    if (Number(stat.size) > metadata.maxBytes) throw createAssetTooLargeError(metadata.maxBytes);
+    const header = await readFileHeader(filePath);
+    if (!doesImageBufferMatchMimeType(header, metadata.mimeType) && !doesVideoBufferMatchMimeType(header, metadata.mimeType)) {
+      throw new Error("Generated asset content does not match its MIME type");
+    }
+    return { filePath, stat, metadata };
+  }
 
   return {
     provider: "aliyun_oss",
     isConfigured: () => true,
     async save(input) {
-      const assetInput = validateGeneratedAssetInput(input);
+      const assetInput = validateGeneratedAssetInput(input, limits);
       const createdAt = now();
       const year = String(createdAt.getUTCFullYear());
       const month = String(createdAt.getUTCMonth() + 1).padStart(2, "0");
@@ -85,8 +121,60 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
         provider: "aliyun_oss",
         storedPath: "",
         objectKey,
+        variant: assetInput.variant,
         mimeType: assetInput.mimeType,
         sizeBytes: assetInput.buffer.length,
+        createdAt: createdAt.toISOString(),
+        bucket: config.bucket,
+        endpoint: config.endpoint,
+      };
+    },
+    async saveFile(input) {
+      const { filePath, stat, metadata } = await validateFileInput(input);
+      const createdAt = now();
+      const year = String(createdAt.getUTCFullYear());
+      const month = String(createdAt.getUTCMonth() + 1).padStart(2, "0");
+      const filename = buildGeneratedAssetFileName(
+        metadata.generationId,
+        metadata.variant,
+        metadata.mimeType,
+        typeof randomId === "function" ? randomId() : undefined,
+      );
+      const objectKey = assertSafeObjectKey(
+        path.posix.join(
+          prefix,
+          "generated-images",
+          "users",
+          String(metadata.ownerUserId),
+          year,
+          month,
+          String(metadata.generationId),
+          filename,
+        ),
+        prefix,
+      );
+      if (typeof client.putStream !== "function") {
+        throw new Error("OSS client does not support streaming generated asset uploads");
+      }
+      const stream = createReadStream(filePath);
+      try {
+        await client.putStream(objectKey, stream, {
+          headers: {
+            "Content-Type": metadata.mimeType,
+            "x-oss-forbid-overwrite": "true",
+          },
+        });
+      } catch (error) {
+        stream.destroy();
+        throw error;
+      }
+      return {
+        provider: "aliyun_oss",
+        storedPath: "",
+        objectKey,
+        variant: metadata.variant,
+        mimeType: metadata.mimeType,
+        sizeBytes: Number(stat.size),
         createdAt: createdAt.toISOString(),
         bucket: config.bucket,
         endpoint: config.endpoint,
@@ -256,23 +344,20 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
       const expires = Math.max(1, Math.min(3600, Number(options.expiresSeconds || DEFAULT_READ_URL_EXPIRY_SECONDS)));
       return client.signatureUrl(assertSafeObjectKey(asset.objectKey, prefix), { method: "GET", expires });
     },
-    async readBuffer(asset) {
+    async readBuffer(asset, options = {}) {
       if (!asset?.objectKey) throw new Error("Generated asset not found");
       const objectKey = assertSafeObjectKey(asset.objectKey, prefix);
+      const maxBytes = resolveGeneratedAssetMaxBytes({ ...asset, maxBytes: options.maxBytes }, limits);
       if (typeof client.head === "function") {
         const metadata = await client.head(objectKey);
         const contentLength = Number(
           metadata?.res?.headers?.["content-length"] || metadata?.res?.headers?.["Content-Length"] || metadata?.meta?.["content-length"] || 0,
         );
-        if (contentLength > MAX_GENERATED_ASSET_BYTES) {
-          throw Object.assign(new Error("Generated asset exceeds the 60MB limit"), { code: "PAYLOAD_TOO_LARGE" });
-        }
+        if (contentLength > maxBytes) throw createAssetTooLargeError(maxBytes);
       }
       const response = await client.get(objectKey);
       if (!Buffer.isBuffer(response?.content)) throw new Error("OSS object content is unavailable");
-      if (response.content.length > MAX_GENERATED_ASSET_BYTES) {
-        throw Object.assign(new Error("Generated asset exceeds the 60MB limit"), { code: "PAYLOAD_TOO_LARGE" });
-      }
+      if (response.content.length > maxBytes) throw createAssetTooLargeError(maxBytes);
       return response.content;
     },
   };

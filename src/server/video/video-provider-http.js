@@ -66,6 +66,15 @@ async function requestProviderJson(fetchImpl, url, options = {}) {
     error.statusCode = response.status;
     error.payload = payload;
     error.phase = phase;
+    if (phase === "submit" && response.status !== 429) {
+      // A gateway/server error may be returned after the provider accepted the
+      // task. Without provider idempotency support it is unsafe to resubmit.
+      // Definitive client/auth/route errors remain safe to mark failed.
+      const definitive = new Set([400, 401, 403, 404, 422]);
+      if (response.status === 408 || response.status >= 500 || !definitive.has(response.status)) {
+        error.uncertainSubmission = true;
+      }
+    }
     throw error;
   }
   return payload;

@@ -1,6 +1,11 @@
 const crypto = require("crypto");
 
-const MAX_GENERATED_ASSET_BYTES = 60 * 1024 * 1024;
+const DEFAULT_GENERATED_IMAGE_ASSET_BYTES = 60 * 1024 * 1024;
+const DEFAULT_VIDEO_CLIP_ASSET_BYTES = 256 * 1024 * 1024;
+const DEFAULT_VIDEO_FINAL_ASSET_BYTES = 1024 * 1024 * 1024;
+// Kept as a compatibility alias for callers that only handle images. Video
+// paths must use the explicit clip/final limits below.
+const MAX_GENERATED_ASSET_BYTES = DEFAULT_GENERATED_IMAGE_ASSET_BYTES;
 const GENERATED_IMAGE_MIME_EXTENSIONS = Object.freeze({
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -11,7 +16,27 @@ const GENERATED_VIDEO_MIME_EXTENSIONS = Object.freeze({
   "video/mp4": "mp4",
 });
 
-function validateGeneratedAssetInput(input = {}) {
+function positiveLimit(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function resolveGeneratedAssetMaxBytes(input = {}, limits = {}) {
+  const explicit = Number(input.maxBytes);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+  const mimeType = String(input.mimeType || "").trim().toLowerCase();
+  const storedPath = String(input.storedPath || input.objectKey || input.filePath || "").trim().toLowerCase();
+  const imagePath = /\.(?:png|jpe?g|webp|gif)(?:$|[?#])/.test(storedPath);
+  if (mimeType.startsWith("image/") || imagePath) {
+    return positiveLimit(limits.imageMaxBytes, DEFAULT_GENERATED_IMAGE_ASSET_BYTES);
+  }
+  if (String(input.variant || "").trim() === "final") {
+    return positiveLimit(limits.videoFinalMaxBytes, DEFAULT_VIDEO_FINAL_ASSET_BYTES);
+  }
+  return positiveLimit(limits.videoClipMaxBytes, DEFAULT_VIDEO_CLIP_ASSET_BYTES);
+}
+
+function validateGeneratedAssetMetadata(input = {}, limits = {}) {
   const ownerUserId = Number(input.ownerUserId);
   const generationId = Number(input.generationId);
   const variant = String(input.variant || "").trim();
@@ -19,17 +44,41 @@ function validateGeneratedAssetInput(input = {}) {
   if (!Number.isSafeInteger(ownerUserId) || ownerUserId <= 0) throw new Error("Invalid generated asset owner");
   if (!Number.isSafeInteger(generationId) || generationId <= 0) throw new Error("Invalid generated asset generation");
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(variant)) throw new Error("Invalid generated asset variant");
-  if (!Buffer.isBuffer(input.buffer)) throw new Error("Generated asset must be a Buffer");
   if (!GENERATED_IMAGE_MIME_EXTENSIONS[mimeType] && !GENERATED_VIDEO_MIME_EXTENSIONS[mimeType]) throw new Error("Unsupported generated asset MIME type");
-  if (input.buffer.length > MAX_GENERATED_ASSET_BYTES) {
-    const error = new Error("Generated asset exceeds the 60MB limit");
+  return {
+    ownerUserId,
+    generationId,
+    variant,
+    mimeType,
+    maxBytes: resolveGeneratedAssetMaxBytes({ ...input, mimeType, variant }, limits),
+  };
+}
+
+function formatAssetLimit(maxBytes) {
+  const megabytes = Number(maxBytes) / (1024 * 1024);
+  if (Number.isInteger(megabytes)) return `${megabytes}MB`;
+  return `${Math.round(megabytes * 10) / 10}MB`;
+}
+
+function createAssetTooLargeError(maxBytes) {
+  const error = new Error(`Generated asset exceeds the ${formatAssetLimit(maxBytes)} limit`);
+  error.code = "PAYLOAD_TOO_LARGE";
+  error.maxBytes = maxBytes;
+  return error;
+}
+
+function validateGeneratedAssetInput(input = {}, limits = {}) {
+  const metadata = validateGeneratedAssetMetadata(input, limits);
+  if (!Buffer.isBuffer(input.buffer)) throw new Error("Generated asset must be a Buffer");
+  if (input.buffer.length > metadata.maxBytes) {
+    const error = createAssetTooLargeError(metadata.maxBytes);
     error.code = "PAYLOAD_TOO_LARGE";
     throw error;
   }
-  if (!doesImageBufferMatchMimeType(input.buffer, mimeType) && !doesVideoBufferMatchMimeType(input.buffer, mimeType)) {
+  if (!doesImageBufferMatchMimeType(input.buffer, metadata.mimeType) && !doesVideoBufferMatchMimeType(input.buffer, metadata.mimeType)) {
     throw new Error("Generated asset content does not match its MIME type");
   }
-  return { ownerUserId, generationId, variant, mimeType, buffer: input.buffer };
+  return { ...metadata, buffer: input.buffer };
 }
 
 function doesImageBufferMatchMimeType(buffer, mimeType) {
@@ -76,12 +125,19 @@ function isOssObjectNotFoundError(error) {
 }
 
 module.exports = {
+  DEFAULT_GENERATED_IMAGE_ASSET_BYTES,
+  DEFAULT_VIDEO_CLIP_ASSET_BYTES,
+  DEFAULT_VIDEO_FINAL_ASSET_BYTES,
   MAX_GENERATED_ASSET_BYTES,
   GENERATED_IMAGE_MIME_EXTENSIONS,
   GENERATED_VIDEO_MIME_EXTENSIONS,
   doesImageBufferMatchMimeType,
   doesVideoBufferMatchMimeType,
+  resolveGeneratedAssetMaxBytes,
+  validateGeneratedAssetMetadata,
   validateGeneratedAssetInput,
+  createAssetTooLargeError,
+  formatAssetLimit,
   buildGeneratedAssetFileName,
   inferGeneratedAssetProvider,
   isOssNotFoundError,

@@ -4,8 +4,12 @@ const crypto = require("crypto");
 const { DATA_DIR } = require("../config");
 const {
   validateGeneratedAssetInput,
+  validateGeneratedAssetMetadata,
   buildGeneratedAssetFileName,
-  MAX_GENERATED_ASSET_BYTES,
+  resolveGeneratedAssetMaxBytes,
+  createAssetTooLargeError,
+  doesImageBufferMatchMimeType,
+  doesVideoBufferMatchMimeType,
 } = require("./generated-asset-utils");
 
 const DELETION_STAGING_GRACE_MS = 60 * 60 * 1000;
@@ -25,6 +29,32 @@ function createLocalGeneratedAssetStorage(options = {}) {
   const fsPromises = options.fsp || fsp;
   const now = options.now || (() => new Date());
   const randomId = options.randomId;
+  const limits = {
+    imageMaxBytes: options.imageMaxBytes,
+    videoClipMaxBytes: options.videoClipMaxBytes,
+    videoFinalMaxBytes: options.videoFinalMaxBytes,
+  };
+
+  async function readFileHeader(filePath) {
+    if (typeof fsPromises.open !== "function") {
+      const buffer = await fsPromises.readFile(filePath);
+      return buffer.subarray(0, 12);
+    }
+    const handle = await fsPromises.open(filePath, "r");
+    try {
+      const header = Buffer.alloc(12);
+      const result = await handle.read(header, 0, header.length, 0);
+      return header.subarray(0, result.bytesRead);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  function assetMetadata(input, stat) {
+    const metadata = validateGeneratedAssetMetadata(input, limits);
+    if (Number(stat.size) > metadata.maxBytes) throw createAssetTooLargeError(metadata.maxBytes);
+    return metadata;
+  }
 
   async function visitFiles(directory, visitor) {
     let entries;
@@ -45,7 +75,7 @@ function createLocalGeneratedAssetStorage(options = {}) {
     provider: "local",
     isConfigured: () => true,
     async save(input) {
-      const assetInput = validateGeneratedAssetInput(input);
+      const assetInput = validateGeneratedAssetInput(input, limits);
       const createdAt = now();
       const year = String(createdAt.getUTCFullYear());
       const month = String(createdAt.getUTCMonth() + 1).padStart(2, "0");
@@ -72,8 +102,61 @@ function createLocalGeneratedAssetStorage(options = {}) {
         provider: "local",
         storedPath,
         objectKey: "",
+        variant: assetInput.variant,
         mimeType: assetInput.mimeType,
         sizeBytes: assetInput.buffer.length,
+        createdAt: createdAt.toISOString(),
+        bucket: "",
+        endpoint: "",
+      };
+    },
+    async saveFile(input) {
+      const rawSourcePath = String(input?.filePath || "").trim();
+      if (!rawSourcePath) throw new Error("Generated asset source file is required");
+      const sourcePath = path.resolve(rawSourcePath);
+      if (sourcePath === path.parse(sourcePath).root) throw new Error("Generated asset source file is required");
+      const stat = await fsPromises.stat(sourcePath);
+      const metadata = assetMetadata(input, stat);
+      const header = await readFileHeader(sourcePath);
+      if (!doesImageBufferMatchMimeType(header, metadata.mimeType) && !doesVideoBufferMatchMimeType(header, metadata.mimeType)) {
+        throw new Error("Generated asset content does not match its MIME type");
+      }
+      const createdAt = now();
+      const year = String(createdAt.getUTCFullYear());
+      const month = String(createdAt.getUTCMonth() + 1).padStart(2, "0");
+      const filename = buildGeneratedAssetFileName(
+        metadata.generationId,
+        metadata.variant,
+        metadata.mimeType,
+        typeof randomId === "function" ? randomId() : undefined,
+      );
+      const storedPath = path.join(
+        "uploads",
+        "generated-images",
+        "users",
+        String(metadata.ownerUserId),
+        year,
+        month,
+        String(metadata.generationId),
+        filename,
+      );
+      const absolutePath = resolveLocalAssetPath(storedPath, dataDir);
+      const temporaryPath = `${absolutePath}.tmp-${crypto.randomUUID()}`;
+      await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
+      try {
+        await fsPromises.copyFile(sourcePath, temporaryPath);
+        await fsPromises.rename(temporaryPath, absolutePath);
+      } catch (error) {
+        await fsPromises.unlink(temporaryPath).catch(() => {});
+        throw error;
+      }
+      return {
+        provider: "local",
+        storedPath,
+        objectKey: "",
+        variant: metadata.variant,
+        mimeType: metadata.mimeType,
+        sizeBytes: Number(stat.size),
         createdAt: createdAt.toISOString(),
         bucket: "",
         endpoint: "",
@@ -179,11 +262,12 @@ function createLocalGeneratedAssetStorage(options = {}) {
     async createReadUrl() {
       return "";
     },
-    async readBuffer(asset) {
+    async readBuffer(asset, options = {}) {
       if (!asset?.storedPath) throw Object.assign(new Error("Generated asset not found"), { code: "ENOENT" });
       const absolutePath = resolveLocalAssetPath(asset.storedPath, dataDir);
       const stat = await fsPromises.stat(absolutePath);
-      if (stat.size > MAX_GENERATED_ASSET_BYTES) throw Object.assign(new Error("Generated asset exceeds the 60MB limit"), { code: "PAYLOAD_TOO_LARGE" });
+      const maxBytes = resolveGeneratedAssetMaxBytes({ ...asset, maxBytes: options.maxBytes }, limits);
+      if (stat.size > maxBytes) throw createAssetTooLargeError(maxBytes);
       return fsPromises.readFile(absolutePath);
     },
   };

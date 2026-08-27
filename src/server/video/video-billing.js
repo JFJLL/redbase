@@ -17,6 +17,17 @@ function findRefundEvent({ userId, refundKey }) {
   `).get(Number(userId), String(refundKey || ""));
 }
 
+function sumVideoProjectRefundCredits({ userId, projectId } = {}) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) AS refunded_credits
+    FROM credit_events
+    WHERE user_id = ?
+      AND action_type = 'videoProjectRefund'
+      AND CAST(json_extract(payload_json, '$.projectId') AS INTEGER) = ?
+  `).get(Number(userId), Number(projectId));
+  return Number(row?.refunded_credits || 0);
+}
+
 function refundVideoCredits({
   userId,
   amount,
@@ -89,4 +100,5 @@ function refundVideoCredits({
 module.exports = {
   findRefundEvent,
   refundVideoCredits,
+  sumVideoProjectRefundCredits,
 };

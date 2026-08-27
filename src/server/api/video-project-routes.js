@@ -184,7 +184,11 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
         badRequest(res, "缺少 requestId，请重试。");
         return true;
       }
-      json(res, 200, { project: await service.retryClip(Number(retryMatch[1]), user.id, Number(retryMatch[2]), requestId) });
+      const result = await service.retryClip(Number(retryMatch[1]), user.id, Number(retryMatch[2]), requestId);
+      json(res, 200, {
+        project: result?.project || result,
+        user: sanitizeUser(result?.user || user),
+      });
     } catch (error) {
       respondVideoError(res, error, badRequest);
     }
