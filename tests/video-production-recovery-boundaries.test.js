@@ -13,7 +13,7 @@ const { openDatabase, getDbProxy } = require("../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/server/db/schema");
 const { insertUser, findUserById } = require("../src/server/db/repositories/auth-repository");
 const { insertProductImage } = require("../src/server/db/repositories/product-image-repository");
-const { updateProject, updateClip } = require("../src/server/db/repositories/video-project-repository");
+const { getProject, updateProject, updateClip } = require("../src/server/db/repositories/video-project-repository");
 const { createVideoProjectService } = require("../src/server/video/video-project-service");
 const { createAgnesKeyPool } = require("../src/server/video/agnes-key-pool");
 const { downloadProviderMediaToFile } = require("../src/server/video/video-remote");
@@ -154,6 +154,8 @@ function makeService({
   keyPool = createAgnesKeyPool({ keys: ["boundary-key-a"], rpmPerKey: 60 }),
   appConfig = makeAppConfig(),
   fetchImpl = fetch,
+  resolver,
+  resolveStoredProductImagePath = resolver || (() => frozenSourcePath),
   executor = async (_binary, args) => {
     await fsp.writeFile(args[args.length - 1], String(args[args.length - 1]).endsWith(".jpg") ? JPEG_BUFFER : MP4_BUFFER);
   },
@@ -169,7 +171,7 @@ function makeService({
     generatedAssetStorage: storage,
     providers: providers || { d2: p, g2: p },
     keyPool,
-    resolveStoredProductImagePath: () => frozenSourcePath,
+    resolveStoredProductImagePath,
     fetchImpl,
     executor,
     allowLegacyScript: true,
@@ -1064,7 +1066,7 @@ test("29.C, D, E: retry-result requestId validation, replay, and conflict", asyn
     script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
   });
 
-  updateClip(created.project.clips[0].id, { status: "result_processing_failed", provider_task_id: "prov-1" });
+  updateClip(created.project.clips[0].id, { status: "result_processing_failed", providerTaskId: "prov-1" });
   updateProject(created.project.id, { status: "result_processing_failed" });
 
   // 29.C: empty requestId throws VIDEO_REQUEST_ID_REQUIRED
@@ -1081,7 +1083,7 @@ test("29.C, D, E: retry-result requestId validation, replay, and conflict", asyn
   assert.equal(secondClaim.project.id, created.project.id);
 
   // 29.E: same requestId different clip (clip 2) -> 409 conflict
-  updateClip(created.project.clips[1].id, { status: "result_processing_failed", provider_task_id: "prov-2" });
+  updateClip(created.project.clips[1].id, { status: "result_processing_failed", providerTaskId: "prov-2" });
   await assert.rejects(
     service.retryClipResult(created.project.id, ownerUserId, 2, "retry-idem-001"),
     (err) => err.code === "VIDEO_IDEMPOTENCY_CONFLICT",
@@ -1119,7 +1121,7 @@ test("29.F: Concurrency guard: scheduler and manual retry-result share single wo
   });
 
   await service.pump(); // submits clip
-  updateClip(created.project.clips[0].id, { status: "result_processing_failed", provider_task_id: "task-conc" });
+  updateClip(created.project.clips[0].id, { status: "result_processing_failed", providerTaskId: "task-conc" });
   updateProject(created.project.id, { status: "result_processing_failed" });
 
   providerGetStatusCalls = 0;
@@ -1171,8 +1173,9 @@ test("29.I & J: Continuity frame missing auto-recovery from dependency MP4; unre
   await new Promise((r) => setTimeout(r, 10));
   await service.pump(); // completes clip 1
 
-  // 29.I: Clear clip 1 continuityFrame asset while leaving outputVideo.asset intact
-  updateClip(created.project.clips[0].id, { continuityFrame: {} });
+  // 29.I: Physical continuity frame asset deleted from storage while leaving outputVideo.asset intact
+  const clip1Fresh = getProject(created.project.id).clips[0];
+  storage.buffers.delete(clip1Fresh.continuityFrame.asset.storedPath);
 
   ffmpegRuns = 0;
   submitCalls = 0;
@@ -1181,7 +1184,7 @@ test("29.I & J: Continuity frame missing auto-recovery from dependency MP4; unre
   assert.ok(ffmpegRuns > 0, "FFmpeg must have extracted frame from clip 1 MP4");
   assert.equal(submitCalls, 1, "clip 2 submitted without re-calling submitClip for clip 1");
 
-  // 29.J: Both continuity frame and dependency outputVideo are missing -> unrecoverable -> refund unexecuted parts
+  // 29.J: Both continuity frame and dependency outputVideo are physically missing -> unrecoverable -> refund unexecuted parts
   const unrecoverableCreated = await service.createProject({
     ownerUserId,
     requestId: "continuity-unrecoverable-proj",
@@ -1196,9 +1199,10 @@ test("29.I & J: Continuity frame missing auto-recovery from dependency MP4; unre
   await service.pump(); // submits clip 1
   await new Promise((r) => setTimeout(r, 10));
   await service.pump(); // completes clip 1
-  // Wipe both continuity frame and outputVideo from clip 1
-  const unrecFresh = service.getProject(unrecoverableCreated.project.id, ownerUserId);
-  updateClip(unrecFresh.clips[0].id, { continuityFrame: {}, outputVideo: {} });
+  // Physically wipe both continuity frame and outputVideo from storage for clip 1
+  const unrecFresh = getProject(unrecoverableCreated.project.id);
+  if (unrecFresh.clips[0].continuityFrame?.asset?.storedPath) storage.buffers.delete(unrecFresh.clips[0].continuityFrame.asset.storedPath);
+  if (unrecFresh.clips[0].outputVideo?.asset?.storedPath) storage.buffers.delete(unrecFresh.clips[0].outputVideo.asset.storedPath);
 
   const creditsBeforeUnrecoverable = findUserById(ownerUserId).credits;
   await new Promise((r) => setTimeout(r, 10));
@@ -1210,7 +1214,7 @@ test("29.I & J: Continuity frame missing auto-recovery from dependency MP4; unre
   updateProject(unrecoverableCreated.project.id, { status: "completed" });
 });
 
-test("29.K & L: Missing input snapshot auto-recovery from disk; unrecoverable refunds", async () => {
+test("29.K: Missing input snapshot auto-recovery from disk (empty inputAssets)", async () => {
   const ownerUserId = 1014;
   addUser(ownerUserId, 200);
 
@@ -1243,14 +1247,370 @@ test("29.K & L: Missing input snapshot auto-recovery from disk; unrecoverable re
     script: makeScript({ totalDurationSec: 10 }),
   });
 
-  // 29.K: Wipe input assets from project in DB
-  updateProject(created.project.id, { input_assets_json: "[]" });
+  // 29.K: Wipe input assets from project in DB using camelCase inputAssets
+  updateProject(created.project.id, { inputAssets: [] });
 
   // Pump -> auto-recovers frozen input asset from disk
   await service.pump();
-  const recoveredProject = service.getProject(created.project.id, ownerUserId);
+  const recoveredProject = getProject(created.project.id);
   assert.equal(recoveredProject.clips[0].status, "running");
-  assert.ok((recoveredProject.inputAssets || []).length > 0);
+  assert.equal((recoveredProject.inputAssets || []).length, 1);
+  assert.equal(recoveredProject.inputAssets[0].sourceImageId, img.id);
+  assert.ok(recoveredProject.inputAssets[0].asset?.storedPath);
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.N: Existing null asset entry replacement guarantees strictly 1 record", async () => {
+  const ownerUserId = 1015;
+  addUser(ownerUserId, 200);
+
+  const img = insertProductImage({
+    id: 8882,
+    ownerUserId,
+    brandId: 1,
+    originalName: "null-entry.png",
+    storedPath: "uploads/null-entry.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    sha256: "null-entry-sha",
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+
+  const service = makeService({
+    resolver: () => frozenSourcePath,
+  });
+
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "input-snapshot-null-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [img.id],
+    script: makeScript({ totalDurationSec: 10 }),
+  });
+
+  // Set inputAssets to an array with a null asset entry
+  updateProject(created.project.id, {
+    inputAssets: [{ position: 1, sourceImageId: img.id, originalName: "corrupt.png", mimeType: "image/png", sizeBytes: 0, asset: null }],
+  });
+
+  await service.pump();
+  const recoveredProject = getProject(created.project.id);
+  const matching = (recoveredProject.inputAssets || []).filter((x) => Number(x.sourceImageId) === Number(img.id));
+  assert.equal(matching.length, 1, "strictly 1 record per sourceImageId");
+  assert.ok(matching[0].asset?.storedPath, "asset is non-null and valid");
+  assert.equal(recoveredProject.clips[0].status, "running");
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.O & P: Physical local & OSS missing asset auto-refreezes from source image", async () => {
+  const ownerUserId = 1016;
+  addUser(ownerUserId, 200);
+
+  const img = insertProductImage({
+    id: 8883,
+    ownerUserId,
+    brandId: 1,
+    originalName: "physical-loss.png",
+    storedPath: "uploads/physical-loss.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    sha256: "physical-loss-sha",
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+
+  const storage = makeStorage();
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { submitCalls += 1; return { taskId: "d2-ref-task" }; },
+    async getTaskStatus() { return { status: "running" }; },
+  };
+
+  const service = makeService({
+    provider,
+    storage,
+    resolver: () => frozenSourcePath,
+  });
+
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "physical-loss-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [img.id],
+    script: makeScript({ totalDurationSec: 10 }),
+  });
+
+  // 29.O: Physically remove the frozen asset buffer from storage (storage.stat will throw ENOENT)
+  const initialProject = getProject(created.project.id);
+  const frozenPath = initialProject.inputAssets[0].asset.storedPath;
+  storage.buffers.delete(frozenPath);
+
+  submitCalls = 0;
+  await service.pump();
+  const recoveredProject = getProject(created.project.id);
+  const matching = (recoveredProject.inputAssets || []).filter((x) => Number(x.sourceImageId) === Number(img.id));
+  assert.equal(matching.length, 1, "strictly 1 record after refreeze");
+  assert.ok(matching[0].asset?.storedPath);
+  assert.equal(submitCalls, 1, "clip successfully submitted");
+  assert.equal(recoveredProject.clips[0].status, "running");
+
+  // 29.P: OSS NoSuchKey simulation
+  const ossProject = await service.createProject({
+    ownerUserId,
+    requestId: "oss-loss-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 1,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [img.id],
+    script: makeScript({ totalDurationSec: 10 }),
+  });
+  // Point asset to objectKey and mock stat throwing NoSuchKey
+  const oldStat = storage.stat;
+  storage.stat = async (asset) => {
+    if (asset?.objectKey === "oss-missing-key") {
+      const err = new Error("The specified key does not exist.");
+      err.name = "NoSuchKey";
+      err.code = "NoSuchKey";
+      err.status = 404;
+      throw err;
+    }
+    return oldStat(asset);
+  };
+  updateProject(ossProject.project.id, {
+    inputAssets: [{ position: 1, sourceImageId: img.id, originalName: "oss.png", mimeType: "image/png", sizeBytes: 10, asset: { provider: "aliyun_oss", objectKey: "oss-missing-key" } }],
+  });
+  submitCalls = 0;
+  await service.pump();
+  storage.stat = oldStat;
+  const recoveredOssProject = getProject(ossProject.project.id);
+  assert.equal(recoveredOssProject.inputAssets.filter((x) => Number(x.sourceImageId) === Number(img.id)).length, 1);
+  assert.equal(submitCalls, 1);
+
+  updateProject(created.project.id, { status: "completed" });
+  updateProject(ossProject.project.id, { status: "completed" });
+});
+
+test("29.Q: Source product image deleted + frozen asset missing -> unrecoverable refund", async () => {
+  const ownerUserId = 1017;
+  addUser(ownerUserId, 200);
+
+  const img = insertProductImage({
+    id: 8884,
+    ownerUserId,
+    brandId: 1,
+    originalName: "deleted-source.png",
+    storedPath: "uploads/deleted-source.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    sha256: "deleted-source-sha",
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { submitCalls += 1; return { taskId: "d2-fail-task" }; },
+    async getTaskStatus() { return { status: "running" }; },
+  };
+
+  let resolvePath = () => frozenSourcePath;
+  const service = makeService({
+    provider,
+    resolver: () => resolvePath(),
+  });
+
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "deleted-source-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [img.id],
+    script: makeScript({ totalDurationSec: 10 }),
+  });
+
+  // Wipe inputAssets and switch resolver to simulate product image deletion on disk
+  resolvePath = () => {
+    const err = new Error("File not found on disk");
+    err.code = "ENOENT";
+    throw err;
+  };
+  updateProject(created.project.id, { inputAssets: [] });
+
+  const creditsBefore = findUserById(ownerUserId).credits;
+  await service.pump();
+  const failedProject = service.getProject(created.project.id, ownerUserId);
+  assert.equal(failedProject.status, "project_data_failed");
+  assert.equal(submitCalls, 0, "provider submit count must be 0");
+  assert.ok(findUserById(ownerUserId).credits > creditsBefore, "unexecuted clip credits refunded");
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.R: Local video streaming error handling & client disconnect", async () => {
+  const ownerUserId = 1018;
+  addUser(ownerUserId, 200);
+
+  const storage = makeStorage();
+  const service = makeService({ storage });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "stream-err-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  const clipAsset = { provider: "local", storedPath: "generated-images/users/1018/test/clip-1.mp4", mimeType: "video/mp4", sizeBytes: MP4_BUFFER.length };
+  storage.buffers.set(clipAsset.storedPath, MP4_BUFFER);
+  updateClip(created.project.clips[0].id, { status: "completed", outputVideo: { asset: clipAsset, mimeType: "video/mp4", sizeBytes: MP4_BUFFER.length } });
+
+  // 1. No-Range stream error
+  const { EventEmitter, Readable } = require("stream");
+  const errorStream = new Readable({
+    read() {
+      process.nextTick(() => this.emit("error", new Error("disk read error")));
+    },
+  });
+  const oldCreateStream = storage.createReadStream;
+  storage.createReadStream = () => errorStream;
+
+  let destroyedWithError = null;
+  const mockRes = Object.assign(new EventEmitter(), {
+    headersSent: true,
+    writeHead() {},
+    end() {},
+    destroy(err) { destroyedWithError = err; },
+  });
+
+  const served = await service.serveAsset(created.project.id, ownerUserId, "clip", 1, mockRes, { headers: {} });
+  assert.equal(served, true);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(destroyedWithError, "res.destroy called on stream error");
+
+  // 2. Client disconnect
+  const normalStream = Readable.from(MP4_BUFFER);
+  storage.createReadStream = () => normalStream;
+  const clientRes = Object.assign(new EventEmitter(), {
+    headersSent: true,
+    writeHead() {},
+    end() {},
+    destroy() {},
+  });
+  await service.serveAsset(created.project.id, ownerUserId, "clip", 1, clientRes, { headers: {} });
+  clientRes.emit("close");
+  assert.equal(normalStream.destroyed, true, "source stream destroyed when client disconnects");
+
+  storage.createReadStream = oldCreateStream;
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.S: startProject state matrix enforces valid transitions", async () => {
+  const ownerUserId = 1019;
+  addUser(ownerUserId, 200);
+
+  const service = makeService();
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "start-matrix-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  // preparing -> queued
+  updateProject(created.project.id, { status: "preparing" });
+  const p1 = service.startProject(created.project.id, ownerUserId);
+  assert.equal(p1.status, "queued");
+
+  // queued -> queued
+  const p2 = service.startProject(created.project.id, ownerUserId);
+  assert.equal(p2.status, "queued");
+
+  // Other statuses remain unchanged
+  const unmodifiableStatuses = [
+    "running",
+    "processing_result",
+    "result_processing_failed",
+    "assembly_failed",
+    "partial_failed",
+    "uncertain",
+    "project_data_failed",
+    "completed",
+    "failed",
+    "cancelled",
+  ];
+
+  for (const st of unmodifiableStatuses) {
+    updateProject(created.project.id, { status: st });
+    const res = service.startProject(created.project.id, ownerUserId);
+    assert.equal(res.status, st, "startProject must not change " + st);
+    const fresh = service.getProject(created.project.id, ownerUserId);
+    assert.equal(fresh.status, st);
+  }
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.T: Top-level project status becomes processing_result when provider completes", async () => {
+  const ownerUserId = 1020;
+  addUser(ownerUserId, 200);
+
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { return { taskId: "task-pr-top" }; },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER };
+    },
+  };
+
+  const service = makeService({ provider });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "pr-top-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  await service.pump(); // submits clip
+  updateClip(created.project.clips[0].id, { status: "result_processing_failed", providerTaskId: "task-pr-top" });
+  updateProject(created.project.id, { status: "result_processing_failed" });
+
+  // Claim retry-result -> project must be processing_result
+  const claim = await service.retryClipResult(created.project.id, ownerUserId, 1, "retry-claim-pr");
+  assert.equal(claim.project.status, "processing_result");
+  assert.equal(claim.project.clips[0].status, "processing_result");
+
   updateProject(created.project.id, { status: "completed" });
 });
 
