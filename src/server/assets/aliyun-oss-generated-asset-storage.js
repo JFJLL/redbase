@@ -344,6 +344,37 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
       const expires = Math.max(1, Math.min(3600, Number(options.expiresSeconds || DEFAULT_READ_URL_EXPIRY_SECONDS)));
       return client.signatureUrl(assertSafeObjectKey(asset.objectKey, prefix), { method: "GET", expires });
     },
+    createReadStream(asset, options = {}) {
+      throw new Error("OSS video assets should be served via signed read URL redirects");
+    },
+    async stat(asset) {
+      if (!asset?.objectKey) throw new Error("Generated asset not found");
+      const objectKey = assertSafeObjectKey(asset.objectKey, prefix);
+      if (typeof client.head === "function") {
+        const metadata = await client.head(objectKey);
+        const size = Number(
+          metadata?.res?.headers?.["content-length"] || metadata?.res?.headers?.["Content-Length"] || metadata?.meta?.["content-length"] || 0,
+        );
+        return { size };
+      }
+      const response = await client.get(objectKey);
+      return { size: response?.content?.length || 0 };
+    },
+    async copyToFile(asset, targetPath) {
+      if (!asset?.objectKey) throw new Error("Generated asset not found");
+      const objectKey = assertSafeObjectKey(asset.objectKey, prefix);
+      await fsp.mkdir(path.dirname(path.resolve(targetPath)), { recursive: true });
+      if (typeof client.getStream === "function") {
+        const response = await client.getStream(objectKey);
+        const writeStream = (dependencies.fs || fs).createWriteStream(targetPath);
+        const { pipeline } = require("stream/promises");
+        await pipeline(response.stream, writeStream);
+        return;
+      }
+      const response = await client.get(objectKey);
+      if (!Buffer.isBuffer(response?.content)) throw new Error("OSS object content is unavailable");
+      await fsp.writeFile(targetPath, response.content);
+    },
     async readBuffer(asset, options = {}) {
       if (!asset?.objectKey) throw new Error("Generated asset not found");
       const objectKey = assertSafeObjectKey(asset.objectKey, prefix);

@@ -1,4 +1,5 @@
 const fsp = require("fs/promises");
+const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { DATA_DIR } = require("../config");
@@ -261,6 +262,26 @@ function createLocalGeneratedAssetStorage(options = {}) {
     },
     async createReadUrl() {
       return "";
+    },
+    createReadStream(asset, options = {}) {
+      if (!asset?.storedPath) throw Object.assign(new Error("Generated asset not found"), { code: "ENOENT" });
+      const absolutePath = resolveLocalAssetPath(asset.storedPath, dataDir);
+      const fsStream = (options.fs || fs).createReadStream;
+      const streamOptions = {};
+      if (typeof options.start === "number") streamOptions.start = options.start;
+      if (typeof options.end === "number") streamOptions.end = options.end;
+      return fsStream(absolutePath, streamOptions);
+    },
+    async stat(asset) {
+      if (!asset?.storedPath) throw Object.assign(new Error("Generated asset not found"), { code: "ENOENT" });
+      const absolutePath = resolveLocalAssetPath(asset.storedPath, dataDir);
+      return fsPromises.stat(absolutePath);
+    },
+    async copyToFile(asset, targetPath) {
+      if (!asset?.storedPath) throw Object.assign(new Error("Generated asset not found"), { code: "ENOENT" });
+      const absolutePath = resolveLocalAssetPath(asset.storedPath, dataDir);
+      await fsPromises.mkdir(path.dirname(path.resolve(targetPath)), { recursive: true });
+      await fsPromises.copyFile(absolutePath, targetPath);
     },
     async readBuffer(asset, options = {}) {
       if (!asset?.storedPath) throw Object.assign(new Error("Generated asset not found"), { code: "ENOENT" });

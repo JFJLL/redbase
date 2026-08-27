@@ -84,6 +84,21 @@ function createGeneratedAssetStorage(appConfig = {}, dependencies = {}) {
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");
       return backend.createReadUrl(asset, options);
     },
+    createReadStream(asset, options) {
+      const backend = backendFor(asset);
+      if (!backend) throw new Error("Generated asset storage backend is not configured");
+      return backend.createReadStream(asset, options);
+    },
+    async stat(asset) {
+      const backend = backendFor(asset);
+      if (!backend) throw new Error("Generated asset storage backend is not configured");
+      return backend.stat(asset);
+    },
+    async copyToFile(asset, targetPath) {
+      const backend = backendFor(asset);
+      if (!backend) throw new Error("Generated asset storage backend is not configured");
+      return backend.copyToFile(asset, targetPath);
+    },
     async readBuffer(asset, options) {
       const backend = backendFor(asset);
       if (!backend) throw new Error("Aliyun OSS generated asset storage is not configured");
