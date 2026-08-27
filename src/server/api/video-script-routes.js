@@ -1,4 +1,5 @@
 const fsp = require("fs/promises");
+const crypto = require("crypto");
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
 const brandRepository = require("../db/repositories/brand-repository");
@@ -44,6 +45,35 @@ function parseDataUrl(dataUrl) {
     buffer: Buffer.from(match[2], "base64"),
     base64: match[2],
   };
+}
+
+function calculateVideoScriptInputSignature({
+  brandId,
+  trendId,
+  ideaIndex,
+  model,
+  mode,
+  duration,
+  aspectRatio,
+  effectiveVideoReferenceIds,
+  useBrandLogo,
+  styleReferenceSignature,
+}) {
+  const canonical = {
+    aspectRatio: resolveVideoAspectRatio(aspectRatio, "9:16"),
+    brandId: Number(brandId),
+    duration: String(duration || "auto"),
+    effectiveVideoReferenceIds: Array.isArray(effectiveVideoReferenceIds)
+      ? [...effectiveVideoReferenceIds].map(Number).sort((a, b) => a - b)
+      : [],
+    ideaIndex: Number(ideaIndex),
+    model: String(model || "").trim().toLowerCase(),
+    mode: String(mode || "text").trim().toLowerCase(),
+    styleReferenceSignature: String(styleReferenceSignature || "").trim(),
+    trendId: Number(trendId),
+    useBrandLogo: Boolean(useBrandLogo),
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
 async function handleVideoScriptRoutes(context, req, res, pathname) {
@@ -99,42 +129,6 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     const modelConfig = model ? getVideoModelConfig(model) : null;
     const mode = String(payload.mode || "text").trim().toLowerCase();
     const requestedVideoAspectRatio = resolveVideoAspectRatio(payload.aspectRatioSelection || "9:16", "9:16");
-
-    // 幂等防线：相同用户、相同 requestId 返回已有 generation
-    const existing = findGenerationByOwnerAndRequestId(user.id, requestId);
-    if (existing) {
-      json(res, 200, {
-        generation: sanitizeGeneration(existing, appConfig),
-        videoScript: existing.payload?.videoScript || null,
-        user: sanitizeUser(user),
-      });
-      return true;
-    }
-
-    const existingRequest = findVideoScriptRequest(user.id, requestId);
-    if (existingRequest) {
-      if (existingRequest.status === "completed" && existingRequest.generationId) {
-        const completedGeneration = findGenerationByOwner(existingRequest.generationId, user.id);
-        if (completedGeneration) {
-          json(res, 200, {
-            generation: sanitizeGeneration(completedGeneration, appConfig),
-            videoScript: completedGeneration.payload?.videoScript || null,
-            user: sanitizeUser(user),
-          });
-          return true;
-        }
-      }
-      const stateMessage = existingRequest.status === "running"
-        ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
-        : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。";
-      json(res, 400, {
-        error: stateMessage,
-        code: existingRequest.status === "running"
-          ? "VIDEO_SCRIPT_REQUEST_RUNNING"
-          : "VIDEO_SCRIPT_REQUEST_TERMINAL",
-      });
-      return true;
-    }
 
     // 解析受控素材输入
     const resolvedImages = [];
@@ -212,6 +206,80 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       }
     }
 
+    const styleSignature = Array.isArray(payload.styleReferenceImages) && payload.styleReferenceImages.length > 0
+      ? String(payload.styleReferenceImages[0]?.name || "") + ":" + (payload.styleReferenceImages[0]?.dataUrl ? crypto.createHash("sha256").update(payload.styleReferenceImages[0].dataUrl).digest("hex").slice(0, 16) : "")
+      : "";
+
+    const inputSignature = calculateVideoScriptInputSignature({
+      brandId: brand.id,
+      trendId: trend.id,
+      ideaIndex,
+      model,
+      mode,
+      duration: payload.videoDuration || payload.durationSelection || "auto",
+      aspectRatio: requestedVideoAspectRatio,
+      effectiveVideoReferenceIds: resolvedVideoReferenceIds,
+      useBrandLogo: Boolean(payload.useBrandLogo && brand.logo),
+      styleReferenceSignature: styleSignature,
+    });
+
+    // 幂等防线：相同用户、相同 requestId 返回已有 generation
+    const existing = findGenerationByOwnerAndRequestId(user.id, requestId);
+    if (existing) {
+      if (existing.type !== "videoScript") {
+        json(res, 409, { error: "请求已被其他生成类型使用", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
+        return true;
+      }
+      const p = existing.payload || {};
+      const matches = Number(existing.brandId) === brand.id &&
+        Number(existing.trendId) === trend.id &&
+        Number(p.ideaIndex) === ideaIndex &&
+        (!model || String(p.videoModel || "").toLowerCase() === model) &&
+        (!model || String(p.videoMode || "text").toLowerCase() === mode);
+      if (!matches) {
+        json(res, 409, { error: "请求已被使用但输入参数不一致", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
+        return true;
+      }
+      json(res, 200, {
+        generation: sanitizeGeneration(existing, appConfig),
+        videoScript: existing.payload?.videoScript || null,
+        user: sanitizeUser(user),
+      });
+      return true;
+    }
+
+    const existingRequest = findVideoScriptRequest(user.id, requestId);
+    if (existingRequest) {
+      const signatureMatch = existingRequest.inputSignature
+        ? existingRequest.inputSignature === inputSignature
+        : (Number(existingRequest.brandId) === brand.id && Number(existingRequest.trendId) === trend.id && Number(existingRequest.ideaIndex) === ideaIndex && (!model || existingRequest.model === model));
+      if (!signatureMatch) {
+        json(res, 409, { error: "请求已被使用但输入参数不一致", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
+        return true;
+      }
+      if (existingRequest.status === "completed" && existingRequest.generationId) {
+        const completedGeneration = findGenerationByOwner(existingRequest.generationId, user.id);
+        if (completedGeneration) {
+          json(res, 200, {
+            generation: sanitizeGeneration(completedGeneration, appConfig),
+            videoScript: completedGeneration.payload?.videoScript || null,
+            user: sanitizeUser(user),
+          });
+          return true;
+        }
+      }
+      const stateMessage = existingRequest.status === "running"
+        ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
+        : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。";
+      json(res, 400, {
+        error: stateMessage,
+        code: existingRequest.status === "running"
+          ? "VIDEO_SCRIPT_REQUEST_RUNNING"
+          : "VIDEO_SCRIPT_REQUEST_TERMINAL",
+      });
+      return true;
+    }
+
     // 预扣积分
     const productCount = resolvedImages.filter((img) => img.role === "product").length;
     const styleCount = resolvedImages.filter((img) => img.role === "style").length;
@@ -260,6 +328,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       mode,
       creditCost: CREDIT_COSTS.videoScript,
       event: billingEvent,
+      inputSignature,
     });
 
     if (!billing.started && billing.insufficient) {

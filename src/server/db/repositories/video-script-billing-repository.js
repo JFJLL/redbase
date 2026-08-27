@@ -12,7 +12,7 @@ const db = getDbProxy();
 const VIDEO_SCRIPT_REQUEST_STALE_MS = 15 * 60 * 1000;
 const REQUEST_COLUMNS = `
   id, request_id, user_id, brand_id, trend_id, idea_index, model, mode, status,
-  credit_cost, credit_event_id, generation_id, error, created_at, updated_at
+  credit_cost, credit_event_id, generation_id, error, input_signature, created_at, updated_at
 `;
 
 function mapVideoScriptRequest(row) {
@@ -31,6 +31,7 @@ function mapVideoScriptRequest(row) {
     creditEventId: row.credit_event_id == null ? null : Number(row.credit_event_id),
     generationId: row.generation_id == null ? null : Number(row.generation_id),
     error: String(row.error || ""),
+    inputSignature: String(row.input_signature || ""),
     createdAt: String(row.created_at || ""),
     updatedAt: String(row.updated_at || ""),
   };
@@ -51,12 +52,13 @@ function insertRequest(input) {
   db.prepare(`
     INSERT INTO video_script_requests (
       id, request_id, user_id, brand_id, trend_id, idea_index, model, mode,
-      status, credit_cost, credit_event_id, generation_id, error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      status, credit_cost, credit_event_id, generation_id, error, input_signature, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     Number(id), String(input.requestId), Number(input.userId), Number(input.brandId), Number(input.trendId),
     Number(input.ideaIndex), String(input.model || ""), String(input.mode || ""), String(input.status || "running"),
-    Number(input.creditCost || 0), input.creditEventId ?? null, input.generationId ?? null, String(input.error || ""), now, now,
+    Number(input.creditCost || 0), input.creditEventId ?? null, input.generationId ?? null, String(input.error || ""),
+    String(input.inputSignature || ""), now, now,
   );
   return findVideoScriptRequest(input.userId, input.requestId);
 }
@@ -76,7 +78,7 @@ function updateRequest(requestId, userId, patch = {}) {
   return findVideoScriptRequest(userId, requestId);
 }
 
-function beginVideoScriptRequest({ userId, requestId, brandId, trendId, ideaIndex, model, mode, creditCost, event, createdAt } = {}) {
+function beginVideoScriptRequest({ userId, requestId, brandId, trendId, ideaIndex, model, mode, creditCost, event, createdAt, inputSignature } = {}) {
   return runTransaction(() => {
     const normalizedRequestId = String(requestId || "").trim();
     if (!normalizedRequestId) {
@@ -105,6 +107,7 @@ function beginVideoScriptRequest({ userId, requestId, brandId, trendId, ideaInde
       creditCost,
       creditEventId: charged.creditEvent.id,
       createdAt,
+      inputSignature,
     });
     return { started: true, request, user: charged.user, creditEvent: charged.creditEvent };
   });
