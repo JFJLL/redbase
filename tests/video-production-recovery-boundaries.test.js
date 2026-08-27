@@ -1635,3 +1635,421 @@ test("29.M: Stream download disk write error causes Promise rejection without No
     }),
   );
 });
+
+test("R7.1: Multi-reference recovery (D2 A/B/C all physically missing) preserves all 3 inputs without stale snapshot overwrite", async () => {
+  const ownerUserId = 1021;
+  addUser(ownerUserId, 300);
+
+  const pathA = path.join(sourceDir, "ref-71-a.png");
+  const pathB = path.join(sourceDir, "ref-71-b.png");
+  const pathC = path.join(sourceDir, "ref-71-c.png");
+  fs.writeFileSync(pathA, Buffer.from("image-payload-71-a"));
+  fs.writeFileSync(pathB, Buffer.from("image-payload-71-b"));
+  fs.writeFileSync(pathC, Buffer.from("image-payload-71-c"));
+
+  const imgA = insertProductImage({ id: 8901, ownerUserId, brandId: 1, originalName: "ref-71-a.png", storedPath: "uploads/ref-71-a.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-71-a", createdAt: "2026-08-27T00:00:00.000Z" });
+  const imgB = insertProductImage({ id: 8902, ownerUserId, brandId: 1, originalName: "ref-71-b.png", storedPath: "uploads/ref-71-b.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-71-b", createdAt: "2026-08-27T00:00:00.000Z" });
+  const imgC = insertProductImage({ id: 8903, ownerUserId, brandId: 1, originalName: "ref-71-c.png", storedPath: "uploads/ref-71-c.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-71-c", createdAt: "2026-08-27T00:00:00.000Z" });
+
+  const storage = makeStorage();
+  let lastSubmitArgs = null;
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip(args) {
+      submitCalls += 1;
+      lastSubmitArgs = args;
+      return { taskId: "d2-multi-ref-71" };
+    },
+    async getTaskStatus() { return { status: "running" }; },
+  };
+
+  const resolver = (image) => {
+    if (Number(image?.id) === 8901) return pathA;
+    if (Number(image?.id) === 8902) return pathB;
+    if (Number(image?.id) === 8903) return pathC;
+    return frozenSourcePath;
+  };
+
+  const service = makeService({ provider, storage, resolver });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "multi-ref-71-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [imgA.id, imgB.id, imgC.id],
+    script: {
+      title: "多参考图恢复测试",
+      creativeConcept: "多图概念",
+      totalDurationSec: 10,
+      aspectRatio: "9:16",
+      model: "d2",
+      mode: "image",
+      clips: [{
+        index: 1,
+        purpose: "镜头 1",
+        scene: "场景 1",
+        subjectAction: "动作 1",
+        cameraMovement: "运镜 1",
+        environmentMotion: "动态 1",
+        lightingAndStyle: "光影 1",
+        continuity: "连续性 1",
+        prompt: "提示词 1",
+        generationDurationSec: 10,
+        referenceAssetIds: [imgA.id, imgB.id, imgC.id],
+      }],
+    },
+  });
+
+  const initialProject = getProject(created.project.id);
+  assert.equal(initialProject.inputAssets.length, 3);
+  // Physically wipe all 3 frozen assets from storage
+  for (const item of initialProject.inputAssets) {
+    storage.buffers.delete(item.asset.storedPath);
+  }
+
+  await service.pump();
+
+  const recoveredProject = getProject(created.project.id);
+  assert.equal(recoveredProject.inputAssets.length, 3, "must have strictly 3 inputAssets");
+
+  const recoveredSourceIds = recoveredProject.inputAssets.map((x) => Number(x.sourceImageId));
+  assert.deepEqual(recoveredSourceIds.sort(), [8901, 8902, 8903], "each sourceImageId A/B/C exactly 1 record");
+
+  const positions = recoveredProject.inputAssets.map((x) => x.position);
+  assert.equal(new Set(positions).size, 3, "positions must be strictly unique");
+
+  for (const item of recoveredProject.inputAssets) {
+    assert.ok(storage.buffers.has(item.asset.storedPath), `asset for sourceImageId ${item.sourceImageId} must physically exist in storage`);
+  }
+
+  assert.equal(submitCalls, 1);
+  assert.ok(lastSubmitArgs);
+  assert.equal(lastSubmitArgs.referenceUrls.length, 3, "provider must receive 3 reference URLs");
+  assert.equal(new Set(lastSubmitArgs.referenceUrls).size, 3, "provider reference URLs must be distinct");
+
+  // Verify serving each position returns the distinct buffer
+  for (const item of recoveredProject.inputAssets) {
+    const mockRes = createMockHttpResponse();
+    await service.serveAsset(recoveredProject.id, ownerUserId, "input", item.position, mockRes, { headers: {} });
+    assert.equal(mockRes.statusCode, 200);
+    const expectedContent = item.sourceImageId === 8901 ? "image-payload-71-a" : (item.sourceImageId === 8902 ? "image-payload-71-b" : "image-payload-71-c");
+    assert.equal(mockRes.body.toString(), expectedContent);
+  }
+
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("R7.2: inputAssets=[] with multi-reference (A/B/C) recovers all snapshots with unique positions & URLs", async () => {
+  const ownerUserId = 1022;
+  addUser(ownerUserId, 300);
+
+  const pathA = path.join(sourceDir, "ref-72-a.png");
+  const pathB = path.join(sourceDir, "ref-72-b.png");
+  const pathC = path.join(sourceDir, "ref-72-c.png");
+  fs.writeFileSync(pathA, Buffer.from("image-payload-72-a"));
+  fs.writeFileSync(pathB, Buffer.from("image-payload-72-b"));
+  fs.writeFileSync(pathC, Buffer.from("image-payload-72-c"));
+
+  const imgA = insertProductImage({ id: 8904, ownerUserId, brandId: 1, originalName: "ref-72-a.png", storedPath: "uploads/ref-72-a.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-72-a", createdAt: "2026-08-27T00:00:00.000Z" });
+  const imgB = insertProductImage({ id: 8905, ownerUserId, brandId: 1, originalName: "ref-72-b.png", storedPath: "uploads/ref-72-b.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-72-b", createdAt: "2026-08-27T00:00:00.000Z" });
+  const imgC = insertProductImage({ id: 8906, ownerUserId, brandId: 1, originalName: "ref-72-c.png", storedPath: "uploads/ref-72-c.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-72-c", createdAt: "2026-08-27T00:00:00.000Z" });
+
+  const storage = makeStorage();
+  let lastSubmitArgs = null;
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip(args) {
+      submitCalls += 1;
+      lastSubmitArgs = args;
+      return { taskId: "d2-multi-ref-72" };
+    },
+    async getTaskStatus() { return { status: "running" }; },
+  };
+
+  const resolver = (image) => {
+    if (Number(image?.id) === 8904) return pathA;
+    if (Number(image?.id) === 8905) return pathB;
+    if (Number(image?.id) === 8906) return pathC;
+    return frozenSourcePath;
+  };
+
+  const service = makeService({ provider, storage, resolver });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "multi-ref-72-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [imgA.id, imgB.id, imgC.id],
+    script: {
+      title: "空数组恢复测试",
+      creativeConcept: "多图空数组概念",
+      totalDurationSec: 10,
+      aspectRatio: "9:16",
+      model: "d2",
+      mode: "image",
+      clips: [{
+        index: 1,
+        purpose: "镜头 1",
+        scene: "场景 1",
+        subjectAction: "动作 1",
+        cameraMovement: "运镜 1",
+        environmentMotion: "动态 1",
+        lightingAndStyle: "光影 1",
+        continuity: "连续性 1",
+        prompt: "提示词 1",
+        generationDurationSec: 10,
+        referenceAssetIds: [imgA.id, imgB.id, imgC.id],
+      }],
+    },
+  });
+
+  // Wipe inputAssets from project table in DB
+  updateProject(created.project.id, { inputAssets: [] });
+
+  await service.pump();
+
+  const recoveredProject = getProject(created.project.id);
+  assert.equal(recoveredProject.inputAssets.length, 3, "must have 3 recovered inputAssets");
+
+  const positions = recoveredProject.inputAssets.map((x) => x.position);
+  assert.equal(new Set(positions).size, 3, "positions must not duplicate");
+
+  for (const item of recoveredProject.inputAssets) {
+    assert.ok(storage.buffers.has(item.asset.storedPath), "recovered asset physically exists");
+  }
+
+  assert.equal(submitCalls, 1);
+  assert.equal(lastSubmitArgs.referenceUrls.length, 3);
+  assert.equal(new Set(lastSubmitArgs.referenceUrls).size, 3, "provider reference URLs must not duplicate");
+
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("R7.3: Mixed multi-reference recovery (A=valid, B=missing physical, C=null asset)", async () => {
+  const ownerUserId = 1023;
+  addUser(ownerUserId, 300);
+
+  const pathA = path.join(sourceDir, "ref-73-a.png");
+  const pathB = path.join(sourceDir, "ref-73-b.png");
+  const pathC = path.join(sourceDir, "ref-73-c.png");
+  fs.writeFileSync(pathA, Buffer.from("image-payload-73-a"));
+  fs.writeFileSync(pathB, Buffer.from("image-payload-73-b"));
+  fs.writeFileSync(pathC, Buffer.from("image-payload-73-c"));
+
+  const imgA = insertProductImage({ id: 8907, ownerUserId, brandId: 1, originalName: "ref-73-a.png", storedPath: "uploads/ref-73-a.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-73-a", createdAt: "2026-08-27T00:00:00.000Z" });
+  const imgB = insertProductImage({ id: 8908, ownerUserId, brandId: 1, originalName: "ref-73-b.png", storedPath: "uploads/ref-73-b.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-73-b", createdAt: "2026-08-27T00:00:00.000Z" });
+  const imgC = insertProductImage({ id: 8909, ownerUserId, brandId: 1, originalName: "ref-73-c.png", storedPath: "uploads/ref-73-c.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-73-c", createdAt: "2026-08-27T00:00:00.000Z" });
+
+  const storage = makeStorage();
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { submitCalls += 1; return { taskId: "d2-multi-ref-73" }; },
+    async getTaskStatus() { return { status: "running" }; },
+  };
+
+  const resolver = (image) => {
+    if (Number(image?.id) === 8907) return pathA;
+    if (Number(image?.id) === 8908) return pathB;
+    if (Number(image?.id) === 8909) return pathC;
+    return frozenSourcePath;
+  };
+
+  const service = makeService({ provider, storage, resolver });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "multi-ref-73-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [imgA.id, imgB.id, imgC.id],
+    script: {
+      title: "混合状态恢复测试",
+      creativeConcept: "混合概念",
+      totalDurationSec: 10,
+      aspectRatio: "9:16",
+      model: "d2",
+      mode: "image",
+      clips: [{
+        index: 1,
+        purpose: "镜头 1",
+        scene: "场景 1",
+        subjectAction: "动作 1",
+        cameraMovement: "运镜 1",
+        environmentMotion: "动态 1",
+        lightingAndStyle: "光影 1",
+        continuity: "连续性 1",
+        prompt: "提示词 1",
+        generationDurationSec: 10,
+        referenceAssetIds: [imgA.id, imgB.id, imgC.id],
+      }],
+    },
+  });
+
+  const initProject = getProject(created.project.id);
+  const assetA = initProject.inputAssets.find((x) => x.sourceImageId === imgA.id);
+  const assetB = initProject.inputAssets.find((x) => x.sourceImageId === imgB.id);
+
+  // A = valid (kept in storage)
+  // B = missing physical (delete from storage)
+  storage.buffers.delete(assetB.asset.storedPath);
+  // C = null asset entry
+  const customInputs = [
+    assetA,
+    assetB,
+    { position: 3, sourceImageId: imgC.id, originalName: "ref-73-c.png", mimeType: "image/png", sizeBytes: 0, asset: null },
+  ];
+  updateProject(created.project.id, { inputAssets: customInputs });
+
+  let saveCalls = [];
+  const origSave = storage.save.bind(storage);
+  storage.save = async (args) => {
+    saveCalls.push(args.variant);
+    return origSave(args);
+  };
+
+  await service.pump();
+
+  const recoveredProject = getProject(created.project.id);
+  assert.equal(recoveredProject.inputAssets.length, 3);
+
+  const finalA = recoveredProject.inputAssets.find((x) => x.sourceImageId === imgA.id);
+  const finalB = recoveredProject.inputAssets.find((x) => x.sourceImageId === imgB.id);
+  const finalC = recoveredProject.inputAssets.find((x) => x.sourceImageId === imgC.id);
+
+  assert.equal(finalA.asset.storedPath, assetA.asset.storedPath, "A was valid so it was not re-saved");
+  assert.ok(saveCalls.includes("input-2"), "B was refrozen");
+  assert.ok(saveCalls.includes("input-3"), "C was refrozen");
+  assert.ok(!saveCalls.includes("input-1"), "A was valid, not re-saved");
+  assert.ok(finalC.asset?.storedPath, "C had null asset so it was refrozen");
+  assert.ok(storage.buffers.has(finalA.asset.storedPath));
+  assert.ok(storage.buffers.has(finalB.asset.storedPath));
+  assert.ok(storage.buffers.has(finalC.asset.storedPath));
+  assert.equal(submitCalls, 1);
+
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("R7.4: Generation snapshot sync failure during input asset recovery does NOT delete new physical asset", async () => {
+  const ownerUserId = 1024;
+  addUser(ownerUserId, 300);
+
+  const pathA = path.join(sourceDir, "ref-74-a.png");
+  fs.writeFileSync(pathA, Buffer.from("image-payload-74-a"));
+  const imgA = insertProductImage({ id: 8910, ownerUserId, brandId: 1, originalName: "ref-74-a.png", storedPath: "uploads/ref-74-a.png", mimeType: "image/png", sizeBytes: 18, sha256: "sha-74-a", createdAt: "2026-08-27T00:00:00.000Z" });
+
+  const storage = makeStorage();
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { submitCalls += 1; return { taskId: "d2-multi-ref-74" }; },
+    async getTaskStatus() { return { status: "running" }; },
+  };
+
+  const service = makeService({ provider, storage, resolver: () => pathA });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "multi-ref-74-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [imgA.id],
+    script: makeScript({ totalDurationSec: 10 }),
+  });
+
+  // Physically wipe initial frozen asset from storage
+  const initialProject = getProject(created.project.id);
+  storage.buffers.delete(initialProject.inputAssets[0].asset.storedPath);
+
+  // Set trigger to make upsertGeneration fail during snapshot update
+  db.prepare("CREATE TRIGGER fail_gen_upsert_74 BEFORE UPDATE ON generations BEGIN SELECT RAISE(FAIL, 'generation snapshot DB error'); END;").run();
+
+  try {
+    // Pump -> recovers frozen input -> DB update succeeds -> snapshot fails and logs warning -> pump completes
+    await service.pump();
+  } finally {
+    db.prepare("DROP TRIGGER fail_gen_upsert_74;").run();
+  }
+
+  const recoveredProject = getProject(created.project.id);
+  assert.equal(recoveredProject.inputAssets.length, 1);
+  const newAsset = recoveredProject.inputAssets[0].asset;
+  assert.ok(newAsset?.storedPath, "project DB points to new asset");
+  assert.ok(storage.buffers.has(newAsset.storedPath), "new asset must NOT be deleted even if generation snapshot update failed");
+  assert.equal(submitCalls, 1, "clip proceeds to provider submission");
+
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("R7.5: Generation snapshot sync failure during continuity frame recovery does NOT delete new frame asset", async () => {
+  const ownerUserId = 1025;
+  addUser(ownerUserId, 300);
+
+  const storage = makeStorage();
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { submitCalls += 1; return { taskId: "d2-cont-75" }; },
+    async getTaskStatus() { return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER }; },
+  };
+
+  const service = makeService({ provider, storage });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "cont-75-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 15,
+    script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
+  });
+
+  await service.pump(); // submits clip 1
+  await new Promise((r) => setTimeout(r, 10));
+  await service.pump(); // completes clip 1
+
+  // Physically delete continuity frame asset from storage (leaving outputVideo intact)
+  const clip1 = getProject(created.project.id).clips[0];
+  storage.buffers.delete(clip1.continuityFrame.asset.storedPath);
+
+  // Make generation snapshot update fail
+  db.prepare("CREATE TRIGGER fail_gen_upsert_75 BEFORE UPDATE ON generations BEGIN SELECT RAISE(FAIL, 'generation snapshot DB error'); END;").run();
+
+  submitCalls = 0;
+  try {
+    await new Promise((r) => setTimeout(r, 10));
+    await service.pump(); // clip 2 extracts continuity frame from clip 1 video -> snapshot sync fails (caught) -> clip 2 submits
+  } finally {
+    db.prepare("DROP TRIGGER fail_gen_upsert_75;").run();
+  }
+
+  const freshClip1 = getProject(created.project.id).clips[0];
+  assert.ok(freshClip1.continuityFrame?.asset?.storedPath);
+  assert.ok(storage.buffers.has(freshClip1.continuityFrame.asset.storedPath), "new continuity frame buffer must NOT be deleted");
+  assert.equal(submitCalls, 1, "clip 2 submitted successfully");
+
+  updateProject(created.project.id, { status: "completed" });
+});

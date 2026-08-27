@@ -397,50 +397,70 @@ function createVideoProjectService(options = {}) {
     }
   }
 
+  function isSameAsset(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.storedPath && b.storedPath && a.storedPath === b.storedPath) return true;
+    if (a.objectKey && b.objectKey && a.objectKey === b.objectKey) return true;
+    return false;
+  }
+
   async function ensureContinuityFrameReady(project, dependencyClip) {
-    if (dependencyClip?.continuityFrame?.asset) {
-      const exists = await generatedAssetExists(dependencyClip.continuityFrame.asset);
-      if (exists) return dependencyClip;
+    const freshProject = getProject(project.id) || project;
+    const freshClip = freshProject.clips?.find((c) => c.id === dependencyClip.id || c.index === dependencyClip.index) || dependencyClip;
+
+    if (freshClip?.continuityFrame?.asset) {
+      const exists = await generatedAssetExists(freshClip.continuityFrame.asset);
+      if (exists) return freshClip;
     }
-    if (dependencyClip?.outputVideo?.asset) {
-      const videoExists = await generatedAssetExists(dependencyClip.outputVideo.asset);
+    if (freshClip?.outputVideo?.asset) {
+      const videoExists = await generatedAssetExists(freshClip.outputVideo.asset);
       if (!videoExists) {
         throw createProjectError("前置镜头视频画面丢失，无法自动恢复连续性画面", "VIDEO_CONTINUITY_UNRECOVERABLE");
       }
       return mediaSemaphore.run(() => withVideoTempDir(async (tempDir) => {
-        const videoPath = path.join(tempDir, `dep-${dependencyClip.index}.mp4`);
+        const videoPath = path.join(tempDir, `dep-${freshClip.index}.mp4`);
         if (typeof storage.copyToFile === "function") {
-          await storage.copyToFile(dependencyClip.outputVideo.asset, videoPath);
+          await storage.copyToFile(freshClip.outputVideo.asset, videoPath);
         } else {
-          const buffer = await storage.readBuffer(dependencyClip.outputVideo.asset);
+          const buffer = await storage.readBuffer(freshClip.outputVideo.asset);
           await fsp.writeFile(videoPath, buffer);
         }
-        const framePath = path.join(tempDir, `continuity-${dependencyClip.index}.jpg`);
+        const framePath = path.join(tempDir, `continuity-${freshClip.index}.jpg`);
         await ffmpegSemaphore.run(() => extractStableLastFrame({ videoPath, outputPath: framePath, appConfig, executor }));
         const frameBuffer = await fsp.readFile(framePath);
-        const oldFrameAsset = dependencyClip?.continuityFrame?.asset || null;
-        const continuityFrameAsset = await saveAsset(project, `continuity-frame-${dependencyClip.index}`, "image/jpeg", frameBuffer);
+        const oldFrameAsset = freshClip?.continuityFrame?.asset || null;
+        const continuityFrameAsset = await saveAsset(freshProject, `continuity-frame-${freshClip.index}`, "image/jpeg", frameBuffer);
         let updated;
         try {
-          updated = updateClip(dependencyClip.id, {
+          updated = updateClip(freshClip.id, {
             continuityFrame: { asset: continuityFrameAsset, mimeType: "image/jpeg", sizeBytes: frameBuffer.length },
           });
-          updateGenerationSnapshot(getProject(project.id));
         } catch (dbErr) {
           await cleanupAssets([continuityFrameAsset]).catch(() => {});
           throw dbErr;
         }
-        if (oldFrameAsset && oldFrameAsset !== continuityFrameAsset) {
+        try {
+          updateGenerationSnapshot(getProject(freshProject.id));
+        } catch (snapshotErr) {
+          log.warn?.("[video-project] generation snapshot sync failed during continuity frame recovery", {
+            projectId: freshProject.id,
+            clipId: freshClip.id,
+            error: snapshotErr.message,
+          });
+        }
+        if (oldFrameAsset && !isSameAsset(oldFrameAsset, continuityFrameAsset)) {
           cleanupAssets([oldFrameAsset]).catch(() => {});
         }
-        return updated || dependencyClip;
+        return updated || freshClip;
       }));
     }
     throw createProjectError("前置镜头视频画面丢失，无法自动恢复连续性画面", "VIDEO_CONTINUITY_UNRECOVERABLE");
   }
 
  async function ensureFrozenInputAssetReady(project, sourceImageId) {
-    const currentInputAssets = project.inputAssets || [];
+    const freshProject = getProject(project.id) || project;
+    const currentInputAssets = freshProject.inputAssets || [];
     const existingIndex = currentInputAssets.findIndex(
       (item) => Number(item?.sourceImageId) === Number(sourceImageId)
     );
@@ -452,7 +472,7 @@ function createVideoProjectService(options = {}) {
       if (exists) return existing;
     }
 
-    const image = findProductImageByOwner(Number(sourceImageId), project.ownerUserId);
+    const image = findProductImageByOwner(Number(sourceImageId), freshProject.ownerUserId);
     if (image) {
       let buffer = null;
       try {
@@ -462,8 +482,14 @@ function createVideoProjectService(options = {}) {
         buffer = null;
       }
       if (buffer && buffer.length > 0) {
-        const position = existing?.position || currentInputAssets.length + 1;
-        const newAsset = await saveAsset(project, `input-${position}`, image.mimeType || "image/png", buffer);
+        const maxPosition = currentInputAssets.reduce((max, item) => Math.max(max, Number(item?.position) || 0), 0);
+        let position = (existing?.position && Number(existing.position) > 0) ? Number(existing.position) : null;
+        const positionConflict = position && currentInputAssets.some((item, idx) => idx !== existingIndex && Number(item?.position) === position);
+        if (!position || positionConflict) {
+          position = maxPosition + 1;
+        }
+
+        const newAsset = await saveAsset(freshProject, `input-${position}`, image.mimeType || "image/png", buffer);
         const recovered = {
           position,
           sourceImageId: Number(image.id),
@@ -473,29 +499,44 @@ function createVideoProjectService(options = {}) {
           asset: newAsset,
         };
 
-        let nextInputAssets = [...currentInputAssets];
-        if (existingIndex >= 0) {
-          nextInputAssets[existingIndex] = recovered;
-        } else {
+        let nextInputAssets = currentInputAssets.map((item, idx) => {
+          if (idx === existingIndex) return recovered;
+          return item;
+        });
+        if (existingIndex < 0) {
           nextInputAssets.push(recovered);
         }
+
         const seen = new Set();
         nextInputAssets = nextInputAssets.filter((item) => {
+          if (!item || !item.sourceImageId) return false;
           const sid = Number(item.sourceImageId);
+          if (sid === Number(sourceImageId)) {
+            return item === recovered;
+          }
           if (seen.has(sid)) return false;
           seen.add(sid);
           return true;
         });
 
+        let updatedProject;
         try {
-          updateProject(project.id, { inputAssets: nextInputAssets });
-          updateGenerationSnapshot(getProject(project.id));
+          updatedProject = updateProject(freshProject.id, { inputAssets: nextInputAssets });
         } catch (dbError) {
           await cleanupAssets([newAsset]).catch(() => {});
           throw dbError;
         }
 
-        if (oldAsset && oldAsset !== newAsset) {
+        try {
+          updateGenerationSnapshot(updatedProject || getProject(freshProject.id));
+        } catch (snapshotError) {
+          log.warn?.("[video-project] generation snapshot sync failed during input asset recovery", {
+            projectId: freshProject.id,
+            error: snapshotError.message,
+          });
+        }
+
+        if (oldAsset && !isSameAsset(oldAsset, newAsset)) {
           cleanupAssets([oldAsset]).catch(() => {});
         }
 
@@ -508,14 +549,16 @@ function createVideoProjectService(options = {}) {
   async function getReferenceBundle(project, clip, provider) {
     const config = getVideoModelConfig(project.model);
     const references = [];
-   const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
-   if (previous && project.model === "d2") {
-     let readyPrevious = previous;
+    let workingProject = getProject(project.id) || project;
+    const previous = workingProject.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
+    if (previous && workingProject.model === "d2") {
+      let readyPrevious = previous;
       const prevFrameExists = readyPrevious.continuityFrame?.asset ? await generatedAssetExists(readyPrevious.continuityFrame.asset) : false;
       if (!readyPrevious.continuityFrame?.asset || !prevFrameExists) {
-        readyPrevious = await ensureContinuityFrameReady(project, previous);
+        readyPrevious = await ensureContinuityFrameReady(workingProject, previous);
+        workingProject = getProject(project.id) || workingProject;
       }
-      const previousPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", readyPrevious.index));
+      const previousPath = signVideoPath(videoAssetPath(workingProject.id, "continuity-frame", readyPrevious.index));
       references.push({
         url: toPublicUrl(previousPath, { requireAbsolute: provider.provider !== "fake" }),
         label: "上一镜头真实结束画面",
@@ -523,14 +566,15 @@ function createVideoProjectService(options = {}) {
     }
     const ids = clip.referenceAssetIds || [];
     for (const id of ids) {
-      let frozen = getFrozenInputAsset(project, id);
+      let frozen = getFrozenInputAsset(workingProject, id);
       const exists = frozen?.asset ? await generatedAssetExists(frozen.asset) : false;
       if (!frozen?.asset || !exists) {
         try {
-          frozen = await ensureFrozenInputAssetReady(project, id);
+          frozen = await ensureFrozenInputAssetReady(workingProject, id);
+          workingProject = getProject(project.id) || workingProject;
         } catch (freezeErr) {
           if (provider.provider === "fake") {
-            const image = findProductImageByOwner(Number(id), project.ownerUserId);
+            const image = findProductImageByOwner(Number(id), workingProject.ownerUserId);
             if (image) {
               const signedPath = signAssetUrl(appConfig, `/api/product-images/${image.id}/file`, { ttlMs: DAY_MS });
               references.push({
@@ -544,14 +588,14 @@ function createVideoProjectService(options = {}) {
         }
       }
       if (frozen?.asset) {
-        const inputPath = signVideoPath(videoAssetPath(project.id, "input", frozen.position));
+        const inputPath = signVideoPath(videoAssetPath(workingProject.id, "input", frozen.position));
         references.push({
           url: toPublicUrl(inputPath, { requireAbsolute: provider.provider !== "fake" }),
           label: `产品参考图${frozen.position || references.length + 1}${frozen.originalName ? `（${frozen.originalName}）` : ""}`,
         });
         continue;
       }
-      const image = findProductImageByOwner(Number(id), project.ownerUserId);
+      const image = findProductImageByOwner(Number(id), workingProject.ownerUserId);
       if (!image) throw createProjectError("视频项目参考素材不可用，未执行镜头已自动退款。", "VIDEO_INPUT_SNAPSHOT_UNRECOVERABLE");
       const signedPath = signAssetUrl(appConfig, `/api/product-images/${image.id}/file`, { ttlMs: DAY_MS });
       references.push({
@@ -566,14 +610,16 @@ function createVideoProjectService(options = {}) {
   }
 
   async function getFirstFrameUrl(project, clip, provider) {
-    const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
+    let workingProject = getProject(project.id) || project;
+    const previous = workingProject.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
     let readyPrevious = previous;
     const prevFrameExists = readyPrevious?.continuityFrame?.asset ? await generatedAssetExists(readyPrevious.continuityFrame.asset) : false;
     if (readyPrevious && (!readyPrevious.continuityFrame?.asset || !prevFrameExists)) {
-      readyPrevious = await ensureContinuityFrameReady(project, previous);
+      readyPrevious = await ensureContinuityFrameReady(workingProject, previous);
+      workingProject = getProject(project.id) || workingProject;
     }
     if (!readyPrevious?.continuityFrame?.asset) throw createProjectError("上一镜头的连续性画面尚未准备好", "VIDEO_CONTINUITY_UNRECOVERABLE");
-    const signedPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", readyPrevious.index));
+    const signedPath = signVideoPath(videoAssetPath(workingProject.id, "continuity-frame", readyPrevious.index));
     return toPublicUrl(signedPath, { requireAbsolute: provider.provider !== "fake" });
   }
 
