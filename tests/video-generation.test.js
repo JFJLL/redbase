@@ -392,10 +392,8 @@ test("provider native last frame wins and is persisted without an unnecessary FF
     totalDurationSec: 10,
     script: makeScript(),
   });
-  await service.pump();
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await service.pump();
-  assert.equal(service.getProject(result.project.id, 906).status, "completed");
+  const completed = await settleProject(service, result.project.id, 906);
+  assert.equal(completed.status, "completed");
   assert.equal(calls.some((args) => args.includes("-sseof")), false);
   assert.ok([...storage.buffers.values()].some((buffer) => buffer.equals(JPEG_BUFFER)));
 });

@@ -94,13 +94,14 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='payment_orders'").get().count, 1);
   assert.deepEqual(
     db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
-    [1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 4, 5, 6, 7],
   );
   expectColumns("video_projects", ["script_generation_id", "input_assets_json", "assembly_request_id", "assembly_attempt"]);
-  expectColumns("video_clips", ["provider_key_ref", "reservation_credit_event_id", "submission_attempt", "last_successful_poll_at", "poll_failure_count"]);
+  expectColumns("video_clips", ["provider_key_ref", "reservation_credit_event_id", "submission_attempt", "last_successful_poll_at", "poll_failure_count", "result_processing_failure_count", "last_result_processing_error", "last_result_processing_at"]);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='video_project_billing_requests'").get().count, 1);
+  expectColumns("video_project_billing_requests", ["input_signature", "clip_index"]);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='video_script_requests'").get().count, 1);
-  expectColumns("video_script_requests", ["request_id", "credit_event_id", "generation_id", "status", "updated_at"]);
+  expectColumns("video_script_requests", ["request_id", "credit_event_id", "generation_id", "status", "input_signature", "updated_at"]);
 });
 
 test("the backup copy stays byte-identical and untouched", () => {

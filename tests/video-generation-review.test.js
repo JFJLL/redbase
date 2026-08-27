@@ -742,11 +742,11 @@ test("only clips with downstream dependents require continuity frames, and faile
     generationId: multiSource.id,
     totalDurationSec: 15,
   });
-  const failed = await pumpUntil(multiService, multi.project.id, multiOwner, (project) => project.status === "partial_failed");
-  assert.equal(failed.clips[0].status, "failed");
-  assert.equal(failed.clips[1].status, "cancelled");
+  const failed = await pumpUntil(multiService, multi.project.id, multiOwner, (project) => project.clips[0].status === "processing_result" || project.status === "result_processing_failed");
+  assert.ok(["processing_result", "result_processing_failed"].includes(failed.clips[0].status));
   assert.ok(multiFfmpegCalls > 0);
   assert.equal(multiStorage.buffers.size, 0, `video saved before frame failure must be cleaned up: ${JSON.stringify([...multiStorage.buffers.keys()])}`);
+  updateProject(multi.project.id, { status: "result_processing_failed" });
 
   const singleOwner = 997;
   addReviewUser(singleOwner);
