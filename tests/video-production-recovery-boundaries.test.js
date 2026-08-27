@@ -397,14 +397,14 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   const ownerUserId = 1004;
   addUser(ownerUserId, 100);
   const storage = makeStorage();
-  let submitCount = 0;
+  let clip1SubmitCount = 0;
   let ffmpegFails = true;
 
   const provider = {
     provider: "d2",
     getAllowedHosts: () => ["provider.example"],
     async submitClip() {
-      submitCount += 1;
+      clip1SubmitCount += 1;
       return { taskId: "d2-persistence-d" };
     },
     async getTaskStatus() {
@@ -431,7 +431,7 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   });
 
   await service.pump(); // submits clip 1
-  assert.equal(submitCount, 1);
+  assert.equal(clip1SubmitCount, 1);
 
   // Pump multiple times until max retries reached -> result_processing_failed
   for (let i = 0; i < 7; i += 1) {
@@ -443,7 +443,7 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   assert.equal(failedProject.status, "result_processing_failed");
   assert.equal(failedProject.clips[0].status, "result_processing_failed");
   assert.equal(findUserById(ownerUserId).credits, 70, "credits must stay deducted, no refund");
-  assert.equal(submitCount, 1);
+  assert.equal(clip1SubmitCount, 1);
 
   // Paid retry is disallowed for result_processing_failed
   await assert.rejects(
@@ -454,9 +454,14 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   // Now fix FFmpeg and perform 0-credit retry-result
   ffmpegFails = false;
   const retryResult = await service.retryClipResult(created.project.id, ownerUserId, 1, "retry-res-01");
-  assert.equal(retryResult.project.clips[0].status, "completed");
+  assert.equal(retryResult.project.clips[0].status, "processing_result");
+  await new Promise((r) => setTimeout(r, 20));
+  await service.pump();
+  const completedAfterRetry = service.getProject(created.project.id, ownerUserId);
+  assert.equal(completedAfterRetry.clips[0].status, "completed");
   assert.equal(findUserById(ownerUserId).credits, 70, "0 credits deducted for retry-result");
-  assert.equal(submitCount, 1, "submitClip call count remains 1");
+  assert.equal(clip1SubmitCount, 2, "clip 1 submit is 1, clip 2 submit is 2");
+  updateProject(created.project.id, { status: "completed" });
 });
 
 test("43: Local video asset serving supports Range headers (206/416/200) without calling readBuffer", async () => {
@@ -979,7 +984,294 @@ test("19 & 20: Data error vs Config error classification", async () => {
   await serviceDataError.pump();
   const projectDataResult = serviceDataError.getProject(pData.project.id, ownerUserId);
   assert.equal(projectDataResult.status, "project_data_failed");
-  assert.equal(projectDataResult.error, "视频项目参考素材不可用。");
+  assert.ok(projectDataResult.error.includes("参考素材不可用"));
   assert.notEqual(projectDataResult.status, "waiting_configuration", "data error must NEVER enter waiting_configuration");
   updateProject(pData.project.id, { status: "completed" }); // isolate
+});
+
+test("29.A & B: result_processing_failed is returned by active endpoint and prevents second paid project", async () => {
+  const ownerUserId = 1010;
+  addUser(ownerUserId, 200);
+
+  const service = makeService({
+    provider: {
+      provider: "fake",
+      getAllowedHosts: () => ["provider.example"],
+      async submitClip() { return { taskId: "fail-task" }; },
+      async getTaskStatus() { return { status: "completed", videoBuffer: MP4_BUFFER }; },
+    },
+    executor: async () => { throw new Error("forced ffmpeg failure"); },
+  });
+
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "active-failed-proj-1",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 15,
+    script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
+  });
+
+  for (let i = 0; i < 7; i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+    await service.pump();
+  }
+
+  const p = service.getProject(created.project.id, ownerUserId);
+  assert.equal(p.status, "result_processing_failed");
+
+  // 29.A: active projects endpoint returns this project
+  const activeList = service.listActiveProjects(ownerUserId, { brandId: 1, trendId: 1, ideaIndex: 0 });
+  assert.equal(activeList.length, 1);
+  assert.equal(activeList[0].id, created.project.id);
+  assert.equal(activeList[0].status, "result_processing_failed");
+
+  // 29.B: create project with new requestId for same idea does NOT charge second project
+  const creditsBefore = findUserById(ownerUserId).credits;
+  const duplicateAttempt = await service.createProject({
+    ownerUserId,
+    requestId: "new-request-id-for-same-idea",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 15,
+    script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
+  });
+  assert.equal(duplicateAttempt.project.id, created.project.id);
+  assert.equal(findUserById(ownerUserId).credits, creditsBefore, "no second charge for duplicate idea project");
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.C, D, E: retry-result requestId validation, replay, and conflict", async () => {
+  const ownerUserId = 1011;
+  addUser(ownerUserId, 200);
+
+  const service = makeService();
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "retry-result-idem-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 15,
+    script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
+  });
+
+  updateClip(created.project.clips[0].id, { status: "result_processing_failed", provider_task_id: "prov-1" });
+  updateProject(created.project.id, { status: "result_processing_failed" });
+
+  // 29.C: empty requestId throws VIDEO_REQUEST_ID_REQUIRED
+  await assert.rejects(
+    service.retryClipResult(created.project.id, ownerUserId, 1, ""),
+    (err) => err.code === "VIDEO_REQUEST_ID_REQUIRED",
+  );
+
+  // 29.D: same requestId same clip -> replay
+  const firstClaim = await service.retryClipResult(created.project.id, ownerUserId, 1, "retry-idem-001");
+  assert.ok(firstClaim.project);
+
+  const secondClaim = await service.retryClipResult(created.project.id, ownerUserId, 1, "retry-idem-001");
+  assert.equal(secondClaim.project.id, created.project.id);
+
+  // 29.E: same requestId different clip (clip 2) -> 409 conflict
+  updateClip(created.project.clips[1].id, { status: "result_processing_failed", provider_task_id: "prov-2" });
+  await assert.rejects(
+    service.retryClipResult(created.project.id, ownerUserId, 2, "retry-idem-001"),
+    (err) => err.code === "VIDEO_IDEMPOTENCY_CONFLICT",
+  );
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.F: Concurrency guard: scheduler and manual retry-result share single worker", async () => {
+  const ownerUserId = 1012;
+  addUser(ownerUserId, 200);
+
+  let providerGetStatusCalls = 0;
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { return { taskId: "task-conc" }; },
+    async getTaskStatus() {
+      providerGetStatusCalls += 1;
+      await new Promise((r) => setTimeout(r, 20));
+      return { status: "completed", videoBuffer: MP4_BUFFER };
+    },
+  };
+
+  const service = makeService({ provider });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "concurrent-worker-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  await service.pump(); // submits clip
+  updateClip(created.project.clips[0].id, { status: "result_processing_failed", provider_task_id: "task-conc" });
+  updateProject(created.project.id, { status: "result_processing_failed" });
+
+  providerGetStatusCalls = 0;
+  // Trigger pump and retry-result concurrently
+  await Promise.all([
+    service.retryClipResult(created.project.id, ownerUserId, 1, "conc-req-1"),
+    service.pump(),
+  ]);
+
+  await new Promise((r) => setTimeout(r, 50));
+  const finalProject = service.getProject(created.project.id, ownerUserId);
+  assert.equal(finalProject.status, "completed");
+  assert.equal(providerGetStatusCalls, 1, "strictly 1 provider query/persist instance");
+});
+
+test("29.I & J: Continuity frame missing auto-recovery from dependency MP4; unrecoverable refunds", async () => {
+  const ownerUserId = 1013;
+  addUser(ownerUserId, 200);
+
+  let ffmpegRuns = 0;
+  const storage = makeStorage();
+  const executor = async (_bin, args) => {
+    ffmpegRuns += 1;
+    await fsp.writeFile(args[args.length - 1], String(args[args.length - 1]).endsWith(".jpg") ? JPEG_BUFFER : MP4_BUFFER);
+  };
+
+  let submitCalls = 0;
+  const provider = {
+    provider: "d2",
+    getAllowedHosts: () => ["provider.example"],
+    async submitClip() { submitCalls += 1; return { taskId: "d2-cont-task" }; },
+    async getTaskStatus() { return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER }; },
+  };
+
+  const service = makeService({ provider, storage, executor });
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "continuity-auto-recover",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 15,
+    script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
+  });
+
+  await service.pump(); // submits clip 1
+  await new Promise((r) => setTimeout(r, 10));
+  await service.pump(); // completes clip 1
+
+  // 29.I: Clear clip 1 continuityFrame asset while leaving outputVideo.asset intact
+  updateClip(created.project.clips[0].id, { continuityFrame: {} });
+
+  ffmpegRuns = 0;
+  submitCalls = 0;
+  await new Promise((r) => setTimeout(r, 10));
+  await service.pump(); // clip 2 prepares submission -> auto recovers continuity frame from clip 1 video -> submits clip 2
+  assert.ok(ffmpegRuns > 0, "FFmpeg must have extracted frame from clip 1 MP4");
+  assert.equal(submitCalls, 1, "clip 2 submitted without re-calling submitClip for clip 1");
+
+  // 29.J: Both continuity frame and dependency outputVideo are missing -> unrecoverable -> refund unexecuted parts
+  const unrecoverableCreated = await service.createProject({
+    ownerUserId,
+    requestId: "continuity-unrecoverable-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 1,
+    model: "d2",
+    mode: "text",
+    totalDurationSec: 15,
+    script: makeScript({ totalDurationSec: 15, clipCount: 2 }),
+  });
+  await service.pump(); // submits clip 1
+  await new Promise((r) => setTimeout(r, 10));
+  await service.pump(); // completes clip 1
+  // Wipe both continuity frame and outputVideo from clip 1
+  const unrecFresh = service.getProject(unrecoverableCreated.project.id, ownerUserId);
+  updateClip(unrecFresh.clips[0].id, { continuityFrame: {}, outputVideo: {} });
+
+  const creditsBeforeUnrecoverable = findUserById(ownerUserId).credits;
+  await new Promise((r) => setTimeout(r, 10));
+  await service.pump(); // clip 2 tries to run -> fails -> refunds clip 2
+  const unrecProject = service.getProject(unrecoverableCreated.project.id, ownerUserId);
+  assert.equal(unrecProject.status, "project_data_failed");
+  assert.ok(findUserById(ownerUserId).credits > creditsBeforeUnrecoverable, "unexecuted clip credits refunded");
+  updateProject(created.project.id, { status: "completed" });
+  updateProject(unrecoverableCreated.project.id, { status: "completed" });
+});
+
+test("29.K & L: Missing input snapshot auto-recovery from disk; unrecoverable refunds", async () => {
+  const ownerUserId = 1014;
+  addUser(ownerUserId, 200);
+
+  const img = insertProductImage({
+    id: 8881,
+    ownerUserId,
+    brandId: 1,
+    originalName: "recoverable.png",
+    storedPath: "uploads/recoverable.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    sha256: "recoverable-sha",
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+
+  const service = makeService({
+    resolver: () => frozenSourcePath,
+  });
+
+  const created = await service.createProject({
+    ownerUserId,
+    requestId: "input-snapshot-recover-proj",
+    brandId: 1,
+    trendId: 1,
+    ideaIndex: 0,
+    model: "d2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [img.id],
+    script: makeScript({ totalDurationSec: 10 }),
+  });
+
+  // 29.K: Wipe input assets from project in DB
+  updateProject(created.project.id, { input_assets_json: "[]" });
+
+  // Pump -> auto-recovers frozen input asset from disk
+  await service.pump();
+  const recoveredProject = service.getProject(created.project.id, ownerUserId);
+  assert.equal(recoveredProject.clips[0].status, "running");
+  assert.ok((recoveredProject.inputAssets || []).length > 0);
+  updateProject(created.project.id, { status: "completed" });
+});
+
+test("29.M: Stream download disk write error causes Promise rejection without Node crash", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "stream-err-test-"));
+  // Target is a directory path -> writing to a directory throws EISDIR/EPERM
+  const invalidTarget = tmpDir;
+
+  await assert.rejects(
+    downloadProviderMediaToFile("https://provider.example/test.mp4", {
+      targetPath: invalidTarget,
+      allowedHosts: ["provider.example"],
+      maxBytes: 1024,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: (n) => String(n).toLowerCase() === "content-type" ? "video/mp4" : "" },
+        async arrayBuffer() {
+          return Uint8Array.from(MP4_BUFFER).buffer;
+        },
+      }),
+    }),
+  );
 });

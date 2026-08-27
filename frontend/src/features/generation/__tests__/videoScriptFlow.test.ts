@@ -661,4 +661,116 @@ describe("video script generation flow", () => {
     expect(dialog.find('[data-test="retry-assembly"]').text()).toContain("0积分");
     expect(dialog.find('.clip-retry-btn').exists()).toBe(false);
   });
+
+  it("renders processing_result and result_processing_failed states and provides 0-credit retry-result", async () => {
+    vi.useFakeTimers();
+    let retryResultCalled = false;
+    let pollCount = 0;
+
+    const resultProcessingProject = {
+      id: 950,
+      generationId: 951,
+      scriptGenerationId: 88,
+      brandId: 1,
+      trendId: 5,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 10,
+      status: "running",
+      referenceAssetIds: [],
+      visualBible: {},
+      script: { ...FIXTURE_SCRIPT, totalDurationSec: 10, clips: [{ ...FIXTURE_SCRIPT.clips[0], endSec: 10, durationSec: 10 }] },
+      estimatedCredits: 20,
+      chargedCredits: 20,
+      refundedCredits: 0,
+      clips: [{
+        id: 952,
+        index: 1,
+        startSec: 0,
+        endSec: 10,
+        durationSec: 10,
+        status: "processing_result",
+        prompt: "",
+        continuityMode: "text",
+        referenceAssetIds: [],
+        creditCost: 20,
+        attempt: 1,
+        retryCount: 0,
+        resultProcessingFailureCount: 1,
+      }],
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    };
+
+    const resultFailedProject = {
+      ...resultProcessingProject,
+      status: "result_processing_failed",
+      clips: [{
+        ...resultProcessingProject.clips[0],
+        status: "result_processing_failed",
+        error: "视频模型已生成完成，但生成结果暂未保存成功。",
+      }],
+    };
+
+    const completedProject = {
+      ...resultProcessingProject,
+      status: "completed",
+      clips: [{
+        ...resultProcessingProject.clips[0],
+        status: "completed",
+        videoUrl: "/api/video-projects/950/assets/clip/1",
+      }],
+      finalVideoUrl: "/api/video-projects/950/assets/final",
+    };
+
+    const options = baseOptions();
+    options.videoScriptUserCredits = 80;
+    const originalOverride = options.overrides;
+    options.overrides = (url, init) => {
+      const path = String(url).split("?")[0];
+      const method = String(init?.method || "GET");
+      if (method === "GET" && path === "/api/video-projects/active") {
+        return jsonResponse(200, { projects: [resultFailedProject] });
+      }
+      if (method === "GET" && path === "/api/video-projects/950") {
+        pollCount += 1;
+        return jsonResponse(200, { project: retryResultCalled ? completedProject : resultFailedProject });
+      }
+      if (method === "POST" && path === "/api/video-projects/950/clips/1/retry-result") {
+        retryResultCalled = true;
+        return jsonResponse(200, { project: completedProject, user: { id: "1", credits: 80 } });
+      }
+      return originalOverride?.(url, init);
+    };
+
+    const { wrapper, auth, fetchMock } = await openVideoDialog(options);
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+
+    // 1. Reopening dialog restores active result_processing_failed project without charging
+    expect(dialog.find('[data-test="video-project-status"]').exists()).toBe(true);
+    expect(dialog.text()).toContain("生成结果暂未保存成功");
+    expect(auth.user?.credits).toBe(5); // initial mock auth credits preserved
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
+    expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-project")).toHaveLength(0);
+
+    // 2. Button shows 重新处理结果 · 0积分, no paid retry button
+    const retryResultBtn = dialog.find('[data-test="retry-result-btn"]');
+    expect(retryResultBtn.exists()).toBe(true);
+    expect(retryResultBtn.text()).toBe("重新处理结果 · 0积分");
+    expect(dialog.find('[data-test="clip-retry-btn"]').exists()).toBe(false);
+
+    // 3. Click retry-result -> 0 credits deducted
+    await retryResultBtn.trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const retryCalls = postCalls(fetchMock, "/api/video-projects/950/clips/1/retry-result");
+    expect(retryCalls).toHaveLength(1);
+    expect(retryCalls[0].requestId).toBeTruthy();
+    expect(dialog.text()).toContain("已完成");
+  });
+
 });

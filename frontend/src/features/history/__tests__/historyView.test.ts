@@ -322,6 +322,109 @@ describe("HistoryView", () => {
     expect(wrapper.find('[data-test="history-assembly-failed"]').exists()).toBe(false);
   });
 
+  it("renders result_processing_failed status and handles 0-credit retry-result action", async () => {
+    let retryResultCalled = false;
+    const failedProject = {
+      id: 88,
+      generationId: 188,
+      brandId: 7,
+      trendId: 5,
+      ideaIndex: 0,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 10,
+      status: "result_processing_failed",
+      referenceAssetIds: [],
+      visualBible: {},
+      estimatedCredits: 20,
+      chargedCredits: 20,
+      refundedCredits: 0,
+      finalVideoUrl: "",
+      clips: [
+        {
+          id: 8801,
+          index: 1,
+          startSec: 0,
+          endSec: 10,
+          durationSec: 10,
+          status: "result_processing_failed",
+          prompt: "",
+          continuityMode: "text",
+          referenceAssetIds: [],
+          creditCost: 20,
+          attempt: 1,
+          retryCount: 0,
+          error: "生成结果暂未保存成功",
+        },
+      ],
+      script: GENERATIONS[2].payload?.videoScript,
+    };
+    const completedProject = {
+      ...failedProject,
+      status: "completed",
+      clips: [{ ...failedProject.clips[0], status: "completed", videoUrl: "/api/video-projects/88/assets/clip/1" }],
+      finalVideoUrl: "/api/video-projects/88/assets/final",
+    };
+
+    const { wrapper, calls } = await mountView((url, init) => {
+      if (url === "/api/video-projects/88/clips/1/retry-result" && init?.method === "POST") {
+        retryResultCalled = true;
+        return jsonResponse(200, { project: completedProject, user: { id: "1", credits: 8 } });
+      }
+      if (url.startsWith("/api/history")) {
+        return jsonResponse(200, {
+          generations: [{
+            id: 88,
+            type: "videoProject",
+            cardTitle: "露营咖啡视频",
+            brandName: "品牌A",
+            brandId: 7,
+            trendTitle: "五一露营潮",
+            ideaTitle: "户外手冲咖啡指南",
+            channelLabel: "AI 视频",
+            createdAt: "2026-07-23T08:00:00.000Z",
+            previewUrl: "",
+            payload: {
+              projectId: failedProject.id,
+              videoModel: failedProject.model,
+              videoMode: failedProject.mode,
+              videoResolution: failedProject.resolution,
+              videoDuration: failedProject.totalDurationSec,
+              videoAspectRatio: failedProject.aspectRatio,
+              videoStatus: retryResultCalled ? "completed" : failedProject.status,
+              refundedCredits: failedProject.refundedCredits,
+              finalVideoUrl: retryResultCalled ? completedProject.finalVideoUrl : "",
+              videoClips: retryResultCalled ? completedProject.clips : failedProject.clips,
+              script: failedProject.script,
+            },
+          }],
+        });
+      }
+      return undefined;
+    });
+
+    const card = wrapper.find('[data-test="history-card"]');
+    expect(card.text()).toContain("结果处理失败");
+
+    await card.find('[data-test="history-detail"]').trigger("click");
+    await flushPromises();
+
+    const detail = wrapper.find('[data-test="history-video-project-detail"]');
+    expect(detail.text()).toContain("结果处理失败");
+    const retryResultBtn = detail.find('[data-test="history-retry-result"]');
+    expect(retryResultBtn.exists()).toBe(true);
+    expect(retryResultBtn.text()).toContain("重新处理结果 · 0积分");
+    expect(detail.find('[data-test="history-retry-clip"]').exists()).toBe(false);
+
+    await retryResultBtn.trigger("click");
+    await flushPromises();
+
+    expect(calls.some((call) => call.url === "/api/video-projects/88/clips/1/retry-result")).toBe(true);
+  });
+
+
   it("sends DELETE /api/history/:id after confirm and removes the card from store", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const { wrapper, calls } = await mountView((url, init) => {

@@ -356,7 +356,17 @@ test("POST /video-script generates script, deducts 1 credit, is idempotent with 
     },
     {
       requestId,
+      model: "d2",
+      mode: "text",
       aspectRatioSelection: "9:16",
+      videoDuration: "30",
+      videoReferenceImageIds: [999999],
+      styleReferenceImages: [
+        {
+          name: "style-ref.png",
+          dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        },
+      ],
     },
   );
 
