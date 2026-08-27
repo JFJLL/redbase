@@ -117,6 +117,12 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
         auth.handleUnauthorized();
         return null;
       }
+      const requestCode = (err as { body?: { code?: unknown } })?.body?.code;
+      if (requestCode === "VIDEO_SCRIPT_REQUEST_TERMINAL") {
+        // A failed request has already been refunded and is deliberately
+        // immutable. The next explicit retry must reserve a fresh request.
+        currentRequestId.value = generateRequestId();
+      }
       error.value = (err as Error).message || "视频脚本生成失败，请重试。";
       return null;
     } finally {

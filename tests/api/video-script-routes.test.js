@@ -415,6 +415,7 @@ test("POST /video-script refunds credit when model generation fails", async (t) 
 
   assert.equal(res.status, 400);
   assert.match(res.body.error, /视频脚本生成失败/);
+  assert.equal(res.body.code, "VIDEO_SCRIPT_REQUEST_TERMINAL");
   // Credits fully refunded
   assert.equal(findUserById(TEST_USER.id).credits, creditsBefore);
 });

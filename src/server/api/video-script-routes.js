@@ -127,7 +127,12 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       const stateMessage = existingRequest.status === "running"
         ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
         : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。";
-      badRequest(res, stateMessage);
+      json(res, 400, {
+        error: stateMessage,
+        code: existingRequest.status === "running"
+          ? "VIDEO_SCRIPT_REQUEST_RUNNING"
+          : "VIDEO_SCRIPT_REQUEST_TERMINAL",
+      });
       return true;
     }
 
@@ -262,9 +267,13 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       return true;
     }
     if (!billing.started) {
-      badRequest(res, billing.request?.status === "running"
-        ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
-        : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。");
+      const isRunning = billing.request?.status === "running";
+      json(res, 400, {
+        error: isRunning
+          ? "相同 requestId 的视频脚本仍在处理中，请稍后重试。"
+          : "相同 requestId 的视频脚本请求已结束，请使用新的 requestId 重试。",
+        code: isRunning ? "VIDEO_SCRIPT_REQUEST_RUNNING" : "VIDEO_SCRIPT_REQUEST_TERMINAL",
+      });
       return true;
     }
 
@@ -338,8 +347,11 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       });
       return true;
     } catch (error) {
-      failVideoScriptRequest({ userId: user.id, requestId, reason: error.message || "video script generation failed" });
-      badRequest(res, `视频脚本生成失败：${error.message || "模型服务异常"}，已退还积分。`);
+      const failed = failVideoScriptRequest({ userId: user.id, requestId, reason: error.message || "video script generation failed" });
+      json(res, 400, {
+        error: `视频脚本生成失败：${error.message || "模型服务异常"}，已退还积分。`,
+        code: failed?.request?.status === "running" ? "VIDEO_SCRIPT_REQUEST_RUNNING" : "VIDEO_SCRIPT_REQUEST_TERMINAL",
+      });
       return true;
     }
   }

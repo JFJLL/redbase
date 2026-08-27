@@ -461,6 +461,42 @@ describe("video script generation flow", () => {
     expect((referenceCheckbox.element as HTMLInputElement).checked).toBe(true);
   });
 
+  it("uses a fresh request id after a refunded script failure so retry can charge once", async () => {
+    const options = baseOptions();
+    const originalOverride = options.overrides;
+    let scriptAttempt = 0;
+    options.overrides = (url, init) => {
+      const path = String(url).split("?")[0];
+      const method = String(init?.method || "GET");
+      if (method === "POST" && path.endsWith("/video-script") && scriptAttempt++ === 0) {
+        return jsonResponse(400, {
+          error: "视频脚本生成失败：模型服务异常，已退还积分。",
+          code: "VIDEO_SCRIPT_REQUEST_TERMINAL",
+        });
+      }
+      return originalOverride?.(url, init);
+    };
+
+    const { wrapper, fetchMock } = await openVideoDialog(options);
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    expect(dialog.find('[data-test="video-script-retry"]').exists()).toBe(true);
+    const firstRequestId = postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")[0].requestId;
+
+    await dialog.find('[data-test="video-script-retry"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const scriptCalls = postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script");
+    expect(scriptCalls).toHaveLength(2);
+    expect(scriptCalls[1].requestId).toBeTruthy();
+    expect(scriptCalls[1].requestId).not.toBe(firstRequestId);
+    expect(dialog.find('[data-test="video-script-result"]').exists()).toBe(true);
+  });
+
   it("does not mark the script stale when only resolution changes, and shows the real price", async () => {
     const { wrapper, fetchMock } = await openVideoDialog();
     const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
