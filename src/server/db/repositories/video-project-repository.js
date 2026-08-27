@@ -4,6 +4,11 @@ const { allocateCounter, runTransaction } = require("./core-repository");
 const { findGenerationById, upsertGeneration } = require("./generation-repository");
 const { findUserById } = require("./auth-repository");
 const { spendCreditsWithEventInTransaction } = require("./admin-repository");
+const {
+  ACTIVE_PROJECT_STATUSES,
+  RECOVERABLE_PROJECT_STATUSES,
+  TERMINAL_PROJECT_STATUSES,
+} = require("../../video/video-project-statuses");
 
 const db = getDbProxy();
 
@@ -136,6 +141,7 @@ function findProjectByOwnerAndRequestId(ownerUserId, requestId) {
 }
 
 function findActiveProjectByContext({ ownerUserId, brandId, trendId, ideaIndex } = {}) {
+  const activeStatuses = [...ACTIVE_PROJECT_STATUSES];
   const row = db.prepare(`
     SELECT ${PROJECT_COLUMNS}
     FROM video_projects
@@ -143,10 +149,10 @@ function findActiveProjectByContext({ ownerUserId, brandId, trendId, ideaIndex }
       AND brand_id = ?
       AND trend_id = ?
       AND idea_index = ?
-      AND status IN ('preparing', 'queued', 'running', 'partial_failed', 'uncertain', 'waiting_configuration', 'assembling', 'assembly_failed')
+      AND status IN (${activeStatuses.map(() => '?').join(',')})
     ORDER BY created_at DESC, id DESC
     LIMIT 1
-  `).get(Number(ownerUserId), Number(brandId), Number(trendId), Number(ideaIndex));
+  `).get(Number(ownerUserId), Number(brandId), Number(trendId), Number(ideaIndex), ...activeStatuses);
   return row ? mapProjectRow(row) : null;
 }
 
@@ -158,8 +164,7 @@ function findProjectByGenerationId(generationId, ownerUserId = null) {
 }
 
 function listProjectsByOwner(ownerUserId, { activeOnly = false, limit = 100, brandId, trendId, ideaIndex } = {}) {
-  const statuses = ["preparing", "queued", "running", "partial_failed", "uncertain", "waiting_configuration", "assembling", "assembly_failed", "failed", "completed", "cancelled"];
-  const activeStatuses = statuses.slice(0, 8);
+  const activeStatuses = [...ACTIVE_PROJECT_STATUSES];
   const conditions = [];
   const params = [Number(ownerUserId)];
   if (activeOnly) {
@@ -191,13 +196,14 @@ function listProjectsByOwner(ownerUserId, { activeOnly = false, limit = 100, bra
 }
 
 function listRecoverableProjects({ limit = 100 } = {}) {
+  const recoverableStatuses = [...RECOVERABLE_PROJECT_STATUSES];
   const rows = db.prepare(`
     SELECT ${PROJECT_COLUMNS}
     FROM video_projects
-    WHERE status IN ('preparing', 'queued', 'running', 'waiting_configuration', 'assembling')
+    WHERE status IN (${recoverableStatuses.map(() => '?').join(',')})
     ORDER BY updated_at ASC, id ASC
     LIMIT ?
-  `).all(Math.max(1, Number(limit) || 100));
+  `).all(...recoverableStatuses, Math.max(1, Number(limit) || 100));
   return rows.map((row) => mapProjectRow(row));
 }
 
@@ -477,6 +483,85 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
   });
 }
 
+function claimVideoResultRetry({ userId, requestId, projectId, clipIndex }) {
+  return runTransaction(() => {
+    const normalizedRequestId = String(requestId || "").trim();
+    if (!normalizedRequestId) {
+      const error = new Error("缺少结果重试 requestId");
+      error.code = "VIDEO_REQUEST_ID_REQUIRED";
+      throw error;
+    }
+    const existingReservation = findVideoBillingRequestByOwnerRequestId(userId, normalizedRequestId);
+    if (existingReservation) {
+      if (existingReservation.operation !== "retry_result" ||
+          Number(existingReservation.projectId) !== Number(projectId) ||
+          (existingReservation.clipIndex != null && Number(existingReservation.clipIndex) !== Number(clipIndex))) {
+        const error = new Error("结果重试请求已被使用但参数不一致");
+        error.code = "VIDEO_IDEMPOTENCY_CONFLICT";
+        throw error;
+      }
+      return {
+        reused: true,
+        project: getProject(existingReservation.projectId, { ownerUserId: userId }),
+        user: findUserById(userId),
+        billingRequest: existingReservation,
+      };
+    }
+    const project = getProject(projectId, { ownerUserId: userId });
+    if (!project) {
+      const error = new Error("视频项目不存在");
+      error.code = "VIDEO_PROJECT_NOT_FOUND";
+      throw error;
+    }
+    const clip = project.clips.find((candidate) => candidate.index === Number(clipIndex));
+    if (!clip) {
+      const error = new Error("视频镜头不存在");
+      error.code = "VIDEO_CLIP_NOT_FOUND";
+      throw error;
+    }
+    if (clip.status === "completed") {
+      return {
+        reused: true,
+        project,
+        user: findUserById(userId),
+        billingRequest: null,
+      };
+    }
+    if (!["result_processing_failed", "processing_result"].includes(clip.status)) {
+      const error = new Error("当前镜头状态不支持重新处理结果");
+      error.code = "VIDEO_CLIP_RETRY_RESULT_NOT_ALLOWED";
+      throw error;
+    }
+    const reservation = insertVideoBillingRequest({
+      requestId: normalizedRequestId,
+      userId,
+      projectId: project.id,
+      generationId: project.generationId,
+      operation: "retry_result",
+      status: "committed",
+      creditCost: 0,
+      creditEventId: null,
+      clipIndex: clip.index,
+    });
+    updateClip(clip.id, {
+      status: "processing_result",
+      resultProcessingFailureCount: 0,
+      lastResultProcessingError: "",
+      error: "",
+    });
+    updateProject(project.id, {
+      status: "running",
+      error: "",
+    });
+    return {
+      reused: false,
+      project: getProject(projectId, { ownerUserId: userId }),
+      user: findUserById(userId),
+      billingRequest: reservation,
+    };
+  });
+}
+
 function claimAssemblyRetry({ projectId, ownerUserId, requestId }) {
   return runTransaction(() => {
     const normalizedRequestId = String(requestId || "").trim();
@@ -713,6 +798,7 @@ module.exports = {
   updateVideoBillingRequest,
   createProjectWithBilling,
   retryProjectWithBilling,
+  claimVideoResultRetry,
   claimAssemblyRetry,
   claimAssemblyStart,
 };

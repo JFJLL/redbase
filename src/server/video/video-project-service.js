@@ -25,6 +25,11 @@ const { createD2Provider } = require("./providers/d2-provider");
 const { createG2Provider } = require("./providers/g2-provider");
 const { createAgnesKeyPool } = require("./agnes-key-pool");
 const { downloadProviderMedia, downloadProviderMediaToFile } = require("./video-remote");
+const {
+  ACTIVE_PROJECT_STATUSES,
+  RECOVERABLE_PROJECT_STATUSES,
+  TERMINAL_PROJECT_STATUSES,
+} = require("./video-project-statuses");
 const { extractStableLastFrame, withVideoTempDir, defaultExecutor } = require("./video-frame-extractor");
 const { assembleVideoClips } = require("./video-assembler");
 const {
@@ -43,25 +48,11 @@ const {
   updateClip,
   createProjectWithBilling,
   retryProjectWithBilling,
+  claimVideoResultRetry,
   claimAssemblyStart,
   claimAssemblyRetry,
 } = require("../db/repositories/video-project-repository");
 const { refundVideoCredits, sumVideoProjectRefundCredits } = require("./video-billing");
-
-const ACTIVE_PROJECT_STATUSES = new Set([
-  "preparing",
-  "queued",
-  "running",
-  "processing_result",
-  "result_processing_failed",
-  "partial_failed",
-  "uncertain",
-  "waiting_configuration",
-  "project_data_failed",
-  "assembling",
-  "assembly_failed",
-]);
-const TERMINAL_PROJECT_STATUSES = new Set(["completed", "failed", "cancelled", "assembly_failed", "result_processing_failed", "project_data_failed"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const POLL_BACKOFF_STEPS_MS = [2000, 4000, 8000, 15000, 30000];
 const RESULT_PROCESSING_BACKOFF_STEPS_MS = [2000, 4000, 8000, 15000, 30000, 60000];
@@ -382,15 +373,72 @@ function createVideoProjectService(options = {}) {
     return (project.inputAssets || []).find((asset) => Number(asset.sourceImageId) === Number(sourceImageId)) || null;
   }
 
-  function getReferenceBundle(project, clip, provider) {
+  async function ensureContinuityFrameReady(project, dependencyClip) {
+    if (dependencyClip?.continuityFrame?.asset) return dependencyClip;
+    if (dependencyClip?.outputVideo?.asset) {
+      return mediaSemaphore.run(() => withVideoTempDir(async (tempDir) => {
+        const videoPath = path.join(tempDir, `dep-${dependencyClip.index}.mp4`);
+        if (typeof storage.copyToFile === "function") {
+          await storage.copyToFile(dependencyClip.outputVideo.asset, videoPath);
+        } else {
+          const buffer = await storage.readBuffer(dependencyClip.outputVideo.asset);
+          await fsp.writeFile(videoPath, buffer);
+        }
+        const framePath = path.join(tempDir, `continuity-${dependencyClip.index}.jpg`);
+        await ffmpegSemaphore.run(() => extractStableLastFrame({ videoPath, outputPath: framePath, appConfig, executor }));
+        const frameBuffer = await fsp.readFile(framePath);
+        const continuityFrameAsset = await saveAsset(project, `continuity-frame-${dependencyClip.index}`, "image/jpeg", frameBuffer);
+        const updated = updateClip(dependencyClip.id, {
+          continuityFrame: { asset: continuityFrameAsset, mimeType: "image/jpeg", sizeBytes: frameBuffer.length },
+        });
+        updateGenerationSnapshot(getProject(project.id));
+        return updated || dependencyClip;
+      }));
+    }
+    throw createProjectError("前置镜头视频画面丢失，无法自动恢复连续性画面", "VIDEO_CONTINUITY_UNRECOVERABLE");
+  }
+
+  async function ensureFrozenInputAssetReady(project, sourceImageId) {
+    const existing = getFrozenInputAsset(project, sourceImageId);
+    if (existing?.asset) return existing;
+    const image = findProductImageByOwner(Number(sourceImageId), project.ownerUserId);
+    if (image) {
+      try {
+        const filePath = resolveProductImagePath(image);
+        const buffer = await fsp.readFile(filePath);
+        const position = (project.inputAssets || []).length + 1;
+        const asset = await saveAsset(project, `input-${position}`, image.mimeType || "image/png", buffer);
+        const nextInputAssets = [
+          ...(project.inputAssets || []),
+          {
+            position,
+            sourceImageId: Number(image.id),
+            originalName: String(image.originalName || ""),
+            mimeType: String(image.mimeType || "image/png"),
+            sizeBytes: Number(image.sizeBytes || buffer.length),
+            asset,
+          },
+        ];
+        updateProject(project.id, { inputAssets: nextInputAssets });
+        updateGenerationSnapshot(getProject(project.id));
+        return nextInputAssets.find((a) => Number(a.sourceImageId) === Number(sourceImageId)) || null;
+      } catch (_err) {
+        // file unreadable
+      }
+    }
+    throw createProjectError("视频项目参考素材不可用，未执行镜头已自动退款。", "VIDEO_INPUT_SNAPSHOT_UNRECOVERABLE");
+  }
+
+  async function getReferenceBundle(project, clip, provider) {
     const config = getVideoModelConfig(project.model);
     const references = [];
     const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
     if (previous && project.model === "d2") {
-      if (!previous.continuityFrame?.asset) {
-        throw createProjectError("上一镜头的连续性画面尚未准备好", "VIDEO_CONTINUITY_FRAME_REQUIRED");
+      let readyPrevious = previous;
+      if (!readyPrevious.continuityFrame?.asset) {
+        readyPrevious = await ensureContinuityFrameReady(project, previous);
       }
-      const previousPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", previous.index));
+      const previousPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", readyPrevious.index));
       references.push({
         url: toPublicUrl(previousPath, { requireAbsolute: provider.provider !== "fake" }),
         label: "上一镜头真实结束画面",
@@ -398,7 +446,10 @@ function createVideoProjectService(options = {}) {
     }
     const ids = clip.referenceAssetIds || [];
     for (const id of ids) {
-      const frozen = getFrozenInputAsset(project, id);
+      let frozen = getFrozenInputAsset(project, id);
+      if (!frozen?.asset && provider.provider !== "fake") {
+        frozen = await ensureFrozenInputAssetReady(project, id);
+      }
       if (frozen?.asset) {
         const inputPath = signVideoPath(videoAssetPath(project.id, "input", frozen.position));
         references.push({
@@ -407,13 +458,8 @@ function createVideoProjectService(options = {}) {
         });
         continue;
       }
-      // Legacy fake-provider tests may not have a real upload on disk. Real
-      // projects are rejected at creation unless a frozen copy was saved.
-      if (provider.provider !== "fake") {
-        throw createProjectError("项目冻结参考素材不可用，请重新创建视频项目", "VIDEO_INPUT_SNAPSHOT_UNAVAILABLE");
-      }
       const image = findProductImageByOwner(Number(id), project.ownerUserId);
-      if (!image) throw createProjectError("项目参考素材不可用，请重新创建视频项目", "VIDEO_INPUT_SNAPSHOT_UNAVAILABLE");
+      if (!image) throw createProjectError("视频项目参考素材不可用，未执行镜头已自动退款。", "VIDEO_INPUT_SNAPSHOT_UNRECOVERABLE");
       const signedPath = signAssetUrl(appConfig, `/api/product-images/${image.id}/file`, { ttlMs: DAY_MS });
       references.push({
         url: toPublicUrl(signedPath),
@@ -426,10 +472,14 @@ function createVideoProjectService(options = {}) {
     };
   }
 
-  function getFirstFrameUrl(project, clip, provider) {
+  async function getFirstFrameUrl(project, clip, provider) {
     const previous = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
-    if (!previous?.continuityFrame?.asset) throw createProjectError("上一镜头的连续性画面尚未准备好", "VIDEO_CONTINUITY_FRAME_REQUIRED");
-    const signedPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", previous.index));
+    let readyPrevious = previous;
+    if (readyPrevious && !readyPrevious.continuityFrame?.asset) {
+      readyPrevious = await ensureContinuityFrameReady(project, previous);
+    }
+    if (!readyPrevious?.continuityFrame?.asset) throw createProjectError("上一镜头的连续性画面尚未准备好", "VIDEO_CONTINUITY_UNRECOVERABLE");
+    const signedPath = signVideoPath(videoAssetPath(project.id, "continuity-frame", readyPrevious.index));
     return toPublicUrl(signedPath, { requireAbsolute: provider.provider !== "fake" });
   }
 
@@ -665,7 +715,8 @@ function createVideoProjectService(options = {}) {
     if (clip.status === "queued") return true;
     if (clip.status !== "waiting_dependency") return false;
     const dependency = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
-    if (!dependency || dependency.status !== "completed" || !dependency.continuityFrame?.asset) return false;
+    if (!dependency || dependency.status !== "completed") return false;
+    if (!dependency.continuityFrame?.asset && !dependency.outputVideo?.asset) return false;
     updateClip(clip.id, { status: "queued", error: "" });
     return true;
   }
@@ -744,7 +795,7 @@ function createVideoProjectService(options = {}) {
       mode,
       referenceUrls: referenceBundle.referenceUrls,
       referenceLabels: referenceBundle.referenceLabels,
-      firstFrameUrl: project.model === "g2" && clip.index > 1 ? getFirstFrameUrl(project, clip, provider) : "",
+      firstFrameUrl: project.model === "g2" && clip.index > 1 ? await getFirstFrameUrl(project, clip, provider) : "",
       signal: undefined,
     };
     if (project.model === "g2") args.apiKey = lease.key;
@@ -782,7 +833,7 @@ function createVideoProjectService(options = {}) {
         // sent to the Provider and recovery can safely leave the clip queued.
         const currentProject = getProject(project.id) || project;
         const currentClip = currentProject.clips.find((candidate) => candidate.id === clip.id) || clip;
-        const referenceBundle = getReferenceBundle(currentProject, currentClip, provider);
+        const referenceBundle = await getReferenceBundle(currentProject, currentClip, provider);
         // A G2 project is only considered running after this worker has a
         // concrete key lease and is about to submit. A missing RPM slot keeps
         // both the project and clip in their durable queued state.
@@ -1049,7 +1100,7 @@ function createVideoProjectService(options = {}) {
         log.warn?.("[video-project] refund request did not produce an event", { projectId: fresh.id, reservationCreditEventId: group.eventId, refundRange: `${minIndex}-${maxIndex}` });
       }
     }
-    const nextStatus = keySuffix === "uncertain_submission" ? "uncertain" : "partial_failed";
+    const nextStatus = keySuffix === "uncertain_submission" ? "uncertain" : keySuffix === "project_data_failed" ? "project_data_failed" : "partial_failed";
     const reconciled = reconcileProjectRefundedCredits(getProject(fresh.id), { snapshot: false }) || fresh;
     const updated = updateProject(fresh.id, {
       refundedCredits: Number(reconciled.refundedCredits || 0),
@@ -1141,6 +1192,19 @@ function createVideoProjectService(options = {}) {
       await pollRunningClip(project, active, getProvider(project));
       return;
     }
+
+    const brokenDependencyClip = (project.clips || []).find((clip) => {
+      if (clip.status !== "waiting_dependency") return false;
+      const dependency = project.clips?.find((candidate) => candidate.index === clip.dependsOnClipIndex);
+      return dependency && dependency.status === "completed" && !dependency.continuityFrame?.asset && !dependency.outputVideo?.asset;
+    });
+    if (brokenDependencyClip) {
+      await refundRemaining(project, brokenDependencyClip, "project_data_failed", "前置镜头视频画面丢失，无法自动恢复连续性画面");
+      updateClip(brokenDependencyClip.id, { status: "failed", error: "前置镜头视频画面丢失，无法自动恢复连续性画面" });
+      const failedProject = updateProject(project.id, { status: "project_data_failed", error: "前置镜头视频画面丢失，无法自动恢复连续性画面" });
+      updateGenerationSnapshot(failedProject);
+      return;
+    }
     const queued = (project.clips || []).find((candidate) => candidate.status === "queued");
     if (!queued) {
       if ((project.clips || []).every((candidate) => candidate.status === "completed")) await finalizeCompletedProject(project);
@@ -1166,16 +1230,11 @@ function createVideoProjectService(options = {}) {
         updateProject(project.id, { status: "waiting_configuration", error: error.message });
         return;
       }
-      if (error.code === "VIDEO_INPUT_SNAPSHOT_UNAVAILABLE") {
-        updateClip(queued.id, { status: "result_processing_failed", error: "视频项目参考素材不可用。" });
-        updateProject(project.id, { status: "project_data_failed", error: "视频项目参考素材不可用。" });
-        updateGenerationSnapshot(getProject(project.id));
-        return;
-      }
-      if (error.code === "VIDEO_CONTINUITY_FRAME_REQUIRED") {
-        updateClip(queued.id, { status: "result_processing_failed", error: error.message || "连续性画面准备失败" });
-        updateProject(project.id, { status: "result_processing_failed", error: error.message || "连续性画面准备失败" });
-        updateGenerationSnapshot(getProject(project.id));
+      if (["VIDEO_INPUT_SNAPSHOT_UNRECOVERABLE", "VIDEO_CONTINUITY_UNRECOVERABLE", "VIDEO_INPUT_SNAPSHOT_UNAVAILABLE", "VIDEO_CONTINUITY_FRAME_REQUIRED"].includes(error.code)) {
+        await refundRemaining(fresh, queued, "project_data_failed", error.message || "视频项目素材不可用");
+        updateClip(queued.id, { status: "failed", error: error.message || "视频项目素材不可用" });
+        const failedProject = updateProject(project.id, { status: "project_data_failed", error: error.message || "视频项目素材不可用" });
+        updateGenerationSnapshot(failedProject);
         return;
       }
       if (Number(error.statusCode) === 429) {
@@ -1593,40 +1652,16 @@ function createVideoProjectService(options = {}) {
   }
 
   async function retryClipResult(projectId, ownerUserId, clipIndex, requestId) {
-    const project = getProject(projectId, { ownerUserId });
-    if (!project) throw createProjectError("视频项目不存在", "VIDEO_PROJECT_NOT_FOUND");
-    const clip = project.clips.find((candidate) => candidate.index === Number(clipIndex));
-    if (!clip) throw createProjectError("视频镜头不存在", "VIDEO_CLIP_NOT_FOUND");
-    if (clip.status === "completed") {
+    const claim = claimVideoResultRetry({ userId: ownerUserId, requestId, projectId, clipIndex });
+    if (claim.reused && claim.project?.clips?.find((c) => c.index === Number(clipIndex))?.status === "completed") {
       return {
-        project: serializeProject(project),
-        user: findUserById(ownerUserId),
+        project: serializeProject(claim.project),
+        user: claim.user,
       };
     }
-    if (!["result_processing_failed", "processing_result"].includes(clip.status)) {
-      throw createProjectError("当前镜头状态不支持重新处理结果", "VIDEO_CLIP_RETRY_RESULT_NOT_ALLOWED");
-    }
-    if (!clip.providerTaskId) {
-      throw createProjectError("缺少供应商任务标识，无法重新处理结果", "VIDEO_CLIP_RETRY_RESULT_NOT_ALLOWED");
-    }
-
-    const resetClip = updateClip(clip.id, {
-      status: "processing_result",
-      resultProcessingFailureCount: 0,
-      lastResultProcessingError: "",
-      error: "",
-    });
-    updateProject(project.id, {
-      status: "running",
-      error: "",
-    });
-    nextPollAt.delete(clip.id);
-
-    try {
-      await processClipResult(getProject(projectId), resetClip || clip, getProvider(project), null);
-    } catch (error) {
-      log.warn?.("[video-project] retry-result immediate processing failed", { projectId, clipIndex, error: error.message });
-    }
+    const clip = (claim.project?.clips || []).find((c) => c.index === Number(clipIndex));
+    if (clip) nextPollAt.delete(clip.id);
+    pump().catch((error) => log.warn?.("[video-project] retry-result pump failed", { projectId, error: error.message }));
 
     return {
       project: serializeProject(getProject(projectId, { ownerUserId })),
@@ -1734,6 +1769,14 @@ function createVideoProjectService(options = {}) {
         "Cache-Control": "private, max-age=300",
       });
       const stream = storage.createReadStream(asset, { start, end });
+      stream.on("error", (streamErr) => {
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "视频流读取失败" }));
+        } else {
+          res.destroy(streamErr);
+        }
+      });
       stream.pipe(res);
       return true;
     }

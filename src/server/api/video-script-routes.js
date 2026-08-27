@@ -223,31 +223,6 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
       styleReferenceSignature: styleSignature,
     });
 
-    // 幂等防线：相同用户、相同 requestId 返回已有 generation
-    const existing = findGenerationByOwnerAndRequestId(user.id, requestId);
-    if (existing) {
-      if (existing.type !== "videoScript") {
-        json(res, 409, { error: "请求已被其他生成类型使用", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
-        return true;
-      }
-      const p = existing.payload || {};
-      const matches = Number(existing.brandId) === brand.id &&
-        Number(existing.trendId) === trend.id &&
-        Number(p.ideaIndex) === ideaIndex &&
-        (!model || String(p.videoModel || "").toLowerCase() === model) &&
-        (!model || String(p.videoMode || "text").toLowerCase() === mode);
-      if (!matches) {
-        json(res, 409, { error: "请求已被使用但输入参数不一致", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
-        return true;
-      }
-      json(res, 200, {
-        generation: sanitizeGeneration(existing, appConfig),
-        videoScript: existing.payload?.videoScript || null,
-        user: sanitizeUser(user),
-      });
-      return true;
-    }
-
     const existingRequest = findVideoScriptRequest(user.id, requestId);
     if (existingRequest) {
       const signatureMatch = existingRequest.inputSignature
@@ -276,6 +251,36 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         code: existingRequest.status === "running"
           ? "VIDEO_SCRIPT_REQUEST_RUNNING"
           : "VIDEO_SCRIPT_REQUEST_TERMINAL",
+      });
+      return true;
+    }
+
+    // Legacy fallback: 仅在无 video_script_requests 记录时检查历史 generation
+    const legacyExisting = findGenerationByOwnerAndRequestId(user.id, requestId);
+    if (legacyExisting) {
+      if (legacyExisting.type !== "videoScript") {
+        json(res, 409, { error: "请求已被其他生成类型使用", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
+        return true;
+      }
+      const p = legacyExisting.payload || {};
+      if (p.inputSignature && p.inputSignature !== inputSignature) {
+        json(res, 409, { error: "请求已被使用但输入参数不一致", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
+        return true;
+      }
+      const matches = Number(legacyExisting.brandId) === brand.id &&
+        Number(legacyExisting.trendId) === trend.id &&
+        Number(p.ideaIndex) === ideaIndex &&
+        (!model || String(p.videoModel || "").toLowerCase() === model) &&
+        (!model || String(p.videoMode || "text").toLowerCase() === mode) &&
+        (resolveVideoAspectRatio(p.videoAspectRatio || p.aspectRatio, "9:16") === requestedVideoAspectRatio);
+      if (!matches) {
+        json(res, 409, { error: "请求已被使用但输入参数不一致", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
+        return true;
+      }
+      json(res, 200, {
+        generation: sanitizeGeneration(legacyExisting, appConfig),
+        videoScript: legacyExisting.payload?.videoScript || null,
+        user: sanitizeUser(user),
       });
       return true;
     }
@@ -378,6 +383,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         summary: script.creativeConcept || idea.summary || "",
         payload: {
           requestId,
+          inputSignature,
           ideaIndex,
           aspectRatio: script.aspectRatio || requestedVideoAspectRatio,
           videoAspectRatio: script.aspectRatio || requestedVideoAspectRatio,

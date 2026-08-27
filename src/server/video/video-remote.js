@@ -2,7 +2,28 @@ const net = require("net");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
+const { pipeline } = require("stream/promises");
+const { Transform, Readable } = require("stream");
 const { DEFAULT_GENERATED_IMAGE_ASSET_BYTES, DEFAULT_VIDEO_CLIP_ASSET_BYTES } = require("../assets/generated-asset-utils");
+
+class ByteLimiter extends Transform {
+  constructor(maxBytes, controller) {
+    super();
+    this.maxBytes = maxBytes;
+    this.controller = controller;
+    this.downloadedBytes = 0;
+  }
+  _transform(chunk, encoding, callback) {
+    this.downloadedBytes += chunk.length;
+    if (this.downloadedBytes > this.maxBytes) {
+      if (this.controller) this.controller.abort();
+      const error = Object.assign(new Error("供应商媒体超过大小限制"), { code: "PAYLOAD_TOO_LARGE" });
+      callback(error);
+      return;
+    }
+    callback(null, chunk);
+  }
+}
 
 function isPrivateHostname(hostname) {
   const host = String(hostname || "").toLowerCase().replace(/[\[\]]/g, "");
@@ -118,52 +139,31 @@ async function downloadProviderMediaToFile(url, { targetPath, allowedHosts = [],
 
       await fsp.mkdir(path.dirname(path.resolve(targetPath)), { recursive: true });
       const writeStream = fs.createWriteStream(targetPath);
-      let downloadedBytes = 0;
+      const byteLimiter = new ByteLimiter(effectiveMaxBytes, controller);
+
+      let sourceReadable;
+      if (response.body && typeof response.body.getReader === "function") {
+        if (typeof ReadableStream !== "undefined" && response.body instanceof ReadableStream && typeof Readable.fromWeb === "function") {
+          sourceReadable = Readable.fromWeb(response.body);
+        } else {
+          sourceReadable = Readable.from((async function* () {
+            const reader = response.body.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              yield value;
+            }
+          })());
+        }
+      } else if (response.body && typeof response.body[Symbol.asyncIterator] === "function") {
+        sourceReadable = Readable.from(response.body);
+      } else {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        sourceReadable = Readable.from([buffer]);
+      }
 
       try {
-        if (response.body && typeof response.body.getReader === "function") {
-          const reader = response.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-            downloadedBytes += chunk.length;
-            if (downloadedBytes > effectiveMaxBytes) {
-              controller.abort();
-              throw Object.assign(new Error("供应商媒体超过大小限制"), { code: "PAYLOAD_TOO_LARGE" });
-            }
-            if (!writeStream.write(chunk)) {
-              await new Promise((resolve) => writeStream.once("drain", resolve));
-            }
-          }
-          await new Promise((resolve, reject) => {
-            writeStream.end((err) => (err ? reject(err) : resolve()));
-          });
-        } else if (response.body && typeof response.body[Symbol.asyncIterator] === "function") {
-          for await (const rawChunk of response.body) {
-            const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-            downloadedBytes += chunk.length;
-            if (downloadedBytes > effectiveMaxBytes) {
-              controller.abort();
-              throw Object.assign(new Error("供应商媒体超过大小限制"), { code: "PAYLOAD_TOO_LARGE" });
-            }
-            if (!writeStream.write(chunk)) {
-              await new Promise((resolve) => writeStream.once("drain", resolve));
-            }
-          }
-          await new Promise((resolve, reject) => {
-            writeStream.end((err) => (err ? reject(err) : resolve()));
-          });
-        } else {
-          const buffer = Buffer.from(await response.arrayBuffer());
-          downloadedBytes = buffer.length;
-          if (downloadedBytes > effectiveMaxBytes) {
-            throw Object.assign(new Error("供应商媒体超过大小限制"), { code: "PAYLOAD_TOO_LARGE" });
-          }
-          await new Promise((resolve, reject) => {
-            writeStream.end(buffer, (err) => (err ? reject(err) : resolve()));
-          });
-        }
+        await pipeline(sourceReadable, byteLimiter, writeStream);
       } catch (streamError) {
         await new Promise((resolve) => {
           writeStream.once("close", resolve);
@@ -191,7 +191,7 @@ async function downloadProviderMediaToFile(url, { targetPath, allowedHosts = [],
 
       return {
         targetPath,
-        sizeBytes: downloadedBytes,
+        sizeBytes: byteLimiter.downloadedBytes,
         contentType: contentType || (expected === "video" ? "video/mp4" : "image/jpeg"),
         url: parsed.toString(),
       };
