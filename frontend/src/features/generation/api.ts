@@ -644,6 +644,9 @@ export interface VideoProjectClip {
   retryCount: number;
   submissionAttempt?: number;
   lastSuccessfulPollAt?: string;
+  resultProcessingFailureCount?: number;
+  lastResultProcessingError?: string;
+  lastResultProcessingAt?: string;
   error?: string;
   [key: string]: unknown;
 }
@@ -791,6 +794,19 @@ export function retryVideoProjectClip(
   signal?: AbortSignal,
 ): Promise<{ project: VideoProject; user?: SessionUser }> {
   return apiFetch(`/api/video-projects/${projectId}/clips/${clipIndex}/retry`, {
+    method: "POST",
+    body: { requestId },
+    signal,
+  });
+}
+
+export function retryVideoProjectClipResult(
+  projectId: number,
+  clipIndex: number,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<{ project: VideoProject; user?: SessionUser }> {
+  return apiFetch(`/api/video-projects/${projectId}/clips/${clipIndex}/retry-result`, {
     method: "POST",
     body: { requestId },
     signal,

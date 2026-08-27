@@ -20,6 +20,7 @@ import {
   fetchVideoProject,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
   retryVideoProjectClip,
+  retryVideoProjectClipResult,
   retryVideoProjectAssembly,
   uploadProductImage,
   VIDEO_ASPECT_RATIOS,
@@ -221,6 +222,9 @@ const estimatedCredits = computed(() => {
 const projectStatusLabel = computed(() => ({
   queued: "排队中",
   running: "生成中",
+  processing_result: "正在处理生成结果",
+  result_processing_failed: "生成结果暂未保存成功",
+  project_data_failed: "视频项目素材不可用",
   partial_failed: "部分失败，可重试",
   uncertain: "待确认，需操作",
   waiting_configuration: "等待生成通道配置",
@@ -228,7 +232,19 @@ const projectStatusLabel = computed(() => ({
   assembly_failed: "片段已完成，成片拼接失败",
   completed: "已完成",
   failed: "生成失败",
+  cancelled: "已取消",
 }[project.value?.status || ""] || "已提交"));
+
+const TERMINAL_PROJECT_POLL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "partial_failed",
+  "cancelled",
+  "assembly_failed",
+  "uncertain",
+  "result_processing_failed",
+  "project_data_failed",
+]);
 const currentVideoSignature = computed(() => [
   videoModelRef.value,
   videoModeRef.value,
@@ -425,7 +441,7 @@ async function restoreActiveProject() {
       : null;
     restoreScript(existing.script || null, restoredGeneration);
     generatedVideoSignature.value = currentVideoSignature.value;
-    if (!["completed", "failed", "partial_failed", "cancelled", "assembly_failed", "uncertain"].includes(existing.status)) {
+    if (!TERMINAL_PROJECT_POLL_STATUSES.has(existing.status)) {
       await pollProject(existing.id);
     }
   } catch (error) {
@@ -439,7 +455,7 @@ async function pollProject(projectId: number) {
   try {
     const response = await fetchVideoProject(projectId, scope.signalFor("video-project-poll"));
     applyProjectUpdate(response.project);
-    if (["completed", "failed", "partial_failed", "cancelled", "assembly_failed", "uncertain"].includes(response.project.status)) return;
+    if (TERMINAL_PROJECT_POLL_STATUSES.has(response.project.status)) return;
     projectPollTimer = setTimeout(() => pollProject(projectId), 2500);
   } catch (error) {
     if (isAbortError(error)) return;
@@ -490,6 +506,30 @@ async function generateRealVideo() {
     projectError.value = (error as Error).message || "真实视频生成提交失败，请重试。";
   } finally {
     projectLoading.value = false;
+  }
+}
+
+async function retryVideoClipResult(clipIndex: number) {
+  if (!project.value || retryingClipIndex.value != null) return;
+  retryingClipIndex.value = clipIndex;
+  projectError.value = "";
+  stopProjectPolling();
+  try {
+    const response = await retryVideoProjectClipResult(
+      project.value.id,
+      clipIndex,
+      actionRequestId(`retry-result:${clipIndex}`),
+      scope.signalFor(`video-clip-retry-result-${clipIndex}`),
+    );
+    applyProjectUpdate(response.project);
+    mergeAuthUser(response.user);
+    actionRequestIds.delete(`retry-result:${clipIndex}`);
+    if (!TERMINAL_PROJECT_POLL_STATUSES.has(response.project.status)) await pollProject(response.project.id);
+  } catch (error) {
+    if (isAbortError(error)) return;
+    projectError.value = (error as Error).message || "当前镜头重新处理失败，请稍后再试。";
+  } finally {
+    retryingClipIndex.value = null;
   }
 }
 
@@ -856,16 +896,27 @@ onUnmounted(() => {
               <article v-for="clip in project.clips" :key="clip.id" :class="['clip-progress', `clip-${clip.status}`]">
                 <div class="clip-progress-heading">
                   <strong>镜头 {{ clip.index }}</strong>
-                  <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'submitting' ? '提交中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'waiting_dependency' ? '等待上一镜头' : '排队' }}</span>
+                  <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'submitting' ? '提交中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'cancelled' ? '已取消' : '排队' }}</span>
                 </div>
                 <video v-if="clip.videoUrl" class="clip-video-player" controls playsinline :src="clip.videoUrl"></video>
                 <small v-if="clip.error" class="clip-error">失败原因：{{ clip.error }}</small>
                 <div class="clip-actions">
                   <a v-if="clip.videoUrl" class="clip-download" :href="clip.videoUrl" download>下载本段</a>
                   <button
-                    v-if="['failed', 'uncertain_submission', 'cancelled'].includes(clip.status)"
+                    v-if="clip.status === 'result_processing_failed'"
                     type="button"
                     class="secondary-btn clip-retry-btn"
+                    data-test="retry-result-btn"
+                    :disabled="retryingClipIndex === clip.index"
+                    @click="retryVideoClipResult(clip.index)"
+                  >
+                    {{ retryingClipIndex === clip.index ? '处理中…' : '重新处理结果 · 0积分' }}
+                  </button>
+                  <button
+                    v-else-if="['failed', 'uncertain_submission', 'cancelled'].includes(clip.status)"
+                    type="button"
+                    class="secondary-btn clip-retry-btn"
+                    data-test="clip-retry-btn"
                     :disabled="retryingClipIndex === clip.index"
                     @click="retryVideoClip(clip.index)"
                   >

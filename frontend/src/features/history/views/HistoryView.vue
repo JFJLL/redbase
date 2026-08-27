@@ -5,7 +5,7 @@ import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
-import { retryVideoProjectAssembly, retryVideoProjectClip, type VideoScript } from "@/features/generation/api";
+import { retryVideoProjectAssembly, retryVideoProjectClip, retryVideoProjectClipResult, type VideoScript } from "@/features/generation/api";
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
 import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
@@ -195,7 +195,21 @@ function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<str
 }
 
 function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
-  return ({ queued: "排队中", running: "生成中", partial_failed: "部分失败", assembly_failed: "片段已完成，成片拼接失败", completed: "已完成", failed: "失败" } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
+  return ({
+    queued: "排队中",
+    running: "生成中",
+    processing_result: "正在处理生成结果",
+    result_processing_failed: "结果处理失败",
+    project_data_failed: "素材不可用",
+    partial_failed: "部分失败",
+    uncertain: "待确认",
+    waiting_configuration: "等待生成通道配置",
+    assembling: "正在拼接成片",
+    assembly_failed: "片段已完成，成片拼接失败",
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
 }
 
 function videoRequestId(): string {
@@ -236,6 +250,44 @@ async function retryHistoryVideoClip(clip: Record<string, unknown>): Promise<voi
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
     alert(`当前镜头重试失败：${(error as Error).message}`);
+  } finally {
+    retryingVideoClip.value = null;
+  }
+}
+
+async function retryHistoryVideoClipResult(clip: Record<string, unknown>): Promise<void> {
+  const item = detailItem.value;
+  const projectId = Number(item?.payload?.projectId);
+  const clipIndex = Number(clip.index);
+  if (!item || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(clipIndex) || clipIndex <= 0) return;
+  retryingVideoClip.value = String(clipIndex);
+  try {
+    const response = await retryVideoProjectClipResult(projectId, clipIndex, videoRequestId(), scope.signalFor(`history-video-retry-result-${clipIndex}`));
+    if (response.user) auth.user = { ...auth.user, ...response.user };
+    else await auth.refreshUser().catch(() => {});
+    const project = response.project;
+    detailItem.value = {
+      ...item,
+      payload: {
+        ...(item.payload || {}),
+        projectId: project.id,
+        videoModel: project.model,
+        videoMode: project.mode,
+        videoResolution: project.resolution,
+        videoDuration: project.totalDurationSec,
+        videoAspectRatio: project.aspectRatio,
+        videoStatus: project.status,
+        finalVideoUrl: project.finalVideoUrl || "",
+        videoClips: project.clips,
+      },
+    };
+    await historyStore.refresh();
+    const refreshed = historyStore.items.find((candidate) => Number(candidate.id) === Number(item.id));
+    if (refreshed) detailItem.value = refreshed;
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    alert(`重新处理生成结果失败：${(error as Error).message}`);
   } finally {
     retryingVideoClip.value = null;
   }
@@ -636,7 +688,7 @@ onUnmounted(() => {
               <article v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
                 <div class="history-video-clip-heading">
                   <strong>镜头 {{ clip.index }}</strong>
-                  <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : '排队中' }}</span>
+                  <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'cancelled' ? '已取消' : '排队中' }}</span>
                   <span>{{ clip.durationSec }} 秒</span>
                 </div>
                 <video v-if="safeImageSrc(String(clip.videoUrl || ''))" class="history-clip-player" controls playsinline :src="safeImageSrc(String(clip.videoUrl || ''))"></video>
@@ -644,9 +696,20 @@ onUnmounted(() => {
                 <div class="history-video-clip-actions">
                   <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
                   <button
-                    v-if="['failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
+                    v-if="clip.status === 'result_processing_failed'"
                     type="button"
                     class="secondary-btn"
+                    data-test="history-retry-result"
+                    :disabled="retryingVideoClip === String(clip.index)"
+                    @click="retryHistoryVideoClipResult(clip)"
+                  >
+                    {{ retryingVideoClip === String(clip.index) ? '处理中…' : '重新处理结果 · 0积分' }}
+                  </button>
+                  <button
+                    v-else-if="['failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
+                    type="button"
+                    class="secondary-btn"
+                    data-test="history-retry-clip"
                     :disabled="retryingVideoClip === String(clip.index)"
                     @click="retryHistoryVideoClip(clip)"
                   >
