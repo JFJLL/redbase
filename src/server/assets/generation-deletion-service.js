@@ -1,4 +1,9 @@
 const { deleteGenerationRows, deleteGenerationRowsBatch } = require("../db/repositories/generation-repository");
+const { getDbProxy } = require("../db/connection");
+const { runTransaction } = require("../db/repositories/core-repository");
+const { recordAssetPurgeCompleted, recordAssetPurgeFailed, recordGenerationDeleted } = require("../analytics/analytics-recorder");
+
+const db = getDbProxy();
 
 function collectGenerationAssets(generation) {
   const assets = [];
@@ -62,6 +67,213 @@ function assertGenerationAssetOwnership(asset, generation) {
   return true;
 }
 
+function cleanPayloadPreservingData(payload, deletedAt) {
+  if (Array.isArray(payload)) {
+    return payload.map((item) => cleanPayloadPreservingData(item, deletedAt));
+  }
+  if (!payload || typeof payload !== "object") return payload;
+  const cleaned = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "objectKey" || key === "storedPath") {
+      continue;
+    }
+    if (["finalVideoUrl", "finalPosterUrl", "previewUrl", "imageUrl", "providerResultUrl", "videoUrl", "posterUrl"].includes(key)) {
+      cleaned[key] = "";
+      continue;
+    }
+    if (value && typeof value === "object" && (value.objectKey || value.storedPath)) {
+      cleaned[key] = {
+        provider: value.provider || "local",
+        mimeType: value.mimeType || "",
+        sizeBytes: Number(value.sizeBytes || value.bytes || 0),
+        purged: true,
+        purgedAt: deletedAt,
+      };
+      continue;
+    }
+    cleaned[key] = cleanPayloadPreservingData(value, deletedAt);
+  }
+  return cleaned;
+}
+
+function purgeGenerationDataInTransaction(generation, { assets, deletedAt, totalBytes }) {
+  const genId = Number(generation.id);
+  const cleanedPayload = cleanPayloadPreservingData(generation.payload, deletedAt);
+  const hasAssets = assets.length > 0;
+  const assetStatus = hasAssets ? "purged" : "none";
+
+  db.prepare(`
+    UPDATE generations SET
+      visibility_status = 'expired',
+      asset_status = ?,
+      asset_count = ?,
+      asset_bytes = ?,
+      assets_deleted_at = ?,
+      assets_delete_error = '',
+      preview_url = '',
+      payload_json = ?,
+      updated_at = ?
+    WHERE id = ?
+  `).run(
+    assetStatus,
+    assets.length,
+    totalBytes,
+    deletedAt,
+    JSON.stringify(cleanedPayload),
+    deletedAt,
+    genId,
+  );
+
+  db.prepare(`
+    UPDATE image_jobs SET
+      asset_status = 'purged',
+      asset_bytes = (CASE WHEN asset_bytes > 0 THEN asset_bytes ELSE ? END),
+      assets_deleted_at = ?,
+      image_url = '',
+      provider_result_url = '',
+      updated_at = ?
+    WHERE generation_id = ? OR json_extract(generation_context_json, '$.sourceGenerationId') = ?
+  `).run(
+    totalBytes,
+    deletedAt,
+    deletedAt,
+    genId,
+    genId,
+  );
+
+  db.prepare(`
+    UPDATE video_projects SET
+      asset_status = 'purged',
+      asset_count = ?,
+      asset_bytes = ?,
+      assets_deleted_at = ?,
+      final_video_json = json_set(
+        CASE WHEN json_valid(final_video_json) AND json_type(final_video_json) = 'object' THEN final_video_json ELSE '{}' END,
+        '$.asset', json_object('purged', json('true'), 'purgedAt', ?)
+      ),
+      input_assets_json = '[]',
+      updated_at = ?
+    WHERE generation_id = ?
+  `).run(
+    assets.length,
+    totalBytes,
+    deletedAt,
+    deletedAt,
+    deletedAt,
+    genId,
+  );
+
+  db.prepare(`
+    UPDATE video_clips SET
+      asset_status = 'purged',
+      assets_deleted_at = ?,
+      output_video_json = json_set(
+        CASE WHEN json_valid(output_video_json) AND json_type(output_video_json) = 'object' THEN output_video_json ELSE '{}' END,
+        '$.asset', json_object('purged', json('true'), 'purgedAt', ?)
+      ),
+      continuity_frame_json = json_set(
+        CASE WHEN json_valid(continuity_frame_json) AND json_type(continuity_frame_json) = 'object' THEN continuity_frame_json ELSE '{}' END,
+        '$.asset', json_object('purged', json('true'), 'purgedAt', ?)
+      ),
+      updated_at = ?
+    WHERE project_id IN (SELECT id FROM video_projects WHERE generation_id = ?)
+  `).run(
+    deletedAt,
+    deletedAt,
+    deletedAt,
+    deletedAt,
+    genId,
+  );
+
+  recordAssetPurgeCompleted({
+    generationId: genId,
+    count: assets.length,
+    bytes: totalBytes,
+    purgedAt: deletedAt,
+  });
+}
+
+async function purgeGenerationAssetsPreservingData(generation, options = {}) {
+  if (!generation?.id) return { ok: true, alreadyPurged: true, generationId: null };
+  if (generation.visibilityStatus === "expired" && (generation.assetStatus === "purged" || generation.assetStatus === "none")) {
+    return { ok: true, alreadyPurged: true, generationId: Number(generation.id) };
+  }
+  if (!options.storage || typeof options.storage.deleteMany !== "function") {
+    throw new Error("Generated asset storage is required for generation asset purge");
+  }
+
+  const assets = collectGenerationAssets(generation);
+  const totalBytes = assets.reduce((sum, a) => sum + Number(a.sizeBytes || a.bytes || 0), 0);
+  const deletedAt = options.deletedAt || new Date().toISOString();
+
+  let staged;
+  try {
+    staged = typeof options.storage.stageDeleteMany === "function"
+      ? await options.storage.stageDeleteMany(assets)
+      : (await options.storage.deleteMany(assets), { deletedAssetCount: assets.length, rollback: async () => {}, commit: async () => {} });
+  } catch (error) {
+    const errMessage = String(error?.message || "Asset delete staging failed").slice(0, 200);
+    try {
+      db.prepare(`
+        UPDATE generations SET
+          asset_status = 'purge_failed',
+          assets_delete_error = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(errMessage, deletedAt, Number(generation.id));
+      recordAssetPurgeFailed({
+        generationId: Number(generation.id),
+        error: errMessage,
+        failedAt: deletedAt,
+      });
+    } catch (_) {}
+    throw error;
+  }
+
+  try {
+    runTransaction(() => {
+      purgeGenerationDataInTransaction(generation, { assets, deletedAt, totalBytes });
+    });
+  } catch (dbError) {
+    if (staged?.rollback) await staged.rollback().catch(() => {});
+    throw dbError;
+  }
+
+  if (staged?.commit) await staged.commit();
+
+  return {
+    ok: true,
+    purgedGenerationId: Number(generation.id),
+    purgedAssetCount: assets.length,
+    purgedBytes: totalBytes,
+  };
+}
+
+async function purgeGenerationsAssetsPreservingData(generations = [], options = {}) {
+  const source = generations.filter((g) => g?.id);
+  const purgedIds = [];
+  const failedIds = [];
+  let totalBytes = 0;
+  for (const gen of source) {
+    try {
+      const res = await purgeGenerationAssetsPreservingData(gen, options);
+      if (res?.purgedGenerationId) {
+        purgedIds.push(res.purgedGenerationId);
+        totalBytes += Number(res.purgedBytes || 0);
+      }
+    } catch (err) {
+      failedIds.push(gen.id);
+    }
+  }
+  return {
+    ok: true,
+    purgedCount: purgedIds.length,
+    purgedGenerationIds: purgedIds,
+    failedGenerationIds: failedIds,
+    totalPurgedBytes: totalBytes,
+  };
+}
+
 async function removeGenerationAssetsAndRows(generation, options = {}) {
   if (!generation?.id) return { ok: true, alreadyDeleted: true, deletedGenerationId: null };
   if (!options.storage || typeof options.storage.deleteMany !== "function") {
@@ -76,6 +288,7 @@ async function removeGenerationAssetsAndRows(generation, options = {}) {
   let rows;
   try {
     rows = (options.deleteGenerationRows || deleteGenerationRows)(generation.id, { deletedAt, deleteReason });
+    recordGenerationDeleted({ generationId: Number(generation.id), userId: generation.ownerUserId, deletedAt });
   } catch (error) {
     await staged.rollback();
     throw error;
@@ -119,6 +332,9 @@ async function removeGenerationsAssetsAndRows(generations = [], options = {}) {
       deletedAt,
       deleteReason,
     })));
+    for (const gen of source) {
+      recordGenerationDeleted({ generationId: Number(gen.id), userId: gen.ownerUserId, deletedAt });
+    }
   } catch (error) {
     await assetResult.rollback();
     throw error;
@@ -137,6 +353,9 @@ module.exports = {
   collectGenerationAssets,
   collectGenerationsAssets,
   assertGenerationAssetOwnership,
+  cleanPayloadPreservingData,
+  purgeGenerationAssetsPreservingData,
+  purgeGenerationsAssetsPreservingData,
   removeGenerationAssetsAndRows,
   removeGenerationsAssets,
   removeGenerationsAssetsAndRows,

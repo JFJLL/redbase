@@ -5,6 +5,11 @@ const { findGenerationById, upsertGeneration } = require("./generation-repositor
 const { findUserById } = require("./auth-repository");
 const { spendCreditsWithEventInTransaction } = require("./admin-repository");
 const {
+  recordVideoProjectCreated,
+  recordVideoProjectCompleted,
+  recordVideoProjectFailed,
+} = require("../../analytics/analytics-recorder");
+const {
   ACTIVE_PROJECT_STATUSES,
   RECOVERABLE_PROJECT_STATUSES,
   TERMINAL_PROJECT_STATUSES,
@@ -18,6 +23,8 @@ const PROJECT_COLUMNS = `
   reference_asset_ids_json, visual_bible_json, script_json, estimated_credits,
   charged_credits, refunded_credits, credit_event_id, script_generation_id,
   input_assets_json, assembly_request_id, assembly_attempt, final_video_json, error,
+  started_at, completed_at, failed_at, assembly_started_at, assembly_completed_at,
+  asset_status, asset_count, asset_bytes, assets_deleted_at,
   created_at, updated_at
 `;
 
@@ -28,7 +35,9 @@ const CLIP_COLUMNS = `
   continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
   reservation_credit_event_id, submission_attempt, last_successful_poll_at,
   poll_failure_count, error, result_processing_failure_count,
-  last_result_processing_error, last_result_processing_at, created_at, updated_at
+  last_result_processing_error, last_result_processing_at,
+  first_submitted_at, completed_at, failed_at, asset_status, asset_bytes, assets_deleted_at,
+  created_at, updated_at
 `;
 
 function parseJsonObject(value) {
@@ -71,6 +80,12 @@ function mapClipRow(row) {
     resultProcessingFailureCount: Number(row.result_processing_failure_count || 0),
     lastResultProcessingError: String(row.last_result_processing_error || ""),
     lastResultProcessingAt: String(row.last_result_processing_at || ""),
+    firstSubmittedAt: String(row.first_submitted_at || ""),
+    completedAt: String(row.completed_at || ""),
+    failedAt: String(row.failed_at || ""),
+    assetStatus: String(row.asset_status || "available"),
+    assetBytes: Number(row.asset_bytes || 0),
+    assetsDeletedAt: String(row.assets_deleted_at || ""),
     createdAt: String(row.created_at || ""),
     updatedAt: String(row.updated_at || ""),
   };
@@ -106,6 +121,15 @@ function mapProjectRow(row, clips = null) {
     assemblyAttempt: Number(row.assembly_attempt || 0),
     finalVideo: parseJsonObject(row.final_video_json),
     error: String(row.error || ""),
+    startedAt: String(row.started_at || ""),
+    completedAt: String(row.completed_at || ""),
+    failedAt: String(row.failed_at || ""),
+    assemblyStartedAt: String(row.assembly_started_at || ""),
+    assemblyCompletedAt: String(row.assembly_completed_at || ""),
+    assetStatus: String(row.asset_status || "available"),
+    assetCount: Number(row.asset_count || 0),
+    assetBytes: Number(row.asset_bytes || 0),
+    assetsDeletedAt: String(row.assets_deleted_at || ""),
     createdAt: String(row.created_at || ""),
     updatedAt: String(row.updated_at || ""),
     clips: clips || undefined,
@@ -361,6 +385,19 @@ function createProjectWithBilling({ project, clips, generation, billing, prevent
     for (const clip of createdClips) updateClip(clip.id, { reservationCreditEventId: charged.creditEvent.id });
     updateVideoBillingRequest(reservation.id, { status: "committed" });
     const finalProject = getProject(projectId, { ownerUserId: project.ownerUserId });
+    try {
+      recordVideoProjectCreated({
+        projectId,
+        userId: project.ownerUserId,
+        model: project.model,
+        mode: project.mode,
+        resolution: project.resolution,
+        aspectRatio: project.aspectRatio,
+        totalDurationSec: project.totalDurationSec,
+        estimatedCredits: billing.creditCost,
+        createdAt: finalProject.createdAt,
+      });
+    } catch (_) {}
     return {
       reused: false,
       project: finalProject,
@@ -638,8 +675,17 @@ function insertProject(input) {
       reference_asset_ids_json, visual_bible_json, script_json, estimated_credits,
       charged_credits, refunded_credits, credit_event_id, script_generation_id,
       input_assets_json, assembly_request_id, assembly_attempt, final_video_json, error,
+      started_at, completed_at, failed_at, assembly_started_at, assembly_completed_at,
+      asset_status, asset_count, asset_bytes, assets_deleted_at,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?,
+      ?, ?
+    )
   `).run(
     Number(id), Number(input.ownerUserId), Number(input.generationId), String(input.requestId),
     Number(input.brandId), Number(input.trendId), Number(input.ideaIndex), String(input.model || "d2"),
@@ -648,7 +694,11 @@ function insertProject(input) {
     JSON.stringify(input.visualBible || {}), JSON.stringify(input.script || {}), Number(input.estimatedCredits || 0),
     Number(input.chargedCredits || 0), Number(input.refundedCredits || 0), input.creditEventId ?? null,
     input.scriptGenerationId ?? null, JSON.stringify(input.inputAssets || []), String(input.assemblyRequestId || ""),
-    Number(input.assemblyAttempt || 0), JSON.stringify(input.finalVideo || {}), String(input.error || ""), now, now,
+    Number(input.assemblyAttempt || 0), JSON.stringify(input.finalVideo || {}), String(input.error || ""),
+    String(input.startedAt || ""), String(input.completedAt || ""), String(input.failedAt || ""),
+    String(input.assemblyStartedAt || ""), String(input.assemblyCompletedAt || ""),
+    String(input.assetStatus || "available"), Number(input.assetCount || 0), Number(input.assetBytes || 0),
+    String(input.assetsDeletedAt || ""), now, now,
   );
   return getProject(id);
 }
@@ -664,11 +714,14 @@ function insertClip(input) {
       continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
       reservation_credit_event_id, submission_attempt, last_successful_poll_at,
       poll_failure_count, error, result_processing_failure_count,
-      last_result_processing_error, last_result_processing_at, created_at, updated_at
+      last_result_processing_error, last_result_processing_at,
+      first_submitted_at, completed_at, failed_at, asset_status, asset_bytes, assets_deleted_at,
+      created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?
     )
   `).run(
     Number(id), Number(input.projectId), Number(input.clipIndex), Number(input.startSec), Number(input.endSec),
@@ -680,7 +733,10 @@ function insertClip(input) {
     Number(input.retryCount || 0), String(input.providerKeyRef || ""), input.reservationCreditEventId ?? null,
     Number(input.submissionAttempt || 0), String(input.lastSuccessfulPollAt || ""), Number(input.pollFailureCount || 0),
     String(input.error || ""), Number(input.resultProcessingFailureCount || 0),
-    String(input.lastResultProcessingError || ""), String(input.lastResultProcessingAt || ""), now, now,
+    String(input.lastResultProcessingError || ""), String(input.lastResultProcessingAt || ""),
+    String(input.firstSubmittedAt || ""), String(input.completedAt || ""), String(input.failedAt || ""),
+    String(input.assetStatus || "available"), Number(input.assetBytes || 0), String(input.assetsDeletedAt || ""),
+    now, now,
   );
   return getClip(id);
 }
@@ -716,7 +772,10 @@ function updateProject(projectId, patch = {}) {
       status = ?, reference_asset_ids_json = ?, visual_bible_json = ?, script_json = ?,
       estimated_credits = ?, charged_credits = ?, refunded_credits = ?, credit_event_id = ?,
       script_generation_id = ?, input_assets_json = ?, assembly_request_id = ?, assembly_attempt = ?,
-      final_video_json = ?, error = ?, updated_at = ?
+      final_video_json = ?, error = ?,
+      started_at = ?, completed_at = ?, failed_at = ?, assembly_started_at = ?, assembly_completed_at = ?,
+      asset_status = ?, asset_count = ?, asset_bytes = ?, assets_deleted_at = ?,
+      updated_at = ?
     WHERE id = ?
   `).run(
     String(next.status || existing.status), JSON.stringify(next.referenceAssetIds || existing.referenceAssetIds || []),
@@ -725,9 +784,43 @@ function updateProject(projectId, patch = {}) {
     Number(next.refundedCredits ?? existing.refundedCredits ?? 0), next.creditEventId ?? existing.creditEventId ?? null,
     next.scriptGenerationId ?? existing.scriptGenerationId ?? null, JSON.stringify(next.inputAssets || existing.inputAssets || []),
     String(next.assemblyRequestId ?? existing.assemblyRequestId ?? ""), Number(next.assemblyAttempt ?? existing.assemblyAttempt ?? 0),
-    JSON.stringify(next.finalVideo || existing.finalVideo || {}), String(next.error ?? existing.error ?? ""), updatedAt,
+    JSON.stringify(next.finalVideo || existing.finalVideo || {}), String(next.error ?? existing.error ?? ""),
+    String(next.startedAt ?? existing.startedAt ?? ""), String(next.completedAt ?? existing.completedAt ?? ""),
+    String(next.failedAt ?? existing.failedAt ?? ""), String(next.assemblyStartedAt ?? existing.assemblyStartedAt ?? ""),
+    String(next.assemblyCompletedAt ?? existing.assemblyCompletedAt ?? ""),
+    String(next.assetStatus ?? existing.assetStatus ?? "available"), Number(next.assetCount ?? existing.assetCount ?? 0),
+    Number(next.assetBytes ?? existing.assetBytes ?? 0), String(next.assetsDeletedAt ?? existing.assetsDeletedAt ?? ""),
+    updatedAt,
     Number(projectId),
   );
+  if (patch.status === "completed") {
+    try {
+      recordVideoProjectCompleted({
+        projectId,
+        userId: next.ownerUserId,
+        model: next.model,
+        mode: next.mode,
+        resolution: next.resolution,
+        aspectRatio: next.aspectRatio,
+        totalDurationSec: next.totalDurationSec,
+        chargedCredits: next.chargedCredits,
+        refundedCredits: next.refundedCredits,
+        durationMs: next.startedAt ? Date.now() - Date.parse(next.startedAt) : 0,
+        completedAt: next.completedAt || updatedAt,
+      });
+    } catch (_) {}
+  } else if (["failed", "project_data_failed"].includes(patch.status)) {
+    try {
+      recordVideoProjectFailed({
+        projectId,
+        userId: next.ownerUserId,
+        model: next.model,
+        mode: next.mode,
+        error: next.error,
+        failedAt: next.failedAt || updatedAt,
+      });
+    } catch (_) {}
+  }
   return getProject(projectId);
 }
 
@@ -743,7 +836,9 @@ function updateClip(clipId, patch = {}) {
       retry_count = ?, provider_key_ref = ?, reservation_credit_event_id = ?, submission_attempt = ?,
       last_successful_poll_at = ?, poll_failure_count = ?, error = ?,
       result_processing_failure_count = ?, last_result_processing_error = ?,
-      last_result_processing_at = ?, updated_at = ?
+      last_result_processing_at = ?,
+      first_submitted_at = ?, completed_at = ?, failed_at = ?, asset_status = ?, asset_bytes = ?, assets_deleted_at = ?,
+      updated_at = ?
     WHERE id = ?
   `).run(
     String(next.status || existing.status), next.dependsOnClipIndex ?? null, String(next.prompt ?? (existing.prompt || "")),
@@ -758,7 +853,14 @@ function updateClip(clipId, patch = {}) {
     Number(next.resultProcessingFailureCount ?? existing.resultProcessingFailureCount ?? 0),
     String(next.lastResultProcessingError ?? existing.lastResultProcessingError ?? ""),
     String(next.lastResultProcessingAt ?? existing.lastResultProcessingAt ?? ""),
-    nowIso(), Number(clipId),
+    String(next.firstSubmittedAt ?? existing.firstSubmittedAt ?? ""),
+    String(next.completedAt ?? existing.completedAt ?? ""),
+    String(next.failedAt ?? existing.failedAt ?? ""),
+    String(next.assetStatus ?? existing.assetStatus ?? "available"),
+    Number(next.assetBytes ?? existing.assetBytes ?? 0),
+    String(next.assetsDeletedAt ?? existing.assetsDeletedAt ?? ""),
+    nowIso(),
+    Number(clipId),
   );
   return getClip(clipId);
 }

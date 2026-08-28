@@ -1,5 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { hashPassword, verifyAndMigratePassword } = require("../auth/passwords");
+const { recordUserRegistered } = require("../analytics/analytics-recorder");
 const { setSessionCookie, clearSessionCookie } = require("../auth/cookies");
 const { issueVerificationCode, hmacVerificationCode } = require("../auth/verification-service");
 const {
@@ -107,6 +108,10 @@ async function handleAuthRoutes(context, req, res, pathname) {
       createdAt: new Date().toISOString(),
     };
     const savedUser = createUserWithSession({ user, token });
+
+    try {
+      recordUserRegistered({ userId: savedUser.id, accountType: savedUser.accountType, createdAt: savedUser.createdAt });
+    } catch (_) {}
 
     req.__redbaseApiUser = buildApiUserLog(savedUser);
     setSessionCookie(res, token, { secure: appConfig.security.cookieSecure });

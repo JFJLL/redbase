@@ -20,7 +20,8 @@ outputs/
 .playwright-cli/
 .claude/
 redbase-model-cost-estimate.md
-docs/
+docs/*
+!docs/admin-analytics-v1.md
 artifacts/
 .worktrees/
 cert/

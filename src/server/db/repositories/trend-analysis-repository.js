@@ -3,6 +3,11 @@ const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS,
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
 const { findBrandByOwner, upsertBrandFull } = require("./brand-repository");
+const {
+  recordTrendAnalysisStarted,
+  recordTrendAnalysisCompleted,
+  recordTrendAnalysisFailed,
+} = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 function normalizeRequestId(value) {
@@ -88,6 +93,15 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
         analysis_id, credit_event_id, error, created_at, updated_at
       ) VALUES (?, ?, ?, ?, 'reserved', ?, NULL, NULL, '', ?, ?)
     `).run(normalizedRequestId, Number(userId), Number(brandId), String(bucketKey), cost, timestamp, timestamp);
+    try {
+      recordTrendAnalysisStarted({
+        requestId: normalizedRequestId,
+        userId,
+        brandId,
+        bucketKey,
+        createdAt: timestamp,
+      });
+    } catch (_) {}
     return {
       status: "reserved",
       existing: false,
@@ -154,24 +168,44 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
       SET status = 'completed', analysis_id = ?, credit_event_id = ?, error = '', updated_at = ?
       WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ?
     `).run(Number(analysisId), Number(creditEvent.id), timestamp, requestId, Number(userId), Number(brandId), String(bucketKey));
+    try {
+      recordTrendAnalysisCompleted({
+        requestId,
+        userId,
+        brandId,
+        bucketKey,
+        completedAt: timestamp,
+      });
+    } catch (_) {}
     return { replayed: false, brand: savedBrand, user: findUserById(userId), creditEvent };
   });
 }
 
 function failTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, error }) {
   return runTransaction(() => {
+    const timestamp = new Date().toISOString();
     db.prepare(`
       UPDATE trend_analysis_requests
       SET status = 'failed', error = ?, updated_at = ?
       WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ? AND status = 'reserved'
     `).run(
       String(error || "trend analysis failed").slice(0, 500),
-      new Date().toISOString(),
+      timestamp,
       String(requestId),
       Number(userId),
       Number(brandId),
       String(bucketKey),
     );
+    try {
+      recordTrendAnalysisFailed({
+        requestId,
+        userId,
+        brandId,
+        bucketKey,
+        error,
+        failedAt: timestamp,
+      });
+    } catch (_) {}
   });
 }
 

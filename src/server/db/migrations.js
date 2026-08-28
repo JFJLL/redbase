@@ -278,6 +278,208 @@ const VERSIONED_MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 8,
+    name: "asset-retention-and-lifecycle",
+    apply() {
+      const getColumns = (tableName) => {
+        const exists = db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName);
+        if (!exists || !exists.count) return [];
+        return db.prepare("PRAGMA table_info(" + tableName + ")").all().map((row) => row.name);
+      };
+      const addColumn = (tableName, columnName, definition) => {
+        const cols = getColumns(tableName);
+        if (!cols.includes(columnName)) {
+          db.exec("ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + definition);
+        }
+      };
+
+      // generations
+      addColumn("generations", "visibility_status", "TEXT NOT NULL DEFAULT 'active'");
+      addColumn("generations", "asset_status", "TEXT NOT NULL DEFAULT 'available'");
+      addColumn("generations", "asset_count", "INTEGER NOT NULL DEFAULT 0");
+      addColumn("generations", "asset_bytes", "INTEGER NOT NULL DEFAULT 0");
+      addColumn("generations", "assets_deleted_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("generations", "assets_delete_error", "TEXT NOT NULL DEFAULT ''");
+      addColumn("generations", "updated_at", "TEXT NOT NULL DEFAULT ''");
+
+      // image_jobs
+      addColumn("image_jobs", "asset_status", "TEXT NOT NULL DEFAULT 'available'");
+      addColumn("image_jobs", "asset_bytes", "INTEGER NOT NULL DEFAULT 0");
+      addColumn("image_jobs", "assets_deleted_at", "TEXT NOT NULL DEFAULT ''");
+
+      // video_projects
+      addColumn("video_projects", "started_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_projects", "completed_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_projects", "failed_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_projects", "assembly_started_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_projects", "assembly_completed_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_projects", "asset_status", "TEXT NOT NULL DEFAULT 'available'");
+      addColumn("video_projects", "asset_count", "INTEGER NOT NULL DEFAULT 0");
+      addColumn("video_projects", "asset_bytes", "INTEGER NOT NULL DEFAULT 0");
+      addColumn("video_projects", "assets_deleted_at", "TEXT NOT NULL DEFAULT ''");
+
+      // video_clips
+      addColumn("video_clips", "first_submitted_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_clips", "completed_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_clips", "failed_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("video_clips", "asset_status", "TEXT NOT NULL DEFAULT 'available'");
+      addColumn("video_clips", "asset_bytes", "INTEGER NOT NULL DEFAULT 0");
+      addColumn("video_clips", "assets_deleted_at", "TEXT NOT NULL DEFAULT ''");
+
+      // brands
+      addColumn("brands", "created_at", "TEXT NOT NULL DEFAULT ''");
+      addColumn("brands", "updated_at", "TEXT NOT NULL DEFAULT ''");
+
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations(created_at);
+        CREATE INDEX IF NOT EXISTS idx_generations_type_created ON generations(type, created_at);
+        CREATE INDEX IF NOT EXISTS idx_generations_vis_created ON generations(visibility_status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_generations_asset_created ON generations(asset_status, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_credit_events_created ON credit_events(created_at);
+        CREATE INDEX IF NOT EXISTS idx_credit_events_action_created ON credit_events(action_type, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_payment_orders_paid ON payment_orders(paid_at);
+        CREATE INDEX IF NOT EXISTS idx_payment_orders_prov_status_created ON payment_orders(provider, status, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_image_jobs_status_created_ms ON image_jobs(status, created_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_image_jobs_prov_model_created_ms ON image_jobs(provider, model, created_at_ms);
+
+        CREATE INDEX IF NOT EXISTS idx_video_projects_created ON video_projects(created_at);
+        CREATE INDEX IF NOT EXISTS idx_video_projects_model_created ON video_projects(video_model, created_at);
+        CREATE INDEX IF NOT EXISTS idx_video_projects_status_created ON video_projects(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_video_projects_mode_created ON video_projects(mode, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_video_clips_status_created ON video_clips(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_video_clips_provider_created ON video_clips(provider, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_brands_created_at ON brands(created_at);
+      `);
+    },
+  },
+  {
+    version: 9,
+    name: "analytics-facts-and-ai-attempts",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS analytics_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_key TEXT NOT NULL UNIQUE,
+          event_name TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          actor_key TEXT NOT NULL DEFAULT '',
+          actor_user_id INTEGER,
+          account_type TEXT NOT NULL DEFAULT '',
+          feature TEXT NOT NULL DEFAULT '',
+          entity_type TEXT NOT NULL DEFAULT '',
+          entity_id TEXT NOT NULL DEFAULT '',
+          source_table TEXT NOT NULL DEFAULT '',
+          source_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',
+          provider TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL DEFAULT '',
+          mode TEXT NOT NULL DEFAULT '',
+          resolution TEXT NOT NULL DEFAULT '',
+          aspect_ratio TEXT NOT NULL DEFAULT '',
+          duration_ms INTEGER NOT NULL DEFAULT 0,
+          media_duration_sec INTEGER NOT NULL DEFAULT 0,
+          credit_delta INTEGER NOT NULL DEFAULT 0,
+          credit_cost INTEGER NOT NULL DEFAULT 0,
+          amount_fen INTEGER NOT NULL DEFAULT 0,
+          quantity INTEGER NOT NULL DEFAULT 1,
+          asset_bytes INTEGER NOT NULL DEFAULT 0,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          release_sha TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_name_occurred ON analytics_events(event_name, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_occurred ON analytics_events(occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_actor_occurred ON analytics_events(actor_key, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_feature_occurred ON analytics_events(feature, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS ai_task_attempts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          attempt_key TEXT NOT NULL UNIQUE,
+          feature TEXT NOT NULL,
+          task_type TEXT NOT NULL,
+          entity_type TEXT NOT NULL DEFAULT '',
+          entity_id TEXT NOT NULL DEFAULT '',
+          project_id INTEGER,
+          clip_id INTEGER,
+          actor_key TEXT NOT NULL DEFAULT '',
+          actor_user_id INTEGER,
+          account_type TEXT NOT NULL DEFAULT '',
+          provider TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL DEFAULT '',
+          provider_key_ref TEXT NOT NULL DEFAULT '',
+          provider_task_id TEXT NOT NULL DEFAULT '',
+          attempt_kind TEXT NOT NULL DEFAULT 'initial',
+          attempt_no INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL,
+          error_stage TEXT NOT NULL DEFAULT '',
+          error_code TEXT NOT NULL DEFAULT '',
+          error_message TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL,
+          accepted_at TEXT NOT NULL DEFAULT '',
+          provider_completed_at TEXT NOT NULL DEFAULT '',
+          result_processing_started_at TEXT NOT NULL DEFAULT '',
+          result_processing_completed_at TEXT NOT NULL DEFAULT '',
+          completed_at TEXT NOT NULL DEFAULT '',
+          duration_ms INTEGER NOT NULL DEFAULT 0,
+          first_byte_ms INTEGER,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          total_tokens INTEGER,
+          credit_cost INTEGER NOT NULL DEFAULT 0,
+          vendor_cost_fen INTEGER,
+          is_backfilled INTEGER NOT NULL DEFAULT 0,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          release_sha TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_attempts_task_started ON ai_task_attempts(task_type, started_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_attempts_feature_started ON ai_task_attempts(feature, started_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_attempts_status_started ON ai_task_attempts(status, started_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_attempts_prov_model_started ON ai_task_attempts(provider, model, started_at);
+
+        CREATE TABLE IF NOT EXISTS analytics_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+
+      const now = new Date().toISOString();
+      const insertMeta = db.prepare("INSERT OR IGNORE INTO analytics_meta (key, value, updated_at) VALUES (?, ?, ?)");
+      insertMeta.run("analytics_schema_version", "1", now);
+      insertMeta.run("tracking_started_at", now, now);
+      insertMeta.run("client_tracking_started_at", now, now);
+      insertMeta.run("backfill_completed_at", "", now);
+      insertMeta.run("backfill_source_max_at", "", now);
+    },
+  },
+  {
+    version: 10,
+    name: "payment-provider-label-correction",
+    apply() {
+      db.exec(`
+        UPDATE credit_events
+        SET action_type = 'wxpay_recharge',
+            action_label = '微信支付充值',
+            summary = CASE
+              WHEN summary LIKE '%支付宝%' THEN REPLACE(summary, '支付宝', '微信支付')
+              ELSE '微信支付充值'
+            END
+        WHERE id IN (
+          SELECT credit_event_id
+          FROM payment_orders
+          WHERE provider = 'wxpay'
+            AND credit_event_id IS NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

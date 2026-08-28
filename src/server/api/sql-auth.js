@@ -1,4 +1,5 @@
 const { findUserBySessionToken } = require("../db/repositories/auth-repository");
+const { recordUserActiveDay } = require("../analytics/analytics-recorder");
 
 function getAuthenticatedSqlUser(req, helpers) {
   const token = helpers.getSessionToken(req);
@@ -15,6 +16,9 @@ function requireSqlAuth(req, res, helpers) {
     helpers.unauthorized(res, "请先登录");
     return null;
   }
+  try {
+    recordUserActiveDay({ userId: user.id, accountType: user.accountType });
+  } catch (_) {}
   return user;
 }
 

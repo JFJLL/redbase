@@ -1,6 +1,7 @@
 const { shouldLogApiRequest, installApiRequestLogger, json } = require("./api/helpers");
 const { handleHealthRoutes } = require("./api/health-routes");
 const { handleAuthRoutes } = require("./api/auth-routes");
+const { handleAdminAnalyticsRoutes } = require("./api/admin-analytics-routes");
 const { handleAdminRoutes } = require("./api/admin-routes");
 const { handleHistoryRoutes } = require("./api/history-routes");
 const { handlePersonalIpRoutes } = require("./api/personal-ip-routes");
@@ -21,6 +22,7 @@ const generationDeletionService = require("./assets/generation-deletion-service"
 const routeHandlers = [
   handleHealthRoutes,
   handleAuthRoutes,
+  handleAdminAnalyticsRoutes,
   handleAdminRoutes,
   handleHistoryRoutes,
   handlePersonalIpRoutes,
@@ -62,6 +64,14 @@ function createApiHandler({ appConfig, store, ai, generatedAssetStorage, history
       storage: assetStorage,
     }),
     removeGenerationsAssetsAndRows: (generations, options = {}) => generationDeletionService.removeGenerationsAssetsAndRows(generations, {
+      ...options,
+      storage: assetStorage,
+    }),
+    purgeGenerationAssetsPreservingData: (generation, options = {}) => generationDeletionService.purgeGenerationAssetsPreservingData(generation, {
+      ...options,
+      storage: assetStorage,
+    }),
+    purgeGenerationsAssetsPreservingData: (generations, options = {}) => generationDeletionService.purgeGenerationsAssetsPreservingData(generations, {
       ...options,
       storage: assetStorage,
     }),

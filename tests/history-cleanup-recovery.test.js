@@ -93,7 +93,10 @@ test("cleanupDeletionStaging failure does not block deletion of expired rows", a
     storage: createFailingRecoveryStorage("cleanupDeletionStaging"),
     logger: collector.logger,
   });
-  assert.equal(findGenerationById(99001), null);
+  const gen = findGenerationById(99001);
+  assert.ok(gen, "generation record is preserved");
+  assert.equal(gen.visibilityStatus, "expired");
+  assert.equal(gen.assetStatus, "none");
   assert.equal(result.deletedGenerationIds.includes(99001), true);
   assert.equal(result.failedGenerationIds.includes(99001), false);
   const recoveryWarning = collector.warnings.find((entry) =>
@@ -133,7 +136,10 @@ test("cleanupUnreferencedAssets failure does not block deletion of expired rows"
     storage: createFailingRecoveryStorage("cleanupUnreferencedAssets"),
     logger: collector.logger,
   });
-  assert.equal(findGenerationById(99003), null);
+  const gen = findGenerationById(99003);
+  assert.ok(gen, "generation record is preserved");
+  assert.equal(gen.visibilityStatus, "expired");
+  assert.equal(gen.assetStatus, "none");
   assert.equal(result.deletedGenerationIds.includes(99003), true);
   assert.equal(result.failedGenerationIds.includes(99003), false);
   const recoveryWarning = collector.warnings.find((entry) =>

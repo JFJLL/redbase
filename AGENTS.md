@@ -3,8 +3,8 @@
 ## Project
 
 - Goal: run a local/hosted Xiaohongshu content-operations product with real trend evidence, AI generation, image generation, authentication, and SQLite persistence.
-- Runtime: Node.js server with static frontend assets; there is no compile/bundle step.
-- Main directories: `src/server/` backend, `public/` frontend, `tests/` deterministic tests, `scripts/` operational checks, `data/` local runtime state.
+- Runtime: Node.js server with Vue + Vite frontend application (landing, app, admin 3-entry build); `npm run build` generates `dist/public`.
+- Main directories: `src/server/` backend, `frontend/` Vue SPA source, `public/` public assets, `tests/` deterministic tests, `scripts/` operational checks, `data/` local runtime state, `docs/` specifications and manuals.
 
 ## Commands
 

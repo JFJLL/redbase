@@ -1,12 +1,14 @@
 const { getDbProxy } = require("../connection");
 const { safeParseObject } = require("../snapshot-utils");
+const { recordImageTaskAttempt } = require("../../analytics/ai-attempt-recorder");
+const { GENERATION_TYPE_TO_FEATURE } = require("../../analytics/analytics-constants");
 
 const db = getDbProxy();
 
 const IMAGE_JOB_COLUMNS = `
   id, owner_user_id, status, provider, provider_mode, provider_result_url, model,
   metadata_json, generation_context_json, image_url, error, generation_id,
-  created_at_ms, updated_at, completed_at
+  created_at_ms, updated_at, completed_at, asset_status, asset_bytes, assets_deleted_at
 `;
 
 function mapImageJobRow(row) {
@@ -27,6 +29,9 @@ function mapImageJobRow(row) {
     createdAt: row.created_at_ms,
     updatedAt: row.updated_at || "",
     completedAt: row.completed_at || "",
+    assetStatus: row.asset_status || "available",
+    assetBytes: Number(row.asset_bytes || 0),
+    assetsDeletedAt: row.assets_deleted_at || "",
   };
 }
 
@@ -87,8 +92,8 @@ function upsertImageJob(ownerUserId, job) {
     INSERT INTO image_jobs (
       id, owner_user_id, status, provider, provider_mode, provider_result_url, model,
       metadata_json, generation_context_json, image_url, error, generation_id,
-      created_at_ms, updated_at, completed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      created_at_ms, updated_at, completed_at, asset_status, asset_bytes, assets_deleted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       status = excluded.status,
       provider = excluded.provider,
@@ -102,7 +107,10 @@ function upsertImageJob(ownerUserId, job) {
       generation_id = excluded.generation_id,
       created_at_ms = excluded.created_at_ms,
       updated_at = excluded.updated_at,
-      completed_at = excluded.completed_at
+      completed_at = excluded.completed_at,
+      asset_status = excluded.asset_status,
+      asset_bytes = excluded.asset_bytes,
+      assets_deleted_at = excluded.assets_deleted_at
       WHERE image_jobs.owner_user_id = excluded.owner_user_id
   `).run(
     job.id,
@@ -120,8 +128,47 @@ function upsertImageJob(ownerUserId, job) {
     Number(job.createdAt || Date.now()),
     nowIso,
     completedAt,
+    job.assetStatus || "available",
+    Number(job.assetBytes || 0),
+    job.assetsDeletedAt || "",
   );
-  return findImageJobByOwner(job.id, ownerUserId);
+  const savedJob = findImageJobByOwner(job.id, ownerUserId);
+  try {
+    if (job.status === "completed") {
+      const type = job.generationContext?.type || "";
+      const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "style_image";
+      recordImageTaskAttempt({
+        jobId: job.id,
+        feature,
+        provider: job.provider || "keystone",
+        model: job.model || "",
+        status: "completed",
+        durationMs: job.createdAt ? Math.max(0, Date.now() - Number(job.createdAt)) : 0,
+        creditCost: Number(job.generationContext?.creditCost || 0),
+        startedAt: job.createdAt ? new Date(Number(job.createdAt)).toISOString() : nowIso,
+        completedAt,
+        actorUserId: ownerUserId,
+      });
+    } else if (job.status === "failed") {
+      const type = job.generationContext?.type || "";
+      const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "style_image";
+      recordImageTaskAttempt({
+        jobId: job.id,
+        feature,
+        provider: job.provider || "keystone",
+        model: job.model || "",
+        status: "failed",
+        errorStage: "provider",
+        errorMessage: job.error || "",
+        durationMs: job.createdAt ? Math.max(0, Date.now() - Number(job.createdAt)) : 0,
+        creditCost: 0,
+        startedAt: job.createdAt ? new Date(Number(job.createdAt)).toISOString() : nowIso,
+        completedAt: nowIso,
+        actorUserId: ownerUserId,
+      });
+    }
+  } catch (_) {}
+  return savedJob;
 }
 
 function deleteImageJobsForGeneration(generationId) {

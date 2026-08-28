@@ -366,8 +366,10 @@ test("cleanupExpiredGenerationHistory removes expired rows and local files", asy
     },
   });
 
-  assert.equal(findGenerationById(4), null);
+  assert.equal(findGenerationById(4).visibilityStatus, "expired");
+  assert.equal(findGenerationById(4).assetStatus, "purged");
   assert.equal(findGenerationById(5).id, 5);
+  assert.equal(findGenerationById(5).visibilityStatus, "active");
   assert.equal(result.deletedGenerationIds.includes(4), true);
   assert.equal(removedStoredPaths.includes("uploads/generated-images/users/1/2026/05/gi_4_expired.png"), true);
   assert.equal(removedStoredPaths.includes("uploads/generated-images/users/1/2026/05/gi_5_fresh.png"), false);
@@ -464,7 +466,10 @@ test("reading an expired generated image deletes it through the shared service a
   };
   await handleHistoryRoutes(readContext, createReq("/api/generated-images/7/file"), res, "/api/generated-images/7/file");
   assert.equal(res.statusCode, 404);
-  assert.equal(findGenerationById(7), null);
+  const gen7 = findGenerationById(7);
+  assert.ok(gen7);
+  assert.equal(gen7.visibilityStatus, "expired");
+  assert.equal(gen7.assetStatus, "purged");
 });
 
 test("history list never returns expired rows even when a shared cleanup is already in flight", async () => {

@@ -7,6 +7,11 @@ const {
   refundCreditEventIfNeededInTransaction,
   updateCreditEventGeneration,
 } = require("./admin-repository");
+const {
+  recordVideoScriptStarted,
+  recordVideoScriptCompleted,
+  recordVideoScriptFailed,
+} = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 const VIDEO_SCRIPT_REQUEST_STALE_MS = 15 * 60 * 1000;
@@ -109,6 +114,14 @@ function beginVideoScriptRequest({ userId, requestId, brandId, trendId, ideaInde
       createdAt,
       inputSignature,
     });
+    try {
+      recordVideoScriptStarted({
+        requestId: normalizedRequestId,
+        userId,
+        brandId,
+        createdAt,
+      });
+    } catch (_) {}
     return { started: true, request, user: charged.user, creditEvent: charged.creditEvent };
   });
 }
@@ -146,6 +159,15 @@ function completeVideoScriptRequest({ userId, requestId, generation } = {}) {
       generationId: created.id,
       error: "",
     });
+    try {
+      recordVideoScriptCompleted({
+        requestId: request.requestId,
+        userId,
+        generationId: created.id,
+        creditCost: request.creditCost,
+        completedAt: new Date().toISOString(),
+      });
+    } catch (_) {}
     return { completed: true, request: completedRequest, generation: created, user: findUserById(userId) };
   });
 }
@@ -167,6 +189,14 @@ function failVideoScriptRequest({ userId, requestId, reason } = {}) {
       status: nextStatus,
       error: String(reason || "视频脚本生成失败").slice(0, 500),
     });
+    try {
+      recordVideoScriptFailed({
+        requestId: request.requestId,
+        userId,
+        error: reason,
+        failedAt: new Date().toISOString(),
+      });
+    } catch (_) {}
     return { request: updated, refund, user: findUserById(userId) };
   });
 }

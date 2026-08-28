@@ -1,5 +1,6 @@
 const fsp = require("fs/promises");
 const path = require("path");
+const { getDbProxy } = require("../db/connection");
 
 const { signAssetUrl } = require("../assets/signed-urls");
 const { resolveStoredProductImagePath } = require("../assets/image-store");
@@ -53,6 +54,7 @@ const {
   claimAssemblyRetry,
 } = require("../db/repositories/video-project-repository");
 const { refundVideoCredits, sumVideoProjectRefundCredits } = require("./video-billing");
+const db = getDbProxy();
 const DAY_MS = 24 * 60 * 60 * 1000;
 const POLL_BACKOFF_STEPS_MS = [2000, 4000, 8000, 15000, 30000];
 const RESULT_PROCESSING_BACKOFF_STEPS_MS = [2000, 4000, 8000, 15000, 30000, 60000];
@@ -2180,6 +2182,71 @@ function createVideoProjectService(options = {}) {
       media: { active: mediaSemaphore.active, limit: mediaSemaphore.limit },
       ffmpeg: { active: ffmpegSemaphore.active, limit: ffmpegSemaphore.limit },
     }),
+    getRuntimeHealth: () => {
+      const activeRows = db.prepare(`
+        SELECT id, status, created_at, updated_at
+        FROM video_projects
+        WHERE status IN ('preparing', 'queued', 'running', 'processing_result', 'result_processing_failed', 'partial_failed', 'uncertain', 'waiting_configuration', 'assembling', 'assembly_failed')
+      `).all();
+
+      const queueDepthByStatus = {};
+      const actionable = {
+        waitingConfiguration: 0,
+        resultProcessingFailed: 0,
+        partialFailed: 0,
+        uncertain: 0,
+        assemblyFailed: 0,
+      };
+
+      let oldestQueuedAgeSec = 0;
+      let oldestActiveAgeSec = 0;
+      let stuckCount = 0;
+      const now = Date.now();
+
+      for (const row of activeRows) {
+        queueDepthByStatus[row.status] = (queueDepthByStatus[row.status] || 0) + 1;
+        const createdMs = Date.parse(row.created_at || row.updated_at);
+        const ageSec = Number.isFinite(createdMs) ? Math.max(0, Math.floor((now - createdMs) / 1000)) : 0;
+        if (ageSec > oldestActiveAgeSec) oldestActiveAgeSec = ageSec;
+        if (["queued", "preparing"].includes(row.status) && ageSec > oldestQueuedAgeSec) {
+          oldestQueuedAgeSec = ageSec;
+        }
+        if (ageSec > 7200) {
+          stuckCount += 1;
+        }
+        if (row.status === "waiting_configuration") actionable.waitingConfiguration += 1;
+        if (row.status === "result_processing_failed") actionable.resultProcessingFailed += 1;
+        if (row.status === "partial_failed") actionable.partialFailed += 1;
+        if (row.status === "uncertain") actionable.uncertain += 1;
+        if (row.status === "assembly_failed") actionable.assemblyFailed += 1;
+      }
+
+      const agnesSnapshot = typeof keyPool?.snapshot === "function" ? keyPool.snapshot() : [];
+      const healthyKeys = agnesSnapshot.filter((k) => k.health === "healthy").length;
+      const cooldownKeys = agnesSnapshot.filter((k) => k.health === "cooldown").length;
+      const degradedKeys = agnesSnapshot.filter((k) => k.health === "degraded").length;
+      const inFlightKeys = agnesSnapshot.reduce((sum, k) => sum + Number(k.inFlight || 0), 0);
+
+      return {
+        schedulerRunning: Boolean(scheduler),
+        activeProjectCount: activeRows.length,
+        queueDepthByStatus,
+        oldestQueuedAgeSec,
+        oldestActiveAgeSec,
+        stuckCount,
+        d2Submission: { active: d2SubmitSemaphore.active, limit: d2SubmitSemaphore.limit },
+        mediaProcessing: { active: mediaSemaphore.active, limit: mediaSemaphore.limit },
+        ffmpeg: { active: ffmpegSemaphore.active, limit: ffmpegSemaphore.limit },
+        agnes: {
+          keyTotal: agnesSnapshot.length,
+          healthy: healthyKeys,
+          cooldown: cooldownKeys,
+          degraded: degradedKeys,
+          inFlight: inFlightKeys,
+        },
+        actionable,
+      };
+    },
     isActiveStatus: (status) => ACTIVE_PROJECT_STATUSES.has(status),
   };
 }

@@ -21,7 +21,7 @@ function getBrandsBySql(sql, params = []) {
 function listBrandsByOwner(ownerUserId) {
   return getBrandsBySql(
     `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
-            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
+            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style, created_at, updated_at
      FROM brands WHERE owner_user_id = ? ORDER BY id DESC`,
     [Number(ownerUserId)],
   );
@@ -41,6 +41,8 @@ function listBrandSummariesByOwner(ownerUserId) {
        b.profile_type,
        b.content_pillars_json,
        b.persona_style,
+       b.created_at,
+       b.updated_at,
        (
          SELECT COUNT(*)
          FROM trends t
@@ -78,6 +80,8 @@ function listBrandSummariesByOwner(ownerUserId) {
         content_pillars_json: row.content_pillars_json,
         persona_style: row.persona_style,
         material_count: row.material_count,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
       }),
       trendCount: Number(row.trend_count || 0),
       analysisCount: Number(row.analysis_count || 0),
@@ -87,7 +91,7 @@ function listBrandSummariesByOwner(ownerUserId) {
 function listAllBrands() {
   return getBrandsBySql(`
     SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
-           logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
+           logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style, created_at, updated_at
     FROM brands
     ORDER BY id DESC
   `);
@@ -96,7 +100,7 @@ function listAllBrands() {
 function findBrandByOwner(brandId, ownerUserId) {
   return getBrandsBySql(
     `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
-            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
+            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style, created_at, updated_at
      FROM brands WHERE id = ? AND owner_user_id = ?`,
     [Number(brandId), Number(ownerUserId)],
   )[0] || null;
@@ -105,7 +109,7 @@ function findBrandByOwner(brandId, ownerUserId) {
 function findBrandById(brandId) {
   return getBrandsBySql(
     `SELECT id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
-            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
+            logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style, created_at, updated_at
      FROM brands WHERE id = ?`,
     [Number(brandId)],
   )[0] || null;
@@ -192,11 +196,13 @@ function hydrateBrandContent(brands) {
 function insertBrand(input) {
   return runTransaction(() => {
     const brandId = input.id ?? allocateCounter("nextBrandId", 1);
+    const nowIso = new Date().toISOString();
     db.prepare(`
       INSERT INTO brands (
         id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base,
-        logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        logo_json, asset_tags_json, profile_type, content_pillars_json, persona_style,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       brandId,
       input.ownerUserId,
@@ -212,6 +218,8 @@ function insertBrand(input) {
       input.profileType === "personal" ? "personal" : "brand",
       JSON.stringify(Array.isArray(input.contentPillars) ? input.contentPillars : []),
       input.personaStyle || "",
+      input.createdAt || nowIso,
+      input.updatedAt || nowIso,
     );
     return findBrandById(brandId);
   });
@@ -231,7 +239,8 @@ function updateBrandCore(brand) {
       asset_tags_json = ?,
       profile_type = ?,
       content_pillars_json = ?,
-      persona_style = ?
+      persona_style = ?,
+      updated_at = ?
     WHERE id = ? AND owner_user_id = ?
   `).run(
     brand.name,
@@ -246,6 +255,7 @@ function updateBrandCore(brand) {
     brand.profileType === "personal" ? "personal" : "brand",
     JSON.stringify(Array.isArray(brand.contentPillars) ? brand.contentPillars : []),
     brand.personaStyle || "",
+    brand.updatedAt || new Date().toISOString(),
     brand.id,
     brand.ownerUserId,
   );

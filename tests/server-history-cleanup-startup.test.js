@@ -98,7 +98,10 @@ test("server startup removes expired generation history before listening", async
 
   const server = await start();
   try {
-    assert.equal(findGenerationById(8801), null);
+    const gen8801 = findGenerationById(8801);
+    assert.ok(gen8801, "expired generation record is preserved");
+    assert.equal(gen8801.visibilityStatus, "expired");
+    assert.equal(gen8801.assetStatus, "none");
     assert.equal(findVideoScriptRequest(8801, "startup-stale-video-script").status, "refunded");
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

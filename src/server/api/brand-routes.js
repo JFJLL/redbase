@@ -1,5 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
+const { recordBrandCreated } = require("../analytics/analytics-recorder");
 const { allocateCounter } = require("../db/repositories/core-repository");
 const {
   findBrandByOwner,
@@ -130,6 +131,9 @@ async function handleBrandRoutes(context, req, res, pathname) {
       }
     }
     const savedBrand = insertBrand(brand);
+    try {
+      recordBrandCreated({ brandId: savedBrand.id, userId: user.id, accountType: user.accountType, createdAt: savedBrand.createdAt });
+    } catch (_) {}
     json(res, 201, { brand: sanitizeBrand(savedBrand, appConfig) });
     return true;
   }

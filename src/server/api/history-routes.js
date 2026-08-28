@@ -9,7 +9,11 @@ const {
   findGenerationById,
 } = require("../db/repositories/generation-repository");
 const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
-const { removeGenerationAssetsAndRows } = require("../assets/generation-deletion-service");
+const {
+  removeGenerationAssetsAndRows,
+  purgeGenerationAssetsPreservingData,
+  purgeGenerationsAssetsPreservingData,
+} = require("../assets/generation-deletion-service");
 
 const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "videoScript", "videoProject", "styleImage", "imageEdit"]);
 const HISTORY_GENERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -117,7 +121,7 @@ function getGeneratedAssetStorage(context = {}) {
 
 async function expireGenerationIfNeeded(generation, options = {}) {
   if (!generation || !isGenerationExpired(generation, options.nowMs, options.retentionMs)) return false;
-  await (options.removeGenerationAssetsAndRows || removeGenerationAssetsAndRows)(generation, {
+  await (options.purgeGenerationAssetsPreservingData || purgeGenerationAssetsPreservingData)(generation, {
     storage: options.storage,
     deletedAt: new Date(Number(options.nowMs ?? Date.now())).toISOString(),
     deleteReason: "history_retention_expired",
@@ -181,7 +185,7 @@ async function cleanupExpiredGenerationHistory(options = {}) {
   const failedGenerationIds = [];
   for (const generation of expiredGenerations) {
     try {
-      await (options.removeGenerationAssetsAndRows || removeGenerationAssetsAndRows)(generation, {
+      await (options.purgeGenerationAssetsPreservingData || purgeGenerationAssetsPreservingData)(generation, {
         storage: options.storage,
         deletedAt: new Date(nowMs).toISOString(),
         deleteReason: "history_retention_expired",
@@ -263,12 +267,14 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   const runHistoryCleanup = context.historyCleanupRunner || ((options) => cleanupExpiredGenerationHistory(options));
 
   async function expireGenerationForRead(generation) {
+    if (!generation) return true;
+    if (generation.visibilityStatus === "expired" || generation.assetStatus === "purged") return true;
     if (!isGenerationExpired(generation, getHistoryNowMs(context), HISTORY_GENERATION_RETENTION_MS)) return false;
     try {
       await expireGenerationIfNeeded(generation, {
         nowMs: getHistoryNowMs(context),
         storage,
-        removeGenerationAssetsAndRows: context.removeGenerationAssetsAndRows,
+        purgeGenerationAssetsPreservingData: context.purgeGenerationAssetsPreservingData,
       });
     } catch (error) {
       console.warn("[history-expiry] failed while reading expired generation", {
@@ -299,7 +305,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     await runHistoryCleanup({
       nowMs: getHistoryNowMs(context),
       storage,
-      removeGenerationAssetsAndRows: context.removeGenerationAssetsAndRows,
+      purgeGenerationAssetsPreservingData: context.purgeGenerationAssetsPreservingData,
       cleanupEmptyGeneratedImageDirs,
     });
     const filters = buildHistoryFilters(req);
@@ -318,7 +324,7 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       }
     }
     const history = generations
-        .filter((generation) => !isGenerationExpired(generation, getHistoryNowMs(context), HISTORY_GENERATION_RETENTION_MS))
+        .filter((generation) => generation.visibilityStatus === "active" && !isGenerationExpired(generation, getHistoryNowMs(context), HISTORY_GENERATION_RETENTION_MS))
         .filter(isRenderableGeneration)
         .filter((generation) => !(generation.type === "videoScript" && supersededScriptIds.has(Number(generation.id))))
         .map((generation) => {

@@ -1,12 +1,14 @@
 const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
 const { mapGenerationRow } = require("./row-mappers");
+const { recordOutputCompleted } = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 
 const GENERATION_COLUMNS = `
   id, owner_user_id, type, channel_label, brand_id, brand_name, trend_id, trend_title, idea_title,
-  card_title, created_at, preview_url, summary, payload_json
+  card_title, created_at, preview_url, summary, payload_json, visibility_status, asset_status,
+  asset_count, asset_bytes, assets_deleted_at, assets_delete_error, updated_at
 `;
 
 function listGenerationsByOwner(ownerUserId) {
@@ -75,8 +77,8 @@ function listExpiredGenerations(cutoffIso) {
   return db.prepare(`
     SELECT ${GENERATION_COLUMNS}
     FROM generations
-    WHERE julianday(created_at) IS NULL
-      OR julianday(created_at) <= julianday(?)
+    WHERE (julianday(created_at) IS NULL OR julianday(created_at) <= julianday(?))
+      AND visibility_status = 'active'
     ORDER BY julianday(created_at) ASC, id ASC
   `).all(String(cutoffIso || "")).map(mapGenerationRow);
 }
@@ -102,7 +104,11 @@ function collectGeneratedAssetReferenceIdentities(value, identities) {
 
 function createGeneratedAssetReferenceLookup() {
   const identities = new Set();
-  listAllGenerations().forEach((generation) => collectGeneratedAssetReferenceIdentities(generation.payload, identities));
+  db.prepare(`
+    SELECT ${GENERATION_COLUMNS}
+    FROM generations
+    WHERE visibility_status = 'active' AND asset_status = 'available'
+  `).all().map(mapGenerationRow).forEach((generation) => collectGeneratedAssetReferenceIdentities(generation.payload, identities));
   return (asset) => identities.has(`${asset?.objectKey ? "aliyun_oss" : "local"}:${asset?.objectKey || asset?.storedPath || ""}`);
 }
 
@@ -152,11 +158,13 @@ function findXhsCarouselGenerationByGroup(ownerUserId, carouselGroupId) {
 }
 
 function upsertGeneration(generation) {
+  const nowIso = new Date().toISOString();
   db.prepare(`
     INSERT INTO generations (
       id, owner_user_id, type, channel_label, brand_id, brand_name, trend_id, trend_title, idea_title,
-      card_title, created_at, preview_url, summary, payload_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      card_title, created_at, preview_url, summary, payload_json, visibility_status, asset_status,
+      asset_count, asset_bytes, assets_deleted_at, assets_delete_error, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       owner_user_id = excluded.owner_user_id,
       type = excluded.type,
@@ -170,7 +178,14 @@ function upsertGeneration(generation) {
       created_at = excluded.created_at,
       preview_url = excluded.preview_url,
       summary = excluded.summary,
-      payload_json = excluded.payload_json
+      payload_json = excluded.payload_json,
+      visibility_status = excluded.visibility_status,
+      asset_status = excluded.asset_status,
+      asset_count = excluded.asset_count,
+      asset_bytes = excluded.asset_bytes,
+      assets_deleted_at = excluded.assets_deleted_at,
+      assets_delete_error = excluded.assets_delete_error,
+      updated_at = excluded.updated_at
   `).run(
     generation.id,
     generation.ownerUserId,
@@ -186,8 +201,25 @@ function upsertGeneration(generation) {
     generation.previewUrl || "",
     generation.summary || "",
     JSON.stringify(generation.payload || {}),
+    generation.visibilityStatus || "active",
+    generation.assetStatus || "available",
+    Number(generation.assetCount || 0),
+    Number(generation.assetBytes || 0),
+    generation.assetsDeletedAt || "",
+    generation.assetsDeleteError || "",
+    generation.updatedAt || nowIso,
   );
-  return findGenerationById(generation.id);
+  const saved = findGenerationById(generation.id);
+  try {
+    recordOutputCompleted({
+      generationId: generation.id,
+      userId: generation.ownerUserId,
+      type: generation.type,
+      creditCost: 0,
+      completedAt: generation.createdAt,
+    });
+  } catch (_) {}
+  return saved;
 }
 
 function insertGeneration(generation) {

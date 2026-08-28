@@ -1,5 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
-const { findUserById, findUserBySessionToken } = require("../db/repositories/auth-repository");
+const { findUserById } = require("../db/repositories/auth-repository");
+const { requireAdminFromSql: requireAdmin } = require("./admin-auth");
 const { addCredits, deleteUserCascadeRows, readAdminOverviewStore, readUserDeletionAssets } = require("../db/repositories/admin-repository");
 const { findGenerationById } = require("../db/repositories/generation-repository");
 const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
@@ -40,18 +41,7 @@ async function handleAdminRoutes(context, req, res, pathname) {
     }));
 
   function requireAdminFromSql() {
-    const token = getSessionToken(req);
-    const user = token ? findUserBySessionToken(token) : null;
-    if (!user) {
-      unauthorized(res, "请先登录");
-      return null;
-    }
-    if (!isAdminUser(user, appConfig)) {
-      forbidden(res, "当前账号没有管理后台权限");
-      return null;
-    }
-    req.__redbaseApiUser = buildApiUserLog(user);
-    return user;
+    return requireAdmin(req, res, { getSessionToken, buildApiUserLog, isAdminUser, appConfig, unauthorized, forbidden });
   }
 
   if (req.method === "GET" && pathname === "/api/admin/health") {

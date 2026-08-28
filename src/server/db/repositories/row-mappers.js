@@ -65,6 +65,8 @@ function mapBrandRow(row) {
     contentPillars: safeParseArray(row.content_pillars_json),
     personaStyle: row.persona_style || "",
     materialCount: Number(row.material_count || 0),
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || "",
     materials: [],
     analyses: [],
     trends: [],
@@ -88,6 +90,13 @@ function mapGenerationRow(row) {
     previewUrl: row.preview_url,
     summary: row.summary,
     payload: safeParseObject(row.payload_json),
+    visibilityStatus: row.visibility_status || "active",
+    assetStatus: row.asset_status || "available",
+    assetCount: Number(row.asset_count || 0),
+    assetBytes: Number(row.asset_bytes || 0),
+    assetsDeletedAt: row.assets_deleted_at || "",
+    assetsDeleteError: row.assets_delete_error || "",
+    updatedAt: row.updated_at || "",
   };
 }
 

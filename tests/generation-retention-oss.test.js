@@ -17,6 +17,8 @@ const {
 const {
   removeGenerationAssetsAndRows,
   removeGenerationsAssets,
+  purgeGenerationAssetsPreservingData,
+  purgeGenerationsAssetsPreservingData,
   collectGenerationAssets,
 } = require("../src/server/assets/generation-deletion-service");
 const {
@@ -94,8 +96,51 @@ test("generated asset reference lookup snapshots all identities once for O(1) cl
   assert.equal(isReferenced({ provider: "local", storedPath: `${storedPath}.missing` }), false);
 });
 
-test("successful asset deletion removes generation and image jobs but preserves audited credit event", async () => {
+test("periodic 30-day purge removes physical assets but preserves generation, image_jobs, and video data", async () => {
   const generationId = 7101;
+  seedGeneration(generationId, "2026-05-01T00:00:00.000Z", {
+    localImage: { provider: "aliyun_oss", objectKey: `redbase/generated-images/users/501/2026/05/${generationId}/gi_${generationId}_main_x.png`, sizeBytes: 2048 },
+  });
+  seedLinkedRows(generationId);
+  const deletedAssets = [];
+  const deletedAt = "2026-06-01T00:00:00.000Z";
+
+  const result = await purgeGenerationAssetsPreservingData(findGenerationById(generationId), {
+    storage: {
+      deleteMany: async (assets) => deletedAssets.push(...assets),
+      stageDeleteMany: async (assets) => {
+        deletedAssets.push(...assets);
+        return { deletedAssetCount: assets.length, rollback: async () => {}, commit: async () => {} };
+      },
+    },
+    deletedAt,
+  });
+
+  const db = getDatabase();
+  assert.equal(result.ok, true);
+  assert.equal(deletedAssets.length, 1);
+
+  const genAfter = findGenerationById(generationId);
+  assert.ok(genAfter, "generation record must be preserved");
+  assert.equal(genAfter.visibilityStatus, "expired");
+  assert.equal(genAfter.assetStatus, "purged");
+  assert.equal(genAfter.previewUrl, "");
+  assert.equal(genAfter.assetsDeletedAt, deletedAt);
+  assert.equal(genAfter.assetBytes, 2048);
+
+  const job = db.prepare("SELECT asset_status, image_url, provider_result_url, assets_deleted_at FROM image_jobs WHERE generation_id = ?").get(generationId);
+  assert.ok(job, "image_job record must be preserved");
+  assert.equal(job.asset_status, "purged");
+  assert.equal(job.image_url, "");
+  assert.equal(job.assets_deleted_at, deletedAt);
+
+  const credit = db.prepare("SELECT generation_id, payload_json FROM credit_events WHERE id = ?").get(generationId);
+  assert.ok(credit, "credit_event record must be preserved");
+  assert.equal(credit.generation_id, generationId);
+});
+
+test("successful user active deletion removes generation and image jobs but preserves audited credit event", async () => {
+  const generationId = 7119;
   seedGeneration(generationId, "2026-05-01T00:00:00.000Z", {
     localImage: { provider: "aliyun_oss", objectKey: `redbase/generated-images/users/501/2026/05/${generationId}/gi_${generationId}_main_x.png` },
   });
@@ -361,10 +406,11 @@ test("cleanup deletes exactly-30-day, older, and invalid-timestamp rows while re
     storage: { deleteMany: async () => [] },
   });
   assert.ok(findGenerationById(ids.fresh));
-  assert.equal(findGenerationById(ids.exact), null);
-  assert.equal(findGenerationById(ids.old), null);
-  assert.equal(findGenerationById(ids.invalid), null);
-  assert.equal(findGenerationById(ids.offset), null);
+  assert.equal(findGenerationById(ids.fresh).visibilityStatus, "active");
+  assert.equal(findGenerationById(ids.exact).visibilityStatus, "expired");
+  assert.equal(findGenerationById(ids.old).visibilityStatus, "expired");
+  assert.equal(findGenerationById(ids.invalid).visibilityStatus, "expired");
+  assert.equal(findGenerationById(ids.offset).visibilityStatus, "expired");
   assert.deepEqual(
     result.deletedGenerationIds.filter((id) => [ids.exact, ids.old, ids.invalid, ids.offset].includes(id)).sort((a, b) => a - b),
     [ids.exact, ids.old, ids.invalid, ids.offset].sort((a, b) => a - b),

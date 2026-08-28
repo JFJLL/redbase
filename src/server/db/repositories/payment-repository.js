@@ -2,6 +2,7 @@
 
 const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
+const { recordPaymentOrderCreated, recordPaymentPaid, recordPaymentFailed } = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 
@@ -67,7 +68,18 @@ function insertPaymentOrder({ outTradeNo, userId, idempotencyKey, plan, status =
     String(nowIso),
     String(expiresAtIso),
   );
-  return findPaymentOrderByOutTradeNo(outTradeNo);
+  const order = findPaymentOrderByOutTradeNo(outTradeNo);
+  try {
+    recordPaymentOrderCreated({
+      outTradeNo: order.outTradeNo,
+      userId: order.userId,
+      amountFen: order.amountFen,
+      planId: order.planId,
+      provider: order.provider,
+      createdAt: order.createdAt,
+    });
+  } catch (_) {}
+  return order;
 }
 
 function updatePaymentOrderStatus({ outTradeNo, status, nowIso, extra = {} }) {
@@ -84,7 +96,22 @@ function updatePaymentOrderStatus({ outTradeNo, status, nowIso, extra = {} }) {
     values.push(String(extra.paidAt));
   }
   values.push(String(outTradeNo || ""));
-  return db.prepare(`UPDATE payment_orders SET ${sets.join(", ")} WHERE out_trade_no = ?`).run(...values).changes > 0;
+  const updated = db.prepare(`UPDATE payment_orders SET ${sets.join(", ")} WHERE out_trade_no = ?`).run(...values).changes > 0;
+  if (updated && ["failed", "expired"].includes(String(status))) {
+    try {
+      const order = findPaymentOrderByOutTradeNo(outTradeNo);
+      if (order && order.status !== "paid") {
+        recordPaymentFailed({
+          outTradeNo: order.outTradeNo,
+          userId: order.userId,
+          amountFen: order.amountFen,
+          provider: order.provider,
+          failedAt: String(nowIso),
+        });
+      }
+    } catch (_) {}
+  }
+  return updated;
 }
 
 function findPaymentOrderByOutTradeNo(outTradeNo) {
@@ -159,17 +186,25 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
     }
 
     const creditEventId = allocateCounter("nextCreditEventId", 1);
+    const isWx = String(order.provider || "").toLowerCase() === "wxpay";
+    const actionType = isWx ? "wxpay_recharge" : "alipay_recharge";
+    const actionLabel = isWx ? "微信支付充值" : "支付宝充值";
+    const summary = isWx
+      ? `微信支付充值 ${order.planCredits} 积分`
+      : `支付宝充值 ${order.planCredits} 积分`;
     db.prepare(`
       INSERT INTO credit_events (
         id, user_id, action_type, action_label, credit_delta, credit_cost,
         created_at, summary, payload_json
-      ) VALUES (?, ?, 'alipay_recharge', '支付宝充值', ?, 0, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
     `).run(
       creditEventId,
       Number(order.userId),
+      actionType,
+      actionLabel,
       Number(order.planCredits),
       String(nowIso),
-      `支付宝充值 ${order.planCredits} 积分`,
+      summary,
       JSON.stringify({
         outTradeNo: order.outTradeNo,
         planId: order.planId,
@@ -185,6 +220,17 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
       UPDATE payment_orders SET credit_event_id = ?
       WHERE out_trade_no = ? AND credit_event_id IS NULL
     `).run(creditEventId, String(outTradeNo || ""));
+    try {
+      recordPaymentPaid({
+        outTradeNo: order.outTradeNo,
+        userId: order.userId,
+        amountFen: order.amountFen,
+        planId: order.planId,
+        planCredits: order.planCredits,
+        provider: order.provider,
+        paidAt: String(nowIso),
+      });
+    } catch (_) {}
     return { order: findPaymentOrderByOutTradeNo(outTradeNo), alreadyPaid: false };
   });
 }

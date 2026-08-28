@@ -60,6 +60,8 @@ function initializeDatabaseSchema() {
       profile_type TEXT NOT NULL DEFAULT 'brand',
       content_pillars_json TEXT NOT NULL DEFAULT '[]',
       persona_style TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -144,6 +146,13 @@ function initializeDatabaseSchema() {
       preview_url TEXT NOT NULL,
       summary TEXT NOT NULL,
       payload_json TEXT NOT NULL DEFAULT '{}',
+      visibility_status TEXT NOT NULL DEFAULT 'active',
+      asset_status TEXT NOT NULL DEFAULT 'available',
+      asset_count INTEGER NOT NULL DEFAULT 0,
+      asset_bytes INTEGER NOT NULL DEFAULT 0,
+      assets_deleted_at TEXT NOT NULL DEFAULT '',
+      assets_delete_error TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -193,6 +202,9 @@ function initializeDatabaseSchema() {
       created_at_ms INTEGER NOT NULL,
       updated_at TEXT NOT NULL DEFAULT '',
       completed_at TEXT NOT NULL DEFAULT '',
+      asset_status TEXT NOT NULL DEFAULT 'available',
+      asset_bytes INTEGER NOT NULL DEFAULT 0,
+      assets_deleted_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -221,6 +233,15 @@ function initializeDatabaseSchema() {
       error TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      started_at TEXT NOT NULL DEFAULT '',
+      completed_at TEXT NOT NULL DEFAULT '',
+      failed_at TEXT NOT NULL DEFAULT '',
+      assembly_started_at TEXT NOT NULL DEFAULT '',
+      assembly_completed_at TEXT NOT NULL DEFAULT '',
+      asset_status TEXT NOT NULL DEFAULT 'available',
+      asset_count INTEGER NOT NULL DEFAULT 0,
+      asset_bytes INTEGER NOT NULL DEFAULT 0,
+      assets_deleted_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE,
       FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL,
@@ -250,6 +271,12 @@ function initializeDatabaseSchema() {
       error TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      first_submitted_at TEXT NOT NULL DEFAULT '',
+      completed_at TEXT NOT NULL DEFAULT '',
+      failed_at TEXT NOT NULL DEFAULT '',
+      asset_status TEXT NOT NULL DEFAULT 'available',
+      asset_bytes INTEGER NOT NULL DEFAULT 0,
+      assets_deleted_at TEXT NOT NULL DEFAULT '',
       FOREIGN KEY (project_id) REFERENCES video_projects(id) ON DELETE CASCADE,
       UNIQUE (project_id, clip_index)
     );

@@ -57,6 +57,7 @@ for (const row of seededEvents) {
 db.prepare("INSERT INTO verification_codes (phone, code, expires_at) VALUES ('13900000001', '123456', 9999999999999)").run();
 db.prepare("INSERT INTO counters (name, value) VALUES ('nextUserId', 4)").run();
 db.prepare("INSERT INTO counters (name, value) VALUES ('nextCreditEventId', 103)").run();
+db.prepare("INSERT INTO brands (id, owner_user_id, name, industry, audience, description, product, goal, knowledge_base) VALUES (1, 1, '历史品牌', '行业', '人群', '描述', '产品', '目标', '')").run();
 
 function snapshot(table, columns, orderBy) {
   return db.prepare(`SELECT ${columns} FROM ${table} ORDER BY ${orderBy}`).all();
@@ -94,7 +95,7 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='payment_orders'").get().count, 1);
   assert.deepEqual(
     db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
-    [1, 2, 3, 4, 5, 6, 7],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   );
   expectColumns("video_projects", ["script_generation_id", "input_assets_json", "assembly_request_id", "assembly_attempt"]);
   expectColumns("video_clips", ["provider_key_ref", "reservation_credit_event_id", "submission_attempt", "last_successful_poll_at", "poll_failure_count", "result_processing_failure_count", "last_result_processing_error", "last_result_processing_at"]);
@@ -102,6 +103,19 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   expectColumns("video_project_billing_requests", ["input_signature", "clip_index"]);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='video_script_requests'").get().count, 1);
   expectColumns("video_script_requests", ["request_id", "credit_event_id", "generation_id", "status", "input_signature", "updated_at"]);
+
+  expectColumns("generations", ["visibility_status", "asset_status", "asset_count", "asset_bytes", "assets_deleted_at", "assets_delete_error", "updated_at"]);
+  expectColumns("image_jobs", ["asset_status", "asset_bytes", "assets_deleted_at"]);
+  expectColumns("video_projects", ["started_at", "completed_at", "failed_at", "assembly_started_at", "assembly_completed_at", "asset_status", "asset_count", "asset_bytes", "assets_deleted_at"]);
+  expectColumns("video_clips", ["first_submitted_at", "completed_at", "failed_at", "asset_status", "asset_bytes", "assets_deleted_at"]);
+  expectColumns("brands", ["created_at", "updated_at"]);
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='analytics_events'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='ai_task_attempts'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='analytics_meta'").get().count, 1);
+
+  // Historical brand created_at remains empty string, not forged with migration time
+  assert.equal(db.prepare("SELECT created_at FROM brands WHERE id = 1").get().created_at, "");
 });
 
 test("the backup copy stays byte-identical and untouched", () => {

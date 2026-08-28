@@ -7,6 +7,12 @@ const {
 } = require("./core-repository");
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
+const {
+  recordExcellentDirectionCompleted,
+  recordExcellentDirectionFailed,
+  recordExcellentFusionCompleted,
+  recordExcellentFusionFailed,
+} = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 
@@ -350,6 +356,13 @@ function settleExcellentBillingRequest({
       Number(userId),
       String(kind),
     );
+    try {
+      if (kind === EXCELLENT_BILLING_KIND_DIRECTION) {
+        recordExcellentDirectionCompleted({ requestId, userId, creditCost: cost, completedAt: timestamp });
+      } else {
+        recordExcellentFusionCompleted({ requestId, userId, creditCost: cost, completedAt: timestamp });
+      }
+    } catch (_) {}
     return {
       replayed: false,
       charged: cost > 0,
@@ -379,19 +392,28 @@ function failExcellentBillingRequest({
   now = new Date(),
 }) {
   return runTransaction(() => {
+    const timestamp = now.toISOString();
+    const errorText = String(error || "excellent billing request failed").slice(0, 500);
     db.prepare(`
       UPDATE excellent_remix_billing_requests
       SET status = 'failed', credit_cost = 0, counted = 0, error = ?, updated_at = ?
       WHERE request_id = ? AND user_id = ? AND kind = ? AND input_signature = ? AND created_at = ? AND status = 'reserved'
     `).run(
-      String(error || "excellent billing request failed").slice(0, 500),
-      now.toISOString(),
+      errorText,
+      timestamp,
       String(requestId),
       Number(userId),
       String(kind),
       String(inputSignature || ""),
       String(reservationToken || ""),
     );
+    try {
+      if (kind === EXCELLENT_BILLING_KIND_DIRECTION) {
+        recordExcellentDirectionFailed({ requestId, userId, error: errorText, failedAt: timestamp });
+      } else {
+        recordExcellentFusionFailed({ requestId, userId, error: errorText, failedAt: timestamp });
+      }
+    } catch (_) {}
   });
 }
 

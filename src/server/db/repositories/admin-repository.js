@@ -3,6 +3,12 @@ const { safeParseArray, safeParseObject } = require("../snapshot-utils");
 const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS, allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
 const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
+const {
+  recordCreditConsumed,
+  recordCreditRefunded,
+  recordCreditGranted,
+  recordUserDeleted,
+} = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 const ADMIN_OVERVIEW_LIMITS = {
@@ -45,7 +51,43 @@ function insertCreditEvent(input) {
     input.summary || "",
     JSON.stringify(input.payload || {}),
   );
-  return mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(id));
+  const row = mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(id));
+  try {
+    const delta = Number(input.creditDelta || 0);
+    if (delta < 0) {
+      recordCreditConsumed({
+        creditEventId: id,
+        userId: Number(input.userId),
+        actionType: input.actionType,
+        creditDelta: delta,
+        creditCost: Number(input.creditCost || Math.abs(delta)),
+        generationId: input.generationId,
+        createdAt: input.createdAt,
+      });
+    } else if (delta > 0) {
+      const action = String(input.actionType || "").toLowerCase();
+      if (action.includes("refund") || input.payload?.refundForCreditEventId) {
+        recordCreditRefunded({
+          creditEventId: id,
+          userId: Number(input.userId),
+          actionType: input.actionType,
+          creditDelta: delta,
+          refundForCreditEventId: input.payload?.refundForCreditEventId,
+          createdAt: input.createdAt,
+        });
+      } else if (!action.includes("recharge")) {
+        recordCreditGranted({
+          creditEventId: id,
+          userId: Number(input.userId),
+          actionType: input.actionType,
+          creditDelta: delta,
+          adminUserId: input.adminUserId,
+          createdAt: input.createdAt,
+        });
+      }
+    }
+  } catch (_) {}
+  return row;
 }
 
 function spendCreditsWithEventInTransaction({ userId, amount, event }) {
@@ -493,6 +535,9 @@ function deleteUserCascadeRows(userId) {
   return runTransaction(() => {
     const user = findUserById(userId);
     if (!user) return null;
+    try {
+      recordUserDeleted({ userId: user.id });
+    } catch (_) {}
     db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id);
     db.prepare("DELETE FROM verification_codes WHERE phone = ?").run(user.phone);
     db.prepare("DELETE FROM credit_events WHERE user_id = ? OR admin_user_id = ?").run(user.id, user.id);
