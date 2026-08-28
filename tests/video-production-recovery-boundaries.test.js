@@ -457,8 +457,11 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   ffmpegFails = false;
   const retryResult = await service.retryClipResult(created.project.id, ownerUserId, 1, "retry-res-01");
   assert.equal(retryResult.project.clips[0].status, "processing_result");
-  await new Promise((r) => setTimeout(r, 20));
-  await service.pump();
+  for (let i = 0; i < 10; i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+    await service.pump();
+    if (service.getProject(created.project.id, ownerUserId).clips[0].status === "completed") break;
+  }
   const completedAfterRetry = service.getProject(created.project.id, ownerUserId);
   assert.equal(completedAfterRetry.clips[0].status, "completed");
   assert.equal(findUserById(ownerUserId).credits, 70, "0 credits deducted for retry-result");

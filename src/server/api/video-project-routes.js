@@ -239,7 +239,7 @@ async function handleVideoProjectRoutes(context, req, res, pathname) {
     return true;
   }
 
-  const assetMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/assets\/(final|input|clip|continuity-frame)(?:\/(\d+))?$/);
+  const assetMatch = pathname.match(/^\/api\/video-projects\/(\d+)\/assets\/(final|final-poster|input|clip|poster|continuity-frame)(?:\/(\d+))?$/);
   if (req.method === "GET" && assetMatch) {
     if (!verifySignedAssetRequest(appConfig, req)) {
       unauthorized(res, "视频链接已失效，请刷新页面后重试");

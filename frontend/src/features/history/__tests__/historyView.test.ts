@@ -203,7 +203,7 @@ describe("HistoryView", () => {
       refundedCredits: 5,
       finalVideoUrl: "",
       clips: [
-        { id: 7701, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "镜头一原提示词", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0, videoUrl: "/api/video-projects/77/assets/clip/1?assetExpires=9999999999999&assetSignature=clip-one", error: "" },
+        { id: 7701, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "镜头一原提示词", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0, videoUrl: "/api/video-projects/77/assets/clip/1?assetExpires=9999999999999&assetSignature=clip-one", posterUrl: "/api/video-projects/77/assets/poster/1?assetExpires=9999999999999&assetSignature=poster-one", error: "" },
         { id: 7702, index: 2, startSec: 10, endSec: 15, durationSec: 5, status: "failed", prompt: "镜头二原提示词", continuityMode: "image", referenceAssetIds: [], creditCost: 10, attempt: 1, retryCount: 0, error: "供应商暂时不可用" },
       ],
       script: GENERATIONS[2].payload?.videoScript,
@@ -252,7 +252,10 @@ describe("HistoryView", () => {
     const card = wrapper.find('[data-test="history-card"]');
     expect(card.text()).toContain("AI 视频");
     expect(card.text()).toContain("部分失败");
-    expect(card.find('img[src*="video-projects/77/assets/clip/1"]').exists()).toBe(true);
+    const cardPreview = card.find('video[src*="video-projects/77/assets/clip/1"]');
+    expect(cardPreview.exists()).toBe(true);
+    expect(cardPreview.attributes("preload")).toBe("metadata");
+    expect(cardPreview.attributes("poster")).toContain("video-projects/77/assets/poster/1");
     await card.find('[data-test="history-detail"]').trigger("click");
     await flushPromises();
 
@@ -262,6 +265,11 @@ describe("HistoryView", () => {
     expect(detail.findAll("video")).toHaveLength(1);
     expect(detail.text()).toContain("供应商暂时不可用");
     expect(detail.text()).toContain("重新生成任意一段后，系统会自动替换该段并重新合并最终成片");
+    expect(detail.findAll(".history-video-clip-body")).toHaveLength(2);
+    expect(detail.find(".history-video-clip-media .history-clip-player").attributes("preload")).toBe("metadata");
+    expect(detail.find(".history-video-clip-media .history-clip-player").attributes("poster")).toContain("video-projects/77/assets/poster/1");
+    expect(detail.find(".history-video-clip-editor .history-video-prompt-editor").exists()).toBe(true);
+    expect(detail.find('[data-test="history-retry-clip"]').classes()).toContain("history-regenerate-btn");
     await detail.findAll('[data-test="history-clip-prompt"]')[1].setValue("镜头二改为缓慢推进产品特写");
     await detail.findAll('[data-test="history-retry-clip"]')[1].trigger("click");
     await flushPromises();
@@ -307,12 +315,13 @@ describe("HistoryView", () => {
       status: "completed",
       refundedCredits: 0,
       finalVideoUrl: "/api/video-projects/78/assets/final",
+      finalPosterUrl: "/api/video-projects/78/assets/final-poster",
       clips: failedGeneration.payload.videoClips,
       script: GENERATIONS[2].payload?.videoScript,
     };
     const { wrapper, calls } = await mountView((url, init) => {
       if (url.startsWith("/api/history")) {
-        return jsonResponse(200, { generations: [assemblyRetried ? { ...failedGeneration, payload: { ...failedGeneration.payload, videoStatus: "completed", finalVideoUrl: completedProject.finalVideoUrl } } : failedGeneration] });
+        return jsonResponse(200, { generations: [assemblyRetried ? { ...failedGeneration, payload: { ...failedGeneration.payload, videoStatus: "completed", finalVideoUrl: completedProject.finalVideoUrl, finalPosterUrl: completedProject.finalPosterUrl } } : failedGeneration] });
       }
       if (url === "/api/video-projects/78/retry-assembly" && init?.method === "POST") {
         assemblyRetried = true;
@@ -339,6 +348,7 @@ describe("HistoryView", () => {
     const completedDetail = wrapper.find('[data-test="history-video-project-detail"]');
     expect(completedDetail.findAll("video")).toHaveLength(1);
     expect(completedDetail.find(".history-video-player").exists()).toBe(true);
+    expect(completedDetail.find(".history-video-player").attributes("poster")).toContain("final-poster");
     expect(completedDetail.find(".history-clip-player").exists()).toBe(false);
   });
 

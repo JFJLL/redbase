@@ -221,13 +221,30 @@ function videoProjectVideoUrl(item: GenerationHistoryItem | null): string {
   return safeImageSrc(item?.payload?.finalVideoUrl || item?.previewUrl);
 }
 
+function videoProjectCardVideoUrl(item: GenerationHistoryItem | null): string {
+  const firstClip = videoProjectClips(item)[0];
+  return videoProjectVideoUrl(item) || safeImageSrc(String(firstClip?.videoUrl || ""));
+}
+
+function videoProjectFinalPosterUrl(item: GenerationHistoryItem | null): string {
+  const firstClip = videoProjectClips(item)[0];
+  return safeImageSrc(String(item?.payload?.finalPosterUrl || firstClip?.posterUrl || ""));
+}
+
 function videoProjectThumbnailUrl(item: GenerationHistoryItem | null): string {
   const firstClip = videoProjectClips(item)[0];
-  return safeImageSrc(String(firstClip?.continuityFrameUrl || firstClip?.videoUrl || ""));
+  return safeImageSrc(String(firstClip?.posterUrl || firstClip?.continuityFrameUrl || ""));
 }
 
 function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<string, unknown>> {
   return Array.isArray(item?.payload?.videoClips) ? item.payload.videoClips : [];
+}
+
+function shouldShowVideoProjectClip(item: GenerationHistoryItem | null, clip: Record<string, unknown>): boolean {
+  return Boolean(
+    (videoProjectClips(item).length > 1 || !videoProjectVideoUrl(item))
+    && safeImageSrc(String(clip.videoUrl || "")),
+  );
 }
 
 function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
@@ -269,6 +286,7 @@ function updateVideoProjectDetail(item: GenerationHistoryItem, project: VideoPro
       videoStatus: project.status,
       refundedCredits: project.refundedCredits,
       finalVideoUrl: project.finalVideoUrl || "",
+      finalPosterUrl: project.finalPosterUrl || "",
       videoClips: project.clips,
       script: project.script,
     },
@@ -358,6 +376,7 @@ async function retryHistoryVideoClipResult(clip: Record<string, unknown>): Promi
         videoAspectRatio: project.aspectRatio,
         videoStatus: project.status,
         finalVideoUrl: project.finalVideoUrl || "",
+        finalPosterUrl: project.finalPosterUrl || "",
         videoClips: project.clips,
       },
     };
@@ -394,6 +413,7 @@ async function retryHistoryVideoAssembly(): Promise<void> {
         videoStatus: project.status,
         refundedCredits: project.refundedCredits,
         finalVideoUrl: project.finalVideoUrl || "",
+        finalPosterUrl: project.finalPosterUrl || "",
         videoClips: project.clips,
         script: project.script,
       },
@@ -676,7 +696,15 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else-if="item.type === 'videoProject'" class="history-video-box" @click="openDetail(item)">
-          <video v-if="videoProjectVideoUrl(item)" :src="videoProjectVideoUrl(item)" muted playsinline preload="metadata"></video>
+          <video
+            v-if="videoProjectCardVideoUrl(item)"
+            :src="videoProjectCardVideoUrl(item)"
+            muted
+            playsinline
+            preload="metadata"
+            :poster="videoProjectThumbnailUrl(item)"
+            aria-label="视频首帧预览"
+          ></video>
           <img v-else-if="videoProjectThumbnailUrl(item)" :src="videoProjectThumbnailUrl(item)" alt="视频首帧" loading="lazy" />
           <div v-else class="history-video-placeholder">
             <span class="script-icon">🎬</span>
@@ -781,7 +809,15 @@ onUnmounted(() => {
                 </div>
                 <small>{{ detailItem.payload?.videoDuration || asVideoScript(detailItem)?.totalDurationSec || 30 }} 秒</small>
               </div>
-              <video v-if="videoProjectVideoUrl(detailItem)" class="history-video-player" controls playsinline :src="videoProjectVideoUrl(detailItem)"></video>
+              <video
+                v-if="videoProjectVideoUrl(detailItem)"
+                class="history-video-player"
+                controls
+                playsinline
+                preload="metadata"
+                :src="videoProjectVideoUrl(detailItem)"
+                :poster="videoProjectFinalPosterUrl(detailItem)"
+              ></video>
               <div v-else class="history-video-placeholder large">
                 <strong>{{ videoProjectStatusLabel(detailItem) }}</strong>
                 <small>所有分段完成后，系统会自动合并并在这里展示。</small>
@@ -805,49 +841,56 @@ onUnmounted(() => {
                   <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'cancelled' ? '已取消' : '排队中' }}</span>
                   <span>{{ clip.durationSec }} 秒</span>
                 </div>
-                <video
-                  v-if="(videoProjectClips(detailItem).length > 1 || !videoProjectVideoUrl(detailItem)) && safeImageSrc(String(clip.videoUrl || ''))"
-                  class="history-clip-player"
-                  controls
-                  playsinline
-                  :src="safeImageSrc(String(clip.videoUrl || ''))"
-                ></video>
-                <label class="history-video-prompt-editor">
-                  <span>本段提示词</span>
-                  <textarea
-                    v-model="videoClipPrompts[String(clip.index)]"
-                    :data-clip-prompt="String(clip.index)"
-                    data-test="history-clip-prompt"
-                    rows="3"
-                    :disabled="['queued', 'submitting', 'running', 'processing_result'].includes(String(clip.status))"
-                  ></textarea>
-                </label>
-                <small
-                  v-if="clip.error && ['failed', 'uncertain_submission', 'cancelled', 'result_processing_failed', 'waiting_configuration'].includes(String(clip.status))"
-                  class="history-video-clip-error"
-                >失败原因：{{ clip.error }}</small>
-                <div class="history-video-clip-actions">
-                  <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
-                  <button
-                    v-if="clip.status === 'result_processing_failed'"
-                    type="button"
-                    class="secondary-btn"
-                    data-test="history-retry-result"
-                    :disabled="retryingVideoClip === String(clip.index)"
-                    @click="retryHistoryVideoClipResult(clip)"
-                  >
-                    {{ retryingVideoClip === String(clip.index) ? '处理中…' : '重新处理结果 · 0积分' }}
-                  </button>
-                  <button
-                    v-else-if="['completed', 'failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
-                    type="button"
-                    class="primary-btn"
-                    data-test="history-retry-clip"
-                    :disabled="retryingVideoClip === String(clip.index) || !String(videoClipPrompts[String(clip.index)] || '').trim()"
-                    @click="retryHistoryVideoClip(clip)"
-                  >
-                    {{ retryingVideoClip === String(clip.index) ? '提交中…' : `重新生成本段 · ${clip.creditCost || 0}积分` }}
-                  </button>
+                <div class="history-video-clip-body" :class="{ 'is-prompt-only': !shouldShowVideoProjectClip(detailItem, clip) }">
+                  <div v-if="shouldShowVideoProjectClip(detailItem, clip)" class="history-video-clip-media">
+                    <video
+                      class="history-clip-player"
+                      controls
+                      playsinline
+                      preload="metadata"
+                      :src="safeImageSrc(String(clip.videoUrl || ''))"
+                      :poster="safeImageSrc(String(clip.posterUrl || ''))"
+                    ></video>
+                  </div>
+                  <div class="history-video-clip-editor">
+                    <label class="history-video-prompt-editor">
+                      <span>本段提示词</span>
+                      <textarea
+                        v-model="videoClipPrompts[String(clip.index)]"
+                        :data-clip-prompt="String(clip.index)"
+                        data-test="history-clip-prompt"
+                        rows="8"
+                        :disabled="['queued', 'submitting', 'running', 'processing_result'].includes(String(clip.status))"
+                      ></textarea>
+                    </label>
+                    <small
+                      v-if="clip.error && ['failed', 'uncertain_submission', 'cancelled', 'result_processing_failed', 'waiting_configuration'].includes(String(clip.status))"
+                      class="history-video-clip-error"
+                    >失败原因：{{ clip.error }}</small>
+                    <div class="history-video-clip-actions">
+                      <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
+                      <button
+                        v-if="clip.status === 'result_processing_failed'"
+                        type="button"
+                        class="secondary-btn"
+                        data-test="history-retry-result"
+                        :disabled="retryingVideoClip === String(clip.index)"
+                        @click="retryHistoryVideoClipResult(clip)"
+                      >
+                        {{ retryingVideoClip === String(clip.index) ? '处理中…' : '重新处理结果 · 0积分' }}
+                      </button>
+                      <button
+                        v-else-if="['completed', 'failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
+                        type="button"
+                        class="history-regenerate-btn"
+                        data-test="history-retry-clip"
+                        :disabled="retryingVideoClip === String(clip.index) || !String(videoClipPrompts[String(clip.index)] || '').trim()"
+                        @click="retryHistoryVideoClip(clip)"
+                      >
+                        {{ retryingVideoClip === String(clip.index) ? '提交中…' : `重新生成本段 · ${clip.creditCost || 0}积分` }}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </article>
             </div>
@@ -1144,7 +1187,10 @@ onUnmounted(() => {
 }
 
 .history-video-placeholder.large {
-  min-height: 260px;
+  width: min(100%, 760px);
+  min-height: 0;
+  aspect-ratio: 16 / 9;
+  margin: 0 auto;
   border-radius: var(--radius-md, 8px);
   background: #211d1d;
 }
@@ -1152,10 +1198,12 @@ onUnmounted(() => {
 .history-video-player {
   display: block;
   width: min(100%, 760px);
-  max-height: 66vh;
+  aspect-ratio: 16 / 9;
+  max-height: none;
   margin: 0 auto;
   border-radius: var(--radius-md, 8px);
   background: #211d1d;
+  object-fit: contain;
 }
 
 .history-final-video,
@@ -1230,10 +1278,11 @@ onUnmounted(() => {
 
 .history-video-clip {
   display: grid;
-  gap: 10px;
-  padding: 9px 11px;
+  gap: 12px;
+  padding: 14px 16px 16px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 8px);
+  background: var(--workspace-surface, #fff);
   color: var(--color-text-secondary);
   font-size: 12px;
 }
@@ -1254,12 +1303,43 @@ onUnmounted(() => {
   color: var(--color-text-primary);
 }
 
+.history-video-clip-body {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.08fr);
+  align-items: stretch;
+  gap: 18px;
+  min-width: 0;
+}
+
+.history-video-clip-body.is-prompt-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.history-video-clip-media {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
+  background: #211d1d;
+}
+
 .history-clip-player {
   display: block;
-  width: min(100%, 560px);
-  max-height: 320px;
-  border-radius: var(--radius-md, 8px);
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: inherit;
   background: #211d1d;
+  object-fit: contain;
+}
+
+.history-video-clip-editor {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .history-video-clip-error {
@@ -1268,7 +1348,10 @@ onUnmounted(() => {
 }
 
 .history-video-prompt-editor {
-  display: grid;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
   gap: 6px;
 }
 
@@ -1280,7 +1363,8 @@ onUnmounted(() => {
 
 .history-video-prompt-editor textarea {
   width: 100%;
-  min-height: 82px;
+  min-height: 176px;
+  flex: 1;
   resize: vertical;
   border: 1px solid var(--workspace-border, var(--color-border));
   border-radius: var(--workspace-radius-sm, var(--radius-md));
@@ -1304,14 +1388,61 @@ onUnmounted(() => {
 }
 
 .history-video-clip-actions a {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(216, 68, 68, 0.18);
+  border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
+  background: #fff8f7;
   color: var(--color-brand);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   text-decoration: none;
 }
 
 .history-video-clip-actions a:hover {
-  text-decoration: underline;
+  border-color: rgba(216, 68, 68, 0.34);
+  background: #fff1ef;
+}
+
+.history-regenerate-btn {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0 16px;
+  border: 1px solid var(--workspace-brand, var(--color-brand));
+  border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
+  background: var(--workspace-brand, var(--color-brand));
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.history-regenerate-btn:hover:not(:disabled) {
+  border-color: #c6373c;
+  background: #c6373c;
+  box-shadow: 0 6px 16px rgba(216, 68, 68, 0.2);
+  transform: translateY(-1px);
+}
+
+.history-regenerate-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.16);
+}
+
+.history-regenerate-btn:disabled {
+  border-color: #d9cfcb;
+  background: #d9cfcb;
+  color: #fff;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .history-video-refund {
@@ -1798,6 +1929,12 @@ onUnmounted(() => {
   object-fit: cover;
 }
 
+.history-video-box {
+  overflow: hidden;
+  border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
+  background: #211d1d;
+}
+
 .history-grid {
   grid-template-rows: repeat(2, minmax(0, 1fr));
 }
@@ -1920,6 +2057,24 @@ onUnmounted(() => {
 
   .history-detail-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .history-video-clip-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .history-video-prompt-editor textarea {
+    min-height: 156px;
+  }
+
+  .history-video-clip-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-regenerate-btn {
+    width: 100%;
+    margin-left: 0;
   }
 
   .history-filter-search {

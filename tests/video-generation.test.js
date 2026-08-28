@@ -24,7 +24,7 @@ const { validateGeneratedAssetInput } = require("../src/server/assets/generated-
 const { collectGenerationAssets } = require("../src/server/assets/generation-deletion-service");
 const { sanitizeGeneration } = require("../src/server/utils");
 const { assertSafeProviderUrl, downloadProviderMedia } = require("../src/server/video/video-remote");
-const { extractStableLastFrame, withVideoTempDir } = require("../src/server/video/video-frame-extractor");
+const { extractFirstFrame, extractStableLastFrame, withVideoTempDir } = require("../src/server/video/video-frame-extractor");
 const { assembleVideoClips } = require("../src/server/video/video-assembler");
 
 openDatabase();
@@ -333,6 +333,16 @@ test("FFmpeg helpers inject the binary, prefer the stable tail offset, retry fai
     assert.equal(extracted.ffmpegPath, "C:/app/ffmpeg.exe");
     assert.equal(extracted.offsetSeconds, 0.3);
     assert.deepEqual(calls[0].args.slice(0, 6), ["-hide_banner", "-loglevel", "error", "-sseof", "-0.300", "-i"]);
+
+    const firstFramePath = path.join(directory, "poster.jpg");
+    const firstFrame = await extractFirstFrame({
+      videoPath: sourcePath,
+      outputPath: firstFramePath,
+      appConfig: { video: { ffmpegPath: "C:/app/ffmpeg.exe" } },
+      executor,
+    });
+    assert.equal(firstFrame.offsetSeconds, 0);
+    assert.deepEqual(calls[1].args.slice(0, 8), ["-hide_banner", "-loglevel", "error", "-ss", "0.000", "-i", sourcePath, "-frames:v"]);
 
     await assembleVideoClips({
       clipPaths: [clipPath],
@@ -899,7 +909,9 @@ test("video project charges once, runs clips sequentially, assembles final video
   const completed = service.getProject(result.project.id, 901);
   assert.equal(completed.status, "completed");
   assert.match(completed.finalVideoUrl, /video-projects/);
+  assert.match(completed.finalPosterUrl, /final-poster/);
   assert.equal(completed.clips[0].status, "completed");
+  assert.match(completed.clips[0].posterUrl, /\/assets\/poster\/1/);
   assert.equal(findUserById(901).credits, 80);
 
   const rawGeneration = require("../src/server/db/repositories/generation-repository").findGenerationById(completed.generationId);

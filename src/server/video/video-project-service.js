@@ -30,7 +30,7 @@ const {
   RECOVERABLE_PROJECT_STATUSES,
   TERMINAL_PROJECT_STATUSES,
 } = require("./video-project-statuses");
-const { extractStableLastFrame, withVideoTempDir, defaultExecutor } = require("./video-frame-extractor");
+const { extractFirstFrame, extractStableLastFrame, withVideoTempDir, defaultExecutor } = require("./video-frame-extractor");
 const { assembleVideoClips } = require("./video-assembler");
 const {
   DEFAULT_GENERATED_IMAGE_ASSET_BYTES,
@@ -205,6 +205,7 @@ function createVideoProjectService(options = {}) {
   const imageMaxBytes = Math.max(1, Number(appConfig.video?.imageMaxBytes || DEFAULT_GENERATED_IMAGE_ASSET_BYTES));
   const g2MaxClipAttempts = Math.max(1, Number(appConfig.video?.agnes?.maxClipAttempts || 3));
   const inFlight = new Set();
+  const posterInFlight = new Map();
   const nextPollAt = new Map();
   const d2WaitingConfiguration = new Set();
   let scheduler = null;
@@ -249,6 +250,7 @@ function createVideoProjectService(options = {}) {
 
   function buildPublicClip(project, clip) {
     const videoUrl = clip.outputVideo?.asset ? signVideoPath(videoAssetPath(project.id, "clip", clip.index)) : "";
+    const posterUrl = clip.outputVideo?.asset ? signVideoPath(videoAssetPath(project.id, "poster", clip.index)) : "";
     const continuityFrameUrl = clip.continuityFrame?.asset ? signVideoPath(videoAssetPath(project.id, "continuity-frame", clip.index)) : "";
     return {
       id: clip.id,
@@ -263,6 +265,7 @@ function createVideoProjectService(options = {}) {
       referenceAssetIds: clip.referenceAssetIds,
       continuityState: clip.continuityState,
       videoUrl,
+      posterUrl,
       continuityFrameUrl,
       creditCost: clip.creditCost,
       attempt: clip.attempt,
@@ -305,6 +308,9 @@ function createVideoProjectService(options = {}) {
       chargedCredits: project.chargedCredits,
       refundedCredits: project.refundedCredits,
       finalVideoUrl: project.finalVideo?.asset ? signVideoPath(videoAssetPath(project.id, "final")) : "",
+      finalPosterUrl: project.finalVideo?.asset && project.clips?.[0]?.outputVideo?.asset
+        ? signVideoPath(videoAssetPath(project.id, "final-poster"))
+        : "",
       assemblyAttempt: project.assemblyAttempt,
       clips: (project.clips || []).map((clip) => buildPublicClip(project, clip)),
       error: project.error,
@@ -331,6 +337,9 @@ function createVideoProjectService(options = {}) {
       chargedCredits: project.chargedCredits,
       refundedCredits: project.refundedCredits,
       finalVideoUrl: project.finalVideo?.asset ? signVideoPath(videoAssetPath(project.id, "final")) : "",
+      finalPosterUrl: project.finalVideo?.asset && project.clips?.[0]?.outputVideo?.asset
+        ? signVideoPath(videoAssetPath(project.id, "final-poster"))
+        : "",
       videoClips: (project.clips || []).map((clip) => buildPublicClip(project, clip)),
       // Keep storage handles only in the private generation snapshot so the
       // existing history deletion/retention pipeline can reclaim video files.
@@ -339,6 +348,7 @@ function createVideoProjectService(options = {}) {
         final: project.finalVideo?.asset || null,
         clips: (project.clips || []).map((clip) => ({
           video: clip.outputVideo?.asset || null,
+          poster: clip.outputVideo?.posterAsset || null,
           continuityFrame: clip.continuityFrame?.asset || null,
         })),
       },
@@ -477,6 +487,50 @@ function createVideoProjectService(options = {}) {
       }));
     }
     throw createProjectError("前置镜头视频画面丢失，无法自动恢复连续性画面", "VIDEO_CONTINUITY_UNRECOVERABLE");
+  }
+
+  async function ensurePosterFrameReady(project, sourceClip) {
+    const freshProject = getProject(project.id) || project;
+    const freshClip = freshProject.clips?.find((clip) => clip.id === sourceClip.id || clip.index === sourceClip.index) || sourceClip;
+    if (freshClip.outputVideo?.posterAsset && await generatedAssetExists(freshClip.outputVideo.posterAsset)) {
+      return freshClip;
+    }
+    if (!freshClip.outputVideo?.asset || !await generatedAssetExists(freshClip.outputVideo.asset)) return freshClip;
+    if (posterInFlight.has(freshClip.id)) return posterInFlight.get(freshClip.id);
+
+    const task = mediaSemaphore.run(() => withVideoTempDir(async (tempDir) => {
+      const videoPath = path.join(tempDir, `poster-source-${freshClip.index}.mp4`);
+      if (typeof storage.copyToFile === "function") {
+        await storage.copyToFile(freshClip.outputVideo.asset, videoPath);
+      } else {
+        const buffer = await storage.readBuffer(freshClip.outputVideo.asset);
+        await fsp.writeFile(videoPath, buffer);
+      }
+      const posterPath = path.join(tempDir, `poster-${freshClip.index}.jpg`);
+      await ffmpegSemaphore.run(() => extractFirstFrame({ videoPath, outputPath: posterPath, appConfig, executor }));
+      const posterBuffer = await fsp.readFile(posterPath);
+      const posterAsset = await saveAsset(freshProject, `poster-${freshClip.index}`, "image/jpeg", posterBuffer);
+      let updated;
+      try {
+        updated = updateClip(freshClip.id, {
+          outputVideo: {
+            ...(freshClip.outputVideo || {}),
+            posterAsset,
+            posterMimeType: "image/jpeg",
+            posterSizeBytes: posterBuffer.length,
+          },
+        });
+      } catch (error) {
+        await cleanupAssets([posterAsset]).catch(() => {});
+        throw error;
+      }
+      updateGenerationSnapshot(getProject(freshProject.id));
+      return updated || freshClip;
+    })).finally(() => {
+      posterInFlight.delete(freshClip.id);
+    });
+    posterInFlight.set(freshClip.id, task);
+    return task;
   }
 
  async function ensureFrozenInputAssetReady(project, sourceImageId) {
@@ -785,6 +839,24 @@ function createVideoProjectService(options = {}) {
         }
         const videoAsset = await saveAssetFile(project, `clip-${clip.index}`, "video/mp4", videoPath, videoSizeBytes);
         savedAssets.push(videoAsset);
+        const outputVideo = { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes };
+
+        try {
+          const posterPath = path.join(tempDir, `poster-${clip.index}.jpg`);
+          await ffmpegSemaphore.run(() => extractFirstFrame({ videoPath, outputPath: posterPath, appConfig, executor }));
+          const posterBuffer = await fsp.readFile(posterPath);
+          const posterAsset = await saveAsset(project, `poster-${clip.index}`, "image/jpeg", posterBuffer);
+          savedAssets.push(posterAsset);
+          outputVideo.posterAsset = posterAsset;
+          outputVideo.posterMimeType = "image/jpeg";
+          outputVideo.posterSizeBytes = posterBuffer.length;
+        } catch (error) {
+          log.warn?.("[video-project] optional first-frame poster unavailable", {
+            projectId: project.id,
+            clipIndex: clip.index,
+            error: error.message,
+          });
+        }
 
         // The final clip has no downstream dependency. Its continuity frame is
         // not part of the paid generation contract and must not make an
@@ -796,7 +868,7 @@ function createVideoProjectService(options = {}) {
               const continuityFrame = await saveAsset(project, `continuity-frame-${clip.index}`, frame.contentType || "image/jpeg", frame.buffer);
               savedAssets.push(continuityFrame);
               return {
-                outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes },
+                outputVideo,
                 continuityFrame: { asset: continuityFrame, mimeType: frame.contentType || "image/jpeg", sizeBytes: frame.buffer.length },
               };
             } catch (error) {
@@ -808,7 +880,7 @@ function createVideoProjectService(options = {}) {
             }
           }
           return {
-            outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes },
+            outputVideo,
             continuityFrame: {},
           };
         }
@@ -835,7 +907,7 @@ function createVideoProjectService(options = {}) {
         const continuityFrame = await saveAsset(project, `continuity-frame-${clip.index}`, frame.contentType || "image/jpeg", frame.buffer);
         savedAssets.push(continuityFrame);
         return {
-          outputVideo: { asset: videoAsset, mimeType: "video/mp4", sizeBytes: videoSizeBytes },
+          outputVideo,
           continuityFrame: { asset: continuityFrame, mimeType: frame.contentType || "image/jpeg", sizeBytes: frame.buffer.length },
         };
       } catch (error) {
@@ -1954,6 +2026,19 @@ function createVideoProjectService(options = {}) {
     let asset = null;
     let contentType = "video/mp4";
     if (kind === "final") asset = project.finalVideo?.asset;
+    else if (kind === "final-poster") {
+      const firstClip = project.clips?.[0];
+      if (firstClip) {
+        try {
+          const posterClip = await ensurePosterFrameReady(project, firstClip);
+          asset = posterClip.outputVideo?.posterAsset;
+          contentType = posterClip.outputVideo?.posterMimeType || "image/jpeg";
+        } catch (error) {
+          log.warn?.("[video-project] final poster generation failed", { projectId: project.id, error: error.message });
+          return false;
+        }
+      }
+    }
     else if (kind === "input") {
       const input = (project.inputAssets || []).find((candidate) => candidate.position === Number(position));
       asset = input?.asset;
@@ -1961,6 +2046,16 @@ function createVideoProjectService(options = {}) {
     } else {
       const clip = project.clips.find((candidate) => candidate.index === Number(position));
       if (kind === "clip") asset = clip?.outputVideo?.asset;
+      if (kind === "poster" && clip) {
+        try {
+          const posterClip = await ensurePosterFrameReady(project, clip);
+          asset = posterClip.outputVideo?.posterAsset;
+          contentType = posterClip.outputVideo?.posterMimeType || "image/jpeg";
+        } catch (error) {
+          log.warn?.("[video-project] clip poster generation failed", { projectId: project.id, clipIndex: clip.index, error: error.message });
+          return false;
+        }
+      }
       if (kind === "continuity-frame") {
         asset = clip?.continuityFrame?.asset;
         contentType = clip?.continuityFrame?.mimeType || "image/jpeg";

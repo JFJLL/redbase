@@ -638,6 +638,7 @@ export interface VideoProjectClip {
   referenceAssetIds: number[];
   continuityState?: Record<string, unknown>;
   videoUrl?: string;
+  posterUrl?: string;
   continuityFrameUrl?: string;
   creditCost: number;
   attempt: number;
@@ -678,6 +679,7 @@ export interface VideoProject {
     sizeBytes?: number;
   }>;
   finalVideoUrl?: string;
+  finalPosterUrl?: string;
   assemblyAttempt?: number;
   clips: VideoProjectClip[];
   error?: string;

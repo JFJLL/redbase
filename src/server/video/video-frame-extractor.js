@@ -69,6 +69,31 @@ async function extractStableLastFrame({ videoPath, outputPath, appConfig, execut
   throw lastError || new Error("无法提取视频尾帧");
 }
 
+async function extractFirstFrame({ videoPath, outputPath, appConfig, executor = defaultExecutor } = {}) {
+  if (!videoPath || !outputPath) throw new Error("videoPath and outputPath are required");
+  const ffmpegPath = resolveFfmpegBinary(appConfig);
+  const attempts = [0, 0.04, 0.1];
+  let lastError;
+  for (const offsetSeconds of attempts) {
+    try {
+      await executor(ffmpegPath, [
+        "-hide_banner",
+        "-loglevel", "error",
+        "-ss", Number(offsetSeconds).toFixed(3),
+        "-i", videoPath,
+        "-frames:v", "1",
+        "-q:v", "2",
+        "-y", outputPath,
+      ]);
+      const stat = await fsp.stat(outputPath);
+      if (stat.size > 0) return { outputPath, offsetSeconds, ffmpegPath };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("无法提取视频首帧");
+}
+
 async function withVideoTempDir(work, options = {}) {
   const tempDir = options.tempDir || await createVideoTempDir(options.prefix);
   try {
@@ -83,6 +108,7 @@ module.exports = {
   resolveFfmpegBinary,
   createVideoTempDir,
   extractFrameAtOffset,
+  extractFirstFrame,
   extractStableLastFrame,
   withVideoTempDir,
 };

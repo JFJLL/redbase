@@ -592,19 +592,19 @@ test("assembly_failed is not scheduled again and assembly retry is free", async 
   const beforeCredits = findUserById(ownerUserId).credits;
   const failed = await pumpUntil(service, created.project.id, ownerUserId, (project) => project.status === "assembly_failed");
   assert.equal(failed.clips.every((clip) => clip.status === "completed"), true);
-  assert.equal(ffmpegCalls, 2, "one failed assembly may try stream-copy and the documented codec fallback");
+  assert.equal(ffmpegCalls, 8, "two optional poster retries plus the documented assembly fallbacks are bounded");
 
   for (let index = 0; index < 10; index += 1) await service.pump();
-  assert.equal(ffmpegCalls, 2);
+  assert.equal(ffmpegCalls, 8);
 
   failAssembly = false;
   const completed = await service.retryAssembly(created.project.id, ownerUserId, "review-assembly-retry");
   assert.equal(completed.status, "completed");
-  assert.equal(ffmpegCalls, 3);
+  assert.equal(ffmpegCalls, 9);
   assert.equal(findUserById(ownerUserId).credits, beforeCredits);
   const repeated = await service.retryAssembly(created.project.id, ownerUserId, "review-assembly-retry");
   assert.equal(repeated.status, "completed");
-  assert.equal(ffmpegCalls, 3);
+  assert.equal(ffmpegCalls, 9);
 });
 
 test("G2 polling keeps the submission key affinity across reordered configuration and refuses a missing key", async () => {
@@ -809,7 +809,7 @@ test("only clips with downstream dependents require continuity frames, and faile
   });
   const completed = await pumpUntil(singleService, single.project.id, singleOwner, (project) => project.status === "completed");
   assert.equal(completed.status, "completed");
-  assert.equal(singleFfmpegCalls, 0);
+  assert.equal(singleFfmpegCalls, 3, "the optional first-frame poster may retry without failing the final clip");
   assert.equal(singleStorage.buffers.size, 1);
 });
 

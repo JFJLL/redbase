@@ -211,4 +211,12 @@ test("video project asset route requires a valid signature", async (t) => {
   const served = await request(server, { path: signed });
   assert.equal(served.status, 200);
   assert.equal(served.body, "video");
+
+  const poster = signAssetUrl(DEFAULT_APP_CONFIG, "/api/video-projects/7001/assets/poster/1", { ttlMs: 60_000, stable: false });
+  const servedPoster = await request(server, { path: poster });
+  assert.equal(servedPoster.status, 200);
+
+  const finalPoster = signAssetUrl(DEFAULT_APP_CONFIG, "/api/video-projects/7001/assets/final-poster", { ttlMs: 60_000, stable: false });
+  const servedFinalPoster = await request(server, { path: finalPoster });
+  assert.equal(servedFinalPoster.status, 200);
 });
