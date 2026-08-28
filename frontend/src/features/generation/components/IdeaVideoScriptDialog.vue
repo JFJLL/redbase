@@ -1008,7 +1008,10 @@ onUnmounted(() => {
                   <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'submitting' ? '提交中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'cancelled' ? '已取消' : '排队' }}</span>
                 </div>
                 <video v-if="clip.videoUrl" class="clip-video-player" controls playsinline :src="clip.videoUrl"></video>
-                <small v-if="clip.error" class="clip-error">失败原因：{{ clip.error }}</small>
+                <small
+                  v-if="clip.error && ['failed', 'uncertain_submission', 'cancelled', 'result_processing_failed', 'waiting_configuration'].includes(clip.status)"
+                  class="clip-error"
+                >失败原因：{{ clip.error }}</small>
                 <div class="clip-actions">
                   <a v-if="clip.videoUrl" class="clip-download" :href="clip.videoUrl" download>下载本段</a>
                   <button

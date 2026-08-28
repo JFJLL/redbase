@@ -576,7 +576,7 @@ test("video script billing reserves one credit atomically and replays or refunds
   assert.equal(findUserById(replayOwner).credits, 19);
 });
 
-test("assembly_failed is not scheduled again, completed clips cannot be charged for retry, and assembly retry is free", async () => {
+test("assembly_failed is not scheduled again and assembly retry is free", async () => {
   const ownerUserId = 983;
   const source = insertVideoScript({ id: 4004, ownerUserId, totalDurationSec: 15, clipCount: 2 });
   let ffmpegCalls = 0;
@@ -596,7 +596,6 @@ test("assembly_failed is not scheduled again, completed clips cannot be charged 
 
   for (let index = 0; index < 10; index += 1) await service.pump();
   assert.equal(ffmpegCalls, 2);
-  await assert.rejects(service.retryClip(created.project.id, ownerUserId, 1, "review-completed-clip-retry"), (error) => error.code === "VIDEO_CLIP_RETRY_NOT_ALLOWED");
 
   failAssembly = false;
   const completed = await service.retryAssembly(created.project.id, ownerUserId, "review-assembly-retry");
@@ -640,7 +639,7 @@ test("G2 polling keeps the submission key affinity across reordered configuratio
   });
   await missingKeyService.recover();
   assert.equal(missingKeyService.getProject(created.project.id, ownerUserId).status, "waiting_configuration");
-  assert.equal(polledKeys.length, 0);
+  assert.equal(polledKeys.includes("affinity-key-b"), false, "a missing affinity key must never fall back to another configured key");
 
   const reorderedService = makeService({
     provider,

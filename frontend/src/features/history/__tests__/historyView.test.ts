@@ -203,8 +203,8 @@ describe("HistoryView", () => {
       refundedCredits: 5,
       finalVideoUrl: "",
       clips: [
-        { id: 7701, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0, videoUrl: "/api/video-projects/77/assets/clip/1?assetExpires=9999999999999&assetSignature=clip-one", error: "" },
-        { id: 7702, index: 2, startSec: 10, endSec: 15, durationSec: 5, status: "failed", prompt: "", continuityMode: "image", referenceAssetIds: [], creditCost: 10, attempt: 1, retryCount: 0, error: "供应商暂时不可用" },
+        { id: 7701, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "镜头一原提示词", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0, videoUrl: "/api/video-projects/77/assets/clip/1?assetExpires=9999999999999&assetSignature=clip-one", error: "" },
+        { id: 7702, index: 2, startSec: 10, endSec: 15, durationSec: 5, status: "failed", prompt: "镜头二原提示词", continuityMode: "image", referenceAssetIds: [], creditCost: 10, attempt: 1, retryCount: 0, error: "供应商暂时不可用" },
       ],
       script: GENERATIONS[2].payload?.videoScript,
     };
@@ -261,9 +261,13 @@ describe("HistoryView", () => {
     expect(detail.text()).toContain("累计退款 5 积分");
     expect(detail.findAll("video")).toHaveLength(1);
     expect(detail.text()).toContain("供应商暂时不可用");
-    await detail.find('.history-video-clip-actions button').trigger("click");
+    expect(detail.text()).toContain("重新生成任意一段后，系统会自动替换该段并重新合并最终成片");
+    await detail.findAll('[data-test="history-clip-prompt"]')[1].setValue("镜头二改为缓慢推进产品特写");
+    await detail.findAll('[data-test="history-retry-clip"]')[1].trigger("click");
     await flushPromises();
     expect(calls.some((call) => call.url === "/api/video-projects/77/clips/2/retry")).toBe(true);
+    const retryCall = calls.find((call) => call.url === "/api/video-projects/77/clips/2/retry");
+    expect(JSON.parse(String(retryCall?.init?.body))).toMatchObject({ prompt: "镜头二改为缓慢推进产品特写" });
   });
 
   it("renders assembly_failed separately and retries assembly without clip billing", async () => {
@@ -289,7 +293,7 @@ describe("HistoryView", () => {
         videoStatus: "assembly_failed",
         refundedCredits: 0,
         finalVideoUrl: "",
-        videoClips: [{ id: 7801, index: 1, durationSec: 10, status: "completed", videoUrl: "/api/video-projects/78/assets/clip/1" }],
+        videoClips: [{ id: 7801, index: 1, durationSec: 10, status: "completed", prompt: "产品特写", creditCost: 20, error: "G2 状态查询限流，系统正在自动重试（第 1 次）", videoUrl: "/api/video-projects/78/assets/clip/1" }],
         script: GENERATIONS[2].payload?.videoScript,
       },
     };
@@ -323,7 +327,8 @@ describe("HistoryView", () => {
     const detail = wrapper.find('[data-test="history-video-project-detail"]');
     expect(detail.find('[data-test="history-assembly-failed"]').text()).toContain("视频片段均已生成完成");
     expect(detail.find('[data-test="history-retry-assembly"]').text()).toContain("0积分");
-    expect(detail.find('.history-video-clip-actions button').exists()).toBe(false);
+    expect(detail.find('[data-test="history-retry-clip"]').exists()).toBe(true);
+    expect(detail.text()).not.toContain("状态查询限流");
     expect(detail.findAll("video")).toHaveLength(1);
     expect(detail.find(".history-clip-player").exists()).toBe(true);
 

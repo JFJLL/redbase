@@ -800,6 +800,20 @@ export function retryVideoProjectClip(
   });
 }
 
+export function regenerateVideoProjectClip(
+  projectId: number,
+  clipIndex: number,
+  requestId: string,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<{ project: VideoProject; user?: SessionUser }> {
+  return apiFetch(`/api/video-projects/${projectId}/clips/${clipIndex}/retry`, {
+    method: "POST",
+    body: { requestId, prompt },
+    signal,
+  });
+}
+
 export function retryVideoProjectClipResult(
   projectId: number,
   clipIndex: number,

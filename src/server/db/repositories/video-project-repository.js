@@ -371,7 +371,7 @@ function createProjectWithBilling({ project, clips, generation, billing, prevent
   });
 }
 
-function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId, creditCost, event }) {
+function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId, creditCost, prompt, allowCompleted = false, event }) {
   return runTransaction(() => {
     const normalizedRequestId = String(requestId || "").trim();
     if (!normalizedRequestId) {
@@ -407,8 +407,9 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
       error.code = "VIDEO_CLIP_NOT_FOUND";
       throw error;
     }
-    if (!["failed", "uncertain_submission", "cancelled"].includes(target.status)) {
-      const error = new Error("只有失败、待确认或已取消的镜头才能重新生成");
+    const regeneratingCompletedClip = allowCompleted && target.status === "completed";
+    if (!["failed", "uncertain_submission", "cancelled"].includes(target.status) && !regeneratingCompletedClip) {
+      const error = new Error("只有已完成、失败、待确认或已取消的镜头才能重新生成");
       error.code = "VIDEO_CLIP_RETRY_NOT_ALLOWED";
       throw error;
     }
@@ -420,7 +421,9 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
       error.code = "VIDEO_CLIP_RETRY_NOT_ALLOWED";
       throw error;
     }
-    const retryableClips = project.clips.filter((clip) => clip.index >= target.index && clip.status !== "completed");
+    const retryableClips = regeneratingCompletedClip
+      ? [target]
+      : project.clips.filter((clip) => clip.index >= target.index && clip.status !== "completed");
     const cost = Number(creditCost || retryableClips.reduce((sum, clip) => sum + Number(clip.creditCost || 0), 0));
     if (!Number.isFinite(cost) || cost <= 0) {
       const error = new Error("没有需要重新计费的镜头");
@@ -461,6 +464,7 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
         providerKeyRef: "",
         outputVideo: {},
         continuityFrame: {},
+        prompt: clip.index === target.index && String(prompt || "").trim() ? String(prompt).trim() : clip.prompt,
         error: "",
         retryCount: Number(clip.retryCount || 0) + (clip.index === target.index ? 1 : 0),
         reservationCreditEventId: charged.creditEvent.id,
@@ -471,6 +475,7 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
     updateProject(project.id, {
       status: "queued",
       error: "",
+      finalVideo: {},
       chargedCredits: project.chargedCredits + cost,
     });
     updateVideoBillingRequest(reservation.id, { status: "committed" });

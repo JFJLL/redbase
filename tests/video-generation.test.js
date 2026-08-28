@@ -41,7 +41,7 @@ insertUser({
   createdAt: "2026-08-26T00:00:00.000Z",
 });
 
-for (const id of [902, 903, 904, 905, 906, 907, 908, 909, 910]) {
+for (const id of [902, 903, 904, 905, 906, 907, 908, 909, 910, 911]) {
   insertUser({
     id,
     name: `Video Tester ${id}`,
@@ -704,7 +704,8 @@ test("G2 automatically retries a failed second clip with another key without cha
   assert.equal(retrying.status, "queued");
   assert.equal(retrying.clips[1].status, "queued");
   assert.equal(retrying.clips[1].retryCount, 1);
-  assert.match(retrying.clips[1].error, /切换通道自动重试/);
+  assert.equal(retrying.error, "");
+  assert.equal(retrying.clips[1].error, "");
 
   clock = 6;
   await service.pump();
@@ -718,7 +719,7 @@ test("G2 automatically retries a failed second clip with another key without cha
   assert.equal(findUserById(906).credits, beforeCredits - 3);
 });
 
-test("G2 polling rate limits stay on the affinity key, show retry progress, and never resubmit", async () => {
+test("G2 polling rate limits stay silent on the affinity key and never resubmit", async () => {
   let clock = 0;
   let submitCount = 0;
   let pollCount = 0;
@@ -759,7 +760,8 @@ test("G2 polling rate limits stay on the affinity key, show retry progress, and 
   await service.pump();
   const retrying = service.getProject(result.project.id, 908);
   assert.equal(retrying.status, "running");
-  assert.match(retrying.error, /状态查询限流，系统正在自动重试/);
+  assert.equal(retrying.error, "");
+  assert.equal(retrying.clips[0].error, "");
   assert.equal(submitCount, 1);
 
   clock = 62000;
@@ -936,5 +938,65 @@ test("failed video clip refunds the unexecuted reservation once", async () => {
   const failed = service.getProject(result.project.id, 901);
   assert.equal(failed.status, "partial_failed");
   assert.equal(failed.clips[0].status, "failed");
+  assert.equal(failed.clips[0].error, "fake provider failure");
   assert.equal(findUserById(901).credits, 80);
+});
+
+test("completed G2 clip can be regenerated with an edited prompt and is assembled again", async () => {
+  let clock = 0;
+  const submissions = [];
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip(args) {
+      submissions.push(args);
+      return { taskId: `g2-regenerate-${submissions.length}` };
+    },
+    async getTaskStatus() {
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const service = makeService(provider, makeStorage(), { now: () => clock });
+  const result = await service.createProject({
+    ownerUserId: 911,
+    requestId: "video-g2-completed-regenerate",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  await service.pump();
+  clock = 2;
+  const completed = await settleProject(service, result.project.id, 911);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const beforeRetryCredits = findUserById(911).credits;
+  const editedPrompt = "镜头缓慢推进，突出产品灯光和桌面质感";
+  const retried = await service.retryClip(result.project.id, 911, 1, "video-g2-completed-regenerate-retry", editedPrompt);
+
+  assert.equal(retried.project.status, "queued");
+  assert.equal(retried.project.finalVideoUrl, "");
+  assert.equal(retried.project.clips[0].status, "queued");
+  assert.equal(retried.project.clips[0].prompt, editedPrompt);
+  assert.equal(findUserById(911).credits, beforeRetryCredits - completed.clips[0].creditCost);
+
+  let regenerated = retried.project;
+  for (let attempt = 0; attempt < 12 && regenerated.status !== "completed"; attempt += 1) {
+    clock += 2;
+    await service.pump();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    regenerated = service.getProject(result.project.id, 911);
+  }
+  assert.equal(regenerated.status, "completed");
+  assert.ok(regenerated.finalVideoUrl);
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[1].prompt, editedPrompt);
 });

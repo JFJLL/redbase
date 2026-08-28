@@ -91,6 +91,7 @@ function makeService() {
   let project = makeProject();
   let createdInput = null;
   let activeArgs = null;
+  let retryArgs = null;
   return {
     getCapabilities: () => [{ id: "d2", displayName: "D2", maxReferenceImages: 9 }, { id: "g2", displayName: "G2", maxReferenceImages: 5 }],
     estimateCost: (input) => ({ model: input.model || "d2", resolution: input.resolution || "720p", totalDurationSec: Number(input.totalDurationSec || 10), clipDurations: [10], credits: 2 }),
@@ -101,11 +102,12 @@ function makeService() {
     },
     getProject: (id, ownerUserId) => Number(id) === project.id && (!ownerUserId || Number(ownerUserId) === 951) ? project : null,
     startProject: () => { project = { ...project, status: "running" }; return project; },
-    retryClip: () => project,
+    retryClip: (...args) => { retryArgs = args; return project; },
     retryAssembly: () => ({ ...project, status: "completed" }),
     serveAsset: async (_id, _owner, _kind, _index, res) => { res.writeHead(200, { "Content-Type": "video/mp4" }); res.end("video"); return true; },
     getCreatedInput: () => createdInput,
     getActiveArgs: () => activeArgs,
+    getRetryArgs: () => retryArgs,
   };
 }
 
@@ -184,6 +186,14 @@ test("video project routes expose capabilities, enforce ownership, and map selec
   });
   assert.equal(active.status, 200);
   assert.deepEqual(service.getActiveArgs(), [951, { brandId: "91", trendId: "991", ideaIndex: "0" }]);
+
+  const regenerated = await request(server, {
+    method: "POST",
+    path: "/api/video-projects/7001/clips/1/retry",
+    headers: { Cookie: "redbase_session=route-video-session" },
+  }, { requestId: "route-regenerate-1", prompt: "改为缓慢推进的产品特写" });
+  assert.equal(regenerated.status, 200);
+  assert.deepEqual(service.getRetryArgs(), [7001, 951, 1, "route-regenerate-1", "改为缓慢推进的产品特写"]);
 
   const forbidden = await request(server, { path: "/api/video-projects/7001", headers: { Cookie: "redbase_session=route-video-other-session" } });
   assert.equal(forbidden.status, 404);

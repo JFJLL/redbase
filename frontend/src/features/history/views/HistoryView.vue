@@ -5,7 +5,14 @@ import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
-import { retryVideoProjectAssembly, retryVideoProjectClip, retryVideoProjectClipResult, type VideoScript } from "@/features/generation/api";
+import {
+  fetchVideoProject,
+  regenerateVideoProjectClip,
+  retryVideoProjectAssembly,
+  retryVideoProjectClipResult,
+  type VideoProject,
+  type VideoScript,
+} from "@/features/generation/api";
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
 import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
@@ -38,6 +45,10 @@ const detailSlideIndex = ref<number | null>(null);
 const editEntryId = ref<string | null>(null);
 const retryingVideoClip = ref<string | null>(null);
 const retryingVideoAssembly = ref(false);
+const videoClipPrompts = reactive<Record<string, string>>({});
+let videoProjectRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+const ACTIVE_VIDEO_STATUSES = new Set(["preparing", "queued", "submitting", "running", "processing_result", "assembling"]);
 
 // 图片加载失败：明确错误态 + 重试；签名过期只刷新一次列表拿新签名，不无限循环。
 const failedImageUrls = reactive(new Set<string>());
@@ -237,6 +248,66 @@ function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
   } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
 }
 
+function syncVideoClipPrompts(item: GenerationHistoryItem | null): void {
+  for (const key of Object.keys(videoClipPrompts)) delete videoClipPrompts[key];
+  for (const clip of videoProjectClips(item)) {
+    videoClipPrompts[String(clip.index)] = String(clip.prompt || "");
+  }
+}
+
+function updateVideoProjectDetail(item: GenerationHistoryItem, project: VideoProject): void {
+  detailItem.value = {
+    ...item,
+    payload: {
+      ...(item.payload || {}),
+      projectId: project.id,
+      videoModel: project.model,
+      videoMode: project.mode,
+      videoResolution: project.resolution,
+      videoDuration: project.totalDurationSec,
+      videoAspectRatio: project.aspectRatio,
+      videoStatus: project.status,
+      refundedCredits: project.refundedCredits,
+      finalVideoUrl: project.finalVideoUrl || "",
+      videoClips: project.clips,
+      script: project.script,
+    },
+  };
+  for (const clip of project.clips) {
+    if (document.activeElement?.getAttribute("data-clip-prompt") !== String(clip.index)) {
+      videoClipPrompts[String(clip.index)] = String(clip.prompt || "");
+    }
+  }
+}
+
+function stopVideoProjectRefresh(): void {
+  if (videoProjectRefreshTimer) clearTimeout(videoProjectRefreshTimer);
+  videoProjectRefreshTimer = null;
+}
+
+function scheduleVideoProjectRefresh(projectId: number, generationId: number, delayMs = 1800): void {
+  stopVideoProjectRefresh();
+  videoProjectRefreshTimer = setTimeout(async () => {
+    const current = detailItem.value;
+    if (!current || current.type !== "videoProject" || Number(current.id) !== generationId) return;
+    try {
+      const response = await fetchVideoProject(projectId, scope.signalFor(`history-video-project-${projectId}`));
+      updateVideoProjectDetail(current, response.project);
+      if (ACTIVE_VIDEO_STATUSES.has(response.project.status)) {
+        scheduleVideoProjectRefresh(projectId, generationId);
+        return;
+      }
+      await historyStore.refresh();
+      const refreshed = historyStore.items.find((candidate) => Number(candidate.id) === generationId);
+      if (refreshed) {
+        updateVideoProjectDetail(refreshed, response.project);
+      }
+    } catch (error) {
+      if (!isAbortError(error) && detailItem.value) scheduleVideoProjectRefresh(projectId, generationId, 4000);
+    }
+  }, delayMs);
+}
+
 function videoRequestId(): string {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `history-video-retry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -249,28 +320,12 @@ async function retryHistoryVideoClip(clip: Record<string, unknown>): Promise<voi
   if (!item || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(clipIndex) || clipIndex <= 0) return;
   retryingVideoClip.value = String(clipIndex);
   try {
-    const response = await retryVideoProjectClip(projectId, clipIndex, videoRequestId(), scope.signalFor(`history-video-retry-${clipIndex}`));
+    const prompt = String(videoClipPrompts[String(clipIndex)] || clip.prompt || "").trim();
+    const response = await regenerateVideoProjectClip(projectId, clipIndex, videoRequestId(), prompt, scope.signalFor(`history-video-retry-${clipIndex}`));
     if (response.user) auth.user = { ...auth.user, ...response.user };
     else await auth.refreshUser().catch(() => {});
-    const project = response.project;
-    detailItem.value = {
-      ...item,
-      payload: {
-        ...(item.payload || {}),
-        projectId: project.id,
-        videoModel: project.model,
-        videoMode: project.mode,
-        videoResolution: project.resolution,
-        videoDuration: project.totalDurationSec,
-        videoAspectRatio: project.aspectRatio,
-        videoStatus: project.status,
-        finalVideoUrl: project.finalVideoUrl || "",
-        videoClips: project.clips,
-      },
-    };
-    await historyStore.refresh();
-    const refreshed = historyStore.items.find((candidate) => Number(candidate.id) === Number(item.id));
-    if (refreshed) detailItem.value = refreshed;
+    updateVideoProjectDetail(item, response.project);
+    scheduleVideoProjectRefresh(projectId, Number(item.id), 600);
   } catch (error) {
     if (isAbortError(error)) return;
     if (await handleUnauthorizedError(error)) return;
@@ -388,9 +443,16 @@ async function removeItem(generationId: number) {
 
 function openDetail(item: GenerationHistoryItem, slideUrl = "") {
   detailItem.value = item;
-    if (item.type === "videoScript" || item.type === "videoProject") {
+  if (item.type === "videoScript" || item.type === "videoProject") {
     detailSlideIndex.value = null;
     editEntryId.value = null;
+    if (item.type === "videoProject") {
+      syncVideoClipPrompts(item);
+      const projectId = Number(item.payload?.projectId);
+      if (Number.isSafeInteger(projectId) && projectId > 0) {
+        scheduleVideoProjectRefresh(projectId, Number(item.id), 300);
+      }
+    }
     return;
   }
   const slides = slideImages(item);
@@ -401,6 +463,7 @@ function openDetail(item: GenerationHistoryItem, slideUrl = "") {
 }
 
 function closeDetail() {
+  stopVideoProjectRefresh();
   detailItem.value = null;
   detailSlideIndex.value = null;
   editEntryId.value = null;
@@ -433,6 +496,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (signatureRefreshTimer) clearTimeout(signatureRefreshTimer);
+  stopVideoProjectRefresh();
 });
 </script>
 
@@ -709,15 +773,31 @@ onUnmounted(() => {
                 {{ retryingVideoAssembly ? '拼接中…' : '重新拼接成片 · 0积分' }}
               </button>
             </div>
-            <video v-if="videoProjectVideoUrl(detailItem)" class="history-video-player" controls playsinline :src="videoProjectVideoUrl(detailItem)"></video>
-            <div v-else class="history-video-placeholder large">
-              <span class="script-icon">🎬</span>
-              <strong>{{ videoProjectStatusLabel(detailItem) }}</strong>
-              <small>视频完成后刷新历史记录即可播放。</small>
-            </div>
+            <section class="history-final-video" data-test="history-final-video">
+              <div class="history-video-section-heading">
+                <div>
+                  <span>最终成片</span>
+                  <strong>已按镜头顺序自动合并</strong>
+                </div>
+                <small>{{ detailItem.payload?.videoDuration || asVideoScript(detailItem)?.totalDurationSec || 30 }} 秒</small>
+              </div>
+              <video v-if="videoProjectVideoUrl(detailItem)" class="history-video-player" controls playsinline :src="videoProjectVideoUrl(detailItem)"></video>
+              <div v-else class="history-video-placeholder large">
+                <strong>{{ videoProjectStatusLabel(detailItem) }}</strong>
+                <small>所有分段完成后，系统会自动合并并在这里展示。</small>
+              </div>
+            </section>
             <p v-if="detailItem.payload?.videoStatus === 'partial_failed' || detailItem.payload?.videoStatus === 'failed'" class="history-video-refund">
               失败镜头的未执行积分会自动退款；本项目累计退款 {{ detailItem.payload?.refundedCredits || 0 }} 积分。
             </p>
+            <div class="history-video-section-heading is-clips">
+              <div>
+                <span>分段镜头</span>
+                <strong>可编辑提示词并单独重新生成</strong>
+              </div>
+              <small>共 {{ videoProjectClips(detailItem).length }} 段</small>
+            </div>
+            <p class="history-video-workflow-hint">重新生成任意一段后，系统会自动替换该段并重新合并最终成片。</p>
             <div class="history-video-clips">
               <article v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
                 <div class="history-video-clip-heading">
@@ -732,7 +812,20 @@ onUnmounted(() => {
                   playsinline
                   :src="safeImageSrc(String(clip.videoUrl || ''))"
                 ></video>
-                <small v-if="clip.error" class="history-video-clip-error">失败原因：{{ clip.error }}</small>
+                <label class="history-video-prompt-editor">
+                  <span>本段提示词</span>
+                  <textarea
+                    v-model="videoClipPrompts[String(clip.index)]"
+                    :data-clip-prompt="String(clip.index)"
+                    data-test="history-clip-prompt"
+                    rows="3"
+                    :disabled="['queued', 'submitting', 'running', 'processing_result'].includes(String(clip.status))"
+                  ></textarea>
+                </label>
+                <small
+                  v-if="clip.error && ['failed', 'uncertain_submission', 'cancelled', 'result_processing_failed', 'waiting_configuration'].includes(String(clip.status))"
+                  class="history-video-clip-error"
+                >失败原因：{{ clip.error }}</small>
                 <div class="history-video-clip-actions">
                   <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
                   <button
@@ -746,14 +839,14 @@ onUnmounted(() => {
                     {{ retryingVideoClip === String(clip.index) ? '处理中…' : '重新处理结果 · 0积分' }}
                   </button>
                   <button
-                    v-else-if="['failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
+                    v-else-if="['completed', 'failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
                     type="button"
-                    class="secondary-btn"
+                    class="primary-btn"
                     data-test="history-retry-clip"
-                    :disabled="retryingVideoClip === String(clip.index)"
+                    :disabled="retryingVideoClip === String(clip.index) || !String(videoClipPrompts[String(clip.index)] || '').trim()"
                     @click="retryHistoryVideoClip(clip)"
                   >
-                    {{ retryingVideoClip === String(clip.index) ? '提交中…' : '重新生成当前镜头' }}
+                    {{ retryingVideoClip === String(clip.index) ? '提交中…' : `重新生成本段 · ${clip.creditCost || 0}积分` }}
                   </button>
                 </div>
               </article>
@@ -1065,6 +1158,51 @@ onUnmounted(() => {
   background: #211d1d;
 }
 
+.history-final-video,
+.video-project-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.history-video-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.history-video-section-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.history-video-section-heading span {
+  color: var(--workspace-brand, var(--color-brand));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.history-video-section-heading strong {
+  color: var(--workspace-text, var(--color-text-primary));
+  font-size: 16px;
+}
+
+.history-video-section-heading small {
+  color: var(--workspace-text-muted, var(--color-text-secondary));
+}
+
+.history-video-section-heading.is-clips {
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--workspace-border, var(--color-border));
+}
+
+.history-video-workflow-hint {
+  margin: -6px 0 0;
+  color: var(--workspace-text-muted, var(--color-text-secondary));
+  font-size: 13px;
+}
+
 .history-assembly-failed {
   display: grid;
   gap: 8px;
@@ -1127,6 +1265,42 @@ onUnmounted(() => {
 .history-video-clip-error {
   color: var(--color-brand);
   line-height: 1.5;
+}
+
+.history-video-prompt-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.history-video-prompt-editor span {
+  color: var(--workspace-text, var(--color-text-primary));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.history-video-prompt-editor textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  border: 1px solid var(--workspace-border, var(--color-border));
+  border-radius: var(--workspace-radius-sm, var(--radius-md));
+  padding: 10px 12px;
+  background: var(--workspace-surface, #fff);
+  color: var(--workspace-text, var(--color-text-primary));
+  font: inherit;
+  line-height: 1.6;
+  outline: none;
+}
+
+.history-video-prompt-editor textarea:focus {
+  border-color: var(--workspace-brand, var(--color-brand));
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.1);
+}
+
+.history-video-prompt-editor textarea:disabled {
+  cursor: not-allowed;
+  background: var(--workspace-surface-soft, #faf7f5);
+  color: var(--workspace-text-muted, var(--color-text-secondary));
 }
 
 .history-video-clip-actions a {
@@ -1407,12 +1581,13 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--workspace-grid-gap);
-  align-items: start;
+  align-items: stretch;
+  grid-auto-rows: 560px;
 }
 
 .history-card {
-  min-height: 0;
-  max-height: 680px;
+  min-height: 560px;
+  max-height: 560px;
 }
 
 .history-card-top h3 {
@@ -1598,6 +1773,42 @@ onUnmounted(() => {
   box-shadow: none;
 }
 
+.history-script-box,
+.history-video-box,
+.history-preview,
+.history-grid {
+  width: 100%;
+  height: 220px;
+  min-height: 220px;
+  margin-top: auto;
+}
+
+.history-script-box {
+  display: flex;
+  align-items: center;
+}
+
+.history-video-box video,
+.history-video-box img,
+.history-preview img {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+  object-fit: cover;
+}
+
+.history-grid {
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.history-grid img,
+.history-slide-cell {
+  height: 100%;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
 .history-card-top {
   gap: 16px;
 }
@@ -1699,6 +1910,12 @@ onUnmounted(() => {
 
   .history-generate-list {
     grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
+
+  .history-card {
+    min-height: 0;
+    max-height: none;
   }
 
   .history-detail-grid {

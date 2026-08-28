@@ -1056,15 +1056,14 @@ function createVideoProjectService(options = {}) {
   function queueAutomaticG2Retry(project, clip, errorMessage) {
     if (!canAutomaticallyRetryG2Clip(project, clip)) return false;
     const nextAttempt = Number(clip.submissionAttempt || 0) + 1;
-    const message = `G2 生成失败，正在切换通道自动重试（第 ${nextAttempt}/${g2MaxClipAttempts} 次）`;
     updateClip(clip.id, {
       status: "queued",
       providerTaskId: "",
       retryCount: Number(clip.retryCount || 0) + 1,
       pollFailureCount: 0,
-      error: message,
+      error: "",
     });
-    updateProject(project.id, { status: "queued", error: message });
+    updateProject(project.id, { status: "queued", error: "" });
     log.warn?.("[video-project] scheduling automatic G2 retry", {
       projectId: project.id,
       clipIndex: clip.index,
@@ -1114,16 +1113,13 @@ function createVideoProjectService(options = {}) {
       releaseResult = { error: true, statusCode: error.statusCode, rateLimited: Number(error.statusCode) === 429 };
       const failureCount = Number(clip.pollFailureCount || 0) + 1;
       const rateLimited = Number(error.statusCode) === 429;
-      const retryMessage = rateLimited
-        ? `G2 状态查询限流，系统正在自动重试（第 ${failureCount} 次）`
-        : failureCount >= 5 ? "轮询监控暂时受阻，将继续重试" : "暂时无法查询供应商状态，将稍后重试";
       updateClip(clip.id, {
         pollFailureCount: failureCount,
-        error: retryMessage,
+        error: "",
       });
       updateProject(project.id, {
         status: "running",
-        error: rateLimited || failureCount >= 5 ? retryMessage : "",
+        error: "",
       });
       schedulePoll(project, clip, failureCount);
       log.warn?.("[video-project] polling failed", { projectId: project.id, clipIndex: clip.index, error: error.message });
@@ -1849,7 +1845,7 @@ function createVideoProjectService(options = {}) {
    return serializeProject(next);
  }
 
-  async function retryClip(projectId, ownerUserId, clipIndex, requestId) {
+  async function retryClip(projectId, ownerUserId, clipIndex, requestId, prompt = "") {
     const project = getProject(projectId, { ownerUserId });
     if (!project) throw createProjectError("视频项目不存在", "VIDEO_PROJECT_NOT_FOUND");
     const clip = project.clips.find((candidate) => candidate.index === Number(clipIndex));
@@ -1862,9 +1858,11 @@ function createVideoProjectService(options = {}) {
       ownerUserId,
       clipIndex,
       requestId,
+      prompt,
+      allowCompleted: true,
       event: {
         actionType: "videoProjectRetry",
-        actionLabel: "AI 视频失败镜头重试",
+        actionLabel: clip.status === "completed" ? "AI 视频镜头重新生成" : "AI 视频失败镜头重试",
         brandId: project.brandId,
         trendId: project.trendId,
         ideaTitle: project.script?.title || "",
