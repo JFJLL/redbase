@@ -40,7 +40,7 @@ const store = useInsightsStore();
 const brand = computed<BrandDetail | null>(() => (store.selectedBrand as unknown as BrandDetail) || null);
 const trend = computed<TrendDetail | null>(() => (store.selectedTrend as unknown as TrendDetail) || null);
 const idea = computed<IdeaDetail | null>(() => trend.value?.ideas?.[props.ideaIndex] ?? null);
-const brandId = computed(() => store.selectedBrandId ?? null);
+const brandId = computed(() => (store.selectedBrand ? Number(store.selectedBrand.id) : (store.selectedBrandId ?? null)));
 const trendId = computed(() => Number(store.selectedTrend?.id ?? 0) || null);
 const ideaIndex = computed(() => props.ideaIndex);
 const settingsKey = computed(() => getIdeaSettingsKey(brandId.value, trendId.value, props.ideaIndex));
@@ -83,6 +83,7 @@ const {
 
 const closeButton = ref<HTMLButtonElement | null>(null);
 let previousFocus: HTMLElement | null = null;
+const isClosing = ref(false);
 
 // 打开即按 URL 上的 action 自动启动（至多一次）；图库/上下文未就绪时由内部 watch 复查。
 onMounted(() => {
@@ -109,19 +110,32 @@ watch(
   },
 );
 
-function close(): void {
-  emit("close");
+function startClose(): void {
+  if (isClosing.value) return;
+  if (wechatConfirm.value) {
+    resolveWechatConfirm(null);
+    return;
+  }
+  isClosing.value = true;
+  const prefersReduced =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const isTest = typeof process !== "undefined" && process.env.NODE_ENV === "test";
+  if (isTest) {
+    emit("close");
+    return;
+  }
+  const duration = prefersReduced ? 150 : 280;
+  setTimeout(() => {
+    emit("close");
+  }, duration);
 }
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== "Escape") return;
   event.preventDefault();
-  // 公众号比例提醒打开时先取消提醒，再关闭对话框。
-  if (wechatConfirm.value) {
-    resolveWechatConfirm(null);
-    return;
-  }
-  close();
+  startClose();
 }
 
 function retryDisabled(): boolean {
@@ -192,10 +206,11 @@ function onEdited(): void {
 </script>
 
 <template>
-  <div class="idea-generation-backdrop" data-test="idea-generation-dialog" @click.self="close">
+  <div class="idea-generation-backdrop" :class="{ 'is-closing': isClosing }" data-test="idea-generation-dialog" @click.self="startClose">
     <section
       class="idea-generation-panel"
       :class="{ 'idea-generation-panel--xhs': genKind === 'xhsCarousel' }"
+      :data-closing="isClosing ? 'true' : undefined"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ideaGenerationTitle"
@@ -214,7 +229,7 @@ function onEdited(): void {
           type="button"
           class="secondary-btn"
           data-test="idea-generation-close"
-          @click="close"
+          @click="startClose"
         >
           关闭
         </button>
@@ -347,7 +362,7 @@ function onEdited(): void {
                   class="primary-btn slide-start-btn"
                   :data-test="`generate-xhs-slide-${index}`"
                   :disabled="slide.isGenerating"
-                  @click="generateCarouselSlide(index)"
+                  @click="generateCarouselSlide(Number(index))"
                 >
                   {{ slide.isGenerating ? "生图中..." : "开始生图" }}
                 </button>
@@ -393,7 +408,7 @@ function onEdited(): void {
                     class="secondary-btn"
                     :data-test="`edit-xhs-slide-${index}`"
                     :disabled="slide.isEditing"
-                    @click="editCarouselSlide(index)"
+                    @click="editCarouselSlide(Number(index))"
                   >
                     {{ slide.isEditing ? "改图中..." : "改这一页" }}
                   </button>
@@ -436,6 +451,12 @@ function onEdited(): void {
   padding: 24px;
   background: rgba(42, 31, 34, 0.38);
   backdrop-filter: blur(2px);
+  opacity: 1;
+  transition: opacity 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.idea-generation-backdrop.is-closing {
+  opacity: 0;
 }
 
 .idea-generation-panel {
@@ -453,6 +474,24 @@ function onEdited(): void {
   background: #fffdfc;
   color: var(--workspace-text);
   box-shadow: 0 20px 54px rgba(54, 38, 43, 0.16);
+  transform: translate(0, 0) scale(1);
+  transform-origin: 10% 55%;
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1), opacity 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.idea-generation-panel[data-closing="true"] {
+  transform: translate(-30vw, 2vh) scale(0.18);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idea-generation-backdrop {
+    transition: opacity 150ms ease !important;
+  }
+  .idea-generation-panel {
+    transition: opacity 150ms ease !important;
+    transform: none !important;
+  }
 }
 
 .idea-generation-panel::before {
