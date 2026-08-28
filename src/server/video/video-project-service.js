@@ -203,6 +203,7 @@ function createVideoProjectService(options = {}) {
   const videoClipMaxBytes = Math.max(1, Number(appConfig.video?.maxClipBytes || DEFAULT_VIDEO_CLIP_ASSET_BYTES));
   const videoFinalMaxBytes = Math.max(1, Number(appConfig.video?.maxFinalBytes || DEFAULT_VIDEO_FINAL_ASSET_BYTES));
   const imageMaxBytes = Math.max(1, Number(appConfig.video?.imageMaxBytes || DEFAULT_GENERATED_IMAGE_ASSET_BYTES));
+  const g2MaxClipAttempts = Math.max(1, Number(appConfig.video?.agnes?.maxClipAttempts || 3));
   const inFlight = new Set();
   const nextPollAt = new Map();
   const d2WaitingConfiguration = new Set();
@@ -219,6 +220,22 @@ function createVideoProjectService(options = {}) {
     if (base) return new URL(value, `${base}/`).toString();
     if (requireAbsolute) throw createProjectError("视频 Provider 需要配置 VIDEO_PUBLIC_BASE_URL 以访问参考素材", "VIDEO_PUBLIC_BASE_URL_REQUIRED");
     return value;
+  }
+
+  function hasDirectAssetUrls() {
+    return storage?.provider === "aliyun_oss" && typeof storage.createReadUrl === "function";
+  }
+
+  function canExposeProviderAssets() {
+    return hasDirectAssetUrls() || Boolean(publicBaseUrl() && String(appConfig.security?.assetSigningSecret || "").trim());
+  }
+
+  async function toProviderAssetUrl(asset, relativePath, { requireAbsolute = false } = {}) {
+    if (requireAbsolute && asset?.provider === "aliyun_oss" && typeof storage.createReadUrl === "function") {
+      const directUrl = String(await storage.createReadUrl(asset, { expiresSeconds: 3600 }) || "").trim();
+      if (isAbsoluteHttps(directUrl)) return directUrl;
+    }
+    return toPublicUrl(relativePath, { requireAbsolute });
   }
 
   function signVideoPath(relativePath) {
@@ -349,17 +366,21 @@ function createVideoProjectService(options = {}) {
     return provider;
   }
 
-  function assertExternalVideoConfiguration(model, provider = providers[normalizeModelId(model)]) {
+  function assertExternalVideoConfiguration(
+    model,
+    provider = providers[normalizeModelId(model)],
+    { requiresAssetAccess = true } = {},
+  ) {
     const modelConfig = getVideoModelConfig(model);
     // Tests and local deterministic providers do not expose project assets to
     // an external service. Only the configured real provider needs the stable
     // public signing prerequisites.
     if (provider?.provider === "fake" || modelConfig.provider === "fake") return;
-    if (!String(appConfig.security?.assetSigningSecret || "").trim()) {
+    if (requiresAssetAccess && !hasDirectAssetUrls() && !String(appConfig.security?.assetSigningSecret || "").trim()) {
       throw createProjectError("视频资源签名配置未完成，请联系管理员。", "VIDEO_ASSET_SIGNING_REQUIRED");
     }
-    if (!publicBaseUrl()) {
-      throw createProjectError("视频 Provider 需要配置 VIDEO_PUBLIC_BASE_URL 以访问参考素材", "VIDEO_PUBLIC_BASE_URL_REQUIRED");
+    if (requiresAssetAccess && !hasDirectAssetUrls() && !publicBaseUrl()) {
+      throw createProjectError("当前环境无法向视频模型提供已选择的参考图，请联系管理员配置素材访问地址。", "VIDEO_PUBLIC_BASE_URL_REQUIRED");
     }
     if (provider?.provider === "runninghub" && !String(appConfig.video?.runninghub?.apiKey || "").trim()) {
       throw createProjectError("RunningHub 视频 API Key 未配置，请联系管理员。", "VIDEO_PROVIDER_NOT_CONFIGURED");
@@ -560,7 +581,7 @@ function createVideoProjectService(options = {}) {
       }
       const previousPath = signVideoPath(videoAssetPath(workingProject.id, "continuity-frame", readyPrevious.index));
       references.push({
-        url: toPublicUrl(previousPath, { requireAbsolute: provider.provider !== "fake" }),
+        url: await toProviderAssetUrl(readyPrevious.continuityFrame.asset, previousPath, { requireAbsolute: provider.provider !== "fake" }),
         label: "上一镜头真实结束画面",
       });
     }
@@ -590,7 +611,7 @@ function createVideoProjectService(options = {}) {
       if (frozen?.asset) {
         const inputPath = signVideoPath(videoAssetPath(workingProject.id, "input", frozen.position));
         references.push({
-          url: toPublicUrl(inputPath, { requireAbsolute: provider.provider !== "fake" }),
+          url: await toProviderAssetUrl(frozen.asset, inputPath, { requireAbsolute: provider.provider !== "fake" }),
           label: `产品参考图${frozen.position || references.length + 1}${frozen.originalName ? `（${frozen.originalName}）` : ""}`,
         });
         continue;
@@ -620,7 +641,7 @@ function createVideoProjectService(options = {}) {
     }
     if (!readyPrevious?.continuityFrame?.asset) throw createProjectError("上一镜头的连续性画面尚未准备好", "VIDEO_CONTINUITY_UNRECOVERABLE");
     const signedPath = signVideoPath(videoAssetPath(workingProject.id, "continuity-frame", readyPrevious.index));
-    return toPublicUrl(signedPath, { requireAbsolute: provider.provider !== "fake" });
+    return toProviderAssetUrl(readyPrevious.continuityFrame.asset, signedPath, { requireAbsolute: provider.provider !== "fake" });
   }
 
   async function downloadMedia(url, result, expected, provider) {
@@ -926,7 +947,9 @@ function createVideoProjectService(options = {}) {
   }
 
   async function submitProviderClip(project, clip, provider, lease, referenceBundle) {
-    const mode = project.model === "g2" ? (clip.index === 1 ? (project.mode === "image" ? "reference" : "text") : "keyframe") : undefined;
+    const mode = project.model === "g2"
+      ? (clip.dependsOnClipIndex ? "keyframe" : project.mode === "image" ? "reference" : "text")
+      : undefined;
     const args = {
       prompt: clip.prompt,
       resolution: project.resolution,
@@ -935,7 +958,9 @@ function createVideoProjectService(options = {}) {
       mode,
       referenceUrls: referenceBundle.referenceUrls,
       referenceLabels: referenceBundle.referenceLabels,
-      firstFrameUrl: project.model === "g2" && clip.index > 1 ? await getFirstFrameUrl(project, clip, provider) : "",
+      firstFrameUrl: project.model === "g2" && clip.dependsOnClipIndex
+        ? await getFirstFrameUrl(project, clip, provider)
+        : "",
       signal: undefined,
     };
     if (project.model === "g2") args.apiKey = lease.key;
@@ -943,7 +968,8 @@ function createVideoProjectService(options = {}) {
   }
 
   async function submitQueuedClip(project, clip, provider) {
-    assertExternalVideoConfiguration(project.model, provider);
+    const requiresAssetAccess = Boolean((clip.referenceAssetIds || []).length || clip.dependsOnClipIndex);
+    assertExternalVideoConfiguration(project.model, provider, { requiresAssetAccess });
     let lease = null;
     let releaseResult = {};
     try {
@@ -957,7 +983,9 @@ function createVideoProjectService(options = {}) {
           }
           return false;
         }
-        lease = keyPool.acquire();
+        const previousKeyRef = Number(clip.retryCount || 0) > 0 ? String(clip.providerKeyRef || "") : "";
+        const excludeKeyRefs = previousKeyRef && keyPool.hasAlternativeKey?.(previousKeyRef) ? [previousKeyRef] : [];
+        lease = keyPool.acquire({ excludeKeyRefs });
         if (!lease) {
           // No RPM slot is available yet. Keep the durable state as queued so
           // the UI does not claim that a provider request is already running.
@@ -1021,6 +1049,39 @@ function createVideoProjectService(options = {}) {
     return updateProject(project.id, { status: "waiting_configuration", error: message });
   }
 
+  function canAutomaticallyRetryG2Clip(project, clip) {
+    return project.model === "g2" && Number(clip.submissionAttempt || 0) < g2MaxClipAttempts;
+  }
+
+  function queueAutomaticG2Retry(project, clip, errorMessage) {
+    if (!canAutomaticallyRetryG2Clip(project, clip)) return false;
+    const nextAttempt = Number(clip.submissionAttempt || 0) + 1;
+    const message = `G2 生成失败，正在切换通道自动重试（第 ${nextAttempt}/${g2MaxClipAttempts} 次）`;
+    updateClip(clip.id, {
+      status: "queued",
+      providerTaskId: "",
+      retryCount: Number(clip.retryCount || 0) + 1,
+      pollFailureCount: 0,
+      error: message,
+    });
+    updateProject(project.id, { status: "queued", error: message });
+    log.warn?.("[video-project] scheduling automatic G2 retry", {
+      projectId: project.id,
+      clipIndex: clip.index,
+      nextAttempt,
+      maxAttempts: g2MaxClipAttempts,
+      error: String(errorMessage || "G2 provider failure"),
+    });
+    return true;
+  }
+
+  function isSafeG2SubmissionRetry(project, error) {
+    if (project.model !== "g2" || error?.uncertainSubmission) return false;
+    const statusCode = Number(error?.statusCode || 0);
+    if ([401, 402, 403, 429].includes(statusCode)) return true;
+    return [400, 409, 422].includes(statusCode) && /quota|credit|balance|api\s*key|rate.?limit|余额|额度|密钥|限流/i.test(String(error?.message || ""));
+  }
+
   async function pollRunningClip(project, clip, provider) {
     if (!clip.providerTaskId) {
       await markUncertainSubmission(project, clip, "服务重启后发现 submitting 任务没有 provider task id");
@@ -1052,13 +1113,17 @@ function createVideoProjectService(options = {}) {
     } catch (error) {
       releaseResult = { error: true, statusCode: error.statusCode, rateLimited: Number(error.statusCode) === 429 };
       const failureCount = Number(clip.pollFailureCount || 0) + 1;
+      const rateLimited = Number(error.statusCode) === 429;
+      const retryMessage = rateLimited
+        ? `G2 状态查询限流，系统正在自动重试（第 ${failureCount} 次）`
+        : failureCount >= 5 ? "轮询监控暂时受阻，将继续重试" : "暂时无法查询供应商状态，将稍后重试";
       updateClip(clip.id, {
         pollFailureCount: failureCount,
-        error: failureCount >= 5 ? "轮询监控暂时受阻，将继续重试" : "暂时无法查询供应商状态，将稍后重试",
+        error: retryMessage,
       });
       updateProject(project.id, {
         status: "running",
-        error: failureCount >= 5 ? "轮询监控暂时受阻，将继续重试" : "",
+        error: rateLimited || failureCount >= 5 ? retryMessage : "",
       });
       schedulePoll(project, clip, failureCount);
       log.warn?.("[video-project] polling failed", { projectId: project.id, clipIndex: clip.index, error: error.message });
@@ -1071,11 +1136,13 @@ function createVideoProjectService(options = {}) {
     const normalizedStatus = String(result?.status || "running").toLowerCase();
     if (normalizedStatus === "running") {
       const updated = updateClip(clip.id, { lastSuccessfulPollAt: successAt, pollFailureCount: 0, error: "" });
+      if (project.error) updateProject(project.id, { status: "running", error: "" });
       schedulePoll(project, updated || clip);
       return;
     }
     if (normalizedStatus === "failed") {
       updateClip(clip.id, { lastSuccessfulPollAt: successAt, pollFailureCount: 0 });
+      if (queueAutomaticG2Retry(project, getProject(project.id)?.clips?.find((candidate) => candidate.id === clip.id) || clip, result.error)) return;
       await failClip(project, clip, result.error || "供应商生成失败");
       return;
     }
@@ -1389,9 +1456,11 @@ function createVideoProjectService(options = {}) {
         updateGenerationSnapshot(failedProject);
         return;
       }
-      if (Number(error.statusCode) === 429) {
-        updateClip(queued.id, { status: "queued", providerKeyRef: "", error: "供应商限流，等待重试" });
-        updateProject(project.id, { status: "queued", error: "供应商限流，等待重试" });
+      if (isSafeG2SubmissionRetry(fresh, error)) {
+        const latest = getProject(project.id);
+        const latestClip = latest?.clips.find((candidate) => candidate.id === queued.id) || queued;
+        if (queueAutomaticG2Retry(latest || fresh, latestClip, error.message)) return;
+        await failClip(latest || fresh, latestClip, error.message || "G2 提交失败，自动重试次数已用完");
         return;
       }
       if (error.uncertainSubmission || (error.code === "VIDEO_PROVIDER_TIMEOUT" && error.phase === "submit")) {
@@ -1439,7 +1508,9 @@ function createVideoProjectService(options = {}) {
       }
       if (project.model === "d2" && project.status === "waiting_configuration") {
         try {
-          assertExternalVideoConfiguration(project.model, getProvider(project));
+          assertExternalVideoConfiguration(project.model, getProvider(project), {
+            requiresAssetAccess: Boolean((project.referenceAssetIds || []).length || (project.clips || []).length > 1),
+          });
         } catch (_error) {
           d2WaitingConfiguration.add(project.id);
           continue;
@@ -1520,8 +1591,24 @@ function createVideoProjectService(options = {}) {
     if (mode === "image" && !storedReferences.length) {
       throw createProjectError("图生视频至少需要一张参考图，请重新生成脚本。", "VIDEO_REFERENCE_REQUIRED");
     }
-    if (storedScript.clips.length < segmentVideoDuration(model, totalDurationSec).length) {
-      throw createProjectError("视频脚本分镜数量不足，请重新生成脚本。", "VIDEO_SCRIPT_INCOMPATIBLE");
+    const expectedDurations = segmentVideoDuration(model, totalDurationSec);
+    const hasExplicitTimeline = storedScript.clips.every((clip) =>
+      Number.isFinite(Number(clip.durationSec)) && Number.isFinite(Number(clip.startSec)) && Number.isFinite(Number(clip.endSec))
+    );
+    let timelineMatches = storedScript.clips.length >= expectedDurations.length;
+    if (hasExplicitTimeline) {
+      let expectedStart = 0;
+      timelineMatches = storedScript.clips.length === expectedDurations.length && storedScript.clips.every((clip, index) => {
+        const duration = Number(clip.durationSec);
+        const start = Number(clip.startSec);
+        const end = Number(clip.endSec);
+        const matches = duration === expectedDurations[index] && start === expectedStart && end === expectedStart + duration;
+        expectedStart = end;
+        return matches;
+      }) && expectedStart === totalDurationSec;
+    }
+    if (!timelineMatches) {
+      throw createProjectError("视频脚本分镜时长与当前模型不匹配，请重新生成脚本。", "VIDEO_SCRIPT_INCOMPATIBLE");
     }
     return { generation, script: storedScript, referenceAssetIds: storedReferences };
   }
@@ -1598,7 +1685,10 @@ function createVideoProjectService(options = {}) {
       throw createProjectError("请先生成并确认当前模型的视频脚本", "VIDEO_SCRIPT_GENERATION_REQUIRED");
     }
     if (mode === "image" && !source.referenceAssetIds.length) throw createProjectError("图生视频至少需要一张参考图", "VIDEO_REFERENCE_REQUIRED");
-    assertExternalVideoConfiguration(model, providers[model]);
+    const useContinuityFrames = durations.length > 1 && (mode === "image" || canExposeProviderAssets());
+    assertExternalVideoConfiguration(model, providers[model], {
+      requiresAssetAccess: Boolean(source.referenceAssetIds.length || useContinuityFrames),
+    });
 
     const projectId = allocateCounter("nextVideoProjectId", 1);
     const generationId = allocateCounter("nextGenerationId", 1);
@@ -1622,8 +1712,8 @@ function createVideoProjectService(options = {}) {
           ...(source.script.clips?.[index] || {}),
           ...timeline,
           generationDurationSec: timeline.durationSec,
-          dependsOnClipIndex: index > 0 ? index : null,
-          continuityMode: index === 0 ? mode : model === "g2" ? "keyframe" : "image",
+          dependsOnClipIndex: useContinuityFrames && index > 0 ? index : null,
+          continuityMode: useContinuityFrames && index > 0 ? (model === "g2" ? "keyframe" : "image") : mode,
           referenceAssetIds: buildClipReferenceIds({ model, mode, allIds: source.referenceAssetIds, clipIndex: index + 1, maxReferenceImages: modelConfig.maxReferenceImages }),
         })),
       };
@@ -1686,11 +1776,11 @@ function createVideoProjectService(options = {}) {
       const clips = timeline.map((item, index) => ({
         ...item,
         clipIndex: index + 1,
-        status: index === 0 ? "queued" : "waiting_dependency",
-        dependsOnClipIndex: index > 0 ? index : null,
+        status: useContinuityFrames && index > 0 ? "waiting_dependency" : "queued",
+        dependsOnClipIndex: useContinuityFrames && index > 0 ? index : null,
         prompt: getClipPrompt(script, index + 1),
         provider: modelConfig.provider,
-        continuityMode: index === 0 ? mode : model === "g2" ? "keyframe" : "image",
+        continuityMode: useContinuityFrames && index > 0 ? (model === "g2" ? "keyframe" : "image") : mode,
         referenceAssetIds: script.clips[index].referenceAssetIds || [],
         continuityState: getClipContinuityState(script, index + 1),
         creditCost: model === "g2" ? Number(modelConfig.pricing[String(item.durationSec)] || 0) : item.durationSec * Number(modelConfig.pricing[resolution] || 0),

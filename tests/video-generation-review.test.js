@@ -95,6 +95,21 @@ function makeStorage() {
   };
 }
 
+function makeOssStorage() {
+  const storage = makeStorage();
+  return {
+    ...storage,
+    provider: "aliyun_oss",
+    async save(input) {
+      const asset = await storage.save(input);
+      return { ...asset, provider: "aliyun_oss", objectKey: `review/${asset.storedPath}` };
+    },
+    async createReadUrl(asset) {
+      return `https://review-assets.oss.example/${encodeURIComponent(asset.objectKey)}`;
+    },
+  };
+}
+
 function makeAppConfig(overrides = {}) {
   const baseVideo = {
     publicBaseUrl: "https://redbase.review.example",
@@ -722,7 +737,25 @@ test("G2 without an RPM slot stays queued and does not rewrite updated_at on eve
 test("only clips with downstream dependents require continuity frames, and failed frame persistence cleans saved video", async () => {
   const multiOwner = 996;
   addReviewUser(multiOwner);
-  const multiSource = insertVideoScript({ id: 4018, ownerUserId: multiOwner, totalDurationSec: 15, clipCount: 2 });
+  insertProductImage({
+    id: 9931,
+    ownerUserId: multiOwner,
+    brandId: 1,
+    originalName: "continuity-reference.png",
+    storedPath: "uploads/review/continuity-reference.png",
+    mimeType: "image/png",
+    sizeBytes: frozenSourcePath.length,
+    sha256: "continuity-reference-sha256",
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+  const multiSource = insertVideoScript({
+    id: 4018,
+    ownerUserId: multiOwner,
+    mode: "image",
+    totalDurationSec: 15,
+    clipCount: 2,
+    referenceAssetIds: [9931],
+  });
   const multiStorage = makeStorage();
   let multiFfmpegCalls = 0;
   const multiProvider = makeProvider({
@@ -740,13 +773,19 @@ test("only clips with downstream dependents require continuity frames, and faile
     ownerUserId: multiOwner,
     requestId: "review-continuity-cleanup-multi",
     generationId: multiSource.id,
+    mode: "image",
     totalDurationSec: 15,
   });
   const failed = await pumpUntil(multiService, multi.project.id, multiOwner, (project) => project.clips[0].status === "processing_result" || project.status === "result_processing_failed");
   assert.ok(["processing_result", "result_processing_failed"].includes(failed.clips[0].status));
   assert.ok(multiFfmpegCalls > 0);
-  assert.equal(multiStorage.buffers.size, 0, `video saved before frame failure must be cleaned up: ${JSON.stringify([...multiStorage.buffers.keys()])}`);
-  updateProject(multi.project.id, { status: "result_processing_failed" });
+  assert.deepEqual(
+    [...multiStorage.buffers.keys()],
+    [`generated-images/users/${multiOwner}/${multi.project.generationId}/input-1.jpg`],
+    "the frozen input remains, but the video saved before frame failure must be cleaned up",
+  );
+  updateClip(multi.project.clips[0].id, { status: "failed" });
+  updateProject(multi.project.id, { status: "failed" });
 
   const singleOwner = 997;
   addReviewUser(singleOwner);
@@ -930,6 +969,8 @@ test("G2 output fixtures accept nested metadata and stay inside the narrow outpu
   assert.equal(readMetadataUrl({ videoUrl: "https://platform-outputs.agnes-ai.space/d.mp4" }), "https://platform-outputs.agnes-ai.space/d.mp4");
   const g2 = createG2Provider({ appConfig: { video: { agnes: { apiKeys: [] } } } });
   assert.ok(g2.getAllowedHosts().includes("platform-outputs.agnes-ai.space"));
+  assert.ok(g2.getAllowedHosts().includes("cos-platform-outputs.agnes-ai.cn"));
+  assert.doesNotThrow(() => require("../src/server/video/video-remote").assertSafeProviderUrl("https://cos-platform-outputs.agnes-ai.cn/a.mp4", { allowedHosts: g2.getAllowedHosts() }));
   assert.throws(() => require("../src/server/video/video-remote").assertSafeProviderUrl("https://evil.example/a.mp4", { allowedHosts: g2.getAllowedHosts() }), /host/);
   assert.throws(() => require("../src/server/video/video-remote").assertSafeProviderUrl("https://127.0.0.1/a.mp4", { allowedHosts: g2.getAllowedHosts() }), /host/);
 });
@@ -986,9 +1027,9 @@ test("legacy video scripts without persisted model context cannot start a real p
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM video_projects WHERE owner_user_id = ?").get(ownerUserId).count, 0);
 });
 
-test("strict production project creation rejects browser-only scripts and missing stable signing configuration before charging", async () => {
+test("strict production project creation requires signing only when the provider must read project assets", async () => {
   const ownerUserId = 989;
-  const source = insertVideoScript({ id: 4012, ownerUserId });
+  const source = insertVideoScript({ id: 4012, ownerUserId, mode: "image", referenceAssetIds: [777] });
   let providerCalls = 0;
   const provider = makeProvider({
     provider: "runninghub",
@@ -1013,7 +1054,7 @@ test("strict production project creation rejects browser-only scripts and missin
       trendId: 2,
       ideaIndex: 0,
       model: "d2",
-      mode: "text",
+      mode: "image",
       resolution: "720p",
       aspectRatio: "9:16",
       totalDurationSec: 10,
@@ -1025,6 +1066,36 @@ test("strict production project creation rejects browser-only scripts and missin
   assert.equal(providerCalls, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM video_projects WHERE owner_user_id = ?").get(ownerUserId).count, 0);
 
+  const textSource = insertVideoScript({ id: 4020, ownerUserId, model: "g2", mode: "text", totalDurationSec: 30, clipCount: 3 });
+  const textOnlyService = makeService({
+    provider: makeProvider({ provider: "agnes" }),
+    appConfig: makeAppConfig({
+      security: { assetSigningSecret: "" },
+      video: { publicBaseUrl: "" },
+    }),
+  });
+  const textOnly = await textOnlyService.createProject({
+    ownerUserId,
+    requestId: "review-g2-text-without-public-assets",
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 30,
+    videoScriptGenerationId: textSource.id,
+  });
+  assert.equal(textOnly.project.mode, "text");
+  assert.deepEqual(textOnly.project.referenceAssetIds, []);
+  assert.deepEqual(textOnly.project.inputAssets, []);
+  assert.equal(textOnly.project.clips.length, 3);
+  assert.ok(textOnly.project.clips.every((clip) => clip.status === "queued" && clip.dependsOnClipIndex == null && clip.continuityMode === "text"));
+  updateProject(textOnly.project.id, { status: "completed" });
+
+  const noKeySource = insertVideoScript({ id: 4021, ownerUserId, ideaIndex: 1, model: "d2", mode: "text", totalDurationSec: 10 });
+  const beforeNoKey = findUserById(ownerUserId).credits;
   const noKeyService = makeService({
     provider: makeProvider({ provider: "runninghub" }),
     appConfig: makeAppConfig({ video: { runninghub: { apiKey: "" } } }),
@@ -1035,17 +1106,17 @@ test("strict production project creation rejects browser-only scripts and missin
       requestId: "review-missing-provider-key",
       brandId: 1,
       trendId: 2,
-      ideaIndex: 0,
+      ideaIndex: 1,
       model: "d2",
       mode: "text",
       resolution: "720p",
       aspectRatio: "9:16",
       totalDurationSec: 10,
-      videoScriptGenerationId: source.id,
+      videoScriptGenerationId: noKeySource.id,
     }),
     (error) => error.code === "VIDEO_PROVIDER_NOT_CONFIGURED",
   );
-  assert.equal(findUserById(ownerUserId).credits, before);
+  assert.equal(findUserById(ownerUserId).credits, beforeNoKey);
 
   await assert.rejects(
     makeService({ provider: makeProvider() }).createProject({
@@ -1053,7 +1124,7 @@ test("strict production project creation rejects browser-only scripts and missin
       requestId: "review-missing-script-generation",
       brandId: 1,
       trendId: 2,
-      ideaIndex: 0,
+      ideaIndex: 2,
       model: "d2",
       mode: "text",
       resolution: "720p",
@@ -1063,6 +1134,58 @@ test("strict production project creation rejects browser-only scripts and missin
     }),
     (error) => error.code === "VIDEO_SCRIPT_GENERATION_REQUIRED",
   );
+});
+
+test("G2 image mode uses the selected frozen OSS image without requiring VIDEO_PUBLIC_BASE_URL", async () => {
+  const ownerUserId = 1300;
+  addReviewUser(ownerUserId);
+  insertProductImage({
+    id: 9930,
+    ownerUserId,
+    brandId: 1,
+    originalName: "selected-reference.png",
+    storedPath: "uploads/review/selected-reference.png",
+    mimeType: "image/png",
+    sizeBytes: frozenSourcePath.length,
+    sha256: "selected-reference-sha256",
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+  const source = insertVideoScript({
+    id: 4030,
+    ownerUserId,
+    model: "g2",
+    mode: "image",
+    totalDurationSec: 10,
+    referenceAssetIds: [9930],
+  });
+  let submittedImages = [];
+  const provider = makeProvider({
+    provider: "agnes",
+    submitClip(args) {
+      submittedImages = args.referenceUrls;
+      return { taskId: "g2-selected-image" };
+    },
+  });
+  const service = makeService({
+    provider,
+    storage: makeOssStorage(),
+    appConfig: makeAppConfig({
+      security: { assetSigningSecret: "" },
+      video: { publicBaseUrl: "" },
+    }),
+  });
+  const created = await createProject(service, {
+    ownerUserId,
+    requestId: "review-g2-image-direct-oss-url",
+    generationId: source.id,
+    model: "g2",
+    mode: "image",
+  });
+  assert.deepEqual(created.project.referenceAssetIds, [9930]);
+  service.startProject(created.project.id, ownerUserId);
+  await pumpUntil(service, created.project.id, ownerUserId, () => submittedImages.length === 1);
+  assert.equal(submittedImages.length, 1);
+  assert.match(submittedImages[0], /^https:\/\/review-assets\.oss\.example\//);
 });
 
 test("frozen project input remains provider-readable after the original product image is deleted", async () => {

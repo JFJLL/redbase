@@ -12,6 +12,7 @@ import {
   type StyleReferenceImage,
 } from "../ideaCreativeSettings";
 import { useIdeaVideoScript } from "../composables/useIdeaVideoScript";
+import StudioSelect from "./StudioSelect.vue";
 import VideoScriptResult from "./VideoScriptResult.vue";
 import {
   createVideoProject,
@@ -90,7 +91,7 @@ const trendIdRef = computed(() => trend.value?.id);
 const ideaIndexRef = computed(() => props.ideaIndex);
 const videoAspectRatioRef = ref(settings.value.videoAspectRatio || "9:16");
 const videoDurationRef = ref(settings.value.videoDuration || "auto");
-const videoModelRef = ref(settings.value.videoModel || "d2");
+const videoModelRef = ref(settings.value.videoModel || "g2");
 const videoModeRef = ref(settings.value.videoMode || "text");
 const videoResolutionRef = ref(settings.value.videoResolution || "720p");
 const useBrandLogoRef = computed(() => Boolean(settings.value.useBrandLogo && brand.value?.logo));
@@ -119,12 +120,20 @@ const project = ref<VideoProject | null>(null);
 const projectLoading = ref(false);
 const projectError = ref("");
 const generatedVideoSignature = ref("");
+type StudioStep = 1 | 2 | 3;
+const currentStep = ref<StudioStep>(1);
+const studioSteps = [
+  { id: 1 as const, title: "生成设置", description: "选择模型与参数" },
+  { id: 2 as const, title: "脚本分镜", description: "检查画面与节奏" },
+  { id: 3 as const, title: "生成视频", description: "提交并跟踪成片" },
+];
 let projectPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 function applyProjectUpdate(next: VideoProject | null) {
   const previousRefunded = project.value ? Number(project.value.refundedCredits || 0) : 0;
   project.value = next;
   const nextRefunded = next ? Number(next.refundedCredits || 0) : 0;
+  if (next) currentStep.value = 3;
   if (nextRefunded > previousRefunded) {
     void auth.refreshUser().catch(() => {});
   }
@@ -156,6 +165,11 @@ const activeVideoCapability = computed(() =>
   effectiveVideoCapabilities.value.find((model) => model.id === videoModelRef.value) || effectiveVideoCapabilities.value[0],
 );
 const videoModelOptions = computed(() => effectiveVideoCapabilities.value);
+const videoModelSelectOptions = computed(() => videoModelOptions.value.map((model) => ({
+  value: model.id,
+  label: model.displayName,
+  badge: model.promotionLabel || undefined,
+})));
 const availableVideoModes = computed(() => activeVideoCapability.value?.supportedModes || ["text", "image"]);
 const availableVideoRatios = computed(() => activeVideoCapability.value?.aspectRatios || [...VIDEO_ASPECT_RATIOS]);
 const availableResolutions = computed(() => activeVideoCapability.value?.resolutions || ["720p"]);
@@ -163,6 +177,22 @@ const visibleVideoDurationOptions = computed(() => {
   const supported = new Set(activeVideoCapability.value?.totalDurationOptions || []);
   return VIDEO_DURATION_OPTIONS.filter((option) => option.value === "auto" || supported.has(Number(option.value)));
 });
+const videoModeSelectOptions = computed(() => availableVideoModes.value.map((mode) => ({
+  value: mode,
+  label: mode === "image" ? "图生视频" : "文生视频",
+})));
+const videoDurationSelectOptions = computed(() => visibleVideoDurationOptions.value.map((option) => ({
+  value: option.value,
+  label: option.label,
+})));
+const videoAspectSelectOptions = computed(() => [
+  { value: "smart", label: "智能竖屏（9:16）" },
+  ...availableVideoRatios.value.map((ratio) => ({ value: ratio, label: ratio })),
+]);
+const videoResolutionSelectOptions = computed(() => availableResolutions.value.map((resolution) => ({
+  value: resolution,
+  label: resolution,
+})));
 
 const selectedVideoReferenceImages = computed(() => {
   if (videoModeRef.value !== "image") return [];
@@ -289,13 +319,89 @@ const scriptCompatible = computed(() => {
   const currentScript = script.value;
   if (!capability || !currentScript) return true;
   const scriptRatio = currentScript.aspectRatio === "smart" ? "9:16" : currentScript.aspectRatio;
-  if (!capability.aspectRatios.includes(scriptRatio)) return false;
-  return (currentScript.clips || []).every((clip) => {
+  const expectedRatio = videoAspectRatioRef.value === "smart" ? "9:16" : videoAspectRatioRef.value;
+  const totalDuration = Number(currentScript.totalDurationSec);
+  const selectedDuration = videoDurationRef.value === "auto" ? totalDuration : Number(videoDurationRef.value);
+  const expectedDurations = segmentVideoDuration(capability, selectedDuration);
+  const clips = currentScript.clips || [];
+  if (scriptRatio !== expectedRatio || !capability.aspectRatios.includes(scriptRatio)) return false;
+  if (!Number.isFinite(totalDuration) || totalDuration !== selectedDuration || !expectedDurations.length) return false;
+  if (clips.length !== expectedDurations.length) return false;
+  let expectedStart = 0;
+  return clips.every((clip, index) => {
     const duration = Number(clip.durationSec);
-    const allowed = capability.allowedClipDurations?.map(Number);
-    return Number.isFinite(duration) && duration >= capability.clipDurationRules.min && duration <= capability.clipDurationRules.max && (!allowed || allowed.includes(duration));
-  });
+    const start = Number(clip.startSec);
+    const end = Number(clip.endSec);
+    const valid = duration === expectedDurations[index] && start === expectedStart && end === expectedStart + duration;
+    expectedStart = end;
+    return valid;
+  }) && expectedStart === selectedDuration;
 });
+
+function canEnterStep(step: StudioStep): boolean {
+  if (step === 1) return true;
+  if (step === 2) return Boolean(script.value || loading.value || error.value || videoScriptBlockedError.value);
+  return Boolean(script.value && !controlsDirty.value && scriptCompatible.value);
+}
+
+function goToStep(step: StudioStep) {
+  if (canEnterStep(step)) currentStep.value = step;
+}
+
+function goPreviousStep() {
+  if (currentStep.value > 1) currentStep.value = (currentStep.value - 1) as StudioStep;
+}
+
+const primaryStepLabel = computed(() => {
+  if (currentStep.value === 1) {
+    if (loading.value) return "脚本生成中…";
+    if (script.value && !controlsDirty.value) return "查看脚本，下一步";
+    return script.value ? "重新生成脚本并继续 · 1积分" : "生成脚本并进入下一步 · 1积分";
+  }
+  if (currentStep.value === 2) {
+    if (loading.value) return "脚本生成中…";
+    if (error.value) return "重新尝试生成脚本 · 1积分";
+    if (script.value && (controlsDirty.value || !scriptCompatible.value)) return "重新生成脚本并继续 · 1积分";
+    return script.value ? "确认脚本，下一步" : "返回生成设置";
+  }
+  if (projectLoading.value) return "提交中…";
+  if (project.value) return "视频已提交";
+  return `生成真实视频 · ${estimatedCredits.value}积分`;
+});
+
+const primaryStepDisabled = computed(() => {
+  if (currentStep.value === 1) {
+    return loading.value || Boolean(project.value) || (videoModeRef.value === "image" && !selectedVideoReferenceIds.value.length);
+  }
+  if (currentStep.value === 2) return loading.value || (!script.value && !error.value);
+  return projectLoading.value || Boolean(project.value) || !script.value || controlsDirty.value || !scriptCompatible.value || !generation.value?.id;
+});
+
+const primaryStepTestId = computed(() => {
+  if (currentStep.value === 1) {
+    return videoScriptBlockedError.value ? "video-script-generate-after-reference" : "video-script-generate";
+  }
+  if (currentStep.value === 2) return error.value ? "video-script-retry" : "video-step-next";
+  return "generate-real-video";
+});
+
+async function handlePrimaryStepAction() {
+  if (primaryStepDisabled.value) return;
+  if (currentStep.value === 1) {
+    if (script.value && !controlsDirty.value) currentStep.value = 2;
+    else if (script.value) handleRegenerate();
+    else await generateScriptWhenReady();
+    return;
+  }
+  if (currentStep.value === 2) {
+    if (error.value) await handleRetry();
+    else if (script.value && (controlsDirty.value || !scriptCompatible.value)) handleRegenerate();
+    else if (script.value) currentStep.value = 3;
+    else currentStep.value = 1;
+    return;
+  }
+  await generateRealVideo();
+}
 
 function applyVideoCapabilityDefaults() {
   if (project.value) return;
@@ -348,10 +454,6 @@ onMounted(() => {
   })();
 });
 
-watch(script, (value) => {
-  if (value) generatedVideoSignature.value = currentVideoSignature.value;
-});
-
 watch(videoModelRef, () => {
   applyVideoCapabilityDefaults();
 });
@@ -372,7 +474,7 @@ watch([videoModeRef, videoResolutionRef, videoDurationRef, videoAspectRatioRef, 
   }
 }, { deep: true });
 
-function generateScriptWhenReady() {
+async function generateScriptWhenReady() {
   if (project.value) {
     projectError.value = "当前视频项目已创建，生成参数已锁定。请先关闭工作台后再创建新视频。";
     return null;
@@ -382,7 +484,11 @@ function generateScriptWhenReady() {
     return null;
   }
   videoScriptBlockedError.value = "";
-  return generateScript();
+  const requestSignature = currentVideoSignature.value;
+  currentStep.value = 2;
+  const generated = await generateScript();
+  if (generated) generatedVideoSignature.value = requestSignature;
+  return generated;
 }
 
 function newRequestId() {
@@ -691,59 +797,85 @@ onUnmounted(() => {
         </button>
       </header>
 
+      <nav class="studio-stepper" aria-label="AI 视频生成步骤" data-test="video-studio-stepper">
+        <button
+          v-for="step in studioSteps"
+          :key="step.id"
+          type="button"
+          class="studio-step"
+          :class="{ active: currentStep === step.id, complete: currentStep > step.id }"
+          :disabled="!canEnterStep(step.id)"
+          :aria-current="currentStep === step.id ? 'step' : undefined"
+          :data-test="`video-step-${step.id}`"
+          @click="goToStep(step.id)"
+        >
+          <span class="studio-step-index">{{ currentStep > step.id ? '✓' : step.id }}</span>
+          <span class="studio-step-copy">
+            <strong>{{ step.title }}</strong>
+            <small>{{ step.description }}</small>
+          </span>
+        </button>
+      </nav>
+
       <div class="dialog-body">
+        <div v-show="currentStep === 1" class="studio-step-panel" data-test="video-step-settings-panel">
         <section class="video-studio-controls" data-test="video-studio-controls">
           <div class="studio-controls-heading">
             <div>
               <span class="control-eyebrow">AI 视频工作台</span>
               <h3>先定生成规则，再生成真实视频</h3>
             </div>
-            <span class="estimate-pill">预计 {{ estimatedCredits }} 积分</span>
           </div>
           <div class="studio-control-grid">
             <label class="studio-field model-field">
               <span>视频模型</span>
-              <small v-if="activeVideoCapability?.promotionLabel" class="model-promotion">{{ activeVideoCapability.promotionLabel }}</small>
-              <span class="model-switch" role="radiogroup" aria-label="视频模型">
-                <button
-                  v-for="model in videoModelOptions"
-                  :key="model.id"
-                  type="button"
-                  :class="{ active: videoModelRef === model.id }"
-                  :data-test="`video-model-${model.id}`"
-                  :disabled="Boolean(project)"
-                  @click.stop="videoModelRef = model.id"
-                >
-                  {{ model.displayName }}
-                </button>
-              </span>
+              <StudioSelect
+                v-model="videoModelRef"
+                :options="videoModelSelectOptions"
+                :disabled="Boolean(project)"
+                test-id="video-model-select"
+                label="视频模型"
+              />
             </label>
             <label class="studio-field">
               <span>生成方式</span>
-              <select v-model="videoModeRef" data-test="video-mode-select" :disabled="Boolean(project)">
-                <option v-for="mode in availableVideoModes" :key="mode" :value="mode">
-                  {{ mode === 'image' ? '图生视频' : '文生视频' }}
-                </option>
-              </select>
+              <StudioSelect
+                v-model="videoModeRef"
+                :options="videoModeSelectOptions"
+                :disabled="Boolean(project)"
+                test-id="video-mode-select"
+                label="生成方式"
+              />
             </label>
             <label class="studio-field">
               <span>总时长</span>
-              <select v-model="videoDurationRef" data-test="video-duration-select" :disabled="Boolean(project)">
-                <option v-for="option in visibleVideoDurationOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
+              <StudioSelect
+                v-model="videoDurationRef"
+                :options="videoDurationSelectOptions"
+                :disabled="Boolean(project)"
+                test-id="video-duration-select"
+                label="总时长"
+              />
             </label>
             <label class="studio-field">
               <span>画幅</span>
-              <select v-model="videoAspectRatioRef" data-test="video-aspect-select" :disabled="Boolean(project)">
-                <option value="smart">智能竖屏（9:16）</option>
-                <option v-for="ratio in availableVideoRatios" :key="ratio" :value="ratio">{{ ratio }}</option>
-              </select>
+              <StudioSelect
+                v-model="videoAspectRatioRef"
+                :options="videoAspectSelectOptions"
+                :disabled="Boolean(project)"
+                test-id="video-aspect-select"
+                label="画幅"
+              />
             </label>
             <label class="studio-field">
               <span>清晰度</span>
-              <select v-model="videoResolutionRef" data-test="video-resolution-select" :disabled="Boolean(project)">
-                <option v-for="resolution in availableResolutions" :key="resolution" :value="resolution">{{ resolution }}</option>
-              </select>
+              <StudioSelect
+                v-model="videoResolutionRef"
+                :options="videoResolutionSelectOptions"
+                :disabled="Boolean(project)"
+                test-id="video-resolution-select"
+                label="清晰度"
+              />
             </label>
           </div>
           <p v-if="project" class="capability-hint" data-test="video-project-controls-locked">当前视频项目已创建，生成参数已锁定。</p>
@@ -781,47 +913,34 @@ onUnmounted(() => {
               {{ videoReferenceUploadLoading ? '上传中…' : '上传新的参考图' }}
             </label>
           </section>
+          <p v-if="videoScriptBlockedError" class="stale-settings-warning" data-test="video-script-reference-required">
+            {{ videoScriptBlockedError }}
+          </p>
           <p v-if="controlsDirty" class="stale-settings-warning" data-test="video-script-settings-stale">参数已变更，脚本尚未同步；请重新生成脚本后再生成真实视频。</p>
           <p v-else-if="script && !generation?.id" class="stale-settings-warning" data-test="video-script-generation-required">这份历史脚本缺少服务端脚本记录，请重新生成后再创建真实视频。</p>
         </section>
 
-        <section v-if="!script && !loading && !error && !videoScriptBlockedError" class="script-preparation-action" data-test="video-script-preparation">
+        <section v-if="!script && !loading && !error" class="script-preparation-action" data-test="video-script-preparation">
           <div>
             <span class="control-eyebrow">脚本与分镜</span>
             <h3>确认视频准备后，再生成付费脚本</h3>
             <p>脚本会根据当前模型、生成方式、时长、画幅和参考图生成。</p>
           </div>
-          <button
-            type="button"
-            class="primary-btn"
-            data-test="video-script-generate"
-            :disabled="videoModeRef === 'image' && !selectedVideoReferenceIds.length"
-            @click="generateScriptWhenReady"
-          >
-            生成视频脚本 · 1积分
-          </button>
         </section>
+        </div>
 
-        <div v-if="loading" class="dialog-loading-state" data-test="video-script-loading">
+        <div v-if="currentStep === 2 && loading" class="dialog-loading-state" data-test="video-script-loading">
           <div class="loading-spinner" aria-hidden="true"></div>
           <h3>正在生成 AI 视频脚本与分镜提示词...</h3>
           <p>AI 正在结合品牌定位、选题视角与参考素材，生成可直接复制给视频模型的结构化提示词。</p>
           <small class="loading-hint">仅生成文字分镜与视频生成提示词，不产生实际视频。</small>
         </div>
 
-        <div v-else-if="error" class="dialog-error-state" data-test="video-script-error">
+        <div v-else-if="currentStep === 2 && error" class="dialog-error-state" data-test="video-script-error">
           <div class="error-icon" aria-hidden="true">!</div>
           <h3>视频脚本生成失败</h3>
           <p class="error-text">{{ error }}</p>
           <div class="error-actions">
-            <button
-              type="button"
-              class="primary-btn"
-              data-test="video-script-retry"
-              @click="handleRetry"
-            >
-              重新尝试
-            </button>
             <button
               type="button"
               class="secondary-btn"
@@ -833,16 +952,13 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-else-if="videoScriptBlockedError && !script" class="dialog-error-state" data-test="video-script-reference-required">
+        <div v-else-if="currentStep === 2 && videoScriptBlockedError && !script" class="dialog-error-state" data-test="video-script-reference-required">
           <div class="error-icon" aria-hidden="true">!</div>
           <h3>先准备视频参考图</h3>
           <p class="error-text">{{ videoScriptBlockedError }}</p>
-          <button type="button" class="primary-btn" data-test="video-script-generate-after-reference" :disabled="videoModeRef === 'image' && !selectedVideoReferenceIds.length" @click="generateScriptWhenReady">
-            生成视频脚本 · 1积分
-          </button>
         </div>
 
-        <div v-else-if="script" class="dialog-result-state">
+        <div v-else-if="currentStep === 2 && script" class="dialog-result-state" data-test="video-step-script-panel">
           <VideoScriptResult
             :script="script"
             :show-actions="true"
@@ -854,6 +970,8 @@ onUnmounted(() => {
             <strong>{{ scriptCompatible ? '当前模型可直接生成' : '当前模型需要重新生成分镜' }}</strong>
             <span v-if="!scriptCompatible">当前分镜包含模型不支持的比例或镜头时长，请重新生成视频脚本。</span>
           </div>
+        </div>
+        <div v-if="currentStep === 3 && script" class="dialog-production-state" data-test="video-step-production-panel">
           <section class="real-video-panel" data-test="real-video-panel">
             <div class="real-video-copy">
               <span class="control-eyebrow">下一步</span>
@@ -861,15 +979,6 @@ onUnmounted(() => {
               <p>脚本已准备好。系统会按 {{ videoModelRef.toUpperCase() }} 的镜头规则排队生成，并自动保存到历史记录。</p>
               <p v-if="script.visualBible && Object.values(script.visualBible).some(Boolean)" class="bible-summary">视觉理解 Bible 已写入脚本，用于跨镜头保持主体、材质、色彩与光线一致。</p>
             </div>
-            <button
-              type="button"
-              class="primary-btn generate-video-btn"
-              data-test="generate-real-video"
-              :disabled="projectLoading || controlsDirty || !scriptCompatible || !generation?.id || Boolean(project)"
-              @click="generateRealVideo"
-            >
-              {{ projectLoading ? "提交中..." : `生成真实视频 · ${estimatedCredits}积分` }}
-            </button>
           </section>
           <p v-if="projectError" class="project-error" data-test="video-project-error">{{ projectError }}</p>
           <section v-if="project" class="video-project-status" data-test="video-project-status">
@@ -928,6 +1037,28 @@ onUnmounted(() => {
           </section>
         </div>
       </div>
+
+      <footer class="studio-step-navigation" data-test="video-step-navigation">
+        <button
+          type="button"
+          class="secondary-btn"
+          data-test="video-step-previous"
+          :disabled="currentStep === 1"
+          @click="goPreviousStep"
+        >
+          上一步
+        </button>
+        <span>第 {{ currentStep }} / {{ studioSteps.length }} 步</span>
+        <button
+          type="button"
+          class="primary-btn"
+          :data-test="primaryStepTestId"
+          :disabled="primaryStepDisabled"
+          @click="handlePrimaryStepAction"
+        >
+          {{ primaryStepLabel }}
+        </button>
+      </footer>
     </section>
   </div>
 </template>
@@ -948,6 +1079,7 @@ onUnmounted(() => {
 
 .video-script-dialog-panel {
   width: min(1180px, calc(100vw - 48px));
+  height: min(780px, calc(100vh - 32px));
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
@@ -1012,6 +1144,105 @@ onUnmounted(() => {
   min-height: 240px;
 }
 
+.studio-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 24px;
+  border-bottom: 1px solid #eadfd8;
+  background: #fbf7f5;
+}
+
+.studio-step {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px 12px;
+  border: 1px solid #e7dcd8;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #8c7d80;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.studio-step:hover:not(:disabled) {
+  border-color: #cdaaa6;
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.studio-step:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.studio-step-index {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d8c9c5;
+  border-radius: 50%;
+  background: #fff;
+  color: #8c7d80;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.studio-step.active {
+  border-color: #9c4a4f;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(124, 45, 50, 0.09);
+}
+
+.studio-step.complete {
+  border-color: #dfc3bf;
+  background: #fff9f7;
+}
+
+.studio-step.active .studio-step-index {
+  border-color: #7c2d32;
+  background: #7c2d32;
+  color: #fff;
+}
+
+.studio-step.complete .studio-step-index {
+  border-color: #d9aaa4;
+  background: #f4dfdb;
+  color: #7c2d32;
+}
+
+.studio-step-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.studio-step-copy strong {
+  color: #57484b;
+  font-size: 12.5px;
+}
+
+.studio-step.active .studio-step-copy strong {
+  color: #7c2d32;
+}
+
+.studio-step.complete .studio-step-copy strong {
+  color: #6d4246;
+}
+
+.studio-step-copy small {
+  color: #9a898c;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 .video-studio-controls {
   margin-bottom: 18px;
   padding: 16px 18px;
@@ -1043,16 +1274,6 @@ onUnmounted(() => {
   text-transform: uppercase;
 }
 
-.estimate-pill {
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: #f7e6d8;
-  color: #8a4e2d;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
 .studio-control-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1068,49 +1289,8 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
-.studio-field select {
-  min-height: 36px;
-  padding: 0 9px;
-  border: 1px solid #e2d7d1;
-  border-radius: 7px;
-  background: #fff;
-  color: #362d2f;
-  font-size: 12px;
-}
-
 .model-field {
   grid-column: span 1;
-}
-
-.model-switch {
-  display: flex;
-  min-height: 36px;
-  padding: 3px;
-  border: 1px solid #e2d7d1;
-  border-radius: 7px;
-  background: #fff;
-}
-
-.model-switch button {
-  flex: 1;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: #7c7074;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.model-switch button.active {
-  background: #7c2d32;
-  color: white;
-}
-
-.model-promotion {
-  color: #a45f28;
-  font-size: 11px;
-  font-weight: 600;
 }
 
 .capability-hint {
@@ -1461,6 +1641,27 @@ onUnmounted(() => {
   gap: 12px;
 }
 
+.studio-step-navigation {
+  display: grid;
+  grid-template-columns: minmax(108px, auto) 1fr minmax(108px, auto);
+  align-items: center;
+  gap: 12px;
+  padding: 13px 24px;
+  border-top: 1px solid #eadfd8;
+  background: #fffdfc;
+}
+
+.studio-step-navigation > span {
+  color: #8c7d80;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.studio-step-navigation button:last-child {
+  justify-self: end;
+}
+
 @media (max-width: 840px) {
   .studio-control-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1488,6 +1689,14 @@ onUnmounted(() => {
   .script-preparation-action button,
   .assembly-failed-panel button {
     margin-left: 0;
+  }
+
+  .studio-stepper {
+    padding-inline: 12px;
+  }
+
+  .studio-step-copy small {
+    display: none;
   }
 }
 

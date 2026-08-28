@@ -77,8 +77,9 @@
       "apiKeys": [],
       "pollPath": "/agnesapi",
       "rpmPerKey": 1,
+      "maxClipAttempts": 3,
       "pollIntervalMs": 2000,
-      "outputHosts": ["platform-outputs.agnes-ai.space"]
+      "outputHosts": ["platform-outputs.agnes-ai.space", "cos-platform-outputs.agnes-ai.cn"]
     }
   },
   "assetStorage": {

@@ -1,6 +1,6 @@
 const { bindRouteScope } = require("./route-scope");
 const { requireSqlAuth } = require("./sql-auth");
-const { listBrandsByOwner, listBrandSummariesByOwner } = require("../db/repositories/brand-repository");
+const { listBrandsByOwner, listBrandSummariesByOwner, findBrandByOwner } = require("../db/repositories/brand-repository");
 const {
   listGenerationsByOwner,
   searchGenerations,
@@ -14,6 +14,31 @@ const { removeGenerationAssetsAndRows } = require("../assets/generation-deletion
 const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "videoScript", "videoProject", "styleImage", "imageEdit"]);
 const HISTORY_GENERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function resolveLegacyVideoScriptIdeaIndex(generation, brand) {
+  const persisted = Number(generation?.payload?.ideaIndex);
+  if (Number.isSafeInteger(persisted) && persisted >= 0) return persisted;
+  if (generation?.type !== "videoScript" || !brand) return null;
+  const trendId = Number(generation.trendId);
+  const ideaTitle = String(generation.ideaTitle || "").trim();
+  if (!Number.isSafeInteger(trendId) || trendId <= 0 || !ideaTitle) return null;
+  const matches = new Set();
+  const visited = new Set();
+  function visit(value) {
+    if (!value || typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
+    if (Number(value.id) === trendId && Array.isArray(value.ideas)) {
+      value.ideas.forEach((idea, index) => {
+        if (String(idea?.title || "").trim() === ideaTitle) matches.add(index);
+      });
+    }
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") visit(child);
+    }
+  }
+  visit(brand);
+  return matches.size === 1 ? [...matches][0] : null;
+}
 
 function normalizeDateBoundary(value, mode) {
   const input = String(value || "").trim();
@@ -281,12 +306,19 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     const generations = Object.keys(filters).length
       ? searchGenerations(user.id, filters)
       : listGenerationsByOwner(user.id);
-    json(res, 200, {
-      generations: generations
+    const brandCache = new Map();
+    const history = generations
         .filter((generation) => !isGenerationExpired(generation, getHistoryNowMs(context), HISTORY_GENERATION_RETENTION_MS))
         .filter(isRenderableGeneration)
-        .map((generation) => sanitizeGeneration(generation, appConfig)),
-    });
+        .map((generation) => {
+          const sanitized = sanitizeGeneration(generation, appConfig);
+          if (generation.type !== "videoScript" || Number.isSafeInteger(Number(sanitized?.payload?.ideaIndex))) return sanitized;
+          const brandId = Number(generation.brandId);
+          if (!brandCache.has(brandId)) brandCache.set(brandId, findBrandByOwner(brandId, user.id));
+          const ideaIndex = resolveLegacyVideoScriptIdeaIndex(generation, brandCache.get(brandId));
+          return ideaIndex == null ? sanitized : { ...sanitized, payload: { ...(sanitized.payload || {}), ideaIndex } };
+        });
+    json(res, 200, { generations: history });
     return true;
   }
 
@@ -386,4 +418,5 @@ module.exports = {
   parseGenerationCreatedAtMs,
   handleHistoryRoutes,
   buildHistoryFilters,
+  resolveLegacyVideoScriptIdeaIndex,
 };

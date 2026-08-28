@@ -25,14 +25,18 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
     return { ...safe };
   }
 
-  function acquire({ rateLimit = true, keyRef = "" } = {}) {
+  function acquire({ rateLimit = true, keyRef = "", excludeKeyRefs = [] } = {}) {
     const timestamp = now();
     const cursor = rateLimit ? submissionCursor : pollingCursor;
     const requestedRef = String(keyRef || "").trim();
+    const excludedRefs = new Set((Array.isArray(excludeKeyRefs) ? excludeKeyRefs : [excludeKeyRefs])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean));
     for (let offset = 0; offset < slots.length; offset += 1) {
       const index = (cursor + offset) % slots.length;
       const slot = slots[index];
       if (requestedRef && slot.keyRef !== requestedRef) continue;
+      if (excludedRefs.has(slot.keyRef)) continue;
       if (slot.disabledUntil > timestamp || slot.inFlight > 0 || (rateLimit && slot.nextAvailableAt > timestamp)) continue;
       slot.inFlight += 1;
       if (rateLimit) slot.nextAvailableAt = timestamp + intervalMs;
@@ -71,6 +75,7 @@ function createAgnesKeyPool({ keys = [], rpmPerKey = 1, now = () => Date.now(), 
     getKey: (slotNumber) => slots.find((item) => item.slot === Number(slotNumber))?.key || slots[0]?.key || "",
     getKeyRef: (slotNumber) => slots.find((item) => item.slot === Number(slotNumber))?.keyRef || "",
     hasKeyRef: (keyRef) => slots.some((item) => item.keyRef === String(keyRef || "")),
+    hasAlternativeKey: (keyRef) => slots.some((item) => item.keyRef !== String(keyRef || "")),
     getAvailableKey: () => slots.find((item) => item.disabledUntil <= now())?.key || slots[0]?.key || "",
     snapshot: () => slots.map(publicSlot),
     get intervalMs() { return intervalMs; },

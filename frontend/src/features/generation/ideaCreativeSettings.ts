@@ -65,7 +65,7 @@ function defaultSettings(): IdeaCreativeSettings {
     visualStylePreset: "auto",
     wechatTemplate: "auto",
     videoDuration: "auto",
-    videoModel: "d2",
+    videoModel: "g2",
     videoMode: "text",
     videoResolution: "720p",
     videoAspectRatio: "smart",
@@ -94,7 +94,7 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
     visualStylePreset: validStyle ? settings.visualStylePreset : "auto",
     wechatTemplate: validTemplate ? settings.wechatTemplate : "auto",
     videoDuration: validDuration ? (settings.videoDuration || "auto") : "auto",
-    videoModel: settings.videoModel === "g2" ? "g2" : "d2",
+    videoModel: settings.videoModel === "d2" ? "d2" : "g2",
     videoMode: settings.videoMode === "image" ? "image" : "text",
     videoResolution: ["720p", "1080p", "2K"].includes(String(settings.videoResolution))
       ? settings.videoResolution

@@ -100,7 +100,7 @@ describe("per-idea creative settings & carousel restoration (real entry)", () =>
         await wrapper.find('[data-test="idea-creative-style-0"]').trigger("click");
     await wrapper.find('[data-test="idea-creative-style-0-option-editorial"]').trigger("click");
     expect((wrapper.find('[data-test="idea-creative-template-0"]').element as HTMLButtonElement).disabled).toBe(true);
-    expect((wrapper.find('[data-test="idea-creative-duration-0"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.find('[data-test="idea-creative-duration-0"]').exists()).toBe(false);
     await wrapper.find('[data-test="idea-ratio-0-1:1"]').trigger("click");
 
     await wrapper.find('[data-test="idea-use-brand-logo-0"]').setValue(true);

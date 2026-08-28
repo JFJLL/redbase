@@ -22,7 +22,7 @@ import type { VideoScript } from "../api";
 const FIXTURE_SCRIPT: VideoScript = {
   title: "夏日清凉特调手冲咖啡",
   creativeConcept: "以冰手冲为视觉中心，展现夏日消暑与咖啡香气的碰撞",
-  totalDurationSec: 30,
+  totalDurationSec: 10,
   aspectRatio: "9:16",
   globalSubjectReference: "手冲器具与透明玻璃杯中的冰块咖啡",
   globalStyleReference: "清爽明亮的夏日自然采光",
@@ -36,8 +36,8 @@ const FIXTURE_SCRIPT: VideoScript = {
     {
       index: 1,
       startSec: 0,
-      endSec: 5,
-      durationSec: 5,
+      endSec: 10,
+      durationSec: 10,
       purpose: "开场抓人",
       referenceAssets: [],
       subjectReference: "晶莹剔透的老冰块",
@@ -55,29 +55,6 @@ const FIXTURE_SCRIPT: VideoScript = {
       transition: "匹配剪辑至咖啡滴落",
       continuity: "光影方向一致",
       prompt: "Cinematic close-up shot of ice cube dropping into crystal glass, condensation on glass, morning sunlight, 4k photorealistic, 60fps.",
-    },
-    {
-      index: 2,
-      startSec: 5,
-      endSec: 12,
-      durationSec: 7,
-      purpose: "产品萃取亮点",
-      referenceAssets: [],
-      subjectReference: "手冲壶与咖啡滤杯",
-      firstFrame: "细水流在咖啡粉表面画圈",
-      lastFrame: "金黄色咖啡油脂膨胀",
-      scene: "咖啡制作吧台",
-      subjectAction: "平稳注水，咖啡粉膨胀起泡",
-      cameraMovement: "俯视45度慢速环绕",
-      environmentMotion: "热气微弱升腾与咖啡滴落",
-      lightingAndStyle: "暖调光泽感",
-      audioPrompt: "水流注水声与滴滤声",
-      voiceover: "让香气在冰块上慢慢释放",
-      dialogue: "",
-      onScreenText: "",
-      transition: "快速横摇",
-      continuity: "水流动作连贯",
-      prompt: "Macro shot of hot water pouring over ground coffee bloom, golden crema bubbling, slow rotation camera, professional studio lighting, 8k resolution.",
     },
   ],
 };
@@ -196,8 +173,43 @@ describe("video script generation flow", () => {
     const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
     expect(dialog.find('[data-test="video-script-preparation"]').exists()).toBe(true);
     expect(dialog.text()).toContain("AI 视频创作");
-    expect(dialog.text()).toContain("生成视频脚本 · 1积分");
+    expect(dialog.text()).toContain("生成脚本并进入下一步 · 1积分");
     expect(postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")).toHaveLength(0);
+  });
+
+  it("defaults to the promoted G2 custom dropdown and guides users through all three steps", async () => {
+    const { wrapper, fetchMock } = await openVideoDialog();
+    const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
+    const modelSelect = dialog.find('[data-test="video-model-select"]');
+
+    expect((modelSelect.element as HTMLSelectElement).value).toBe("g2");
+    expect(dialog.findAll(".studio-select-trigger")).toHaveLength(5);
+    expect(dialog.find('[data-test="video-studio-stepper"]').text()).toContain("选择模型与参数");
+    expect(dialog.find('[data-test="video-step-1"]').attributes("aria-current")).toBe("step");
+    expect(dialog.text()).not.toContain("预计 2 积分");
+
+    await dialog.find('[data-test="video-model-select-trigger"]').trigger("click");
+    const g2Option = dialog.find('[data-test="video-model-select-option-g2"]');
+    expect(g2Option.text()).toContain("G2");
+    expect(g2Option.text()).toContain("限时特惠");
+    expect(dialog.find('[data-test="video-model-select-option-d2"]').exists()).toBe(true);
+    expect(dialog.find(".studio-select-arrow").exists()).toBe(true);
+
+    await dialog.find('[data-test="video-duration-select"]').setValue("10");
+    await dialog.find('[data-test="video-script-generate"]').trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const request = postCalls(fetchMock, "/api/brands/1/trends/5/ideas/0/video-script")[0];
+    expect(request.model).toBe("g2");
+    expect(request.videoDuration).toBe("10");
+    expect(dialog.find('[data-test="video-step-2"]').attributes("aria-current")).toBe("step");
+    expect(dialog.find('[data-test="video-step-script-panel"]').exists()).toBe(true);
+
+    await dialog.find('[data-test="video-step-next"]').trigger("click");
+    expect(dialog.find('[data-test="video-step-production-panel"]').exists()).toBe(true);
+    await dialog.find('[data-test="video-step-previous"]').trigger("click");
+    expect(dialog.find('[data-test="video-step-script-panel"]').exists()).toBe(true);
   });
 
   it("generates structured video script and renders results without model or platform options", async () => {
@@ -247,15 +259,15 @@ describe("video script generation flow", () => {
     const result = dialog.find('[data-test="video-script-result"]');
     expect(result.exists()).toBe(true);
     expect(result.find('[data-test="video-script-title"]').text()).toBe("夏日清凉特调手冲咖啡");
-    expect(result.text()).toContain("30 秒");
-    expect(result.text()).toContain("2 个片段");
+    expect(result.text()).toContain("10 秒");
+    expect(result.text()).toContain("1 个片段");
     expect(result.text()).toContain("这里只生成供 AI 视频模型使用的分镜与提示词，不会直接生成视频。");
 
     // 验证分镜列表
     const clipRows = result.findAll('[data-test^="video-clip-row-"]');
-    expect(clipRows).toHaveLength(2);
+    expect(clipRows).toHaveLength(1);
     expect(clipRows[0].text()).toContain("开场抓人");
-    expect(clipRows[0].text()).toContain("00:00 - 00:05 (5s)");
+    expect(clipRows[0].text()).toContain("00:00 - 00:10 (10s)");
 
     // 展开分镜详情
     await clipRows[0].find('[data-test="toggle-clip-expand-0"]').trigger("click");
@@ -321,8 +333,8 @@ describe("video script generation flow", () => {
     await flushPromises();
 
     const dialog = wrapper.find('[data-test="idea-video-script-dialog"]');
-    expect(dialog.find('[data-test="video-model-studio-x"]').exists()).toBe(true);
-    expect(dialog.find('[data-test="video-model-d2"]').exists()).toBe(false);
+    expect((dialog.find('[data-test="video-model-select"]').element as HTMLSelectElement).value).toBe("studio-x");
+    expect(dialog.find('[data-test="video-model-select"] option[value="d2"]').exists()).toBe(false);
     expect((dialog.find('[data-test="video-resolution-select"]').element as HTMLSelectElement).value).toBe("1080p");
     expect(dialog.find('[data-test="video-mode-select"] option').exists()).toBe(true);
     expect(dialog.find('[data-test="video-mode-select"] option[value="image"]').exists()).toBe(false);
@@ -412,7 +424,7 @@ describe("video script generation flow", () => {
     expect((dialog.find('[data-test="video-duration-select"]').element as HTMLSelectElement).disabled).toBe(true);
     expect((dialog.find('[data-test="video-aspect-select"]').element as HTMLSelectElement).disabled).toBe(true);
     expect((dialog.find('[data-test="video-resolution-select"]').element as HTMLSelectElement).disabled).toBe(true);
-    expect((dialog.find('[data-test="video-model-d2"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect((dialog.find('[data-test="video-model-select"]').element as HTMLSelectElement).disabled).toBe(true);
     expect((dialog.find('[data-test="video-reference-picker"] input[type="checkbox"]').element as HTMLInputElement).disabled).toBe(true);
     expect(dialog.find('[data-test="video-script-regenerate"]').exists()).toBe(false);
     expect(dialog.find('[data-test="video-project-controls-locked"]').text()).toContain("参数已锁定");
@@ -504,6 +516,8 @@ describe("video script generation flow", () => {
     await flushPromises();
     await flushPromises();
 
+    await dialog.find('[data-test="video-step-next"]').trigger("click");
+    await flushPromises();
     const realVideoButton = dialog.find('[data-test="generate-real-video"]');
     expect(realVideoButton.text()).toMatch(/生成真实视频 · \d+积分/);
     expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(false);
@@ -581,6 +595,8 @@ describe("video script generation flow", () => {
     await flushPromises();
     expect(auth.user?.credits).toBe(100);
 
+    await dialog.find('[data-test="video-step-next"]').trigger("click");
+    await flushPromises();
     await dialog.find('[data-test="generate-real-video"]').trigger("click");
     await flushPromises();
     await flushPromises();
@@ -604,7 +620,7 @@ describe("video script generation flow", () => {
     await flushPromises();
     await flushPromises();
 
-    await dialog.find('[data-test="video-model-g2"]').trigger("click");
+    await dialog.find('[data-test="video-model-select"]').setValue("d2");
     await flushPromises();
     expect(dialog.find('[data-test="video-script-settings-stale"]').exists()).toBe(true);
 

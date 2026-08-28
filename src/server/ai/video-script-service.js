@@ -288,9 +288,14 @@ function validateAndNormalizeVideoScript(raw, {
   const normalizedModel = model ? normalizeModelId(model) : "";
   const modelConfig = normalizedModel ? getVideoModelConfig(normalizedModel) : null;
   const totalDurationSec = normalizedModel
-    ? normalizeVideoDuration(targetDuration || raw.totalDurationSec, 30)
+    ? normalizeVideoDuration(targetDuration ?? raw.totalDurationSec, 30)
     : targetDuration ? normalizeTotalDuration(targetDuration) : normalizeTotalDuration(raw.totalDurationSec);
-  const aspectRatio = compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
+  // Product-model scripts must obey the user's selected ratio. Model output is
+  // descriptive content, not an authority allowed to silently change a paid
+  // generation parameter.
+  const aspectRatio = normalizedModel
+    ? resolveVideoAspectRatio(requestedAspectRatio, "9:16")
+    : compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
 
   const globalSubjectReference = compactString(raw.globalSubjectReference, "保持全片主体特征与质感一致", STRUCTURED_FIELD_MAX_LENGTH);
   const globalStyleReference = compactString(raw.globalStyleReference, "电影感光影与统一色调", STRUCTURED_FIELD_MAX_LENGTH);

@@ -166,6 +166,31 @@ function typeLabel(item: GenerationHistoryItem): string {
   return HISTORY_TYPE_LABELS.get(item.type) || item.type;
 }
 
+function videoScriptContext(item: GenerationHistoryItem): { brandId: number; trendId: number; ideaIndex: number } | null {
+  const brandId = Number(item.brandId);
+  const trendId = Number(item.trendId);
+  const ideaIndex = Number(item.payload?.ideaIndex);
+  if (!Number.isSafeInteger(brandId) || brandId <= 0) return null;
+  if (!Number.isSafeInteger(trendId) || trendId <= 0) return null;
+  if (!Number.isSafeInteger(ideaIndex) || ideaIndex < 0) return null;
+  return { brandId, trendId, ideaIndex };
+}
+
+async function continueVideoFromScript(item: GenerationHistoryItem): Promise<void> {
+  const context = videoScriptContext(item);
+  if (!context) return;
+  closeDetail();
+  await router.push({
+    name: "ideas",
+    query: {
+      brandId: String(context.brandId),
+      trendId: String(context.trendId),
+      ideaIndex: String(context.ideaIndex),
+      action: "videoScript",
+    },
+  });
+}
+
 function asVideoScript(item: GenerationHistoryItem | null): VideoScript | null {
   if (!item) return null;
   const payload = item.payload as Record<string, unknown> | undefined;
@@ -508,6 +533,15 @@ onUnmounted(() => {
           </div>
           <div class="history-card-actions">
             <button
+              v-if="item.type === 'videoScript' && videoScriptContext(item)"
+              type="button"
+              class="primary-btn"
+              data-test="history-video-continue"
+              @click="continueVideoFromScript(item)"
+            >
+              继续生成视频
+            </button>
+            <button
               v-if="item.type === 'videoScript'"
               type="button"
               class="secondary-btn"
@@ -691,7 +725,13 @@ onUnmounted(() => {
                   <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'cancelled' ? '已取消' : '排队中' }}</span>
                   <span>{{ clip.durationSec }} 秒</span>
                 </div>
-                <video v-if="safeImageSrc(String(clip.videoUrl || ''))" class="history-clip-player" controls playsinline :src="safeImageSrc(String(clip.videoUrl || ''))"></video>
+                <video
+                  v-if="(videoProjectClips(detailItem).length > 1 || !videoProjectVideoUrl(detailItem)) && safeImageSrc(String(clip.videoUrl || ''))"
+                  class="history-clip-player"
+                  controls
+                  playsinline
+                  :src="safeImageSrc(String(clip.videoUrl || ''))"
+                ></video>
                 <small v-if="clip.error" class="history-video-clip-error">失败原因：{{ clip.error }}</small>
                 <div class="history-video-clip-actions">
                   <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>

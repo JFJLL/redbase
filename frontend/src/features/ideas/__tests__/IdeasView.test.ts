@@ -303,7 +303,7 @@ describe("IdeasView", () => {
     expect(settings.text()).toContain("各项仅影响对应生成入口，互不叠加");
     expect(settings.text()).toContain("小红书组图 · 视觉路线");
     expect(settings.text()).toContain("公众号长图 · 版式模板");
-    expect(settings.text()).toContain("视频脚本 · 时长");
+    expect(settings.text()).not.toContain("视频脚本 · 时长");
     expect(settings.text()).toContain("图片通用设置");
     expect(settings.text()).toContain("统一影响朋友圈、公众号长图和小红书组图");
   });

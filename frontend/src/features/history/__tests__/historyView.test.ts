@@ -24,6 +24,7 @@ function makeRouter(): Router {
     routes: [
       { path: "/", name: "home", component: { template: "<div />" } },
       { path: "/login", name: "login", component: { template: "<div />" } },
+      { path: "/ideas", name: "ideas", component: { template: "<div />" } },
     ],
   });
 }
@@ -35,6 +36,7 @@ const GENERATIONS = [
     cardTitle: "露营朋友圈图",
     brandName: "品牌A",
     brandId: 7,
+    trendId: 5,
     trendTitle: "五一露营潮",
     ideaTitle: "露营装备清单",
     channelLabel: "朋友圈",
@@ -64,12 +66,14 @@ const GENERATIONS = [
     cardTitle: "露营咖啡视频脚本",
     brandName: "品牌A",
     brandId: 7,
+    trendId: 5,
     trendTitle: "五一露营潮",
     ideaTitle: "户外手冲咖啡指南",
     channelLabel: "视频脚本",
     createdAt: "2026-07-22T08:00:00.000Z",
     previewUrl: "",
     payload: {
+      ideaIndex: 0,
       aspectRatio: "9:16",
       videoScript: {
         title: "露营咖啡视频脚本",
@@ -137,7 +141,7 @@ describe("HistoryView", () => {
     await router.isReady();
     const wrapper = mount(HistoryView, { global: { plugins: [pinia, router] } });
     await flushPromises();
-    return { wrapper, calls };
+    return { wrapper, calls, router };
   }
 
   it("renders history cards with type labels, signed image URLs, and 30-day retention note", async () => {
@@ -156,7 +160,7 @@ describe("HistoryView", () => {
   });
 
   it("renders videoScript history cards without images and opens video script modal", async () => {
-    const { wrapper } = await mountView();
+    const { wrapper, router } = await mountView();
     const scriptCard = wrapper.findAll('[data-test="history-card"]')[2];
 
     expect(scriptCard.text()).toContain("视频脚本");
@@ -172,6 +176,11 @@ describe("HistoryView", () => {
     expect(wrapper.find('[data-test="video-script-result"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="video-script-title"]').text()).toBe("露营咖啡视频脚本");
     expect(wrapper.find('[data-test="image-edit-panel"]').exists()).toBe(false);
+
+    await scriptCard.find('[data-test="history-video-continue"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe("ideas");
+    expect(router.currentRoute.value.query).toEqual({ brandId: "7", trendId: "5", ideaIndex: "0", action: "videoScript" });
   });
 
   it("renders video project clip playback, download, failure refund, and retry controls", async () => {
@@ -315,11 +324,17 @@ describe("HistoryView", () => {
     expect(detail.find('[data-test="history-assembly-failed"]').text()).toContain("视频片段均已生成完成");
     expect(detail.find('[data-test="history-retry-assembly"]').text()).toContain("0积分");
     expect(detail.find('.history-video-clip-actions button').exists()).toBe(false);
+    expect(detail.findAll("video")).toHaveLength(1);
+    expect(detail.find(".history-clip-player").exists()).toBe(true);
 
     await detail.find('[data-test="history-retry-assembly"]').trigger("click");
     await flushPromises();
     expect(calls.some((call) => call.url === "/api/video-projects/78/retry-assembly" && call.init?.method === "POST")).toBe(true);
     expect(wrapper.find('[data-test="history-assembly-failed"]').exists()).toBe(false);
+    const completedDetail = wrapper.find('[data-test="history-video-project-detail"]');
+    expect(completedDetail.findAll("video")).toHaveLength(1);
+    expect(completedDetail.find(".history-video-player").exists()).toBe(true);
+    expect(completedDetail.find(".history-clip-player").exists()).toBe(false);
   });
 
   it("renders result_processing_failed status and handles 0-credit retry-result action", async () => {
@@ -422,6 +437,9 @@ describe("HistoryView", () => {
     await flushPromises();
 
     expect(calls.some((call) => call.url === "/api/video-projects/88/clips/1/retry-result")).toBe(true);
+    expect(wrapper.find(".history-video-player").exists()).toBe(true);
+    expect(wrapper.find(".history-clip-player").exists()).toBe(false);
+    expect(wrapper.find(".history-video-clip-actions a").text()).toContain("下载本段");
   });
 
 

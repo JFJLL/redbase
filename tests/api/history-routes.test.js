@@ -8,7 +8,17 @@ const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/s
 const { insertUser, insertSession } = require("../../src/server/db/repositories/auth-repository");
 const { insertBrand, upsertBrandFull } = require("../../src/server/db/repositories/brand-repository");
 const { upsertGeneration, findGenerationById } = require("../../src/server/db/repositories/generation-repository");
-const { cleanupExpiredGenerationHistory, handleHistoryRoutes } = require("../../src/server/api/history-routes");
+const { cleanupExpiredGenerationHistory, handleHistoryRoutes, resolveLegacyVideoScriptIdeaIndex } = require("../../src/server/api/history-routes");
+
+test("legacy video script history safely recovers a unique idea index from its trend title", () => {
+  const generation = { type: "videoScript", trendId: 88, ideaTitle: "第二个选题", payload: {} };
+  const brand = {
+    trends: [{ items: [{ id: 88, ideas: [{ title: "第一个选题" }, { title: "第二个选题" }] }] }],
+  };
+  assert.equal(resolveLegacyVideoScriptIdeaIndex(generation, brand), 1);
+  assert.equal(resolveLegacyVideoScriptIdeaIndex({ ...generation, ideaTitle: "不存在" }, brand), null);
+  assert.equal(resolveLegacyVideoScriptIdeaIndex({ ...generation, payload: { ideaIndex: 0 } }, brand), 0);
+});
 
 openDatabase();
 initializeDatabaseSchema();

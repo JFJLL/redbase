@@ -126,6 +126,21 @@ test("完整结构化分镜会按固定顺序无损编译，且不使用模型�
   assert.equal(prompt.includes("一个女人在办公室喝饮料。"), false);
 });
 
+test("G2 显式选择 10 秒时强制生成单个 10 秒分镜并锁定用户画幅", () => {
+  const script = validateAndNormalizeVideoScript(createRawScript({ aspectRatio: "21:9" }), {
+    requestedAspectRatio: "9:16",
+    targetDuration: 10,
+    model: "g2",
+    mode: "text",
+  });
+
+  assert.equal(script.totalDurationSec, 10);
+  assert.equal(script.aspectRatio, "9:16");
+  assert.equal(script.clips.length, 1);
+  assert.deepEqual(script.clips.map((clip) => clip.durationSec), [10]);
+  assert.deepEqual(script.clips.map((clip) => [clip.startSec, clip.endSec]), [[0, 10]]);
+});
+
 test("rawClip.prompt 为空时仍由已规范化的结构化字段生成完整提示词", () => {
   const script = normalize({
     clips: [{ prompt: "" }, { prompt: "" }],

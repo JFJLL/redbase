@@ -150,7 +150,12 @@ function makeService(provider, storage = makeStorage(), overrides = {}) {
   return createVideoProjectService({
     appConfig: overrides.appConfig || {
       security: { assetSigningSecret: "video-test-secret" },
-      video: { publicBaseUrl: "https://redbase.example", schedulerIntervalMs: 1000, pollIntervalMs: 1, agnes: { apiKeys: [], pollIntervalMs: 1 } },
+      video: {
+        publicBaseUrl: "https://redbase.example",
+        schedulerIntervalMs: 1000,
+        pollIntervalMs: 1,
+        agnes: { apiKeys: [], pollIntervalMs: 1, maxClipAttempts: overrides.g2MaxClipAttempts || 3 },
+      },
     },
     generatedAssetStorage: storage,
     providers: overrides.providers || { d2: provider, g2: provider },
@@ -208,6 +213,16 @@ test("Agnes key pool never exposes API keys and applies per-key cooldown", () =>
   assert.equal(pool.snapshot().some((slot) => Object.prototype.hasOwnProperty.call(slot, "key")), false);
   clock = 1001;
   assert.ok(pool.acquire());
+});
+
+test("Agnes key pool can exclude the previous key when retrying a clip", () => {
+  const pool = createAgnesKeyPool({ keys: ["a", "b", "c"], rpmPerKey: 60 });
+  const first = pool.acquire();
+  pool.release(first.slot, {});
+  const second = pool.acquire({ excludeKeyRefs: [first.keyRef] });
+  assert.ok(second);
+  assert.notEqual(second.keyRef, first.keyRef);
+  assert.equal(pool.hasAlternativeKey(first.keyRef), true);
 });
 
 test("Agnes polling leases do not consume the submission RPM slot", () => {
@@ -287,7 +302,7 @@ test("D2 and G2 provider adapters send only the approved product contract fields
     seconds: "5",
     size: "720P",
     aspect_ratio: "9:16",
-    seed: -1,
+    seed: 0,
     n: 1,
     images: ["https://redbase.example/a"],
   });
@@ -642,6 +657,119 @@ test("G2 maps text, reference, and keyframe modes while rotating submission keys
   assert.equal((await settleProject(imageService, imageResult.project.id, 904)).status, "completed");
 });
 
+test("G2 automatically retries a failed second clip with another key without charging again", async () => {
+  let clock = 0;
+  const storage = makeStorage();
+  const submissions = [];
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip(args) {
+      submissions.push(args);
+      return { taskId: `g2-auto-retry-${submissions.length}` };
+    },
+    async getTaskStatus({ taskId }) {
+      if (taskId === "g2-auto-retry-2") return { status: "failed", error: "temporary second clip failure" };
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const keyPool = createAgnesKeyPool({ keys: ["g2-retry-a", "g2-retry-b", "g2-retry-c"], rpmPerKey: 60, now: () => clock });
+  const service = makeService(provider, storage, { now: () => clock, keyPool });
+  const beforeCredits = findUserById(906).credits;
+  const result = await service.createProject({
+    ownerUserId: 906,
+    requestId: "video-g2-auto-retry-second-clip",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 15,
+    script: makeScript(15, 2),
+  });
+
+  await service.pump();
+  clock = 2;
+  await service.pump();
+  clock = 3;
+  await service.pump();
+  clock = 5;
+  await service.pump();
+  const retrying = service.getProject(result.project.id, 906);
+  assert.equal(retrying.status, "queued");
+  assert.equal(retrying.clips[1].status, "queued");
+  assert.equal(retrying.clips[1].retryCount, 1);
+  assert.match(retrying.clips[1].error, /切换通道自动重试/);
+
+  clock = 6;
+  await service.pump();
+  assert.equal(submissions.length, 3);
+  assert.notEqual(submissions[1].apiKey, submissions[2].apiKey);
+  clock = 8;
+  const completed = await settleProject(service, result.project.id, 906);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.clips[1].submissionAttempt, 2);
+  assert.equal(completed.clips[1].attempt, 2);
+  assert.equal(findUserById(906).credits, beforeCredits - 3);
+});
+
+test("G2 polling rate limits stay on the affinity key, show retry progress, and never resubmit", async () => {
+  let clock = 0;
+  let submitCount = 0;
+  let pollCount = 0;
+  const provider = {
+    provider: "fake",
+    getAllowedHosts: () => [],
+    async submitClip() {
+      submitCount += 1;
+      return { taskId: "g2-poll-rate-limit" };
+    },
+    async getTaskStatus() {
+      pollCount += 1;
+      if (pollCount === 1) throw Object.assign(new Error("video status query rate limit exceeded"), { statusCode: 429 });
+      return { status: "completed", videoBuffer: MP4_BUFFER, frameBuffer: JPEG_BUFFER };
+    },
+  };
+  const keyPool = createAgnesKeyPool({ keys: ["g2-affinity-key", "g2-unused-key"], rpmPerKey: 60, now: () => clock });
+  const service = makeService(provider, makeStorage(), { now: () => clock, keyPool });
+  const result = await service.createProject({
+    ownerUserId: 908,
+    requestId: "video-g2-poll-rate-limit-recovery",
+    brand: { id: 1, name: "Test Brand" },
+    trend: { id: 2, title: "Test Trend" },
+    idea: { title: "Test Idea" },
+    brandId: 1,
+    trendId: 2,
+    ideaIndex: 0,
+    model: "g2",
+    mode: "text",
+    resolution: "720p",
+    aspectRatio: "9:16",
+    totalDurationSec: 10,
+    script: makeScript(),
+  });
+
+  await service.pump();
+  clock = 2;
+  await service.pump();
+  const retrying = service.getProject(result.project.id, 908);
+  assert.equal(retrying.status, "running");
+  assert.match(retrying.error, /状态查询限流，系统正在自动重试/);
+  assert.equal(submitCount, 1);
+
+  clock = 62000;
+  const completed = await settleProject(service, result.project.id, 908);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.error, "");
+  assert.equal(submitCount, 1);
+  assert.equal(pollCount, 2);
+});
+
 test("video recovery polls persisted tasks, marks ambiguous submissions, and retries with idempotent billing", async () => {
   const storage = makeStorage();
   const submissions = [];
@@ -733,14 +861,11 @@ test("video recovery polls persisted tasks, marks ambiguous submissions, and ret
     totalDurationSec: 10,
     script: makeScript(),
   });
-  const failed = await settleProject(retryService, retryProject.project.id, 910);
-  assert.equal(failed.status, "partial_failed");
-  assert.equal(findUserById(910).credits, 300);
-  retryService.retryClip(retryProject.project.id, 910, 1, "video-retry-request");
-  assert.equal(findUserById(910).credits, 298);
-  assert.equal((await settleProject(retryService, retryProject.project.id, 910)).status, "completed");
-  retryService.retryClip(retryProject.project.id, 910, 1, "video-retry-request");
-  assert.equal(findUserById(910).credits, 298, "same retry request must not charge twice");
+  const completedAfterAutomaticRetry = await settleProject(retryService, retryProject.project.id, 910, 220);
+  assert.equal(completedAfterAutomaticRetry.status, "completed");
+  assert.equal(completedAfterAutomaticRetry.clips[0].retryCount, 1);
+  assert.equal(completedAfterAutomaticRetry.clips[0].submissionAttempt, 2);
+  assert.equal(findUserById(910).credits, 298, "automatic retry must not charge twice");
 });
 
 test("video project charges once, runs clips sequentially, assembles final video, and retains private cleanup handles", async () => {
@@ -787,7 +912,7 @@ test("video project charges once, runs clips sequentially, assembles final video
 });
 
 test("failed video clip refunds the unexecuted reservation once", async () => {
-  const service = makeService(makeProvider({ failNext: true }));
+  const service = makeService(makeProvider({ failNext: true }), makeStorage(), { g2MaxClipAttempts: 1 });
   const result = await service.createProject({
     ownerUserId: 901,
     requestId: "video-project-failure",

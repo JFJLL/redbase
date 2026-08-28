@@ -76,7 +76,7 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
       useProductImages: options.useProductImages.value,
       productImages: options.selectedProductImageInputs.value,
       styleReferenceImages: options.selectedStyleReferenceInputs.value,
-      model: options.videoModel?.value || "d2",
+      model: options.videoModel?.value || "g2",
       mode: options.videoMode?.value || "text",
       resolution: options.videoResolution?.value || "720p",
       videoReferenceImageIds: options.videoReferenceImageIds?.value || options.selectedProductImageInputs.value.map((item) => Number(item.id)).filter(Boolean),

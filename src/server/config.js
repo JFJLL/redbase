@@ -121,8 +121,9 @@ const DEFAULT_APP_CONFIG = {
       apiKeys: [],
       pollPath: "/agnesapi",
       rpmPerKey: 1,
+      maxClipAttempts: 3,
       pollIntervalMs: 2000,
-      outputHosts: ["platform-outputs.agnes-ai.space"],
+      outputHosts: ["platform-outputs.agnes-ai.space", "cos-platform-outputs.agnes-ai.cn"],
     },
   },
   assetStorage: {
@@ -589,6 +590,7 @@ function loadAppConfig() {
         apiKeys: parseListConfig(process.env.AGNES_VIDEO_API_KEYS, merged.video?.agnes?.apiKeys),
         pollPath: String(merged.video?.agnes?.pollPath || "/agnesapi").trim(),
         rpmPerKey: Math.max(1, Number(process.env.AGNES_VIDEO_RPM_PER_KEY || merged.video?.agnes?.rpmPerKey || 1)),
+        maxClipAttempts: Math.max(1, Number(process.env.AGNES_VIDEO_MAX_CLIP_ATTEMPTS || merged.video?.agnes?.maxClipAttempts || 3)),
         pollIntervalMs: Math.max(1000, Number(process.env.AGNES_VIDEO_POLL_INTERVAL_MS || merged.video?.agnes?.pollIntervalMs || 2000)),
         outputHosts: parseListConfig(process.env.AGNES_VIDEO_OUTPUT_HOSTS, merged.video?.agnes?.outputHosts, "platform-outputs.agnes-ai.space"),
       },

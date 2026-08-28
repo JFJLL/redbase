@@ -1,7 +1,7 @@
 const { getVideoModelConfig } = require("../video-model-registry");
 const { requestProviderJson } = require("../video-provider-http");
 
-const DEFAULT_OUTPUT_HOSTS = ["platform-outputs.agnes-ai.space"];
+const DEFAULT_OUTPUT_HOSTS = ["platform-outputs.agnes-ai.space", "cos-platform-outputs.agnes-ai.cn"];
 
 function joinUrl(base, path) {
   return `${String(base || "").replace(/\/+$/, "")}/${String(path || "").replace(/^\/+/, "")}`;
@@ -30,9 +30,10 @@ function createG2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
   const config = getVideoModelConfig("g2");
   const providerConfig = appConfig.video?.agnes || {};
   const baseUrl = String(providerConfig.baseUrl || "https://api.agnes-ai.cn").replace(/\/+$/, "");
-  const outputHosts = Array.isArray(providerConfig.outputHosts) && providerConfig.outputHosts.length
-    ? providerConfig.outputHosts
-    : DEFAULT_OUTPUT_HOSTS;
+  const outputHosts = [
+    ...DEFAULT_OUTPUT_HOSTS,
+    ...(Array.isArray(providerConfig.outputHosts) ? providerConfig.outputHosts : []),
+  ];
   const submitTimeoutMs = Number(appConfig.video?.submitTimeoutMs || 45000);
   const pollTimeoutMs = Number(appConfig.video?.pollTimeoutMs || 20000);
 
@@ -68,7 +69,7 @@ function createG2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
         seconds: String(durationSec),
         size: "720P",
         aspect_ratio: String(aspectRatio || "9:16"),
-        seed: -1,
+        seed: 0,
         n: 1,
       };
       if (body.mode === "reference") body.images = referenceUrls.slice(0, config.maxReferenceImages);
