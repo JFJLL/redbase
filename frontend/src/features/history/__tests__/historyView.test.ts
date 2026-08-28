@@ -530,6 +530,84 @@ describe("HistoryView", () => {
     expect(wrapper.findAll('[data-test="history-card"]')).toHaveLength(2);
   });
 
+  it("deduplicates precursor videoScript when videoProject exists with sourceVideoScriptGenerationId", async () => {
+    const generationsWithVideo = [
+      ...GENERATIONS, // id 1 (moments), id 2 (xhsCarousel), id 3 (videoScript)
+      {
+        id: 300,
+        type: "videoProject",
+        channelLabel: "AI 视频",
+        brandId: 7,
+        trendId: 5,
+        cardTitle: "由脚本生成的视频项目",
+        createdAt: "2026-05-03T10:05:00.000Z",
+        previewUrl: "",
+        summary: "视频项目摘要",
+        payload: {
+          projectId: 3001,
+          sourceVideoScriptGenerationId: 3, // supersedes generation id 3
+          videoModel: "d2",
+          videoStatus: "completed",
+          videoDuration: 30,
+          videoAspectRatio: "9:16",
+          videoScript: GENERATIONS[2].payload?.videoScript,
+        },
+      },
+    ];
+    const { wrapper } = await mountView((url) => {
+      if (url.startsWith("/api/history")) {
+        return jsonResponse(200, { generations: generationsWithVideo });
+      }
+      return undefined;
+    });
+    const cards = wrapper.findAll('[data-test="history-card"]');
+    // id 1 (moments), id 2 (xhsCarousel), id 300 (videoProject) -> total 3 cards (id 3 videoScript is omitted)
+    expect(cards).toHaveLength(3);
+    const cardTexts = cards.map((c) => c.text());
+    expect(cardTexts.some((t) => t.includes("由脚本生成的视频项目"))).toBe(true);
+    expect(cardTexts.some((t) => t.includes("AI 视频"))).toBe(true);
+    // Only one card should mention the video script title
+    const scriptMentionCards = cardTexts.filter((t) => t.includes("用手冲咖啡开启自然之旅") || t.includes("由脚本生成的视频项目"));
+    expect(scriptMentionCards).toHaveLength(1);
+  });
+
+  it("renders '生成中' label with loading spinner animation for queued/running video project", async () => {
+    const queuedProjectGeneration = {
+      id: 301,
+      type: "videoProject",
+      channelLabel: "AI 视频",
+      brandId: 7,
+      trendId: 5,
+      cardTitle: "正在生成的视频",
+      createdAt: "2026-05-03T12:00:00.000Z",
+      previewUrl: "",
+      summary: "生成中摘要",
+      payload: {
+        projectId: 3002,
+        videoModel: "g2",
+        videoStatus: "queued",
+        videoDuration: 30,
+        videoAspectRatio: "9:16",
+        videoClips: [{ id: 1, index: 1, durationSec: 10, status: "queued" }],
+      },
+    };
+    const { wrapper } = await mountView((url) => {
+      if (url.startsWith("/api/history")) {
+        return jsonResponse(200, { generations: [queuedProjectGeneration] });
+      }
+      return undefined;
+    });
+    const statusTag = wrapper.find('[data-test="history-video-status-tag"]');
+    expect(statusTag.exists()).toBe(true);
+    expect(statusTag.classes()).toContain("is-generating-tag");
+    expect(statusTag.text()).toContain("G2 · 生成中");
+    expect(statusTag.find(".history-spinner-xs").exists()).toBe(true);
+    const placeholder = wrapper.find(".history-video-placeholder");
+    expect(placeholder.exists()).toBe(true);
+    expect(placeholder.text()).toContain("生成中");
+    expect(placeholder.find(".history-video-spinner").exists()).toBe(true);
+  });
+
   it("filters items locally and does not trigger /api/history requests on filter input", async () => {
     const { wrapper, calls } = await mountView();
     const historyCallsBefore = calls.filter((c) => c.url.startsWith("/api/history")).length;

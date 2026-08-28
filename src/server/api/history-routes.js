@@ -307,9 +307,20 @@ async function handleHistoryRoutes(context, req, res, pathname) {
       ? searchGenerations(user.id, filters)
       : listGenerationsByOwner(user.id);
     const brandCache = new Map();
+    const allUserGenerations = listGenerationsByOwner(user.id);
+    const supersededScriptIds = new Set();
+    for (const gen of allUserGenerations) {
+      if (gen.type === "videoProject" && gen.payload?.sourceVideoScriptGenerationId) {
+        const scriptId = Number(gen.payload.sourceVideoScriptGenerationId);
+        if (Number.isSafeInteger(scriptId) && scriptId > 0) {
+          supersededScriptIds.add(scriptId);
+        }
+      }
+    }
     const history = generations
         .filter((generation) => !isGenerationExpired(generation, getHistoryNowMs(context), HISTORY_GENERATION_RETENTION_MS))
         .filter(isRenderableGeneration)
+        .filter((generation) => !(generation.type === "videoScript" && supersededScriptIds.has(Number(generation.id))))
         .map((generation) => {
           const sanitized = sanitizeGeneration(generation, appConfig);
           if (generation.type !== "videoScript" || Number.isSafeInteger(Number(sanitized?.payload?.ideaIndex))) return sanitized;
@@ -342,6 +353,17 @@ async function handleHistoryRoutes(context, req, res, pathname) {
         deletedAt: new Date(getHistoryNowMs(context)).toISOString(),
         deleteReason: "user_history_delete",
       });
+      if (generation.type === "videoProject" && generation.payload?.sourceVideoScriptGenerationId) {
+        const scriptGenId = Number(generation.payload.sourceVideoScriptGenerationId);
+        const scriptGen = findGenerationByOwner(scriptGenId, user.id);
+        if (scriptGen && scriptGen.type === "videoScript") {
+          await (context.removeGenerationAssetsAndRows || removeGenerationAssetsAndRows)(scriptGen, {
+            storage,
+            deletedAt: new Date(getHistoryNowMs(context)).toISOString(),
+            deleteReason: "user_history_delete_precursor",
+          }).catch(() => {});
+        }
+      }
       json(res, 200, result);
     } catch (error) {
       console.warn("[history-delete] failed to delete generation", {

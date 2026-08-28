@@ -250,7 +250,7 @@ const estimatedCredits = computed(() => {
 });
 
 const projectStatusLabel = computed(() => ({
-  queued: "排队中",
+  queued: "生成中",
   running: "生成中",
   processing_result: "正在处理生成结果",
   result_processing_failed: "生成结果暂未保存成功",

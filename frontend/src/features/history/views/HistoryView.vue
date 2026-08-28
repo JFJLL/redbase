@@ -230,8 +230,21 @@ const placeholderItems = computed<GenerationHistoryItem[]>(() => {
 
 const allGenerations = computed(() => [...placeholderItems.value, ...generations.value]);
 
+const supersededScriptIds = computed(() => {
+  const ids = new Set<number>();
+  for (const item of allGenerations.value) {
+    if (item.type === "videoProject" && item.payload?.sourceVideoScriptGenerationId) {
+      const scriptId = Number(item.payload.sourceVideoScriptGenerationId);
+      if (Number.isSafeInteger(scriptId) && scriptId > 0) ids.add(scriptId);
+    }
+  }
+  return ids;
+});
+
 const visibleHistory = computed(() =>
-  allGenerations.value.filter((item) => matchesGenerationHistoryFilters(item, filters)),
+  allGenerations.value
+    .filter((item) => !(item.type === "videoScript" && supersededScriptIds.value.has(Number(item.id))))
+    .filter((item) => matchesGenerationHistoryFilters(item, filters)),
 );
 const hasFilters = computed(() => Boolean(filters.q || filters.brandId || filters.type || filters.from || filters.to));
 
@@ -336,8 +349,10 @@ function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<str
 
 function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
   return ({
-    queued: "排队中",
+    queued: "生成中",
     running: "生成中",
+    submitting: "生成中",
+    preparing: "生成中",
     processing_result: "正在处理生成结果",
     result_processing_failed: "结果处理失败",
     project_data_failed: "素材不可用",
@@ -349,7 +364,13 @@ function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
     completed: "已完成",
     failed: "失败",
     cancelled: "已取消",
-  } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "已提交";
+  } as Record<string, string>)[String(item?.payload?.videoStatus || "")] || "生成中";
+}
+
+function isVideoProjectGenerating(item: GenerationHistoryItem | null): boolean {
+  if (!item || item.type !== "videoProject") return false;
+  const status = String(item.payload?.videoStatus || "").toLowerCase();
+  return ACTIVE_VIDEO_STATUSES.has(status) || ["queued", "running", "submitting", "preparing", "assembling", "processing_result"].includes(status);
 }
 
 function syncVideoClipPrompts(item: GenerationHistoryItem | null): void {
@@ -636,7 +657,15 @@ onUnmounted(() => {
               <span v-if="item.type === 'videoScript' && asVideoScript(item)?.clips?.length" class="brand-tag">
                 {{ asVideoScript(item)?.clips?.length }} 个片段
               </span>
-              <span v-if="item.type === 'videoProject'" class="brand-tag">{{ item.payload?.videoModel?.toString().toUpperCase() }} · {{ videoProjectStatusLabel(item) }}</span>
+              <span
+                v-if="item.type === 'videoProject'"
+                class="brand-tag"
+                :class="{ 'is-generating-tag': isVideoProjectGenerating(item) }"
+                data-test="history-video-status-tag"
+              >
+                <span v-if="isVideoProjectGenerating(item)" class="history-spinner-xs" aria-hidden="true"></span>
+                {{ item.payload?.videoModel?.toString().toUpperCase() }} · {{ videoProjectStatusLabel(item) }}
+              </span>
               <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
               <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
                 已改图 {{ (item.payload?.editHistory || []).length }} 次
@@ -754,8 +783,9 @@ onUnmounted(() => {
             aria-label="视频首帧预览"
           ></video>
           <img v-else-if="videoProjectThumbnailUrl(item)" :src="videoProjectThumbnailUrl(item)" alt="视频首帧" loading="lazy" />
-          <div v-else class="history-video-placeholder">
-            <span class="script-icon">🎬</span>
+          <div v-else class="history-video-placeholder" :class="{ 'is-generating': isVideoProjectGenerating(item) }">
+            <span v-if="isVideoProjectGenerating(item)" class="history-video-spinner" aria-hidden="true"></span>
+            <span v-else class="script-icon">🎬</span>
             <strong>{{ videoProjectStatusLabel(item) }}</strong>
             <small>{{ videoProjectClips(item).length }} 个镜头 · 点击查看进度</small>
           </div>
@@ -896,7 +926,8 @@ onUnmounted(() => {
                 :src="videoProjectVideoUrl(detailItem)"
                 :poster="videoProjectFinalPosterUrl(detailItem)"
               ></video>
-              <div v-else class="history-video-placeholder large">
+              <div v-else class="history-video-placeholder large" :class="{ 'is-generating': isVideoProjectGenerating(detailItem) }">
+                <span v-if="isVideoProjectGenerating(detailItem)" class="history-video-spinner" aria-hidden="true"></span>
                 <strong>{{ videoProjectStatusLabel(detailItem) }}</strong>
                 <small>所有分段完成后，系统会自动合并并在这里展示。</small>
               </div>
@@ -916,7 +947,7 @@ onUnmounted(() => {
               <article v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
                 <div class="history-video-clip-heading">
                   <strong>镜头 {{ clip.index }}</strong>
-                  <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'cancelled' ? '已取消' : '排队中' }}</span>
+                  <span>{{ clip.status === 'completed' ? '已完成' : ['running', 'queued', 'submitting', 'preparing'].includes(String(clip.status)) ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'cancelled' ? '已取消' : '生成中' }}</span>
                   <span>{{ clip.durationSec }} 秒</span>
                 </div>
                 <div class="history-video-clip-body">
@@ -938,12 +969,12 @@ onUnmounted(() => {
                       />
                       <div class="history-clip-poster-overlay" data-test="history-clip-poster-overlay">
                         <span class="history-clip-spinner" aria-hidden="true"></span>
-                        <strong>{{ clip.status === 'queued' || clip.status === 'submitting' ? '排队中' : clip.status === 'running' ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
+                        <strong>{{ ['queued', 'submitting', 'running', 'preparing'].includes(String(clip.status)) ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
                       </div>
                     </div>
                     <div v-else class="history-clip-placeholder" data-test="history-clip-placeholder">
                       <span class="history-clip-spinner" aria-hidden="true"></span>
-                      <strong>{{ clip.status === 'queued' || clip.status === 'submitting' ? '排队中' : clip.status === 'running' ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
+                      <strong>{{ ['queued', 'submitting', 'running', 'preparing'].includes(String(clip.status)) ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
                       <small>视频生成完成后会自动出现在这里</small>
                     </div>
                   </div>
@@ -1711,6 +1742,17 @@ onUnmounted(() => {
   margin-right: 4px;
   border: 2px solid rgba(216, 68, 68, 0.25);
   border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.history-video-spinner {
+  display: inline-block;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 4px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--workspace-brand, #e5484d);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }

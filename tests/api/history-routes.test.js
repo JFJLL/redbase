@@ -267,6 +267,69 @@ test("GET /api/history combines brand and type filters", async () => {
   assert.deepEqual(res.body.generations.map((item) => item.id), [1]);
 });
 
+test("GET /api/history omits videoScript superseded by a videoProject and DELETE cleans up both", async () => {
+  seedGeneration({
+    id: 50,
+    type: "videoScript",
+    channelLabel: "视频脚本",
+    cardTitle: "被视频替代的脚本",
+    createdAt: "2026-05-03T11:00:00.000Z",
+    payload: { ideaIndex: 0, videoScript: { title: "被视频替代的脚本", clips: [] } },
+  });
+  seedGeneration({
+    id: 51,
+    type: "videoProject",
+    channelLabel: "AI 视频",
+    cardTitle: "由脚本生成的视频项目",
+    createdAt: "2026-05-03T11:05:00.000Z",
+    payload: {
+      sourceVideoScriptGenerationId: 50,
+      projectId: 5001,
+      videoModel: "d2",
+      videoStatus: "completed",
+      videoScript: { title: "由脚本生成的视频项目", clips: [] },
+    },
+  });
+  seedGeneration({
+    id: 52,
+    type: "videoScript",
+    channelLabel: "视频脚本",
+    cardTitle: "独立的未生成视频脚本",
+    createdAt: "2026-05-03T11:10:00.000Z",
+    payload: { ideaIndex: 1, videoScript: { title: "独立的未生成视频脚本", clips: [] } },
+  });
+
+  const res = createRes();
+  const handled = await handleHistoryRoutes(
+    context,
+    createReq("/api/history", "redbase_session=route-token"),
+    res,
+    "/api/history",
+  );
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  const returnedIds = res.body.generations.map((item) => item.id);
+  assert.equal(returnedIds.includes(51), true); // videoProject is returned
+  assert.equal(returnedIds.includes(52), true); // standalone script is returned
+  assert.equal(returnedIds.includes(50), false); // superseded script is omitted
+
+  // Deleting the video project cleans up both id 51 and precursor id 50
+  const deleteRes = createRes();
+  const deleteHandled = await handleHistoryRoutes(
+    { ...context, removeGenerationAssetsAndRows: async (gen, opts) => {
+      const { deleteGenerationRows } = require("../../src/server/db/repositories/generation-repository");
+      return deleteGenerationRows(gen.id, opts);
+    }},
+    { method: "DELETE", url: "/api/history/51", headers: { host: "localhost:3013", cookie: "redbase_session=route-token" } },
+    deleteRes,
+    "/api/history/51",
+  );
+  assert.equal(deleteHandled, true);
+  assert.equal(deleteRes.statusCode, 200);
+  assert.equal(findGenerationById(51), null);
+  assert.equal(findGenerationById(50), null);
+});
+
 test("cleanupExpiredGenerationHistory removes expired rows and local files", async () => {
   seedGeneration({
     id: 4,

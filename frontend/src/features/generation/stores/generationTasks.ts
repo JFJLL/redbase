@@ -164,8 +164,27 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
           .map((item) => String(item.payload?.carouselGroupId || "").trim())
           .filter(Boolean),
       );
+      const supersededScriptIds = new Set(
+        historyStore.items
+          .filter((item) => item.type === "videoProject" && item.payload?.sourceVideoScriptGenerationId)
+          .map((item) => Number(item.payload!.sourceVideoScriptGenerationId)),
+      );
+      const videoProjectIdeaKeys = new Set(
+        historyStore.items
+          .filter((item) => item.type === "videoProject" && item.payload?.ideaIndex != null)
+          .map((item) => String(item.brandId) + "_" + String(item.trendId) + "_" + String(item.payload?.ideaIndex)),
+      );
 
       return state.tasks.filter((task) => {
+        if (task.type === "videoScript") {
+          if (task.generationId && supersededScriptIds.has(Number(task.generationId))) {
+            return false;
+          }
+          if (task.brandId != null && task.trendId != null && task.ideaIndex != null) {
+            const key = String(task.brandId) + "_" + String(task.trendId) + "_" + String(task.ideaIndex);
+            if (videoProjectIdeaKeys.has(key)) return false;
+          }
+        }
         if (task.status === "submitting" || task.status === "polling") {
           return true;
         }
