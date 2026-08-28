@@ -183,6 +183,8 @@ describe("video script generation flow", () => {
     const modelSelect = dialog.find('[data-test="video-model-select"]');
 
     expect((modelSelect.element as HTMLSelectElement).value).toBe("g2");
+    expect((dialog.find('[data-test="video-aspect-select"]').element as HTMLSelectElement).value).toBe("smart");
+    expect(dialog.find('[data-test="video-aspect-select-trigger"]').text()).toContain("智能推荐");
     expect(dialog.findAll(".studio-select-trigger")).toHaveLength(5);
     expect(dialog.find('[data-test="video-studio-stepper"]').text()).toContain("选择模型与参数");
     expect(dialog.find('[data-test="video-step-1"]').attributes("aria-current")).toBe("step");
@@ -602,9 +604,13 @@ describe("video script generation flow", () => {
     await flushPromises();
     expect(auth.user?.credits).toBe(80);
 
+    await dialog.find('[data-test="video-step-previous"]').trigger("click");
+    expect(dialog.find('[data-test="video-step-script-panel"]').exists()).toBe(true);
     await vi.advanceTimersByTimeAsync(2500);
     await flushPromises();
+    expect(dialog.find('[data-test="video-step-script-panel"]').exists()).toBe(true);
     expect(auth.user?.credits).toBe(100);
+    await dialog.find('[data-test="video-step-next"]').trigger("click");
     expect(dialog.find('.clip-retry-btn').exists()).toBe(true);
 
     await dialog.find('.clip-retry-btn').trigger("click");

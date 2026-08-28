@@ -3,6 +3,7 @@ const { test } = require("node:test");
 const {
   STRUCTURED_FIELD_MAX_LENGTH,
   buildSystemPrompt,
+  buildUserPrompt,
   validateAndNormalizeVideoScript,
 } = require("../src/server/ai/video-script-service");
 
@@ -139,6 +140,27 @@ test("G2 显式选择 10 秒时强制生成单个 10 秒分镜并锁定用户画
   assert.equal(script.clips.length, 1);
   assert.deepEqual(script.clips.map((clip) => clip.durationSec), [10]);
   assert.deepEqual(script.clips.map((clip) => [clip.startSec, clip.endSec]), [[0, 10]]);
+});
+
+test("智能推荐画幅采用 AI 返回的受支持比例，而不是固定为 9:16", () => {
+  const script = validateAndNormalizeVideoScript(createRawScript({ aspectRatio: "16:9" }), {
+    requestedAspectRatio: "smart",
+    targetDuration: 10,
+    model: "g2",
+    mode: "text",
+  });
+
+  assert.equal(script.aspectRatio, "16:9");
+  assert.match(script.clips[0].prompt, /画幅比例：16:9/);
+
+  const prompt = buildUserPrompt({
+    idea: { title: "横向空间叙事" },
+    aspectRatio: "smart",
+    model: "g2",
+  });
+  assert.match(prompt, /根据内容智能推荐/);
+  assert.match(prompt, /不要固定使用 9:16/);
+  assert.match(prompt, /16:9/);
 });
 
 test("rawClip.prompt 为空时仍由已规范化的结构化字段生成完整提示词", () => {

@@ -210,7 +210,11 @@ function buildUserPrompt({ brand, trend, idea, aspectRatio, targetDuration = nul
 
   parts.push("【任务目标】");
   parts.push("请根据以下品牌信息、选题视角与视频参数要求，创作一份完整的结构化 AI 视频生成脚本。请将全部可执行细节准确写入各个分镜结构化字段；兼容字段 prompt 可留空，系统会自动编译最终完整提示词。");
-  parts.push(`要求输出视频比例：${aspectRatio || "9:16"}`);
+  if (aspectRatio === "smart") {
+    parts.push(`画幅比例由你根据内容智能推荐。必须从 ${getVideoModelConfig(model || "d2").aspectRatios.join("、")} 中选择一个，并在 aspectRatio 字段输出该精确值。请综合内容主体、叙事方式、构图空间和观看场景选择最合适的比例，不要固定使用 9:16。`);
+  } else {
+    parts.push(`要求输出视频比例：${aspectRatio || "9:16"}`);
+  }
   if (model) parts.push(`当前视频模型：${getVideoModelConfig(model).displayName}；生成方式：${mode === "image" ? "图生视频" : "文生视频"}`);
   if (targetDuration) {
     parts.push(`指定视频总时长：${targetDuration} 秒（必须严格将所有分镜时长划分并保证总和为 ${targetDuration} 秒）`);
@@ -290,12 +294,16 @@ function validateAndNormalizeVideoScript(raw, {
   const totalDurationSec = normalizedModel
     ? normalizeVideoDuration(targetDuration ?? raw.totalDurationSec, 30)
     : targetDuration ? normalizeTotalDuration(targetDuration) : normalizeTotalDuration(raw.totalDurationSec);
-  // Product-model scripts must obey the user's selected ratio. Model output is
-  // descriptive content, not an authority allowed to silently change a paid
-  // generation parameter.
+  const smartAspectRatio = requestedAspectRatio === "smart";
+  // Explicit choices remain locked. With smart recommendation the model may
+  // choose any ratio supported by the selected video model.
   const aspectRatio = normalizedModel
-    ? resolveVideoAspectRatio(requestedAspectRatio, "9:16")
-    : compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
+    ? smartAspectRatio
+      ? resolveVideoAspectRatio(raw.aspectRatio, "9:16")
+      : resolveVideoAspectRatio(requestedAspectRatio, "9:16")
+    : smartAspectRatio
+      ? resolveVideoAspectRatio(raw.aspectRatio, "9:16")
+      : compactString(raw.aspectRatio, requestedAspectRatio || "9:16", 20);
 
   const globalSubjectReference = compactString(raw.globalSubjectReference, "保持全片主体特征与质感一致", STRUCTURED_FIELD_MAX_LENGTH);
   const globalStyleReference = compactString(raw.globalStyleReference, "电影感光影与统一色调", STRUCTURED_FIELD_MAX_LENGTH);
@@ -454,9 +462,11 @@ async function generateVideoScript(
   } = {},
 ) {
   const normalizedModel = model ? normalizeModelId(model) : "";
-  const safeAspectRatio = normalizedModel
-    ? resolveVideoAspectRatio(aspectRatio === "smart" ? "9:16" : aspectRatio, "9:16")
-    : (aspectRatio === "smart" || !aspectRatio ? "9:16" : aspectRatio);
+  const safeAspectRatio = aspectRatio === "smart"
+    ? "smart"
+    : normalizedModel
+      ? resolveVideoAspectRatio(aspectRatio, "9:16")
+      : (aspectRatio || "9:16");
   const targetDuration =
     durationSelection && durationSelection !== "auto" && (normalizedModel ? VIDEO_TOTAL_DURATION_OPTIONS : ALLOWED_TOTAL_DURATIONS).includes(Number(durationSelection))
       ? Number(durationSelection)

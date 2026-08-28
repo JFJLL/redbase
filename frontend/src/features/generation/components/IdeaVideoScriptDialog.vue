@@ -91,7 +91,7 @@ const settings = computed(() => getIdeaCreativeSettings(ideaKey.value));
 const brandIdRef = computed(() => brand.value?.id);
 const trendIdRef = computed(() => trend.value?.id);
 const ideaIndexRef = computed(() => props.ideaIndex);
-const videoAspectRatioRef = ref(settings.value.videoAspectRatio || "9:16");
+const videoAspectRatioRef = ref(settings.value.videoAspectRatio || "smart");
 const videoDurationRef = ref(settings.value.videoDuration || "auto");
 const videoModelRef = ref(settings.value.videoModel || "g2");
 const videoModeRef = ref(settings.value.videoMode || "text");
@@ -135,7 +135,6 @@ function applyProjectUpdate(next: VideoProject | null) {
   const previousRefunded = project.value ? Number(project.value.refundedCredits || 0) : 0;
   project.value = next;
   const nextRefunded = next ? Number(next.refundedCredits || 0) : 0;
-  if (next) currentStep.value = 3;
   if (nextRefunded > previousRefunded) {
     void auth.refreshUser().catch(() => {});
   }
@@ -188,7 +187,7 @@ const videoDurationSelectOptions = computed(() => visibleVideoDurationOptions.va
   label: option.label,
 })));
 const videoAspectSelectOptions = computed(() => [
-  { value: "smart", label: "智能竖屏（9:16）" },
+  { value: "smart", label: "智能推荐" },
   ...availableVideoRatios.value.map((ratio) => ({ value: ratio, label: ratio })),
 ]);
 const videoResolutionSelectOptions = computed(() => availableResolutions.value.map((resolution) => ({
@@ -320,13 +319,13 @@ const scriptCompatible = computed(() => {
   const capability = activeVideoCapability.value;
   const currentScript = script.value;
   if (!capability || !currentScript) return true;
-  const scriptRatio = currentScript.aspectRatio === "smart" ? "9:16" : currentScript.aspectRatio;
-  const expectedRatio = videoAspectRatioRef.value === "smart" ? "9:16" : videoAspectRatioRef.value;
+  const scriptRatio = currentScript.aspectRatio;
   const totalDuration = Number(currentScript.totalDurationSec);
   const selectedDuration = videoDurationRef.value === "auto" ? totalDuration : Number(videoDurationRef.value);
   const expectedDurations = segmentVideoDuration(capability, selectedDuration);
   const clips = currentScript.clips || [];
-  if (scriptRatio !== expectedRatio || !capability.aspectRatios.includes(scriptRatio)) return false;
+  if (!capability.aspectRatios.includes(scriptRatio)) return false;
+  if (videoAspectRatioRef.value !== "smart" && scriptRatio !== videoAspectRatioRef.value) return false;
   if (!Number.isFinite(totalDuration) || totalDuration !== selectedDuration || !expectedDurations.length) return false;
   if (clips.length !== expectedDurations.length) return false;
   let expectedStart = 0;
@@ -524,6 +523,7 @@ async function restoreActiveProject() {
     const existing = response.projects?.[0];
     if (!existing || disposed) return;
     applyProjectUpdate(existing);
+    currentStep.value = 3;
     videoModelRef.value = existing.model;
     videoModeRef.value = existing.mode;
     videoResolutionRef.value = existing.resolution;
@@ -612,7 +612,7 @@ async function generateRealVideo() {
       model: videoModelRef.value,
       mode: videoModeRef.value,
       resolution: videoResolutionRef.value,
-      aspectRatio: videoAspectRatioRef.value === "smart" ? "9:16" : videoAspectRatioRef.value,
+      aspectRatio: videoAspectRatioRef.value === "smart" ? script.value.aspectRatio : videoAspectRatioRef.value,
       totalDurationSec: videoDurationRef.value === "auto" ? Number(script.value.totalDurationSec || 30) : Number(videoDurationRef.value),
       referenceAssetIds: selectedVideoReferenceIds.value.slice(0, maxVideoReferences.value),
     }, scope.signalFor("video-project-create"));
@@ -620,6 +620,9 @@ async function generateRealVideo() {
     mergeAuthUser(response.user);
     const tasksStore = useGenerationTasksStore();
     const historyStore = useHistoryStore();
+    if (response.generation?.id && response.generation?.type === "videoProject") {
+      historyStore.upsertGeneration(response.generation as unknown as GenerationHistoryItem);
+    }
     const ideaTitle = trend.value?.ideas?.[props.ideaIndex]?.title || script.value?.title || "";
     tasksStore.startVideoProjectTask({
       brandId: Number(brand.value.id),
@@ -630,6 +633,7 @@ async function generateRealVideo() {
       ideaTitle,
       cardTitle: script.value?.title || ideaTitle || "AI 视频",
       projectId: response.project.id,
+      generationId: Number(response.generation?.id || response.project.generationId || 0) || undefined,
       videoStatus: response.project.status,
     });
     await historyStore.refresh().catch(() => {});

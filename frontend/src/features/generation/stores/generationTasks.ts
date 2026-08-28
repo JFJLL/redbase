@@ -72,6 +72,7 @@ export interface GenerationTaskItem {
   previewUrl?: string;
   error?: string;
   generationId?: number | null;
+  projectId?: number | null;
   creditEventId?: number | null;
   viewed: boolean;
   copy?: {
@@ -187,8 +188,17 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
           .filter((item) => item.type === "videoProject" && item.payload?.ideaIndex != null)
           .map((item) => String(item.brandId) + "_" + String(item.trendId) + "_" + String(item.payload?.ideaIndex)),
       );
+      const existingVideoProjectIds = new Set(
+        historyStore.items
+          .filter((item) => item.type === "videoProject" && item.payload?.projectId != null)
+          .map((item) => Number(item.payload?.projectId)),
+      );
 
       return state.tasks.filter((task) => {
+        if (task.type === "videoProject") {
+          if (task.generationId && existingHistoryIds.has(Number(task.generationId))) return false;
+          if (task.projectId && existingVideoProjectIds.has(Number(task.projectId))) return false;
+        }
         if (task.type === "videoScript") {
           if (task.generationId && supersededScriptIds.has(Number(task.generationId))) {
             return false;
@@ -245,18 +255,20 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       ideaTitle?: string;
       cardTitle?: string;
       projectId: number;
+      generationId?: number;
       videoStatus?: string;
     }): GenerationTaskItem {
       const clientTaskId = "vp_" + String(params.brandId) + "_" + String(params.trendId) + "_" + String(params.ideaIndex) + "_" + String(params.projectId);
-      const existingIndex = this.tasks.findIndex(
-        (t) =>
-          (t.type === "videoScript" || t.type === "videoProject") &&
-          Number(t.brandId) === Number(params.brandId) &&
-          Number(t.trendId) === Number(params.trendId) &&
-          Number(t.ideaIndex) === Number(params.ideaIndex),
-      );
-      if (existingIndex >= 0) {
-        this.tasks.splice(existingIndex, 1);
+      for (let index = this.tasks.length - 1; index >= 0; index -= 1) {
+        const task = this.tasks[index];
+        if (
+          (task.type === "videoScript" || task.type === "videoProject") &&
+          Number(task.brandId) === Number(params.brandId) &&
+          Number(task.trendId) === Number(params.trendId) &&
+          Number(task.ideaIndex) === Number(params.ideaIndex)
+        ) {
+          this.tasks.splice(index, 1);
+        }
       }
 
       const task: GenerationTaskItem = reactive({
@@ -270,6 +282,8 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         trendTitle: params.trendTitle || "",
         ideaTitle: params.ideaTitle || "",
         cardTitle: params.cardTitle || params.ideaTitle || "AI 视频",
+        projectId: params.projectId,
+        generationId: params.generationId || null,
         status: (params.videoStatus === "completed" ? "completed" : "polling") as GenerationTaskStatus,
         createdAt: Date.now(),
         viewed: false,
@@ -667,6 +681,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
           (result.generation?.payload as Record<string, unknown> | undefined)?.videoScript ||
           null) as VideoScript | null;
         task.videoScript = generatedScript || undefined;
+        if (generatedScript?.aspectRatio) task.aspectRatio = generatedScript.aspectRatio;
         if (result.generation?.id) task.generationId = Number(result.generation.id);
         if (result.generation) task.generation = result.generation as GenerationHistoryItem;
         if (typeof result.generation?.cardTitle === "string") task.cardTitle = result.generation.cardTitle;

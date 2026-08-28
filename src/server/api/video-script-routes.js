@@ -60,7 +60,7 @@ function calculateVideoScriptInputSignature({
   styleReferenceSignature,
 }) {
   const canonical = {
-    aspectRatio: resolveVideoAspectRatio(aspectRatio, "9:16"),
+    aspectRatio: aspectRatio === "smart" ? "smart" : resolveVideoAspectRatio(aspectRatio, "9:16"),
     brandId: Number(brandId),
     duration: String(duration || "auto"),
     effectiveVideoReferenceIds: Array.isArray(effectiveVideoReferenceIds)
@@ -128,7 +128,9 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
     const model = requestedModel ? normalizeModelId(requestedModel) : "";
     const modelConfig = model ? getVideoModelConfig(model) : null;
     const mode = String(payload.mode || "text").trim().toLowerCase();
-    const requestedVideoAspectRatio = resolveVideoAspectRatio(payload.aspectRatioSelection || "9:16", "9:16");
+    const requestedVideoAspectRatio = payload.aspectRatioSelection === "smart"
+      ? "smart"
+      : resolveVideoAspectRatio(payload.aspectRatioSelection || "9:16", "9:16");
 
     // 解析受控素材输入
     const resolvedImages = [];
@@ -272,7 +274,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         Number(p.ideaIndex) === ideaIndex &&
         (!model || String(p.videoModel || "").toLowerCase() === model) &&
         (!model || String(p.videoMode || "text").toLowerCase() === mode) &&
-        (resolveVideoAspectRatio(p.videoAspectRatio || p.aspectRatio, "9:16") === requestedVideoAspectRatio);
+        ((p.aspectRatioSelection === "smart" ? "smart" : resolveVideoAspectRatio(p.videoAspectRatio || p.aspectRatio, "9:16")) === requestedVideoAspectRatio);
       if (!matches) {
         json(res, 409, { error: "请求已被使用但输入参数不一致", code: "VIDEO_IDEMPOTENCY_CONFLICT" });
         return true;
@@ -385,6 +387,7 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
           requestId,
           inputSignature,
           ideaIndex,
+          aspectRatioSelection: requestedVideoAspectRatio,
           aspectRatio: script.aspectRatio || requestedVideoAspectRatio,
           videoAspectRatio: script.aspectRatio || requestedVideoAspectRatio,
           videoDuration: script.totalDurationSec || normalizeTotalDuration(payload.videoDuration || payload.durationSelection || "auto", 30),
