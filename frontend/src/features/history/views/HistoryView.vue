@@ -297,6 +297,17 @@ async function continueVideoFromScript(item: GenerationHistoryItem): Promise<voi
     );
     if (response.user) auth.user = { ...auth.user, ...response.user };
     else await auth.refreshUser().catch(() => {});
+    tasksStore.startVideoProjectTask({
+      brandId: context.brandId,
+      trendId: context.trendId,
+      ideaIndex: context.ideaIndex,
+      brandName: item.brandName,
+      trendTitle: item.trendTitle,
+      ideaTitle: item.ideaTitle,
+      cardTitle: item.cardTitle || "AI 视频",
+      projectId: response.project.id,
+      videoStatus: response.project.status,
+    });
     startVideoError.value = "";
     await historyStore.refresh();
     closeDetail();

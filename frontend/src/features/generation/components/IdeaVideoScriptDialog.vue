@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
+import { useGenerationTasksStore } from "../stores/generationTasks";
+import { useHistoryStore } from "@/features/history/stores/history";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { fileToDataUrl } from "@/shared/utils/fileToDataUrl";
 import { useInsightsStore } from "@/features/trends/stores/insights";
@@ -561,7 +563,16 @@ async function pollProject(projectId: number) {
   try {
     const response = await fetchVideoProject(projectId, scope.signalFor("video-project-poll"));
     applyProjectUpdate(response.project);
-    if (TERMINAL_PROJECT_POLL_STATUSES.has(response.project.status)) return;
+    const tasksStore = useGenerationTasksStore();
+    const historyStore = useHistoryStore();
+    tasksStore.updateVideoProjectTask(projectId, {
+      videoStatus: response.project.status,
+      status: response.project.status === "completed" ? "completed" : response.project.status === "failed" ? "failed" : "polling",
+    });
+    if (TERMINAL_PROJECT_POLL_STATUSES.has(response.project.status)) {
+      await historyStore.refresh().catch(() => {});
+      return;
+    }
     projectPollTimer = setTimeout(() => pollProject(projectId), 2500);
   } catch (error) {
     if (isAbortError(error)) return;
@@ -607,6 +618,21 @@ async function generateRealVideo() {
     }, scope.signalFor("video-project-create"));
     applyProjectUpdate(response.project);
     mergeAuthUser(response.user);
+    const tasksStore = useGenerationTasksStore();
+    const historyStore = useHistoryStore();
+    const ideaTitle = trend.value?.ideas?.[props.ideaIndex]?.title || script.value?.title || "";
+    tasksStore.startVideoProjectTask({
+      brandId: Number(brand.value.id),
+      trendId: Number(trend.value.id),
+      ideaIndex: props.ideaIndex,
+      brandName: brand.value.name,
+      trendTitle: trend.value.title,
+      ideaTitle,
+      cardTitle: script.value?.title || ideaTitle || "AI 视频",
+      projectId: response.project.id,
+      videoStatus: response.project.status,
+    });
+    await historyStore.refresh().catch(() => {});
     if (response.project.status !== "completed") await pollProject(response.project.id);
   } catch (error) {
     projectError.value = (error as Error).message || "真实视频生成提交失败，请重试。";

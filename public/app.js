@@ -139,7 +139,7 @@ const HISTORY_TYPE_LABELS = new Map([
 ]);
 
 const VIDEO_PROJECT_STATUS_LABELS = Object.freeze({
-  queued: "排队中",
+  queued: "生成中",
   running: "生成中",
   processing_result: "正在处理生成结果",
   result_processing_failed: "结果处理失败",
@@ -156,7 +156,7 @@ const VIDEO_PROJECT_STATUS_LABELS = Object.freeze({
 
 const VIDEO_CLIP_STATUS_LABELS = Object.freeze({
   waiting_dependency: "等待前置镜头",
-  queued: "排队中",
+  queued: "生成中",
   submitting: "提交中",
   running: "生成中",
   processing_result: "处理生成结果中",

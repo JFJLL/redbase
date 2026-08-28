@@ -27,7 +27,7 @@ import {
   type VideoScriptSubmitResult,
 } from "../api";
 
-export type GenerationTaskType = "moments" | "wechat" | "xhsCarousel" | "styleImage" | "videoScript";
+export type GenerationTaskType = "moments" | "wechat" | "xhsCarousel" | "styleImage" | "videoScript" | "videoProject";
 export type GenerationTaskStatus = "idle" | "submitting" | "polling" | "completed" | "failed";
 
 export interface CarouselSlideItem {
@@ -99,6 +99,8 @@ function channelLabelForType(type: GenerationTaskType): string {
       return "风格化图";
     case "videoScript":
       return "视频脚本";
+    case "videoProject":
+      return "AI 视频";
     default:
       return "图片生成";
   }
@@ -116,14 +118,26 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
     activeTasks: (state) =>
       state.tasks.filter((task) => task.status === "submitting" || task.status === "polling"),
 
-    hasRunningTasks: (state) =>
-      state.tasks.some(
-        (task) =>
-          task.status === "submitting" ||
-          task.status === "polling" ||
-          (task.type === "xhsCarousel" &&
-            task.slides?.some((s) => s.status === "submitting" || s.status === "polling")),
-      ),
+    hasRunningTasks: (state) => {
+      const historyStore = useHistoryStore();
+      const hasRunningHistoryVideo = historyStore.items.some(
+        (item) =>
+          item.type === "videoProject" &&
+          ["preparing", "queued", "submitting", "running", "processing_result", "assembling"].includes(
+            String(item.payload?.videoStatus || "").toLowerCase(),
+          ),
+      );
+      return (
+        hasRunningHistoryVideo ||
+        state.tasks.some(
+          (task) =>
+            task.status === "submitting" ||
+            task.status === "polling" ||
+            (task.type === "xhsCarousel" &&
+              task.slides?.some((s) => s.status === "submitting" || s.status === "polling")),
+        )
+      );
+    },
 
     runningTasksCount: (state) =>
       state.tasks.filter(
@@ -221,6 +235,59 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       for (const task of this.tasks) {
         task.viewed = true;
       }
+    },
+
+    startVideoProjectTask(params: {
+      brandId: number;
+      trendId: number;
+      ideaIndex: number;
+      brandName?: string;
+      trendTitle?: string;
+      ideaTitle?: string;
+      cardTitle?: string;
+      projectId: number;
+      videoStatus?: string;
+    }): GenerationTaskItem {
+      const clientTaskId = "vp_" + String(params.brandId) + "_" + String(params.trendId) + "_" + String(params.ideaIndex) + "_" + String(params.projectId);
+      const existingIndex = this.tasks.findIndex(
+        (t) =>
+          (t.type === "videoScript" || t.type === "videoProject") &&
+          Number(t.brandId) === Number(params.brandId) &&
+          Number(t.trendId) === Number(params.trendId) &&
+          Number(t.ideaIndex) === Number(params.ideaIndex),
+      );
+      if (existingIndex >= 0) {
+        this.tasks.splice(existingIndex, 1);
+      }
+
+      const task: GenerationTaskItem = reactive({
+        id: clientTaskId,
+        type: "videoProject",
+        channelLabel: "AI 视频",
+        brandId: params.brandId,
+        trendId: params.trendId,
+        ideaIndex: params.ideaIndex,
+        brandName: params.brandName || "",
+        trendTitle: params.trendTitle || "",
+        ideaTitle: params.ideaTitle || "",
+        cardTitle: params.cardTitle || params.ideaTitle || "AI 视频",
+        status: (params.videoStatus === "completed" ? "completed" : "polling") as GenerationTaskStatus,
+        createdAt: Date.now(),
+        viewed: false,
+      });
+
+      this.tasks.unshift(task);
+      return task;
+    },
+
+    updateVideoProjectTask(
+      projectId: number,
+      update: { videoStatus?: string; status?: GenerationTaskStatus },
+    ): void {
+      const task = this.tasks.find((t) => t.type === "videoProject" && t.id.includes("_" + String(projectId)));
+      if (!task) return;
+      if (update.status) task.status = update.status;
+      if (update.status === "completed") task.completedAt = Date.now();
     },
 
     async startMomentsTask(params: {
