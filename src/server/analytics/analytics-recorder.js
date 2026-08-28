@@ -6,6 +6,21 @@ const {
   CLIENT_EVENT_WHITELIST,
 } = require("./analytics-constants");
 
+function actionTypeToFeature(actionType) {
+  const t = String(actionType || "");
+  if (t === "momentsImage") return "moments";
+  if (t === "wechatImage") return "wechat_long_image";
+  if (t === "xhsCarousel" || t === "xhsCarouselSlide") return "xhs_carousel";
+  if (t === "styleImage") return "style_image";
+  if (t === "imageEdit") return "image_edit";
+  if (t === "videoScript") return "video_script";
+  if (t === "videoProject" || t === "videoProjectRetry") return "video_project";
+  if (t === "trend_analysis" || t === "trendAnalysis") return "trend_analysis";
+  if (t === "excellent_direction" || t === "excellentDirection") return "excellent_direction";
+  if (t === "excellent_fusion" || t === "excellentFusion") return "excellent_fusion";
+  return "";
+}
+
 function recordUserActiveDay({ userId, accountType, occurredAt } = {}) {
   if (!userId) return false;
   const nowIso = occurredAt || new Date().toISOString();
@@ -171,40 +186,71 @@ function recordExcellentFusionFailed({ requestId, userId, error, failedAt } = {}
   });
 }
 
-function recordOutputCompleted({ generationId, userId, type, model, creditCost, durationMs, completedAt } = {}) {
-  if (!generationId) return false;
+function recordOutputCompleted({
+  eventKey,
+  generationId,
+  userId,
+  accountType,
+  type,
+  model,
+  creditCost,
+  durationMs,
+  completedAt,
+  entityType = "generation",
+  entityId,
+} = {}) {
+  const key = eventKey || (generationId ? `output_completed:${generationId}` : "");
+  if (!key) return false;
   const nowIso = completedAt || new Date().toISOString();
   const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "other";
-  const eventKey = `output_completed:${generationId}`;
+  const effectiveEntityId = entityId != null ? String(entityId) : (generationId ? String(generationId) : "");
   return insertAnalyticsEvent({
-    eventKey,
+    eventKey: key,
     eventName: "output_completed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
     feature,
     status: "completed",
-    entityType: "generation",
-    entityId: String(generationId),
+    entityType: entityType || "generation",
+    entityId: effectiveEntityId,
+    sourceTable: generationId ? "generations" : "",
+    sourceId: generationId ? String(generationId) : "",
     model: String(model || ""),
     creditCost: Number(creditCost || 0),
     durationMs: Number(durationMs || 0),
   });
 }
 
-function recordOutputFailed({ generationId, userId, type, model, error, failedAt } = {}) {
-  if (!generationId) return false;
+function recordOutputFailed({
+  eventKey,
+  generationId,
+  userId,
+  accountType,
+  type,
+  model,
+  error,
+  failedAt,
+  entityType = "generation",
+  entityId,
+} = {}) {
+  const key = eventKey || (generationId ? `output_failed:${generationId}` : "");
+  if (!key) return false;
   const nowIso = failedAt || new Date().toISOString();
   const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "other";
-  const eventKey = `output_failed:${generationId}`;
+  const effectiveEntityId = entityId != null ? String(entityId) : (generationId ? String(generationId) : "");
   return insertAnalyticsEvent({
-    eventKey,
+    eventKey: key,
     eventName: "output_failed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
     feature,
     status: "failed",
-    entityType: "generation",
-    entityId: String(generationId),
+    entityType: entityType || "generation",
+    entityId: effectiveEntityId,
+    sourceTable: generationId ? "generations" : "",
+    sourceId: generationId ? String(generationId) : "",
     model: String(model || ""),
     metadata: { error: String(error || "").slice(0, 200) },
   });
@@ -327,70 +373,76 @@ function recordVideoProjectFailed({ projectId, userId, model, mode, error, faile
   });
 }
 
-function recordPaymentOrderCreated({ outTradeNo, userId, amountFen, planId, provider, createdAt } = {}) {
-  if (!outTradeNo) return false;
+function recordPaymentOrderCreated({ orderId, userId, accountType, amountFen, planId, planName, planCredits, provider, createdAt } = {}) {
+  if (!orderId) return false;
   const nowIso = createdAt || new Date().toISOString();
-  const eventKey = `payment_order_created:${outTradeNo}`;
+  const eventKey = `payment_order_created:${orderId}`;
   return insertAnalyticsEvent({
     eventKey,
     eventName: "payment_order_created",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
     entityType: "payment_order",
-    entityId: String(outTradeNo),
+    entityId: String(orderId),
     provider: String(provider || ""),
     amountFen: Number(amountFen || 0),
-    metadata: { planId },
+    metadata: { planId: planId || "", planName: planName || "", planCredits: Number(planCredits || 0) },
   });
 }
 
-function recordPaymentPaid({ outTradeNo, userId, amountFen, planId, planCredits, provider, paidAt } = {}) {
-  if (!outTradeNo) return false;
+function recordPaymentPaid({ orderId, userId, accountType, amountFen, planId, planName, planCredits, provider, paidAt } = {}) {
+  if (!orderId) return false;
   const nowIso = paidAt || new Date().toISOString();
-  const eventKey = `payment_paid:${outTradeNo}`;
+  const eventKey = `payment_paid:${orderId}`;
   return insertAnalyticsEvent({
     eventKey,
     eventName: "payment_paid",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
     status: "paid",
     entityType: "payment_order",
-    entityId: String(outTradeNo),
+    entityId: String(orderId),
     provider: String(provider || ""),
     amountFen: Number(amountFen || 0),
     creditDelta: Number(planCredits || 0),
-    metadata: { planId },
+    metadata: { planId: planId || "", planName: planName || "", planCredits: Number(planCredits || 0) },
   });
 }
 
-function recordPaymentFailed({ outTradeNo, userId, amountFen, provider, error, failedAt } = {}) {
-  if (!outTradeNo) return false;
+function recordPaymentFailed({ orderId, userId, accountType, amountFen, provider, error, failedAt } = {}) {
+  if (!orderId) return false;
   const nowIso = failedAt || new Date().toISOString();
-  const eventKey = `payment_failed:${outTradeNo}`;
+  const eventKey = `payment_failed:${orderId}`;
   return insertAnalyticsEvent({
     eventKey,
     eventName: "payment_failed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
     status: "failed",
     entityType: "payment_order",
-    entityId: String(outTradeNo),
+    entityId: String(orderId),
     provider: String(provider || ""),
     amountFen: Number(amountFen || 0),
     metadata: { error: String(error || "").slice(0, 200) },
   });
 }
 
-function recordCreditConsumed({ creditEventId, userId, actionType, creditDelta, creditCost, generationId, createdAt } = {}) {
+function recordCreditConsumed({ creditEventId, userId, accountType, actionType, feature, creditDelta, creditCost, generationId, createdAt } = {}) {
   if (!creditEventId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_consumed:${creditEventId}`;
   const cost = Math.abs(Number(creditCost || creditDelta || 0));
+  const feat = feature || actionTypeToFeature(actionType);
   return insertAnalyticsEvent({
     eventKey,
     eventName: "credit_consumed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
+    feature: feat,
     entityType: "credit_event",
     entityId: String(creditEventId),
     sourceTable: "generations",
@@ -401,16 +453,19 @@ function recordCreditConsumed({ creditEventId, userId, actionType, creditDelta, 
   });
 }
 
-function recordCreditRefunded({ creditEventId, userId, actionType, creditDelta, refundForCreditEventId, createdAt } = {}) {
+function recordCreditRefunded({ creditEventId, userId, accountType, actionType, feature, creditDelta, refundForCreditEventId, createdAt } = {}) {
   if (!creditEventId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_refunded:${creditEventId}`;
   const amount = Math.abs(Number(creditDelta || 0));
+  const feat = feature || actionTypeToFeature(actionType);
   return insertAnalyticsEvent({
     eventKey,
     eventName: "credit_refunded",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
+    feature: feat,
     entityType: "credit_event",
     entityId: String(creditEventId),
     creditDelta: amount,
@@ -418,7 +473,7 @@ function recordCreditRefunded({ creditEventId, userId, actionType, creditDelta, 
   });
 }
 
-function recordCreditGranted({ creditEventId, userId, actionType, creditDelta, adminUserId, createdAt } = {}) {
+function recordCreditGranted({ creditEventId, userId, accountType, actionType, creditDelta, adminUserId, createdAt } = {}) {
   if (!creditEventId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_granted:${creditEventId}`;
@@ -427,6 +482,7 @@ function recordCreditGranted({ creditEventId, userId, actionType, creditDelta, a
     eventName: "credit_granted",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType: accountType || "customer",
     entityType: "credit_event",
     entityId: String(creditEventId),
     creditDelta: Number(creditDelta || 0),

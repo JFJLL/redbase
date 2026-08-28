@@ -1,7 +1,8 @@
 const { getCookieSessionToken } = require("../auth/cookies");
 
 const MAX_REQUEST_BODY_BYTES = 45 * 1024 * 1024;
-async function collectBody(req) {
+async function collectBody(req, options = {}) {
+  const maxBytes = Number.isFinite(Number(options?.maxBytes)) ? Number(options.maxBytes) : MAX_REQUEST_BODY_BYTES;
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalBytes = 0;
@@ -11,10 +12,10 @@ async function collectBody(req) {
       if (tooLarge) return;
 
       totalBytes += chunk.length;
-      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+      if (totalBytes > maxBytes) {
         tooLarge = true;
-        reject(Object.assign(new Error("请求体过大，请压缩图片或上传更小的文件。"), { code: "PAYLOAD_TOO_LARGE" }));
-        req.destroy();
+        reject(Object.assign(new Error("请求体过大，请压缩图片或上传更小的文件。"), { code: "PAYLOAD_TOO_LARGE", status: 413, statusCode: 413 }));
+        if (typeof req.destroy === "function") req.destroy();
         return;
       }
 
@@ -118,8 +119,11 @@ function truncateLogString(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-function json(res, statusCode, payload) {
-  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+function json(res, statusCode, payload, headers = {}) {
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    ...headers,
+  });
   res.end(JSON.stringify(payload));
 }
 

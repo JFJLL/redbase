@@ -9,14 +9,31 @@ const {
   getFinanceMetrics,
   getSystemMetrics,
 } = require("../analytics/analytics-metrics");
+const { parsePaginationDate } = require("../analytics/analytics-query-range");
 const { recordClientEvent } = require("../analytics/analytics-recorder");
 const { safeParseObject } = require("../db/snapshot-utils");
 
 const db = getDbProxy();
 
-// In-memory short TTL cache (20 seconds) for analytics queries
+// In-memory short TTL LRU cache (20 seconds, max 200 items) for analytics queries
 const queryCache = new Map();
 const CACHE_TTL_MS = 20 * 1000;
+const MAX_CACHE_SIZE = 200;
+const clientEventRateLimits = new Map();
+
+function isClientEventRateLimited(userId) {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  const maxEvents = 60;
+  const current = clientEventRateLimits.get(userId);
+  if (!current || now - current.windowStartMs > windowMs) {
+    clientEventRateLimits.set(userId, { count: 1, windowStartMs: now });
+    return false;
+  }
+  if (current.count >= maxEvents) return true;
+  current.count++;
+  return false;
+}
 
 function getCached(key) {
   const entry = queryCache.get(key);
@@ -25,23 +42,26 @@ function getCached(key) {
     queryCache.delete(key);
     return null;
   }
+  queryCache.delete(key);
+  queryCache.set(key, entry);
   return entry.data;
 }
 
 function setCached(key, data) {
-  // Evict old entries if cache grows too large
-  if (queryCache.size > 200) {
-    const now = Date.now();
-    for (const [k, v] of queryCache.entries()) {
-      if (now > v.expiresAt) queryCache.delete(k);
-    }
+  if (queryCache.has(key)) {
+    queryCache.delete(key);
+  } else if (queryCache.size >= MAX_CACHE_SIZE) {
+    const oldestKey = queryCache.keys().next().value;
+    if (oldestKey) queryCache.delete(oldestKey);
   }
   queryCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
 }
 
 function parsePagination(url) {
-  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
-  const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "20", 10)));
+  const rawPage = parseInt(url.searchParams.get("page") || "1", 10);
+  const rawPageSize = parseInt(url.searchParams.get("pageSize") || "20", 10);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
+  const pageSize = Number.isFinite(rawPageSize) ? Math.min(100, Math.max(1, rawPageSize)) : 20;
   const offset = (page - 1) * pageSize;
   return { page, pageSize, offset };
 }
@@ -79,12 +99,20 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
       unauthorized(res, "登录会话已失效");
       return true;
     }
+    if (isClientEventRateLimited(user.id)) {
+      json(res, 429, { error: "埋点请求过于频繁，请稍后再试" });
+      return true;
+    }
 
     let body;
     try {
       body = await collectBody(req, { maxBytes: 2048 });
     } catch (e) {
-      badRequest(res, "事件数据过大");
+      if (e.statusCode === 413 || e.status === 413 || e.code === "PAYLOAD_TOO_LARGE") {
+        json(res, 413, { error: "事件数据过大，单条埋点不能超过 2KB" });
+      } else {
+        badRequest(res, "事件数据无效");
+      }
       return true;
     }
 
@@ -225,8 +253,15 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
       const type = String(url.searchParams.get("type") || "").trim();
       const visibilityStatus = String(url.searchParams.get("visibilityStatus") || "").trim();
       const assetStatus = String(url.searchParams.get("assetStatus") || "").trim();
-      const from = String(url.searchParams.get("from") || "").trim();
-      const to = String(url.searchParams.get("to") || "").trim();
+      let from;
+      let to;
+      try {
+        from = parsePaginationDate(url.searchParams.get("from"), "start");
+        to = parsePaginationDate(url.searchParams.get("to"), "end");
+      } catch (err) {
+        badRequest(res, err.message);
+        return true;
+      }
       const conditions = [];
       const params = [];
       if (q) {
@@ -281,8 +316,15 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
     if (pathname === "/api/admin/data/credit-events") {
       const actionType = String(url.searchParams.get("actionType") || "").trim();
       const userId = url.searchParams.get("userId");
-      const from = String(url.searchParams.get("from") || "").trim();
-      const to = String(url.searchParams.get("to") || "").trim();
+      let from;
+      let to;
+      try {
+        from = parsePaginationDate(url.searchParams.get("from"), "start");
+        to = parsePaginationDate(url.searchParams.get("to"), "end");
+      } catch (err) {
+        badRequest(res, err.message);
+        return true;
+      }
       const conditions = [];
       const params = [];
       if (q) {
@@ -333,8 +375,15 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
     if (pathname === "/api/admin/data/payment-orders") {
       const provider = String(url.searchParams.get("provider") || "").trim();
       const status = String(url.searchParams.get("status") || "").trim();
-      const from = String(url.searchParams.get("from") || "").trim();
-      const to = String(url.searchParams.get("to") || "").trim();
+      let from;
+      let to;
+      try {
+        from = parsePaginationDate(url.searchParams.get("from"), "start");
+        to = parsePaginationDate(url.searchParams.get("to"), "end");
+      } catch (err) {
+        badRequest(res, err.message);
+        return true;
+      }
       const conditions = [];
       const params = [];
       if (q) {
@@ -385,8 +434,15 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
     if (pathname === "/api/admin/data/video-projects") {
       const model = String(url.searchParams.get("model") || "").trim();
       const status = String(url.searchParams.get("status") || "").trim();
-      const from = String(url.searchParams.get("from") || "").trim();
-      const to = String(url.searchParams.get("to") || "").trim();
+      let from;
+      let to;
+      try {
+        from = parsePaginationDate(url.searchParams.get("from"), "start");
+        to = parsePaginationDate(url.searchParams.get("to"), "end");
+      } catch (err) {
+        badRequest(res, err.message);
+        return true;
+      }
       const conditions = [];
       const params = [];
       if (q) {

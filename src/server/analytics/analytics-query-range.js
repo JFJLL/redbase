@@ -2,6 +2,20 @@ const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_RANGE_DAYS = 366;
 
+function isValidCalendarDate(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ""))) return false;
+  const [y, m, d] = String(dateStr).split("-").map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
+function nextShanghaiDayDateString(dateStr) {
+  const [y, m, d] = String(dateStr).split("-").map(Number);
+  const ms = Date.UTC(y, m - 1, d + 1);
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 function toShanghaiDateString(dateOrMs) {
   const ms = typeof dateOrMs === "number" ? dateOrMs : new Date(dateOrMs).getTime();
   if (!Number.isFinite(ms)) return "";
@@ -22,6 +36,29 @@ function shanghaiDayEndIso(dateStr) {
   return new Date(ms).toISOString();
 }
 
+function parsePaginationDate(rawDate, boundary = "start") {
+  if (!rawDate) return undefined;
+  const str = String(rawDate).trim();
+  if (!str) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    if (!isValidCalendarDate(str)) {
+      const err = new Error("日期格式无效或不存在该日历日期");
+      err.code = "INVALID_DATE";
+      err.status = 400;
+      throw err;
+    }
+    return shanghaiDayStartIso(str);
+  }
+  const ms = Date.parse(str);
+  if (!Number.isFinite(ms)) {
+    const err = new Error("日期格式不正确");
+    err.code = "INVALID_DATE";
+    err.status = 400;
+    throw err;
+  }
+  return new Date(ms).toISOString();
+}
+
 function parseQueryRange(query = {}) {
   const tz = String(query.timezone || "Asia/Shanghai").trim();
   if (tz !== "Asia/Shanghai") {
@@ -33,6 +70,7 @@ function parseQueryRange(query = {}) {
 
   const nowMs = Date.now();
   const todayShanghai = toShanghaiDateString(nowMs);
+  const nextDayShanghai = nextShanghaiDayDateString(todayShanghai);
 
   let fromIso;
   let toIso;
@@ -42,13 +80,19 @@ function parseQueryRange(query = {}) {
     const todayStartMs = Date.parse(shanghaiDayStartIso(todayShanghai));
     const fromMs = todayStartMs - 6 * DAY_MS;
     fromIso = new Date(fromMs).toISOString();
-    toIso = shanghaiDayEndIso(todayShanghai);
+    toIso = shanghaiDayStartIso(nextDayShanghai);
   } else {
     const rawFrom = String(query.from || "").trim();
     const rawTo = String(query.to || "").trim();
 
     if (rawFrom) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(rawFrom)) {
+        if (!isValidCalendarDate(rawFrom)) {
+          const err = new Error("from 日期格式无效或不存在该日历日期");
+          err.code = "INVALID_DATE";
+          err.status = 400;
+          throw err;
+        }
         fromIso = shanghaiDayStartIso(rawFrom);
       } else {
         const ms = Date.parse(rawFrom);
@@ -67,8 +111,14 @@ function parseQueryRange(query = {}) {
 
     if (rawTo) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(rawTo)) {
-        // If date string given, 'to' is end of that day (exclusive boundary at next day 00:00)
-        toIso = shanghaiDayEndIso(rawTo);
+        if (!isValidCalendarDate(rawTo)) {
+          const err = new Error("to 日期格式无效或不存在该日历日期");
+          err.code = "INVALID_DATE";
+          err.status = 400;
+          throw err;
+        }
+        // Date-only to represents the start of that day (exclusive boundary [from, to))
+        toIso = shanghaiDayStartIso(rawTo);
       } else {
         const ms = Date.parse(rawTo);
         if (!Number.isFinite(ms)) {
@@ -80,7 +130,7 @@ function parseQueryRange(query = {}) {
         toIso = new Date(ms).toISOString();
       }
     } else {
-      toIso = shanghaiDayEndIso(todayShanghai);
+      toIso = shanghaiDayStartIso(nextDayShanghai);
     }
   }
 
@@ -138,8 +188,11 @@ module.exports = {
   SHANGHAI_OFFSET_MS,
   DAY_MS,
   MAX_RANGE_DAYS,
+  isValidCalendarDate,
+  nextShanghaiDayDateString,
   toShanghaiDateString,
   shanghaiDayStartIso,
   shanghaiDayEndIso,
   parseQueryRange,
+  parsePaginationDate,
 };

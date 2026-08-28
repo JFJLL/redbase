@@ -11,6 +11,7 @@ const {
   recordVideoScriptStarted,
   recordVideoScriptCompleted,
   recordVideoScriptFailed,
+  recordOutputCompleted,
 } = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
@@ -160,12 +161,25 @@ function completeVideoScriptRequest({ userId, requestId, generation } = {}) {
       error: "",
     });
     try {
+      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(userId);
+      const nowIso = new Date().toISOString();
       recordVideoScriptCompleted({
         requestId: request.requestId,
         userId,
         generationId: created.id,
         creditCost: request.creditCost,
-        completedAt: new Date().toISOString(),
+        completedAt: nowIso,
+      });
+      recordOutputCompleted({
+        eventKey: `output_completed:script:${request.requestId}`,
+        generationId: created.id,
+        userId,
+        accountType: userRow?.account_type || "customer",
+        type: "videoScript",
+        entityType: "video_script",
+        entityId: String(request.requestId),
+        creditCost: request.creditCost,
+        completedAt: created.createdAt || nowIso,
       });
     } catch (_) {}
     return { completed: true, request: completedRequest, generation: created, user: findUserById(userId) };

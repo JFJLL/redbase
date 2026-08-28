@@ -1,7 +1,6 @@
 const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
 const { mapGenerationRow } = require("./row-mappers");
-const { recordOutputCompleted } = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 
@@ -209,17 +208,7 @@ function upsertGeneration(generation) {
     generation.assetsDeleteError || "",
     generation.updatedAt || nowIso,
   );
-  const saved = findGenerationById(generation.id);
-  try {
-    recordOutputCompleted({
-      generationId: generation.id,
-      userId: generation.ownerUserId,
-      type: generation.type,
-      creditCost: 0,
-      completedAt: generation.createdAt,
-    });
-  } catch (_) {}
-  return saved;
+  return findGenerationById(generation.id);
 }
 
 function insertGeneration(generation) {

@@ -3,6 +3,7 @@ const https = require("https");
 const dns = require("dns");
 const net = require("net");
 const { joinUrl, assertConfigured, parseJsonFromModelText, withRetries } = require("../utils");
+const { recordTextTaskAttempt } = require("../analytics/ai-attempt-recorder");
 
 const DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024;
 let runningHubAddressCursor = 0;
@@ -607,13 +608,66 @@ async function callTextModelJson(appConfig, {
       : Math.min(configuredAttempts, Math.max(1, budgetRemaining)),
     delayMs,
   });
-  const runWithRetries = (task) => withRetries((attempt) => {
+  const runWithRetries = (task) => withRetries(async (attempt) => {
     // Every physical model HTTP attempt must consume one unit of the shared budget.
     if (budget && typeof budget.consume === "function") {
       budget.consume();
     }
+    const attemptStartedAt = Date.now();
+    let attemptUsage = null;
+    let attemptFirstByteMs = null;
+    const interceptTelemetry = (event) => {
+      if (event?.type === "first-byte") attemptFirstByteMs = event.elapsedMs;
+      if (event?.type === "usage") attemptUsage = event.usage;
+      onTelemetry?.(event);
+    };
     onTelemetry?.({ type: "attempt", attempt });
-    return task(attempt);
+    try {
+      const result = await task(attempt, interceptTelemetry);
+      try {
+        recordTextTaskAttempt({
+          feature: "trend_analysis",
+          taskType: "text_generation",
+          provider: provider.provider || provider.apiStyle || "text_provider",
+          model: provider.model || "",
+          attemptKind: attempt === 1 ? "initial" : "auto_retry",
+          attemptNo: attempt,
+          status: "completed",
+          startedAt: new Date(attemptStartedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - attemptStartedAt,
+          firstByteMs: attemptFirstByteMs,
+          inputTokens: attemptUsage?.prompt_tokens ?? attemptUsage?.input_tokens ?? null,
+          outputTokens: attemptUsage?.completion_tokens ?? attemptUsage?.output_tokens ?? null,
+          totalTokens: attemptUsage?.total_tokens ?? null,
+        });
+      } catch (_) {}
+      return result;
+    } catch (err) {
+      try {
+        const isTimeout = err.code === "ETIMEDOUT" || String(err.message || "").includes("timeout");
+        recordTextTaskAttempt({
+          feature: "trend_analysis",
+          taskType: "text_generation",
+          provider: provider.provider || provider.apiStyle || "text_provider",
+          model: provider.model || "",
+          attemptKind: attempt === 1 ? "initial" : "auto_retry",
+          attemptNo: attempt,
+          status: "failed",
+          errorStage: isTimeout ? "provider" : "submission",
+          errorCode: String(err.code || "MODEL_ERROR"),
+          errorMessage: String(err.message || "").slice(0, 500),
+          startedAt: new Date(attemptStartedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - attemptStartedAt,
+          firstByteMs: attemptFirstByteMs,
+          inputTokens: attemptUsage?.prompt_tokens ?? attemptUsage?.input_tokens ?? null,
+          outputTokens: attemptUsage?.completion_tokens ?? attemptUsage?.output_tokens ?? null,
+          totalTokens: attemptUsage?.total_tokens ?? null,
+        });
+      } catch (_) {}
+      throw err;
+    }
   }, retryOptions);
 
   if (provider.apiStyle === "google") {
@@ -697,7 +751,7 @@ async function callTextModelJson(appConfig, {
   };
   if (stream) {
     const text = await runWithRetries(
-      (attempt) =>
+      (attempt, telemetry) =>
         fetchOpenAIText(openAIUrl, {
           method: "POST",
           headers: {
@@ -705,7 +759,7 @@ async function callTextModelJson(appConfig, {
             Authorization: `Bearer ${provider.apiKey}`,
           },
           body: requestBody,
-          onTelemetry,
+          onTelemetry: telemetry || onTelemetry,
           ...getAttemptNetworkOptions(attempt),
           ...getAttemptRequestOptions(),
         }),
@@ -714,7 +768,7 @@ async function callTextModelJson(appConfig, {
   }
 
   const data = await runWithRetries(
-    (attempt) =>
+    (attempt, telemetry) =>
       fetchJson(openAIUrl, {
         method: "POST",
         headers: {
@@ -722,7 +776,7 @@ async function callTextModelJson(appConfig, {
           Authorization: `Bearer ${provider.apiKey}`,
         },
         body: requestBody,
-        onTelemetry,
+        onTelemetry: telemetry || onTelemetry,
         ...getAttemptNetworkOptions(attempt),
         ...getAttemptRequestOptions(),
       }),

@@ -34,6 +34,12 @@ const {
 const { extractFirstFrame, extractStableLastFrame, withVideoTempDir, defaultExecutor } = require("./video-frame-extractor");
 const { assembleVideoClips } = require("./video-assembler");
 const {
+  recordVideoClipAttempt,
+  recordVideoResultProcessingAttempt,
+  recordVideoAssemblyAttempt,
+} = require("../analytics/ai-attempt-recorder");
+const { recordOutputCompleted } = require("../analytics/analytics-recorder");
+const {
   DEFAULT_GENERATED_IMAGE_ASSET_BYTES,
   DEFAULT_VIDEO_CLIP_ASSET_BYTES,
   DEFAULT_VIDEO_FINAL_ASSET_BYTES,
@@ -251,9 +257,13 @@ function createVideoProjectService(options = {}) {
   }
 
   function buildPublicClip(project, clip) {
-    const videoUrl = clip.outputVideo?.asset ? signVideoPath(videoAssetPath(project.id, "clip", clip.index)) : "";
-    const posterUrl = clip.outputVideo?.asset ? signVideoPath(videoAssetPath(project.id, "poster", clip.index)) : "";
-    const continuityFrameUrl = clip.continuityFrame?.asset ? signVideoPath(videoAssetPath(project.id, "continuity-frame", clip.index)) : "";
+    const isClipAvailable = project?.assetStatus === "available" && clip?.assetStatus === "available";
+    const hasVideo = isClipAvailable && clip.outputVideo?.asset && !clip.outputVideo.asset.purged;
+    const hasPoster = isClipAvailable && (clip.outputVideo?.posterAsset || clip.outputVideo?.asset) && !(clip.outputVideo?.posterAsset?.purged || clip.outputVideo?.asset?.purged);
+    const hasContinuity = isClipAvailable && clip.continuityFrame?.asset && !clip.continuityFrame.asset.purged;
+    const videoUrl = hasVideo ? signVideoPath(videoAssetPath(project.id, "clip", clip.index)) : "";
+    const posterUrl = hasPoster ? signVideoPath(videoAssetPath(project.id, "poster", clip.index)) : "";
+    const continuityFrameUrl = hasContinuity ? signVideoPath(videoAssetPath(project.id, "continuity-frame", clip.index)) : "";
     return {
       id: clip.id,
       index: clip.index,
@@ -283,6 +293,13 @@ function createVideoProjectService(options = {}) {
 
   function serializeProject(project) {
     if (!project) return null;
+    const isAvailable = project.assetStatus === "available";
+    const hasFinalVideo = isAvailable && project.finalVideo?.asset && !project.finalVideo.asset.purged;
+    const hasFinalPoster = isAvailable && (project.finalVideo?.posterAsset || project.finalVideo?.asset) && !(project.finalVideo?.posterAsset?.purged || project.finalVideo?.asset?.purged);
+    const finalVideoUrl = hasFinalVideo ? signVideoPath(videoAssetPath(project.id, "final")) : "";
+    const finalPosterUrl = hasFinalPoster && project.clips?.[0]?.outputVideo?.asset && !project.clips[0].outputVideo.asset.purged
+      ? signVideoPath(videoAssetPath(project.id, "final-poster"))
+      : "";
     return {
       id: project.id,
       generationId: project.generationId,
@@ -303,16 +320,15 @@ function createVideoProjectService(options = {}) {
         originalName: asset.originalName,
         mimeType: asset.mimeType,
         sizeBytes: asset.sizeBytes,
+        url: isAvailable && asset.asset && !asset.asset.purged ? signVideoPath(videoAssetPath(project.id, "input", asset.position)) : "",
       })),
       visualBible: project.visualBible,
       script: project.script,
       estimatedCredits: project.estimatedCredits,
       chargedCredits: project.chargedCredits,
       refundedCredits: project.refundedCredits,
-      finalVideoUrl: project.finalVideo?.asset ? signVideoPath(videoAssetPath(project.id, "final")) : "",
-      finalPosterUrl: project.finalVideo?.asset && project.clips?.[0]?.outputVideo?.asset
-        ? signVideoPath(videoAssetPath(project.id, "final-poster"))
-        : "",
+      finalVideoUrl,
+      finalPosterUrl,
       assemblyAttempt: project.assemblyAttempt,
       clips: (project.clips || []).map((clip) => buildPublicClip(project, clip)),
       error: project.error,
@@ -968,20 +984,95 @@ function createVideoProjectService(options = {}) {
     // A single persisted clip is already a valid final video. Reusing the
     // same asset avoids an unnecessary local FFmpeg pass and duplicate bytes.
     if (project.clips.length === 1 && project.clips[0].outputVideo?.asset) {
-      const completed = updateProject(project.id, { status: "completed", finalVideo: { ...project.clips[0].outputVideo }, error: "" });
+      const completedAt = new Date(now()).toISOString();
+      const completed = updateProject(project.id, {
+        status: "completed",
+        completedAt,
+        finalVideo: { ...project.clips[0].outputVideo },
+        error: "",
+      });
+      try {
+        const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(project.ownerUserId);
+        recordOutputCompleted({
+          eventKey: `output_completed:video:${project.id}`,
+          generationId: project.generationId,
+          userId: project.ownerUserId,
+          accountType: userRow?.account_type || "customer",
+          type: "videoProject",
+          model: project.model,
+          creditCost: Number(completed.chargedCredits || 0) - Number(completed.refundedCredits || 0),
+          completedAt,
+        });
+      } catch (_) {}
       updateGenerationSnapshot(completed);
       return completed;
     }
 
     const claim = claimAssemblyStart(project.id);
     if (!claim.shouldRun) return claim.project || getProject(project.id);
+    const assemblyStartedAt = new Date(now()).toISOString();
+    const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(project.ownerUserId);
+    const attemptKind = Number(claim.project.assemblyAttempt || 0) <= 1 ? "assembly_initial" : "assembly_retry";
+    const attemptNo = Math.max(1, Number(claim.project.assemblyAttempt || 1));
+    updateProject(project.id, { assemblyStartedAt });
     try {
       const finalVideo = await ffmpegSemaphore.run(() => assembleFinalVideo(claim.project));
-      const completed = updateProject(project.id, { status: "completed", finalVideo, error: "" });
+      const assemblyCompletedAt = new Date(now()).toISOString();
+      const completed = updateProject(project.id, {
+        status: "completed",
+        finalVideo,
+        assemblyCompletedAt,
+        completedAt: assemblyCompletedAt,
+        error: "",
+      });
+      try {
+        recordVideoAssemblyAttempt({
+          projectId: project.id,
+          attemptKind,
+          attemptNo,
+          status: "completed",
+          startedAt: assemblyStartedAt,
+          completedAt: assemblyCompletedAt,
+          durationMs: Math.max(0, Date.now() - Date.parse(assemblyStartedAt)),
+          actorUserId: project.ownerUserId,
+          accountType: userRow?.account_type || "customer",
+        });
+        recordOutputCompleted({
+          eventKey: `output_completed:video:${project.id}`,
+          generationId: project.generationId,
+          userId: project.ownerUserId,
+          accountType: userRow?.account_type || "customer",
+          type: "videoProject",
+          model: project.model,
+          creditCost: Number(completed.chargedCredits || 0) - Number(completed.refundedCredits || 0),
+          completedAt: assemblyCompletedAt,
+        });
+      } catch (_) {}
       updateGenerationSnapshot(completed);
       return completed;
     } catch (error) {
-      const failed = updateProject(project.id, { status: "assembly_failed", error: error.message || "视频片段已全部完成，最终成片拼接失败" });
+      const failedAt = new Date(now()).toISOString();
+      const failed = updateProject(project.id, {
+        status: "assembly_failed",
+        failedAt,
+        error: error.message || "视频片段已全部完成，最终成片拼接失败",
+      });
+      try {
+        recordVideoAssemblyAttempt({
+          projectId: project.id,
+          attemptKind,
+          attemptNo,
+          status: "failed",
+          errorStage: "assembly",
+          errorCode: String(error.code || "FFMPEG_ERROR"),
+          errorMessage: String(error.message || "").slice(0, 500),
+          startedAt: assemblyStartedAt,
+          completedAt: failedAt,
+          durationMs: Math.max(0, Date.now() - Date.parse(assemblyStartedAt)),
+          actorUserId: project.ownerUserId,
+          accountType: userRow?.account_type || "customer",
+        });
+      } catch (_) {}
       updateGenerationSnapshot(failed);
       return failed;
     }
@@ -1073,36 +1164,92 @@ function createVideoProjectService(options = {}) {
         // Resolve all local input/signing state before recording a real
         // submission attempt. If configuration is missing, no attempt was
         // sent to the Provider and recovery can safely leave the clip queued.
+        const submitStartedAt = new Date(now()).toISOString();
         const currentProject = getProject(project.id) || project;
         const currentClip = currentProject.clips.find((candidate) => candidate.id === clip.id) || clip;
         const referenceBundle = await getReferenceBundle(currentProject, currentClip, provider);
+        const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(currentProject.ownerUserId);
+        const accountType = userRow?.account_type || "customer";
+        const attemptKind = Number(clip.retryCount || 0) > 0 ? "manual_retry" : Number(clip.submissionAttempt || 0) > 0 ? "auto_retry" : "initial";
+        const attemptNo = Math.max(1, Number(clip.submissionAttempt || 0) + 1);
         // A G2 project is only considered running after this worker has a
         // concrete key lease and is about to submit. A missing RPM slot keeps
         // both the project and clip in their durable queued state.
-        updateProject(currentProject.id, { status: "running", error: "" });
+        updateProject(currentProject.id, {
+          status: "running",
+          startedAt: currentProject.startedAt || submitStartedAt,
+          error: "",
+        });
         // Persist the affinity and increment before the actual network call.
         const persisted = updateClip(clip.id, {
           status: "submitting",
+          firstSubmittedAt: clip.firstSubmittedAt || submitStartedAt,
           providerKeyRef: lease?.keyRef || "",
           submissionAttempt: Number(clip.submissionAttempt || 0) + 1,
           error: "",
         });
         const freshProject = getProject(project.id);
         const freshClip = freshProject?.clips.find((candidate) => candidate.id === clip.id) || persisted;
-        const result = await submitProviderClip(freshProject || project, freshClip || clip, provider, lease, referenceBundle);
-        const taskId = String(result?.taskId || result?.videoId || result?.id || "").trim();
-        if (!taskId) throw Object.assign(new Error("供应商未返回任务 ID，无法确认提交结果"), { uncertainSubmission: true });
-        const running = updateClip(clip.id, {
-          status: "running",
-          provider: provider.provider,
-          providerTaskId: taskId,
-          attempt: Number(clip.attempt || 0) + 1,
-          error: "",
-          pollFailureCount: 0,
-        });
-        updateProject(project.id, { status: "running", error: "" });
-        schedulePoll(project, running || clip);
-        return true;
+        try {
+          const result = await submitProviderClip(freshProject || project, freshClip || clip, provider, lease, referenceBundle);
+          const taskId = String(result?.taskId || result?.videoId || result?.id || "").trim();
+          if (!taskId) throw Object.assign(new Error("供应商未返回任务 ID，无法确认提交结果"), { uncertainSubmission: true });
+          const running = updateClip(clip.id, {
+            status: "running",
+            provider: provider.provider,
+            providerTaskId: taskId,
+            attempt: Number(clip.attempt || 0) + 1,
+            error: "",
+            pollFailureCount: 0,
+          });
+          updateProject(project.id, { status: "running", error: "" });
+          try {
+            recordVideoClipAttempt({
+              projectId: currentProject.id,
+              clipId: clip.id,
+              clipIndex: clip.index,
+              provider: provider.provider || currentProject.model,
+              model: currentProject.model,
+              providerKeyRef: lease?.slot?.ref || lease?.keyRef || clip.providerKeyRef || "",
+              providerTaskId: taskId,
+              attemptKind,
+              attemptNo,
+              status: "completed",
+              startedAt: submitStartedAt,
+              completedAt: new Date(now()).toISOString(),
+              durationMs: Math.max(0, Date.now() - Date.parse(submitStartedAt)),
+              creditCost: Number(clip.creditCost || 0),
+              actorUserId: currentProject.ownerUserId,
+              accountType,
+            });
+          } catch (_) {}
+          schedulePoll(project, running || clip);
+          return true;
+        } catch (submitErr) {
+          try {
+            recordVideoClipAttempt({
+              projectId: currentProject.id,
+              clipId: clip.id,
+              clipIndex: clip.index,
+              provider: provider.provider || currentProject.model,
+              model: currentProject.model,
+              providerKeyRef: lease?.slot?.ref || lease?.keyRef || clip.providerKeyRef || "",
+              attemptKind,
+              attemptNo,
+              status: "failed",
+              errorStage: "submission",
+              errorCode: String(submitErr.code || submitErr.statusCode || "SUBMISSION_ERROR"),
+              errorMessage: String(submitErr.message || "").slice(0, 500),
+              startedAt: submitStartedAt,
+              completedAt: new Date(now()).toISOString(),
+              durationMs: Math.max(0, Date.now() - Date.parse(submitStartedAt)),
+              creditCost: 0,
+              actorUserId: currentProject.ownerUserId,
+              accountType,
+            });
+          } catch (_) {}
+          throw submitErr;
+        }
       };
       if (project.model === "d2") return await d2SubmitSemaphore.run(runSubmit);
       return await runSubmit();
@@ -1212,6 +1359,29 @@ function createVideoProjectService(options = {}) {
     }
     if (normalizedStatus === "failed") {
       updateClip(clip.id, { lastSuccessfulPollAt: successAt, pollFailureCount: 0 });
+      try {
+        const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(project.ownerUserId);
+        recordVideoClipAttempt({
+          projectId: project.id,
+          clipId: clip.id,
+          clipIndex: clip.index,
+          provider: provider.provider || project.model,
+          model: project.model,
+          providerKeyRef: clip.providerKeyRef || "",
+          providerTaskId: clip.providerTaskId || "",
+          attemptKind: Number(clip.retryCount || 0) > 0 ? "manual_retry" : Number(clip.submissionAttempt || 0) > 1 ? "auto_retry" : "initial",
+          attemptNo: Math.max(1, Number(clip.submissionAttempt || 1)),
+          status: "failed",
+          errorStage: "provider",
+          errorCode: "PROVIDER_FAILED",
+          errorMessage: String(result?.error || "供应商生成失败").slice(0, 500),
+          startedAt: clip.firstSubmittedAt || new Date(now()).toISOString(),
+          completedAt: new Date(now()).toISOString(),
+          durationMs: clip.firstSubmittedAt ? Math.max(0, Date.now() - Date.parse(clip.firstSubmittedAt)) : 0,
+          actorUserId: project.ownerUserId,
+          accountType: userRow?.account_type || "customer",
+        });
+      } catch (_) {}
       if (queueAutomaticG2Retry(project, getProject(project.id)?.clips?.find((candidate) => candidate.id === clip.id) || clip, result.error)) return;
       await failClip(project, clip, result.error || "供应商生成失败");
       return;
@@ -1288,9 +1458,46 @@ function createVideoProjectService(options = {}) {
    }
 
    let persisted;
+   const procStartedAt = new Date(now()).toISOString();
+   const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(project.ownerUserId);
    try {
      persisted = await persistClipResult(project, clip, result, provider);
+     try {
+       recordVideoResultProcessingAttempt({
+         projectId: project.id,
+         clipId: clip.id,
+         clipIndex: clip.index,
+         provider: provider.provider || project.model,
+         model: project.model,
+         attemptNo: Number(clip.resultProcessingFailureCount || 0) + 1,
+         status: "completed",
+         startedAt: procStartedAt,
+         completedAt: new Date(now()).toISOString(),
+         durationMs: Math.max(0, Date.now() - Date.parse(procStartedAt)),
+         actorUserId: project.ownerUserId,
+         accountType: userRow?.account_type || "customer",
+       });
+     } catch (_) {}
    } catch (error) {
+     try {
+       recordVideoResultProcessingAttempt({
+         projectId: project.id,
+         clipId: clip.id,
+         clipIndex: clip.index,
+         provider: provider.provider || project.model,
+         model: project.model,
+         attemptNo: Number(clip.resultProcessingFailureCount || 0) + 1,
+         status: "failed",
+         errorStage: "persist",
+         errorCode: String(error.code || "PERSIST_ERROR"),
+         errorMessage: String(error.message || "").slice(0, 500),
+         startedAt: procStartedAt,
+         completedAt: new Date(now()).toISOString(),
+         durationMs: Math.max(0, Date.now() - Date.parse(procStartedAt)),
+         actorUserId: project.ownerUserId,
+         accountType: userRow?.account_type || "customer",
+       });
+     } catch (_) {}
      log.warn?.("[video-project] result processing attempt failed", {
        projectId: project.id,
        clipIndex: clip.index,
@@ -1333,6 +1540,7 @@ function createVideoProjectService(options = {}) {
       status: "completed",
       ...persisted,
       providerTaskId: "",
+      completedAt: new Date(now()).toISOString(),
       lastSuccessfulPollAt: new Date(now()).toISOString(),
       pollFailureCount: 0,
       resultProcessingFailureCount: 0,
@@ -2025,6 +2233,11 @@ function createVideoProjectService(options = {}) {
   async function serveAsset(projectId, ownerUserId, kind, position, res, req = null) {
     const project = getProject(projectId, ownerUserId ? { ownerUserId } : {});
     if (!project) return false;
+    if (project.assetStatus === "purged" || project.assetStatus === "none") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "媒体资源已按保留策略清理" }));
+      return true;
+    }
     let asset = null;
     let contentType = "video/mp4";
     if (kind === "final") asset = project.finalVideo?.asset;
@@ -2047,6 +2260,11 @@ function createVideoProjectService(options = {}) {
       contentType = input?.mimeType || "image/png";
     } else {
       const clip = project.clips.find((candidate) => candidate.index === Number(position));
+      if (clip && (clip.assetStatus === "purged" || clip.assetStatus === "none")) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "媒体资源已按保留策略清理" }));
+        return true;
+      }
       if (kind === "clip") asset = clip?.outputVideo?.asset;
       if (kind === "poster" && clip) {
         try {
@@ -2063,7 +2281,14 @@ function createVideoProjectService(options = {}) {
         contentType = clip?.continuityFrame?.mimeType || "image/jpeg";
       }
     }
-    if (!asset) return false;
+    if (!asset || asset.purged === true) {
+      if (project.assetStatus === "purged") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "媒体资源已按保留策略清理" }));
+        return true;
+      }
+      return false;
+    }
     if (asset.objectKey) {
       const url = await storage.createReadUrl(asset, { expiresSeconds: 300 });
       res.writeHead(302, { Location: url, "Cache-Control": "private, no-store" });
@@ -2175,6 +2400,7 @@ function createVideoProjectService(options = {}) {
     retryClip,
     retryClipResult,
     retryAssembly,
+    pump,
     serveAsset,
     serializeProject,
     getConcurrencySnapshot: () => ({

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
+import { trackAnalyticsEvent } from "@/shared/analytics/tracker";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useGenerationTasksStore } from "../stores/generationTasks";
 import { useHistoryStore } from "@/features/history/stores/history";
@@ -449,11 +450,16 @@ async function loadVideoCapabilities() {
 }
 
 onMounted(() => {
+  trackAnalyticsEvent("video_studio_opened", { page: "video_studio" });
   void (async () => {
     await restoreActiveProject();
     if (!disposed) await loadVideoCapabilities();
   })();
 });
+
+watch(currentStep, (step) => {
+  trackAnalyticsEvent("video_step_viewed", { step: String(step) }, { dedupeKey: `video_step:${step}` });
+}, { immediate: true });
 
 watch(videoModelRef, () => {
   applyVideoCapabilityDefaults();
@@ -1059,7 +1065,7 @@ onUnmounted(() => {
                   class="clip-error"
                 >失败原因：{{ clip.error }}</small>
                 <div class="clip-actions">
-                  <a v-if="clip.videoUrl" class="clip-download" :href="clip.videoUrl" download>下载本段</a>
+                  <a v-if="clip.videoUrl" class="clip-download" :href="clip.videoUrl" download @click="trackAnalyticsEvent('final_asset_downloaded', { assetType: 'video_clip' })">下载本段</a>
                   <button
                     v-if="clip.status === 'result_processing_failed'"
                     type="button"

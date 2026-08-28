@@ -26,21 +26,29 @@ export function computeDateParams(filters: AdminFilters): Record<string, string>
     return d.toISOString().slice(0, 10);
   }
 
+  function nextDayStr(dateStr: string) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const ms = Date.UTC(y, m - 1, d + 1);
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
   if (filters.preset === "today") {
     params.from = todayStr;
-    params.to = todayStr;
+    params.to = nextDayStr(todayStr);
   } else if (filters.preset === "7d") {
     params.from = daysAgoStr(6);
-    params.to = todayStr;
+    params.to = nextDayStr(todayStr);
   } else if (filters.preset === "30d") {
     params.from = daysAgoStr(29);
-    params.to = todayStr;
+    params.to = nextDayStr(todayStr);
   } else if (filters.preset === "90d") {
     params.from = daysAgoStr(89);
-    params.to = todayStr;
+    params.to = nextDayStr(todayStr);
   } else if (filters.preset === "custom") {
     if (filters.customFrom) params.from = filters.customFrom;
-    if (filters.customTo) params.to = filters.customTo;
+    if (filters.customTo) {
+      params.to = /^d{4}-d{2}-d{2}$/.test(filters.customTo) ? nextDayStr(filters.customTo) : filters.customTo;
+    }
   }
 
   return params;

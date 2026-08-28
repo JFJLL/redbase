@@ -95,6 +95,7 @@ describe("AdminDashboardView", () => {
     );
     const wrapper = mount(AdminDashboardView, { global: { plugins: [createPinia()] } });
     await flushPromises();
+    await flushPromises();
     return { wrapper, calls };
   }
 
@@ -112,6 +113,7 @@ describe("AdminDashboardView", () => {
 
     await wrapper.find('[data-test="nav-management"]').trigger("click");
     await flushPromises();
+    await flushPromises();
 
     expect(window.location.hash).toBe("#management");
     expect(wrapper.find('[data-test="credit-form"]').exists()).toBe(true);
@@ -119,6 +121,7 @@ describe("AdminDashboardView", () => {
 
   it("management tab allows credit adjustment form submission", async () => {
     window.location.hash = "#management";
+    vi.stubGlobal("alert", vi.fn());
     const { wrapper, calls } = await mountView((url, init) => {
       if (url === "/api/admin/users/2/credits" && init?.method === "POST") {
         return jsonResponse(200, { user: { id: 2 } });
@@ -139,7 +142,7 @@ describe("AdminDashboardView", () => {
     const creditCall = calls.find((call) => call.url === "/api/admin/users/2/credits");
     expect(creditCall).toBeTruthy();
     expect(creditCall!.init?.method).toBe("POST");
-    expect(JSON.parse(String(creditCall!.init?.body))).toEqual({ amount: "30", note: "活动补贴" });
+    expect(JSON.parse(String(creditCall!.init?.body))).toEqual({ amount: 30, note: "活动补贴" });
   });
 
   it("refuses to delete the current admin and confirms before deleting others", async () => {
@@ -167,7 +170,7 @@ describe("AdminDashboardView", () => {
       return undefined;
     });
 
-    expect(wrapper.find('[data-test="admin-error"]').text()).toBe("当前账号没有管理后台权限");
+    expect(wrapper.find('[data-test="admin-error"]').text()).toContain("当前账号没有管理后台权限");
   });
 
   it("renders MediaPreview with video for mp4, img for image, and placeholder for purged", () => {

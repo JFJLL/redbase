@@ -45,6 +45,7 @@ const { resolveAspectRatio } = require("./aspect-ratios");
 const { withExcellentRemixGroupLock } = require("../services/excellent-remix-generation-lock");
 const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
 const { collectGenerationAssets } = require("../assets/generation-deletion-service");
+const { recordOutputCompleted } = require("../analytics/analytics-recorder");
 
 const EXCELLENT_REMIX_CREDIT_ACTION_TYPES = ["xhsCarousel"];
 const CAROUSEL_GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
@@ -1102,6 +1103,18 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               resolved.imageUrl = editEntry.imageUrl;
             }
             upsertImageJob(user.id, resolved);
+            try {
+              recordOutputCompleted({
+                eventKey: `output_completed:edit:${resolved.id}`,
+                generationId: resolved.generationContext.sourceGenerationId,
+                userId: user.id,
+                accountType: user.accountType,
+                type: "imageEdit",
+                entityType: "image_edit",
+                entityId: String(resolved.id),
+                completedAt: editEntry.createdAt || new Date().toISOString(),
+              });
+            } catch (_) {}
           }
         });
       } else if (resolved.generationContext.excellentRemix === true) {
@@ -1224,6 +1237,15 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
                 resolved.imageUrl = generation.previewUrl;
               }
               upsertImageJob(user.id, resolved);
+              try {
+                recordOutputCompleted({
+                  generationId: generation.id,
+                  userId: user.id,
+                  accountType: user.accountType,
+                  type: generation.type,
+                  completedAt: generation.createdAt,
+                });
+              } catch (_) {}
             });
           }
         }
@@ -1910,6 +1932,15 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       carouselGroupId,
       user: sanitizeUser(user),
     });
+    try {
+      recordOutputCompleted({
+        generationId: completeResult.generation.id,
+        userId: user.id,
+        accountType: user.accountType,
+        type: "xhsCarousel",
+        completedAt: completeResult.generation.createdAt,
+      });
+    } catch (_) {}
     return true;
   }
 
@@ -2384,6 +2415,15 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return { generation: created, creditEventId: creditEvent?.id || null };
       },
     );
+    try {
+      recordOutputCompleted({
+        generationId: completeResult.generation.id,
+        userId: user.id,
+        accountType: user.accountType,
+        type: "xhsCarousel",
+        completedAt: completeResult.generation.createdAt,
+      });
+    } catch (_) {}
     json(res, 200, {
       generation: sanitizeGeneration(completeResult.generation, appConfig),
       creditEventId: completeResult.creditEventId,

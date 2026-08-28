@@ -47,8 +47,9 @@ function getCoverageInfo(fromIso) {
 }
 
 function buildAccountFilter(accountType, alias = "e") {
-  if (!accountType) return "";
-  return `AND (${alias}.account_type = '${accountType}' OR ${alias}.actor_user_id IN (SELECT id FROM users WHERE account_type = '${accountType}'))`;
+  if (accountType === "customer") return `AND ${alias}.account_type = 'customer'`;
+  if (accountType === "yimei") return `AND ${alias}.account_type = 'yimei'`;
+  return `AND (${alias}.account_type IS NULL OR ${alias}.account_type != 'admin')`;
 }
 
 function getOverviewMetrics(query = {}) {
@@ -92,10 +93,10 @@ function getOverviewMetrics(query = {}) {
   `).get(fromIso, toIso)?.cnt || 0;
 
   const revenueFen = db.prepare(`
-    SELECT COALESCE(SUM(amount_fen), 0) AS total FROM payment_orders
-    WHERE status = 'paid'
-      AND paid_at >= ? AND paid_at < ?
-      ${accountType ? `AND user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : ''}
+    SELECT COALESCE(SUM(amount_fen), 0) AS total FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
   `).get(fromIso, toIso)?.total || 0;
 
   const outputCount = db.prepare(`
@@ -163,10 +164,10 @@ function getOverviewMetrics(query = {}) {
   `).get(comparisonFromIso, comparisonToIso)?.cnt || 0;
 
   const prevRevenueFen = db.prepare(`
-    SELECT COALESCE(SUM(amount_fen), 0) AS total FROM payment_orders
-    WHERE status = 'paid'
-      AND paid_at >= ? AND paid_at < ?
-      ${accountType ? `AND user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : ''}
+    SELECT COALESCE(SUM(amount_fen), 0) AS total FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
   `).get(comparisonFromIso, comparisonToIso)?.total || 0;
 
   const prevOutputCount = db.prepare(`
@@ -231,11 +232,11 @@ function getOverviewMetrics(query = {}) {
   `).all(fromIso, toIso);
 
   const revenueRows = db.prepare(`
-    SELECT strftime('%Y-%m-%d', datetime(paid_at, '+8 hours')) AS day, COALESCE(SUM(amount_fen), 0) / 100.0 AS val
-    FROM payment_orders
-    WHERE status = 'paid'
-      AND paid_at >= ? AND paid_at < ?
-      ${accountType ? `AND user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : ''}
+    SELECT strftime('%Y-%m-%d', datetime(occurred_at, '+8 hours')) AS day, COALESCE(SUM(amount_fen), 0) / 100.0 AS val
+    FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
     GROUP BY day
   `).all(fromIso, toIso);
 
@@ -322,59 +323,97 @@ function getUsersMetrics(query = {}) {
       ${accFilter}
   `).get(last30dStart)?.cnt || 0;
 
-  // Main conversion funnel
-  // 1. 注册
-  const step1 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'user_registered' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  // 2. 创建品牌
-  const step2 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'brand_created' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  // 3. 趋势/方向
-  const step3 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE (event_name LIKE 'trend_analysis%' OR event_name LIKE 'excellent_direction%')
-      AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  // 4. 首次内容生成
-  const step4 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'output_completed' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  // 5. 第二次内容生成
-  const step5 = db.prepare(`
-    SELECT COUNT(*) AS cnt FROM (
-      SELECT actor_key FROM analytics_events e
-      WHERE event_name = 'output_completed' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-      GROUP BY actor_key HAVING COUNT(*) >= 2
+  // Main conversion funnel (strictly sequential cohort-based)
+  const funnelRow = db.prepare(`
+    WITH reg_cohort AS (
+      SELECT DISTINCT actor_key, occurred_at AS reg_at
+      FROM analytics_events e
+      WHERE event_name = 'user_registered'
+        AND occurred_at >= ? AND occurred_at < ?
+        ${accFilter}
+    ),
+    s2_brand AS (
+      SELECT rc.actor_key, MIN(e.occurred_at) AS brand_at
+      FROM reg_cohort rc
+      JOIN analytics_events e ON e.actor_key = rc.actor_key
+      WHERE e.event_name = 'brand_created'
+        AND e.occurred_at >= rc.reg_at
+        ${accFilter}
+      GROUP BY rc.actor_key
+    ),
+    s3_trend AS (
+      SELECT s2.actor_key, MIN(e.occurred_at) AS trend_at
+      FROM s2_brand s2
+      JOIN analytics_events e ON e.actor_key = s2.actor_key
+      WHERE e.event_name IN ('trend_analysis_completed', 'excellent_direction_completed')
+        AND e.occurred_at >= s2.brand_at
+        ${accFilter}
+      GROUP BY s2.actor_key
+    ),
+    s4_first_output AS (
+      SELECT s3.actor_key, MIN(e.occurred_at) AS output1_at
+      FROM s3_trend s3
+      JOIN analytics_events e ON e.actor_key = s3.actor_key
+      WHERE e.event_name = 'output_completed'
+        AND e.occurred_at >= s3.trend_at
+        ${accFilter}
+      GROUP BY s3.actor_key
+    ),
+    s5_second_output AS (
+      SELECT s4.actor_key, MIN(e.occurred_at) AS output2_at
+      FROM s4_first_output s4
+      JOIN analytics_events e ON e.actor_key = s4.actor_key
+      WHERE e.event_name = 'output_completed'
+        AND e.occurred_at > s4.output1_at
+        ${accFilter}
+      GROUP BY s4.actor_key
+    ),
+    s6_recharge_view AS (
+      SELECT s5.actor_key, MIN(e.occurred_at) AS recharge_at
+      FROM s5_second_output s5
+      JOIN analytics_events e ON e.actor_key = s5.actor_key
+      WHERE e.event_name IN ('recharge_page_viewed', 'payment_order_created', 'payment_paid')
+        AND e.occurred_at >= s5.output2_at
+        ${accFilter}
+      GROUP BY s5.actor_key
+    ),
+    s7_order_create AS (
+      SELECT s6.actor_key, MIN(e.occurred_at) AS order_at
+      FROM s6_recharge_view s6
+      JOIN analytics_events e ON e.actor_key = s6.actor_key
+      WHERE e.event_name = 'payment_order_created'
+        AND e.occurred_at >= s6.recharge_at
+        ${accFilter}
+      GROUP BY s6.actor_key
+    ),
+    s8_order_paid AS (
+      SELECT s7.actor_key, MIN(e.occurred_at) AS paid_at
+      FROM s7_order_create s7
+      JOIN analytics_events e ON e.actor_key = s7.actor_key
+      WHERE e.event_name = 'payment_paid'
+        AND e.occurred_at >= s7.order_at
+        ${accFilter}
+      GROUP BY s7.actor_key
     )
-  `).get(fromIso, toIso)?.cnt || 0;
+    SELECT
+      (SELECT COUNT(*) FROM reg_cohort) AS step1,
+      (SELECT COUNT(*) FROM s2_brand) AS step2,
+      (SELECT COUNT(*) FROM s3_trend) AS step3,
+      (SELECT COUNT(*) FROM s4_first_output) AS step4,
+      (SELECT COUNT(*) FROM s5_second_output) AS step5,
+      (SELECT COUNT(*) FROM s6_recharge_view) AS step6,
+      (SELECT COUNT(*) FROM s7_order_create) AS step7,
+      (SELECT COUNT(*) FROM s8_order_paid) AS step8
+  `).get(fromIso, toIso);
 
-  // 6. 进入充值页
-  const step6 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE (event_name = 'recharge_page_viewed' OR event_name = 'payment_order_created' OR event_name = 'payment_paid')
-      AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  // 7. 创建支付订单
-  const step7 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'payment_order_created' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  // 8. 支付成功
-  const step8 = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'payment_paid' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
+  const step1 = Number(funnelRow?.step1 || 0);
+  const step2 = Number(funnelRow?.step2 || 0);
+  const step3 = Number(funnelRow?.step3 || 0);
+  const step4 = Number(funnelRow?.step4 || 0);
+  const step5 = Number(funnelRow?.step5 || 0);
+  const step6 = Number(funnelRow?.step6 || 0);
+  const step7 = Number(funnelRow?.step7 || 0);
+  const step8 = Number(funnelRow?.step8 || 0);
 
   const mainFunnel = [
     { step: "注册用户", count: step1, rate: step1 > 0 ? 100 : 0 },
@@ -387,21 +426,42 @@ function getUsersMetrics(query = {}) {
     { step: "支付成功", count: step8, rate: safePercent(step8, step1) },
   ];
 
-  // Video production funnel
-  const vScript = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'video_script_completed' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
+  // Video production funnel (strictly sequential)
+  const vFunnelRow = db.prepare(`
+    WITH v1_script AS (
+      SELECT DISTINCT actor_key, occurred_at AS script_at
+      FROM analytics_events e
+      WHERE event_name = 'video_script_completed'
+        AND occurred_at >= ? AND occurred_at < ?
+        ${accFilter}
+    ),
+    v2_project AS (
+      SELECT v1.actor_key, MIN(e.occurred_at) AS project_at
+      FROM v1_script v1
+      JOIN analytics_events e ON e.actor_key = v1.actor_key
+      WHERE e.event_name = 'video_project_created'
+        AND e.occurred_at >= v1.script_at
+        ${accFilter}
+      GROUP BY v1.actor_key
+    ),
+    v3_complete AS (
+      SELECT v2.actor_key, MIN(e.occurred_at) AS complete_at
+      FROM v2_project v2
+      JOIN analytics_events e ON e.actor_key = v2.actor_key
+      WHERE e.event_name = 'video_project_completed'
+        AND e.occurred_at >= v2.project_at
+        ${accFilter}
+      GROUP BY v2.actor_key
+    )
+    SELECT
+      (SELECT COUNT(DISTINCT actor_key) FROM v1_script) AS step1,
+      (SELECT COUNT(*) FROM v2_project) AS step2,
+      (SELECT COUNT(*) FROM v3_complete) AS step3
+  `).get(fromIso, toIso);
 
-  const vCreated = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'video_project_created' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
-
-  const vCompleted = db.prepare(`
-    SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
-    WHERE event_name = 'video_project_completed' AND occurred_at >= ? AND occurred_at < ? ${accFilter}
-  `).get(fromIso, toIso)?.cnt || 0;
+  const vScript = Number(vFunnelRow?.step1 || 0);
+  const vCreated = Number(vFunnelRow?.step2 || 0);
+  const vCompleted = Number(vFunnelRow?.step3 || 0);
 
   const videoFunnel = [
     { step: "视频分镜脚本生成", count: vScript, rate: vScript > 0 ? 100 : 0 },
@@ -409,47 +469,58 @@ function getUsersMetrics(query = {}) {
     { step: "最终视频成片完成", count: vCompleted, rate: safePercent(vCompleted, vScript) },
   ];
 
-  // Retention (D1, D7, D30) for cohorts in range
-  const cohorts = db.prepare(`
+  // Retention (D1, D7, D30) for mature cohorts in range (computed via single CTE query)
+  const todayJdRow = db.prepare("SELECT julianday(date('now', '+8 hours')) AS jd").get();
+  const todayJd = Number(todayJdRow?.jd || 0);
+
+  const retentionRow = db.prepare(`
+    WITH reg_users AS (
+      SELECT DISTINCT
+        actor_key,
+        julianday(date(datetime(occurred_at, '+8 hours'))) AS reg_jd
+      FROM analytics_events e
+      WHERE event_name = 'user_registered'
+        AND occurred_at >= ? AND occurred_at < ?
+        ${accFilter}
+    ),
+    active_days AS (
+      SELECT DISTINCT
+        actor_key,
+        julianday(date(datetime(occurred_at, '+8 hours'))) AS act_jd
+      FROM analytics_events e
+      WHERE event_name = 'user_active_day'
+        ${accFilter}
+    )
     SELECT
-      strftime('%Y-%m-%d', datetime(u.occurred_at, '+8 hours')) AS reg_day,
-      u.actor_key,
-      u.occurred_at AS reg_at
-    FROM analytics_events u
-    WHERE u.event_name = 'user_registered'
-      AND u.occurred_at >= ? AND u.occurred_at < ?
-      ${accFilter}
-  `).all(fromIso, toIso);
+      COUNT(CASE WHEN reg_jd <= ? - 1 THEN 1 END) AS d1_cohort,
+      COUNT(DISTINCT CASE WHEN reg_jd <= ? - 1 AND act.act_jd = reg_users.reg_jd + 1 THEN reg_users.actor_key END) AS d1_retained,
+      COUNT(CASE WHEN reg_jd <= ? - 7 THEN 1 END) AS d7_cohort,
+      COUNT(DISTINCT CASE WHEN reg_jd <= ? - 7 AND act.act_jd = reg_users.reg_jd + 7 THEN reg_users.actor_key END) AS d7_retained,
+      COUNT(CASE WHEN reg_jd <= ? - 30 THEN 1 END) AS d30_cohort,
+      COUNT(DISTINCT CASE WHEN reg_jd <= ? - 30 AND act.act_jd = reg_users.reg_jd + 30 THEN reg_users.actor_key END) AS d30_retained,
+      COUNT(*) AS total_cohort
+    FROM reg_users
+    LEFT JOIN active_days act ON act.actor_key = reg_users.actor_key
+  `).get(fromIso, toIso, todayJd, todayJd, todayJd, todayJd, todayJd, todayJd);
 
-  let cohortTotal = cohorts.length;
-  let d1Retained = 0;
-  let d7Retained = 0;
-  let d30Retained = 0;
-
-  for (const c of cohorts) {
-    const regMs = Date.parse(c.reg_at);
-    const d1Start = new Date(regMs + 1 * DAY_MS).toISOString();
-    const d1End = new Date(regMs + 2 * DAY_MS).toISOString();
-    const d7Start = new Date(regMs + 7 * DAY_MS).toISOString();
-    const d7End = new Date(regMs + 8 * DAY_MS).toISOString();
-    const d30Start = new Date(regMs + 30 * DAY_MS).toISOString();
-    const d30End = new Date(regMs + 31 * DAY_MS).toISOString();
-
-    const actD1 = db.prepare("SELECT 1 FROM analytics_events WHERE actor_key = ? AND event_name = 'user_active_day' AND occurred_at >= ? AND occurred_at < ? LIMIT 1").get(c.actor_key, d1Start, d1End);
-    if (actD1) d1Retained++;
-
-    const actD7 = db.prepare("SELECT 1 FROM analytics_events WHERE actor_key = ? AND event_name = 'user_active_day' AND occurred_at >= ? AND occurred_at < ? LIMIT 1").get(c.actor_key, d7Start, d7End);
-    if (actD7) d7Retained++;
-
-    const actD30 = db.prepare("SELECT 1 FROM analytics_events WHERE actor_key = ? AND event_name = 'user_active_day' AND occurred_at >= ? AND occurred_at < ? LIMIT 1").get(c.actor_key, d30Start, d30End);
-    if (actD30) d30Retained++;
-  }
+  const d1Cohort = Number(retentionRow?.d1_cohort || 0);
+  const d1Retained = Number(retentionRow?.d1_retained || 0);
+  const d7Cohort = Number(retentionRow?.d7_cohort || 0);
+  const d7Retained = Number(retentionRow?.d7_retained || 0);
+  const d30Cohort = Number(retentionRow?.d30_cohort || 0);
+  const d30Retained = Number(retentionRow?.d30_retained || 0);
 
   const retention = {
-    cohortSize: cohortTotal,
-    d1Rate: safePercent(d1Retained, cohortTotal),
-    d7Rate: safePercent(d7Retained, cohortTotal),
-    d30Rate: safePercent(d30Retained, cohortTotal),
+    cohortSize: d1Cohort,
+    d1CohortSize: d1Cohort,
+    d1Retained,
+    d1Rate: safePercent(d1Retained, d1Cohort),
+    d7CohortSize: d7Cohort,
+    d7Retained,
+    d7Rate: safePercent(d7Retained, d7Cohort),
+    d30CohortSize: d30Cohort,
+    d30Retained,
+    d30Rate: safePercent(d30Retained, d30Cohort),
   };
 
   // Account type distribution
@@ -480,6 +551,7 @@ function getFeaturesMetrics(query = {}) {
   const { fromIso, toIso, intervals, accountType } = range;
   const coverage = getCoverageInfo(fromIso);
   const accFilter = buildAccountFilter(accountType, "e");
+  const attFilter = buildAccountFilter(accountType, "a");
 
   const featureStats = ANALYTICS_FEATURE_NAMES.map((feat) => {
     const label = ANALYTICS_FEATURE_LABELS[feat] || feat;
@@ -487,10 +559,19 @@ function getFeaturesMetrics(query = {}) {
     const statsRow = db.prepare(`
       SELECT
         COUNT(DISTINCT actor_key) AS users_count,
-        COUNT(*) AS requests_count,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS success_count,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failure_count,
-        SUM(CASE WHEN credit_cost > 0 THEN credit_cost ELSE 0 END) AS gross_credits
+        COUNT(DISTINCT CASE WHEN entity_type != '' AND entity_id != '' THEN entity_type || ':' || entity_id ELSE NULL END) AS requests_count,
+        COUNT(DISTINCT CASE WHEN status = 'completed' AND entity_type != '' AND entity_id != '' THEN entity_type || ':' || entity_id ELSE NULL END) AS success_count,
+        COUNT(DISTINCT CASE WHEN status = 'failed' AND entity_type != '' AND entity_id != '' THEN entity_type || ':' || entity_id ELSE NULL END) AS failure_count
+      FROM analytics_events e
+      WHERE feature = ?
+        AND occurred_at >= ? AND occurred_at < ?
+        ${accFilter}
+    `).get(feat, fromIso, toIso);
+
+    const creditsRow = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN event_name = 'credit_consumed' THEN credit_cost ELSE 0 END), 0) AS gross_credits,
+        COALESCE(SUM(CASE WHEN event_name = 'credit_refunded' THEN credit_delta ELSE 0 END), 0) AS refund_credits
       FROM analytics_events e
       WHERE feature = ?
         AND occurred_at >= ? AND occurred_at < ?
@@ -501,23 +582,13 @@ function getFeaturesMetrics(query = {}) {
     const requestsCount = Number(statsRow?.requests_count || 0);
     const successCount = Number(statsRow?.success_count || 0);
     const failureCount = Number(statsRow?.failure_count || 0);
-    const grossCredits = Number(statsRow?.gross_credits || 0);
-
-    // Refunds for this feature
-    const refundRow = db.prepare(`
-      SELECT COALESCE(SUM(credit_delta), 0) AS total_refund
-      FROM credit_events
-      WHERE credit_delta > 0
-        AND action_type LIKE ?
-        AND created_at >= ? AND created_at < ?
-        ${accountType ? `AND user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : ''}
-    `).get(`%${feat}%`, fromIso, toIso);
-    const refundCredits = Number(refundRow?.total_refund || 0);
+    const grossCredits = Number(creditsRow?.gross_credits || 0);
+    const refundCredits = Number(creditsRow?.refund_credits || 0);
     const netCredits = grossCredits - refundCredits;
 
     // Daily trend
     const dailyRows = db.prepare(`
-      SELECT strftime('%Y-%m-%d', datetime(occurred_at, '+8 hours')) AS day, COUNT(*) AS val
+      SELECT strftime('%Y-%m-%d', datetime(occurred_at, '+8 hours')) AS day, COUNT(DISTINCT CASE WHEN entity_type != '' AND entity_id != '' THEN entity_type || ':' || entity_id ELSE NULL END) AS val
       FROM analytics_events e
       WHERE feature = ?
         AND occurred_at >= ? AND occurred_at < ?
@@ -546,9 +617,10 @@ function getFeaturesMetrics(query = {}) {
   // Top failure reasons across features
   const failureReasons = db.prepare(`
     SELECT error_stage, error_code, COUNT(*) AS count
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE status = 'failed'
       AND started_at >= ? AND started_at < ?
+      ${attFilter}
     GROUP BY error_stage, error_code
     ORDER BY count DESC
     LIMIT 10
@@ -569,8 +641,10 @@ function getFeaturesMetrics(query = {}) {
 
 function getAiMetrics(query = {}) {
   const range = parseQueryRange(query);
-  const { fromIso, toIso } = range;
+  const { fromIso, toIso, accountType } = range;
   const coverage = getCoverageInfo(fromIso);
+  const attFilter = buildAccountFilter(accountType, "a");
+  const projAccFilter = accountType ? `AND owner_user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : "";
 
   // Summary across all AI attempts
   const summaryRow = db.prepare(`
@@ -580,8 +654,9 @@ function getAiMetrics(query = {}) {
       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
       SUM(CASE WHEN attempt_kind IN ('auto_retry', 'manual_retry', 'result_retry', 'assembly_retry') THEN 1 ELSE 0 END) AS retry_count,
       AVG(CASE WHEN duration_ms > 0 THEN duration_ms ELSE NULL END) AS avg_duration
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ?
+      ${attFilter}
   `).get(fromIso, toIso);
 
   const totalRequests = Number(summaryRow?.total_requests || 0);
@@ -593,8 +668,9 @@ function getAiMetrics(query = {}) {
 
   // Latency percentiles
   const durations = db.prepare(`
-    SELECT duration_ms FROM ai_task_attempts
+    SELECT duration_ms FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ? AND duration_ms > 0
+      ${attFilter}
     ORDER BY duration_ms ASC
   `).all(fromIso, toIso).map((r) => r.duration_ms);
 
@@ -617,8 +693,9 @@ function getAiMetrics(query = {}) {
       AVG(CASE WHEN duration_ms > 0 THEN duration_ms ELSE NULL END) AS avg_ms,
       SUM(COALESCE(total_tokens, 0)) AS total_tokens,
       SUM(CASE WHEN attempt_kind IN ('auto_retry', 'manual_retry') THEN 1 ELSE 0 END) AS retry_count
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ?
+      ${attFilter}
     GROUP BY feature, provider, model
     ORDER BY total_count DESC
   `).all(fromIso, toIso).map((r) => ({
@@ -636,8 +713,9 @@ function getAiMetrics(query = {}) {
   // Error stages
   const errorStages = db.prepare(`
     SELECT error_stage, COUNT(*) AS count
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE status = 'failed' AND started_at >= ? AND started_at < ?
+      ${attFilter}
     GROUP BY error_stage
     ORDER BY count DESC
   `).all(fromIso, toIso).map((r) => ({
@@ -649,8 +727,9 @@ function getAiMetrics(query = {}) {
   // Top error codes
   const topErrorCodes = db.prepare(`
     SELECT error_code, error_stage, COUNT(*) AS count, MAX(error_message) AS sample_message
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE status = 'failed' AND started_at >= ? AND started_at < ?
+      ${attFilter}
     GROUP BY error_code, error_stage
     ORDER BY count DESC
     LIMIT 10
@@ -671,11 +750,14 @@ function getAiMetrics(query = {}) {
       total_duration_sec,
       COUNT(*) AS project_count,
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
-      SUM(CASE WHEN status IN ('failed', 'project_data_failed', 'result_processing_failed', 'partial_failed', 'uncertain', 'assembly_failed') THEN 1 ELSE 0 END) AS failed_count,
+      SUM(CASE WHEN status IN ('failed', 'project_data_failed', 'result_processing_failed', 'partial_failed', 'uncertain', 'assembly_failed', 'cancelled') THEN 1 ELSE 0 END) AS failed_count,
+      SUM(CASE WHEN status IN ('running', 'submitting', 'processing_result', 'assembling', 'queued', 'preparing') THEN 1 ELSE 0 END) AS active_count,
+      SUM(CASE WHEN status = 'waiting_configuration' THEN 1 ELSE 0 END) AS waiting_config_count,
       SUM(CASE WHEN charged_credits > 0 THEN charged_credits ELSE 0 END) AS gross_credits,
       SUM(CASE WHEN refunded_credits > 0 THEN refunded_credits ELSE 0 END) AS refund_credits
     FROM video_projects
     WHERE created_at >= ? AND created_at < ?
+      ${projAccFilter}
     GROUP BY video_model, mode, resolution, aspect_ratio, total_duration_sec
   `).all(fromIso, toIso).map((r) => {
     const matureProjects = Number(r.completed_count || 0) + Number(r.failed_count || 0);
@@ -688,17 +770,20 @@ function getAiMetrics(query = {}) {
       aspectRatio: r.aspect_ratio,
       totalDurationSec: r.total_duration_sec,
       projectCount: Number(r.project_count || 0),
+      matureCount: matureProjects,
+      activeCount: Number(r.active_count || 0),
+      waitingConfigCount: Number(r.waiting_config_count || 0),
       completionRate: safePercent(r.completed_count, matureProjects),
       avgNetCredits: r.project_count > 0 ? Math.round(netCredits / r.project_count) : 0,
       netCreditsPerSuccessSecond: totalSuccessSec > 0 ? Math.round((netCredits / totalSuccessSec) * 10) / 10 : 0,
-      vendorCost: null, // "未配置"
+      vendorCost: null,
       vendorCostLabel: "未配置",
     };
   });
 
   return {
     generatedAt: new Date().toISOString(),
-    range: { from: fromIso, to: toIso, timezone: range.timezone },
+    range: { from: fromIso, to: toIso, timezone: range.timezone, accountType },
     coverage,
     summary: {
       totalRequests,
@@ -720,93 +805,110 @@ function getFinanceMetrics(query = {}) {
   const range = parseQueryRange(query);
   const { fromIso, toIso, intervals, accountType } = range;
   const coverage = getCoverageInfo(fromIso);
-  const accClause = accountType ? `AND user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : "";
+  const accFilter = buildAccountFilter(accountType, "e");
+  const userAccFilter = accountType ? `WHERE account_type = '${accountType}'` : "";
 
-  // Total Revenue & Orders
-  const ordersRow = db.prepare(`
+  // Total Revenue & Paid Orders from payment_paid facts (by occurred_at = paid_at)
+  const paidRow = db.prepare(`
     SELECT
-      COUNT(*) AS total_orders,
-      SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_orders,
-      SUM(CASE WHEN status = 'paid' THEN amount_fen ELSE 0 END) AS paid_amount_fen,
-      COUNT(DISTINCT CASE WHEN status = 'paid' THEN user_id ELSE NULL END) AS paying_users
-    FROM payment_orders
-    WHERE created_at >= ? AND created_at < ?
-      ${accClause}
+      COUNT(*) AS paid_orders,
+      COALESCE(SUM(amount_fen), 0) AS paid_amount_fen,
+      COUNT(DISTINCT actor_key) AS paying_users
+    FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
   `).get(fromIso, toIso);
 
-  const totalOrders = Number(ordersRow?.total_orders || 0);
-  const paidOrders = Number(ordersRow?.paid_orders || 0);
-  const paidAmountFen = Number(ordersRow?.paid_amount_fen || 0);
-  const payingUsers = Number(ordersRow?.paying_users || 0);
+  // Total Orders Created from payment_order_created facts (by occurred_at = created_at)
+  const createdRow = db.prepare(`
+    SELECT
+      COUNT(*) AS total_orders
+    FROM analytics_events e
+    WHERE event_name = 'payment_order_created'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
+  `).get(fromIso, toIso);
+
+  const totalOrders = Number(createdRow?.total_orders || 0);
+  const paidOrders = Number(paidRow?.paid_orders || 0);
+  const paidAmountFen = Number(paidRow?.paid_amount_fen || 0);
+  const payingUsers = Number(paidRow?.paying_users || 0);
   const revenueYuan = paidAmountFen / 100;
   const arppu = payingUsers > 0 ? Math.round((revenueYuan / payingUsers) * 10) / 10 : 0;
   const conversionRate = safePercent(paidOrders, totalOrders);
 
-  // Channel comparison: Alipay vs WeChat
+  // Channel comparison: Alipay vs WeChat from payment_paid facts
   const channelComparison = db.prepare(`
     SELECT
       provider,
-      COUNT(*) AS total_orders,
-      SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid_orders,
-      SUM(CASE WHEN status = 'paid' THEN amount_fen ELSE 0 END) / 100.0 AS revenue_yuan
-    FROM payment_orders
-    WHERE created_at >= ? AND created_at < ?
-      ${accClause}
+      COUNT(*) AS paid_orders,
+      COALESCE(SUM(amount_fen), 0) / 100.0 AS revenue_yuan
+    FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
     GROUP BY provider
   `).all(fromIso, toIso).map((r) => ({
     provider: r.provider,
     providerLabel: r.provider === "wxpay" ? "微信支付" : "支付宝",
-    totalOrders: Number(r.total_orders || 0),
     paidOrders: Number(r.paid_orders || 0),
     revenueYuan: Number(r.revenue_yuan || 0),
   }));
 
-  // Plan package distribution
+  // Plan package distribution from payment_paid facts
   const planDistribution = db.prepare(`
     SELECT
-      plan_id, plan_name,
+      json_extract(metadata_json, '$.planId') AS plan_id,
+      json_extract(metadata_json, '$.planName') AS plan_name,
       COUNT(*) AS orders_count,
-      SUM(CASE WHEN status = 'paid' THEN amount_fen ELSE 0 END) / 100.0 AS revenue_yuan
-    FROM payment_orders
-    WHERE status = 'paid' AND created_at >= ? AND created_at < ?
-      ${accClause}
+      COALESCE(SUM(amount_fen), 0) / 100.0 AS revenue_yuan
+    FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
     GROUP BY plan_id, plan_name
     ORDER BY revenue_yuan DESC
   `).all(fromIso, toIso).map((r) => ({
-    planId: r.plan_id,
-    planName: r.plan_name || r.plan_id,
+    planId: r.plan_id || "default",
+    planName: r.plan_name || r.plan_id || "标准套餐",
     ordersCount: Number(r.orders_count || 0),
     revenueYuan: Number(r.revenue_yuan || 0),
   }));
 
-  // Daily revenue trend
+  // Daily revenue trend from payment_paid facts
   const revDailyRows = db.prepare(`
-    SELECT strftime('%Y-%m-%d', datetime(paid_at, '+8 hours')) AS day, SUM(amount_fen) / 100.0 AS val
-    FROM payment_orders
-    WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?
-      ${accClause}
+    SELECT strftime('%Y-%m-%d', datetime(occurred_at, '+8 hours')) AS day, COALESCE(SUM(amount_fen), 0) / 100.0 AS val
+    FROM analytics_events e
+    WHERE event_name = 'payment_paid'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
     GROUP BY day
   `).all(fromIso, toIso);
   const revMap = new Map(revDailyRows.map((r) => [r.day, r.val]));
   const revenueSeries = intervals.map((d) => ({ date: d, value: Number(revMap.get(d) || 0) }));
 
-  // Credits pool and trends
+  // Credits pool: Gross, Refund, Net, Admin Granted
+  const creditsRow = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN event_name = 'credit_consumed' THEN credit_cost ELSE 0 END), 0) AS gross_credits,
+      COALESCE(SUM(CASE WHEN event_name = 'credit_refunded' THEN credit_delta ELSE 0 END), 0) AS refund_credits,
+      COALESCE(SUM(CASE WHEN event_name = 'credit_granted' THEN credit_delta ELSE 0 END), 0) AS admin_granted_credits
+    FROM analytics_events e
+    WHERE occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
+  `).get(fromIso, toIso);
+  const grossCredits = Number(creditsRow?.gross_credits || 0);
+  const refundCredits = Number(creditsRow?.refund_credits || 0);
+  const netCredits = grossCredits - refundCredits;
+  const adminGrantedCredits = Number(creditsRow?.admin_granted_credits || 0);
+
   const currentRemainingCredits = db.prepare(`
     SELECT COALESCE(SUM(credits), 0) AS total FROM users
-    ${accountType ? `WHERE account_type = '${accountType}'` : ''}
+    ${userAccFilter}
   `).get()?.total || 0;
 
-  const adminGrantedCredits = db.prepare(`
-    SELECT COALESCE(SUM(credit_delta), 0) AS total FROM credit_events
-    WHERE action_type = 'adminAddCredits'
-      AND created_at >= ? AND created_at < ?
-      ${accountType ? `AND user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : ''}
-  `).get(fromIso, toIso)?.total || 0;
-
-  const auditIssuesCount = db.prepare(`
-    SELECT COUNT(*) AS cnt FROM payment_orders
-    WHERE audit_reason != ''
-  `).get()?.cnt || 0;
+  const auditIssuesCount = db.prepare("SELECT COUNT(*) AS cnt FROM payment_orders WHERE audit_reason != ''").get()?.cnt || 0;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -819,8 +921,11 @@ function getFinanceMetrics(query = {}) {
       totalOrders,
       paidOrders,
       conversionRate,
+      grossCredits,
+      refundCredits,
+      netCredits,
       currentRemainingCredits: Number(currentRemainingCredits),
-      adminGrantedCredits: Number(adminGrantedCredits),
+      adminGrantedCredits,
       auditIssuesCount: Number(auditIssuesCount),
     },
     channelComparison,

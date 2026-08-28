@@ -8,6 +8,7 @@ const {
   recordVideoProjectCreated,
   recordVideoProjectCompleted,
   recordVideoProjectFailed,
+  recordOutputCompleted,
 } = require("../../analytics/analytics-recorder");
 const {
   ACTIVE_PROJECT_STATUSES,
@@ -795,6 +796,8 @@ function updateProject(projectId, patch = {}) {
   );
   if (patch.status === "completed") {
     try {
+      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(next.ownerUserId);
+      const completedAt = next.completedAt || updatedAt;
       recordVideoProjectCompleted({
         projectId,
         userId: next.ownerUserId,
@@ -805,8 +808,18 @@ function updateProject(projectId, patch = {}) {
         totalDurationSec: next.totalDurationSec,
         chargedCredits: next.chargedCredits,
         refundedCredits: next.refundedCredits,
-        durationMs: next.startedAt ? Date.now() - Date.parse(next.startedAt) : 0,
-        completedAt: next.completedAt || updatedAt,
+        durationMs: next.startedAt ? Math.max(0, Date.now() - Date.parse(next.startedAt)) : 0,
+        completedAt,
+      });
+      recordOutputCompleted({
+        eventKey: `output_completed:video:${projectId}`,
+        generationId: next.generationId,
+        userId: next.ownerUserId,
+        accountType: userRow?.account_type || "customer",
+        type: "videoProject",
+        model: next.model,
+        creditCost: Number(next.chargedCredits || 0) - Number(next.refundedCredits || 0),
+        completedAt,
       });
     } catch (_) {}
   } else if (["failed", "project_data_failed"].includes(patch.status)) {

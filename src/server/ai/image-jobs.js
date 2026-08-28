@@ -18,6 +18,7 @@ const {
   listPendingJobs,
   markFailed,
 } = require("../db/repositories/image-job-runtime-repository");
+const { recordImageTaskAttempt } = require("../analytics/ai-attempt-recorder");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
@@ -649,6 +650,24 @@ async function createImageJob(
         message: evaluationError?.message || "unknown error",
       });
     }
+    try {
+      recordImageTaskAttempt({
+        jobId: "err_" + Date.now(),
+        feature: String(metadata?.contentType || "style_image"),
+        provider: providerName,
+        model: String(provider.model || KEYSTONE_DEFAULT_MODEL),
+        attemptKind: "initial",
+        attemptNo: 1,
+        status: "failed",
+        errorStage: "submission",
+        errorCode: String(error?.code || error?.statusCode || "SUBMISSION_ERROR"),
+        errorMessage: String(error?.message || "").slice(0, 500),
+        startedAt: new Date(requestStartedAt).toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: Math.max(0, Date.now() - requestStartedAt),
+        actorUserId: ownerUserId,
+      });
+    } catch (_) {}
     throw error;
   }
 
@@ -734,6 +753,21 @@ async function createImageJob(
   if (job.status === "completed") {
     recordImageJobEvaluation(job, { success: true });
   }
+  try {
+    recordImageTaskAttempt({
+      jobId: job.id,
+      feature: String(metadata?.contentType || "style_image"),
+      provider: providerName,
+      model: String(job.model || KEYSTONE_DEFAULT_MODEL),
+      attemptKind: "initial",
+      attemptNo: 1,
+      status: imageUrl ? "completed" : "pending",
+      startedAt: new Date(requestStartedAt).toISOString(),
+      completedAt: imageUrl ? new Date().toISOString() : "",
+      durationMs: imageUrl ? Math.max(0, Date.now() - requestStartedAt) : 0,
+      actorUserId: ownerUserId,
+    });
+  } catch (_) {}
 
   return createJob(job);
 }
@@ -1053,6 +1087,21 @@ async function resolveImageJob(appConfig, jobOrId) {
         imageUrl: summarizeUrl(job.imageUrl),
       });
       recordImageJobEvaluation(job, { success: true });
+      try {
+        recordImageTaskAttempt({
+          jobId: job.id,
+          feature: String(job.generationContext?.type || job.metadata?.contentType || "style_image"),
+          provider: String(job.provider || "keystone"),
+          model: String(job.model || KEYSTONE_DEFAULT_MODEL),
+          attemptKind: "initial",
+          attemptNo: 1,
+          status: "completed",
+          startedAt: new Date(job.createdAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: Math.max(0, Date.now() - Number(job.createdAt || Date.now())),
+          actorUserId: job.ownerUserId,
+        });
+      } catch (_) {}
     } else if (polled.status === "failed") {
       job.status = "failed";
       job.error = polled.error || "图片生成失败";
@@ -1063,6 +1112,24 @@ async function resolveImageJob(appConfig, jobOrId) {
         upstreamPayload: truncateLogValue(polled.payload, 2000),
       });
       recordImageJobEvaluation(job, { success: false, errorMessage: job.error });
+      try {
+        recordImageTaskAttempt({
+          jobId: job.id,
+          feature: String(job.generationContext?.type || job.metadata?.contentType || "style_image"),
+          provider: String(job.provider || "keystone"),
+          model: String(job.model || KEYSTONE_DEFAULT_MODEL),
+          attemptKind: "initial",
+          attemptNo: 1,
+          status: "failed",
+          errorStage: "provider",
+          errorCode: "PROVIDER_FAILED",
+          errorMessage: String(job.error || "").slice(0, 500),
+          startedAt: new Date(job.createdAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: Math.max(0, Date.now() - Number(job.createdAt || Date.now())),
+          actorUserId: job.ownerUserId,
+        });
+      } catch (_) {}
     } else if (isJobTimedOut(job)) {
       job.status = "failed";
       job.error = IMAGE_JOB_TIMEOUT_ERROR;

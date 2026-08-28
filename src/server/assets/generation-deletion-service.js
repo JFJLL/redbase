@@ -1,6 +1,7 @@
 const { deleteGenerationRows, deleteGenerationRowsBatch } = require("../db/repositories/generation-repository");
 const { getDbProxy } = require("../db/connection");
 const { runTransaction } = require("../db/repositories/core-repository");
+const { safeParseObject, safeParseArray } = require("../db/snapshot-utils");
 const { recordAssetPurgeCompleted, recordAssetPurgeFailed, recordGenerationDeleted } = require("../analytics/analytics-recorder");
 
 const db = getDbProxy();
@@ -141,49 +142,73 @@ function purgeGenerationDataInTransaction(generation, { assets, deletedAt, total
     genId,
   );
 
-  db.prepare(`
-    UPDATE video_projects SET
-      asset_status = 'purged',
-      asset_count = ?,
-      asset_bytes = ?,
-      assets_deleted_at = ?,
-      final_video_json = json_set(
-        CASE WHEN json_valid(final_video_json) AND json_type(final_video_json) = 'object' THEN final_video_json ELSE '{}' END,
-        '$.asset', json_object('purged', json('true'), 'purgedAt', ?)
-      ),
-      input_assets_json = '[]',
-      updated_at = ?
-    WHERE generation_id = ?
-  `).run(
-    assets.length,
-    totalBytes,
-    deletedAt,
-    deletedAt,
-    deletedAt,
-    genId,
-  );
+  const projects = db.prepare("SELECT id, final_video_json, input_assets_json FROM video_projects WHERE generation_id = ?").all(genId);
+  for (const p of projects) {
+    const fv = safeParseObject(p.final_video_json);
+    const cleanFinal = {
+      mimeType: fv.mimeType || "video/mp4",
+      sizeBytes: Number(fv.sizeBytes || 0),
+      purged: true,
+      purgedAt: deletedAt,
+      asset: null,
+      posterAsset: null,
+    };
+    const rawInputs = safeParseArray(p.input_assets_json);
+    const cleanInputs = rawInputs.map((item) => ({
+      position: item.position,
+      sourceImageId: item.sourceImageId,
+      originalName: item.originalName || "",
+      mimeType: item.mimeType || "image/png",
+      sizeBytes: Number(item.sizeBytes || 0),
+      purged: true,
+      purgedAt: deletedAt,
+      asset: null,
+    }));
 
-  db.prepare(`
-    UPDATE video_clips SET
-      asset_status = 'purged',
-      assets_deleted_at = ?,
-      output_video_json = json_set(
-        CASE WHEN json_valid(output_video_json) AND json_type(output_video_json) = 'object' THEN output_video_json ELSE '{}' END,
-        '$.asset', json_object('purged', json('true'), 'purgedAt', ?)
-      ),
-      continuity_frame_json = json_set(
-        CASE WHEN json_valid(continuity_frame_json) AND json_type(continuity_frame_json) = 'object' THEN continuity_frame_json ELSE '{}' END,
-        '$.asset', json_object('purged', json('true'), 'purgedAt', ?)
-      ),
-      updated_at = ?
-    WHERE project_id IN (SELECT id FROM video_projects WHERE generation_id = ?)
-  `).run(
-    deletedAt,
-    deletedAt,
-    deletedAt,
-    deletedAt,
-    genId,
-  );
+    const clips = db.prepare("SELECT id, output_video_json, continuity_frame_json FROM video_clips WHERE project_id = ?").all(p.id);
+    for (const c of clips) {
+      const ov = safeParseObject(c.output_video_json);
+      const cf = safeParseObject(c.continuity_frame_json);
+      const cleanOv = {
+        mimeType: ov.mimeType || "video/mp4",
+        sizeBytes: Number(ov.sizeBytes || 0),
+        purged: true,
+        purgedAt: deletedAt,
+        asset: null,
+        posterAsset: null,
+      };
+      const cleanCf = {
+        mimeType: cf.mimeType || "image/jpeg",
+        sizeBytes: Number(cf.sizeBytes || 0),
+        purged: true,
+        purgedAt: deletedAt,
+        asset: null,
+      };
+      const clipBytes = Number(ov.sizeBytes || 0) + Number(cf.sizeBytes || 0);
+      db.prepare(`
+        UPDATE video_clips SET
+          asset_status = 'purged',
+          asset_bytes = ?,
+          assets_deleted_at = ?,
+          output_video_json = ?,
+          continuity_frame_json = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(clipBytes, deletedAt, JSON.stringify(cleanOv), JSON.stringify(cleanCf), deletedAt, c.id);
+    }
+
+    db.prepare(`
+      UPDATE video_projects SET
+        asset_status = 'purged',
+        asset_count = ?,
+        asset_bytes = ?,
+        assets_deleted_at = ?,
+        final_video_json = ?,
+        input_assets_json = ?,
+        updated_at = ?
+      WHERE id = ?
+    `).run(assets.length, totalBytes, deletedAt, JSON.stringify(cleanFinal), JSON.stringify(cleanInputs), deletedAt, p.id);
+  }
 
   recordAssetPurgeCompleted({
     generationId: genId,

@@ -9,6 +9,7 @@ const {
   recordCreditGranted,
   recordUserDeleted,
 } = require("../../analytics/analytics-recorder");
+const { ensureUserAnalyticsBackfill } = require("../../analytics/analytics-backfill");
 
 const db = getDbProxy();
 const ADMIN_OVERVIEW_LIMITS = {
@@ -535,6 +536,10 @@ function deleteUserCascadeRows(userId) {
   return runTransaction(() => {
     const user = findUserById(userId);
     if (!user) return null;
+    const backfillResult = ensureUserAnalyticsBackfill(user.id);
+    if (backfillResult && backfillResult.ok === false) {
+      throw new Error(`用户分析事实回填失败：${backfillResult.error || "未知错误"}`);
+    }
     try {
       recordUserDeleted({ userId: user.id });
     } catch (_) {}

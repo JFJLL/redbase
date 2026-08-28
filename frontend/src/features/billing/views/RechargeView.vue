@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import QRCode from "qrcode";
+import { trackAnalyticsEvent } from "@/shared/analytics/tracker";
 import {
   checkPaymentStatus,
   closeOrder,
@@ -69,6 +70,7 @@ const checkoutPlan = computed<RechargePlan | null>(() => {
 });
 
 onMounted(async () => {
+  trackAnalyticsEvent("recharge_page_viewed", { page: "recharge" });
   const returnStatus = typeof route.query.status === "string" ? route.query.status : "";
   if (returnStatus && routeOrderNo.value) {
     await router.replace({

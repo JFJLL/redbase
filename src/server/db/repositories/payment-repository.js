@@ -70,11 +70,15 @@ function insertPaymentOrder({ outTradeNo, userId, idempotencyKey, plan, status =
   );
   const order = findPaymentOrderByOutTradeNo(outTradeNo);
   try {
+    const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
     recordPaymentOrderCreated({
-      outTradeNo: order.outTradeNo,
+      orderId: order.id,
       userId: order.userId,
+      accountType: userRow?.account_type || "customer",
       amountFen: order.amountFen,
       planId: order.planId,
+      planName: order.planName,
+      planCredits: order.planCredits,
       provider: order.provider,
       createdAt: order.createdAt,
     });
@@ -101,9 +105,11 @@ function updatePaymentOrderStatus({ outTradeNo, status, nowIso, extra = {} }) {
     try {
       const order = findPaymentOrderByOutTradeNo(outTradeNo);
       if (order && order.status !== "paid") {
+        const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
         recordPaymentFailed({
-          outTradeNo: order.outTradeNo,
+          orderId: order.id,
           userId: order.userId,
+          accountType: userRow?.account_type || "customer",
           amountFen: order.amountFen,
           provider: order.provider,
           failedAt: String(nowIso),
@@ -221,11 +227,14 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
       WHERE out_trade_no = ? AND credit_event_id IS NULL
     `).run(creditEventId, String(outTradeNo || ""));
     try {
+      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
       recordPaymentPaid({
-        outTradeNo: order.outTradeNo,
+        orderId: order.id,
         userId: order.userId,
+        accountType: userRow?.account_type || "customer",
         amountFen: order.amountFen,
         planId: order.planId,
+        planName: order.planName,
         planCredits: order.planCredits,
         provider: order.provider,
         paidAt: String(nowIso),

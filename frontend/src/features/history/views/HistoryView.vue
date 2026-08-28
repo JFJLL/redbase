@@ -16,6 +16,7 @@ import {
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
 import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
+import { trackAnalyticsEvent } from "@/shared/analytics/tracker";
 import {
   HISTORY_TYPE_LABELS,
   KNOWN_ASPECT_RATIOS,
@@ -1005,7 +1006,7 @@ onUnmounted(() => {
                       class="history-video-clip-error"
                     >失败原因：{{ clip.error }}</small>
                     <div class="history-video-clip-actions">
-                      <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
+                      <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download @click="trackAnalyticsEvent('final_asset_downloaded', { assetType: 'video_clip' })">下载本段</a>
                     </div>
                   </div>
                 </div>
