@@ -119,25 +119,24 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       state.tasks.filter((task) => task.status === "submitting" || task.status === "polling"),
 
     hasRunningTasks: (state) => {
-      const historyStore = useHistoryStore();
-      const hasRunningHistoryVideo = historyStore.items.some(
-        (item) =>
-          item.type === "videoProject" &&
-          ["preparing", "queued", "submitting", "running", "processing_result", "assembling"].includes(
-            String(item.payload?.videoStatus || "").toLowerCase(),
-          ),
-      );
-      return (
-        hasRunningHistoryVideo ||
-        state.tasks.some(
-          (task) =>
-            task.status === "submitting" ||
-            task.status === "polling" ||
-            (task.type === "xhsCarousel" &&
-              task.slides?.some((s) => s.status === "submitting" || s.status === "polling")),
-        )
+      return state.tasks.some(
+        (task) =>
+          task.status === "submitting" ||
+          task.status === "polling" ||
+          (task.type === "xhsCarousel" &&
+            task.slides?.some((s) => s.status === "submitting" || s.status === "polling")),
       );
     },
+
+    hasUnviewedRunningTasks: (state) =>
+      state.tasks.some(
+        (task) =>
+          !task.viewed &&
+          (task.status === "submitting" ||
+            task.status === "polling" ||
+            (task.type === "xhsCarousel" &&
+              task.slides?.some((s) => s.status === "submitting" || s.status === "polling"))),
+      ),
 
     runningTasksCount: (state) =>
       state.tasks.filter(
@@ -159,7 +158,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       ),
 
     hasUnviewedSuccess(): boolean {
-      if (this.hasRunningTasks || this.hasUnresolvedFailures) return false;
+      if (this.hasUnviewedRunningTasks || this.hasUnresolvedFailures) return false;
       return this.tasks.some(
         (task) =>
           !task.viewed &&

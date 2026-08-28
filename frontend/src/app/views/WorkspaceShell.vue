@@ -185,7 +185,7 @@ async function handleLogout() {
             <span class="sidebar-item-icon">{{ item.icon }}</span>
             <span class="sidebar-item-label">{{ item.label }}</span>
             <template v-if="item.name === 'history'">
-              <span v-if="tasksStore.hasRunningTasks" class="sidebar-task-indicator is-running" title="生图进行中" data-test="sidebar-task-running">
+              <span v-if="tasksStore.hasUnviewedRunningTasks" class="sidebar-task-indicator is-running" title="生成进行中" data-test="sidebar-task-running">
                 <span class="sidebar-spinner" aria-hidden="true"></span>
               </span>
               <span v-else-if="tasksStore.hasUnviewedSuccess" class="sidebar-task-indicator is-completed" title="生图已完成" data-test="sidebar-task-completed">

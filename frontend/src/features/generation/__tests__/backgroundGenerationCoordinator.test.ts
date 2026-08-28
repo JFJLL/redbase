@@ -581,4 +581,45 @@ describe("Background Generation Coordinator & UX Contracts", () => {
 
     wrapper.unmount();
   });
+
+  it("9. 视频生成侧栏通知与查看后清除：生成视频时侧栏提醒进行中，切换至历史生成后清除侧栏提醒", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", credits: 50 };
+    auth.sessionLoaded = true;
+
+    const router = makeRouter();
+    await router.push({ name: "ideas" });
+    await router.isReady();
+
+    const tasksStore = useGenerationTasksStore();
+    const wrapper = mount({ template: "<router-view />" }, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+
+    // 启动视频项目任务
+    tasksStore.startVideoProjectTask({
+      brandId: 7,
+      trendId: 501,
+      ideaIndex: 0,
+      projectId: 701,
+      videoStatus: "queued",
+    });
+    await flushPromises();
+
+    // 在 ideas 页面时：提示生成进行中
+    expect(tasksStore.hasUnviewedRunningTasks).toBe(true);
+    expect(wrapper.find('[data-test="sidebar-task-running"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="sidebar-task-completed"]').exists()).toBe(false);
+
+    // 用户点击并切换到“历史生成”页
+    await router.push({ name: "history" });
+    await flushPromises();
+
+    // 查看后侧栏加载动画清除
+    expect(tasksStore.hasUnviewedRunningTasks).toBe(false);
+    expect(wrapper.find('[data-test="sidebar-task-running"]').exists()).toBe(false);
+
+    wrapper.unmount();
+  });
 });
