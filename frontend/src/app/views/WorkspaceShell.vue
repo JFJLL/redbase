@@ -5,6 +5,7 @@ import { useAuthStore } from "@/shared/stores/auth";
 import { INSUFFICIENT_CREDITS_EVENT } from "@/shared/api/client";
 import { fetchRechargePlans, type RechargePlan } from "@/features/billing/api";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
+import { useGenerationTasksStore } from "@/features/generation/stores/generationTasks";
 import { useHistoryStore } from "@/features/history/stores/history";
 import RecoveredJobBanner from "@/features/generation/components/RecoveredJobBanner.vue";
 
@@ -13,6 +14,7 @@ const LOGO_SRC = "/assets/redbase-logo.png";
 const router = useRouter();
 const auth = useAuthStore();
 const recovery = useImageJobRecovery();
+const tasksStore = useGenerationTasksStore();
 const historyStore = useHistoryStore();
 const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
@@ -50,6 +52,7 @@ onMounted(() => {
   window.addEventListener(INSUFFICIENT_CREDITS_EVENT, handleInsufficientCredits as EventListener);
   if (auth.isLoggedIn) {
     recovery.start();
+    tasksStore.syncActiveServerJobs();
     historyStore.ensureLoaded().catch(() => {});
   }
   fetchRechargePlans()
@@ -65,7 +68,10 @@ onMounted(() => {
 watch(
   () => auth.isLoggedIn,
   (loggedIn) => {
-    if (loggedIn) recovery.start();
+    if (loggedIn) {
+      recovery.start();
+      tasksStore.syncActiveServerJobs();
+    }
   },
 );
 
@@ -75,7 +81,18 @@ watch(
   () => router.currentRoute.value.fullPath,
   () => {
     recovery.rescan();
+    tasksStore.syncActiveServerJobs();
   },
+);
+
+watch(
+  () => router.currentRoute.value.name,
+  (name) => {
+    if (name === "history") {
+      tasksStore.markAllViewed();
+    }
+  },
+  { immediate: true },
 );
 
 onBeforeUnmount(() => {
@@ -167,6 +184,17 @@ async function handleLogout() {
           >
             <span class="sidebar-item-icon">{{ item.icon }}</span>
             <span class="sidebar-item-label">{{ item.label }}</span>
+            <template v-if="item.name === 'history'">
+              <span v-if="tasksStore.hasRunningTasks" class="sidebar-task-indicator is-running" title="生图进行中" data-test="sidebar-task-running">
+                <span class="sidebar-spinner" aria-hidden="true"></span>
+              </span>
+              <span v-else-if="tasksStore.hasUnviewedSuccess" class="sidebar-task-indicator is-completed" title="生图已完成" data-test="sidebar-task-completed">
+                已完成
+              </span>
+              <span v-else-if="tasksStore.hasUnresolvedFailures" class="sidebar-task-indicator is-failed" title="生图失败" data-test="sidebar-task-failed">
+                失败
+              </span>
+            </template>
           </RouterLink>
         </nav>
       </div>
@@ -463,6 +491,53 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 .sidebar-item.is-active .sidebar-item-icon {
   background: var(--workspace-brand);
   color: #fff;
+}
+
+.sidebar-task-indicator {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.sidebar-task-indicator.is-running {
+  padding: 3px;
+}
+
+.sidebar-task-indicator.is-completed {
+  background: #ebfbee;
+  color: #2b8a3e;
+  border: 1px solid rgba(43, 138, 62, 0.25);
+}
+
+.sidebar-task-indicator.is-failed {
+  background: #fff5f5;
+  color: #c92a2a;
+  border: 1px solid rgba(201, 42, 42, 0.25);
+}
+
+.sidebar-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(216, 68, 68, 0.25);
+  border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.sidebar-collapsed .sidebar-task-indicator {
+  display: none;
 }
 
 .workspace-session {

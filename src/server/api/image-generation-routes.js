@@ -472,6 +472,10 @@ function buildRecoverableImageJobSnapshot(job) {
     "sourceGenerationId",
     "parentEditId",
     "sourceSlideIndex",
+    "title",
+    "intro",
+    "visualDirection",
+    "channelLabel",
   ];
   for (const key of contextKeys) {
     if (context[key] !== undefined && context[key] !== null) {
@@ -992,18 +996,21 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       userId: user.id,
       remainingCredits: charged.user.credits,
     });
-    job.generationContext = {
-      type: "moments",
-      channelLabel: "朋友圈图",
-      userId: user.id,
-      brandId: brand.id,
-      trendId: trend.id,
-      ideaIndex: Number(imageMatch[3]),
-      creditEventId: charged.creditEvent.id,
-      aspectRatio,
-    };
-    upsertImageJob(user.id, job);
-    json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
+   job.generationContext = {
+     type: "moments",
+     channelLabel: "朋友圈图",
+     userId: user.id,
+     brandId: brand.id,
+     trendId: trend.id,
+     ideaIndex: Number(imageMatch[3]),
+     creditEventId: charged.creditEvent.id,
+     aspectRatio,
+      title: metadata.title || idea.title || "",
+      caption: metadata.caption || "",
+      visualDirection: metadata.visualDirection || "",
+   };
+   upsertImageJob(user.id, job);
+   json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
     return true;
   }
 
@@ -1130,19 +1137,21 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           }
         }
       } else {
-        const brand = findBrandByOwner(resolved.generationContext.brandId, user.id);
-        const trend = findTrendItem(brand, resolved.generationContext.trendId);
-        const idea = trend?.ideas?.[resolved.generationContext.ideaIndex];
+       const brand = findBrandByOwner(resolved.generationContext.brandId, user.id);
+       const trend = findTrendItem(brand, resolved.generationContext.trendId);
+       const idea = trend?.ideas?.[resolved.generationContext.ideaIndex];
+        const hasCarouselGroup =
+          resolved.generationContext.type === "xhsCarouselSlide" &&
+          Boolean(resolved.generationContext.carouselGroupId);
         const legacyCarouselGroupId = (() => {
           if (resolved.generationContext.type !== "xhsCarouselSlide") return "";
-          if (resolved.generationContext.singleSlideOnly) return "";
+          if (resolved.generationContext.singleSlideOnly || hasCarouselGroup) return "";
           // 迁移窗口内旧版整组任务：无 carouselGroupId，按 creditEventId 推导稳定分组键，
           // 使恢复轮询也能按组落历史（一次扣费对应一行组历史）。
           return resolved.generationContext.creditEventId ? `legacy-${resolved.generationContext.creditEventId}` : "";
         })();
         const legacyCarouselSlide =
           resolved.generationContext.type === "xhsCarouselSlide" &&
-          !resolved.generationContext.singleSlideOnly &&
           Boolean(legacyCarouselGroupId);
         if (
           brand &&
@@ -1150,10 +1159,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           idea &&
           (resolved.generationContext.type !== "xhsCarouselSlide" ||
             resolved.generationContext.singleSlideOnly ||
+            hasCarouselGroup ||
             legacyCarouselSlide)
         ) {
           const isSingleCarouselSlide =
-            (resolved.generationContext.type === "xhsCarouselSlide" && resolved.generationContext.singleSlideOnly) ||
+            resolved.generationContext.type === "xhsCarouselSlide" ||
             legacyCarouselSlide;
           const type = isSingleCarouselSlide ? "xhsCarousel" : resolved.generationContext.type || "moments";
           const channelLabel = isSingleCarouselSlide ? "小红书组图" : resolved.generationContext.channelLabel || "朋友圈图";
@@ -1428,17 +1438,21 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     });
     if (!charged) return true;
     const job = charged.value;
-    job.generationContext = {
-      type: "wechat",
-      channelLabel: "公众号长图",
-      userId: user.id,
-      brandId: brand.id,
-      trendId: trend.id,
-      ideaIndex: Number(wechatLongImageMatch[3]),
-      creditEventId: charged.creditEvent.id,
-      aspectRatio,
-    };
-    console.log("[image-job] api created wechat job", {
+   job.generationContext = {
+     type: "wechat",
+     channelLabel: "公众号长图",
+     userId: user.id,
+     brandId: brand.id,
+     trendId: trend.id,
+     ideaIndex: Number(wechatLongImageMatch[3]),
+     creditEventId: charged.creditEvent.id,
+     aspectRatio,
+      title: wechatPack.title || wechatPack.publishTitle || idea.title || "",
+      publishTitle: wechatPack.publishTitle || "",
+      intro: wechatPack.intro || "",
+      visualDirection: wechatPack.visualDirection || "",
+   };
+   console.log("[image-job] api created wechat job", {
       elapsedMs: Date.now() - requestStartedAt,
       jobId: job.id,
       userId: user.id,
@@ -2010,15 +2024,20 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       }
     }
     carouselPack = applyAspectRatioToCarouselPack(carouselPack, aspectRatio);
-    carouselPack = applyXhsCreativeDirection(carouselPack, {
-      stylePreset: payload.visualStylePreset,
-      brand,
-      idea,
-      aspectRatio,
-    });
-    const charged = await runChargedAiWork({
-      user,
-      cost: CREDIT_COSTS.xhsCarousel,
+   carouselPack = applyXhsCreativeDirection(carouselPack, {
+     stylePreset: payload.visualStylePreset,
+     brand,
+     idea,
+     aspectRatio,
+   });
+    const carouselGroupId = normalizeCarouselGroupId(payload.carouselGroupId) || createCarouselGroupId();
+    carouselPack = {
+      ...carouselPack,
+      carouselGroupId,
+    };
+   const charged = await runChargedAiWork({
+     user,
+     cost: CREDIT_COSTS.xhsCarousel,
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "小红书组图生成",
@@ -2073,16 +2092,22 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
                 copy: slide.copy,
               },
             });
-            job.generationContext = {
-              type: "xhsCarouselSlide",
-              userId: user.id,
-              brandId: brand.id,
-              trendId: trend.id,
-              ideaIndex: Number(xhsCarouselMatch[3]),
-              slideIndex,
+           job.generationContext = {
+             type: "xhsCarouselSlide",
+             userId: user.id,
+             brandId: brand.id,
+             trendId: trend.id,
+             ideaIndex: Number(xhsCarouselMatch[3]),
+             slideIndex,
+              carouselGroupId,
+              carouselTitle: carouselPack.title || "",
+              publishTitle: carouselPack.publishTitle || "",
+              publishCaption: carouselPack.publishCaption || "",
+              caption: carouselPack.caption || "",
+              sourceSlide: buildSourceSlideSnapshot(slide),
               aspectRatio,
             };
-            console.log("[image-job] api created carousel slide job", {
+           console.log("[image-job] api created carousel slide job", {
               elapsedMs: Date.now() - requestStartedAt,
               jobId: job.id,
               userId: user.id,
@@ -2115,12 +2140,13 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         upsertImageJob(user.id, job);
       }
     }
-    json(res, 200, {
-      carouselPack: sanitizePayloadForClient(carouselPack),
-      slideJobs,
-      creditEventId: charged.creditEvent.id,
-      user: sanitizeUser(charged.user),
-    });
+   json(res, 200, {
+     carouselPack: sanitizePayloadForClient(carouselPack),
+      carouselGroupId,
+     slideJobs,
+     creditEventId: charged.creditEvent.id,
+     user: sanitizeUser(charged.user),
+   });
     return true;
   }
 
@@ -2257,33 +2283,36 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           },
         }),
     });
-    if (!charged) return true;
-    const job = charged.value;
-    job.generationContext = {
-      type: "xhsCarouselSlide",
-      singleSlideOnly: true,
-      userId: user.id,
-      brandId: brand.id,
-      trendId: trend.id,
-      ideaIndex,
-      slideIndex,
-      carouselTitle: incomingPack.title || defaultPack.title || "",
-      publishTitle: incomingPack.publishTitle || defaultPack.publishTitle || "",
-      publishCaption: incomingPack.publishCaption || defaultPack.publishCaption || "",
-      caption: incomingPack.caption || defaultPack.caption || "",
-      carouselGroupId: normalizeCarouselGroupId(incomingPack.carouselGroupId),
-      creditEventId: charged.creditEvent.id,
-      aspectRatio,
-    };
-    upsertImageJob(user.id, job);
-    json(res, 202, {
-      slideJob: {
-        slideIndex,
-        jobId: job.id,
-      },
-      creditEventId: charged.creditEvent.id,
-      user: sanitizeUser(charged.user),
-    });
+   if (!charged) return true;
+   const job = charged.value;
+    const carouselGroupId = normalizeCarouselGroupId(incomingPack.carouselGroupId || payload.carouselGroupId) || createCarouselGroupId();
+   job.generationContext = {
+     type: "xhsCarouselSlide",
+     singleSlideOnly: true,
+     userId: user.id,
+     brandId: brand.id,
+     trendId: trend.id,
+     ideaIndex,
+     slideIndex,
+     carouselTitle: incomingPack.title || defaultPack.title || "",
+     publishTitle: incomingPack.publishTitle || defaultPack.publishTitle || "",
+     publishCaption: incomingPack.publishCaption || defaultPack.publishCaption || "",
+     caption: incomingPack.caption || defaultPack.caption || "",
+      carouselGroupId,
+      sourceSlide: buildSourceSlideSnapshot(slide),
+     creditEventId: charged.creditEvent.id,
+     aspectRatio,
+   };
+   upsertImageJob(user.id, job);
+   json(res, 202, {
+     slideJob: {
+       slideIndex,
+       jobId: job.id,
+     },
+      carouselGroupId,
+     creditEventId: charged.creditEvent.id,
+     user: sanitizeUser(charged.user),
+   });
     return true;
   }
 

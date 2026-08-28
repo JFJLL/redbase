@@ -5,6 +5,7 @@ import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
 import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
+import { useGenerationTasksStore } from "@/features/generation/stores/generationTasks";
 import type { VideoScript } from "@/features/generation/api";
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
@@ -25,6 +26,7 @@ import {
 const router = useRouter();
 const auth = useAuthStore();
 const historyStore = useHistoryStore();
+const tasksStore = useGenerationTasksStore();
 const scope = useAbortScope();
 
 const filters = reactive(createEmptyGenerationHistoryFilters());
@@ -148,8 +150,75 @@ function previewSrc(item: GenerationHistoryItem): string {
   return safeImageSrc(item.previewUrl);
 }
 
+function placeholderSlides(item: GenerationHistoryItem) {
+  const rawSlides = Array.isArray(item.payload?.slides) ? item.payload!.slides : [];
+  return Array.from({ length: 4 }, (_, index) => {
+    const slide = (rawSlides[index] || {}) as Record<string, unknown>;
+    return {
+      index,
+      pageLabel: String(slide.pageLabel || `第 ${index + 1} 张`),
+      title: String(slide.title || ""),
+      imageUrl: typeof slide.imageUrl === "string" ? slide.imageUrl : "",
+      previewUrl: typeof slide.previewUrl === "string" ? slide.previewUrl : "",
+      status: typeof slide.status === "string" ? slide.status : "idle",
+      error: typeof slide.error === "string" ? slide.error : "",
+    };
+  });
+}
+
+const placeholderItems = computed<GenerationHistoryItem[]>(() => {
+  return tasksStore.placeholdersForHistory.map((task) => {
+    const summaryByType: Record<string, string> = {
+      moments: task.copy?.caption || task.copy?.visualDirection || "",
+      wechat: task.copy?.publishTitle || task.copy?.intro || "",
+      xhsCarousel: task.copy?.publishCaption || task.copy?.caption || "",
+      styleImage: task.copy?.visualDirection || "",
+    };
+    return {
+      id: `placeholder_${task.id}` as any,
+      ownerUserId: auth.user?.id ? Number(auth.user.id) : 0,
+      type: task.type,
+      channelLabel: task.channelLabel,
+      brandId: task.brandId ?? 0,
+      brandName: task.brandName || "",
+      trendId: task.trendId ?? 0,
+      trendTitle: task.trendTitle || "",
+      ideaTitle: task.ideaTitle || "",
+      cardTitle: task.cardTitle || task.copy?.publishTitle || task.ideaTitle || "生图任务",
+      createdAt: new Date(task.createdAt).toISOString(),
+      previewUrl: task.previewUrl || task.imageUrl || "",
+      summary: summaryByType[task.type] || "",
+      isPlaceholder: true,
+      placeholderStatus: task.status,
+      placeholderError: task.error,
+      payload: {
+        aspectRatio: task.aspectRatio,
+        caption: task.copy?.caption,
+        visualDirection: task.copy?.visualDirection,
+        publishTitle: task.copy?.publishTitle,
+        intro: task.copy?.intro,
+        publishCaption: task.copy?.publishCaption,
+        outline: task.copy?.outline,
+        slides: task.slides?.map((s) => ({
+          sourceSlideIndex: s.index,
+          pageLabel: s.pageLabel,
+          title: s.title,
+          copy: s.copy,
+          prompt: s.prompt,
+          imageUrl: s.imageUrl,
+          previewUrl: s.previewUrl || s.imageUrl,
+          status: s.status,
+          error: s.error,
+        })),
+      },
+    } as GenerationHistoryItem;
+  });
+});
+
+const allGenerations = computed(() => [...placeholderItems.value, ...generations.value]);
+
 const visibleHistory = computed(() =>
-  generations.value.filter((item) => matchesGenerationHistoryFilters(item, filters)),
+  allGenerations.value.filter((item) => matchesGenerationHistoryFilters(item, filters)),
 );
 const hasFilters = computed(() => Boolean(filters.q || filters.brandId || filters.type || filters.from || filters.to));
 
@@ -246,6 +315,7 @@ async function onEdited(): Promise<void> {
 }
 
 onMounted(() => {
+  tasksStore.markAllViewed();
   historyStore.ensureLoaded().catch((error) => {
     handleUnauthorizedError(error);
   });
@@ -333,65 +403,85 @@ onUnmounted(() => {
         <div class="history-card-top">
           <div>
             <div class="history-card-meta">
-              <span class="brand-tag">{{ item.channelLabel }}</span>
-              <span class="brand-tag">{{ typeLabel(item) }}</span>
-              <span v-if="aspectRatioOf(item)" class="brand-tag">{{ aspectRatioOf(item) }}</span>
-              <span v-if="item.type === 'videoScript' && asVideoScript(item)?.totalDurationSec" class="brand-tag">
-                {{ asVideoScript(item)?.totalDurationSec }} 秒
-              </span>
-              <span v-if="item.type === 'videoScript' && asVideoScript(item)?.clips?.length" class="brand-tag">
-                {{ asVideoScript(item)?.clips?.length }} 个片段
-              </span>
-              <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
-              <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
-                已改图 {{ (item.payload?.editHistory || []).length }} 次
-              </span>
-            </div>
-            <h3>{{ item.cardTitle }}</h3>
-            <div class="history-card-ref">{{ item.brandName }} · {{ item.trendTitle }}</div>
-            <div class="history-card-ref">{{ item.ideaTitle }}</div>
+            <span class="brand-tag">{{ item.channelLabel }}</span>
+            <span class="brand-tag">{{ typeLabel(item) }}</span>
+            <span v-if="aspectRatioOf(item)" class="brand-tag">{{ aspectRatioOf(item) }}</span>
+            <span v-if="(item as any).isPlaceholder" class="brand-tag is-generating-tag" data-test="history-placeholder-tag">
+              <span class="history-spinner-xs" aria-hidden="true"></span>
+              {{ (item as any).placeholderStatus === "submitting" ? "准备中…" : "生图中…" }}
+            </span>
+            <span v-if="item.type === 'videoScript' && asVideoScript(item)?.totalDurationSec" class="brand-tag">
+              {{ asVideoScript(item)?.totalDurationSec }} 秒
+            </span>
+            <span v-if="item.type === 'videoScript' && asVideoScript(item)?.clips?.length" class="brand-tag">
+              {{ asVideoScript(item)?.clips?.length }} 个片段
+            </span>
+            <span class="history-card-time">{{ formatTime(item.createdAt) }}</span>
+            <span v-if="(item.payload?.editHistory || []).length" class="brand-tag">
+              已改图 {{ (item.payload?.editHistory || []).length }} 次
+            </span>
           </div>
-          <div class="history-card-actions">
-            <button
-              v-if="item.type === 'videoScript'"
-              type="button"
-              class="secondary-btn"
-              data-test="history-detail"
-              @click="openDetail(item)"
-            >
-              查看脚本
-            </button>
-            <button
-              v-else-if="getGenerationPrimaryImageUrl(item)"
-              type="button"
-              class="secondary-btn"
-              data-test="history-detail"
-              @click="openDetail(item)"
-            >
-              查看
-            </button>
-            <button type="button" class="secondary-btn" data-test="history-delete" @click="removeItem(item.id)">删除</button>
-          </div>
+          <div v-if="(item as any).isPlaceholder && (!item.cardTitle || item.cardTitle === '生图任务')" class="skeleton-line skeleton-title" data-test="history-skeleton-title"></div>
+          <h3 v-else>{{ item.cardTitle }}</h3>
+          <div v-if="(item as any).isPlaceholder && !item.brandName && !item.trendTitle" class="skeleton-line skeleton-ref"></div>
+          <template v-else>
+            <div v-if="item.brandName || item.trendTitle" class="history-card-ref">{{ item.brandName }} · {{ item.trendTitle }}</div>
+            <div v-if="item.ideaTitle" class="history-card-ref">{{ item.ideaTitle }}</div>
+          </template>
         </div>
+        <div class="history-card-actions">
+          <button
+            v-if="item.type === 'videoScript'"
+            type="button"
+            class="secondary-btn"
+            data-test="history-detail"
+            @click="openDetail(item)"
+          >
+            查看脚本
+          </button>
+          <button
+            v-else-if="!(item as any).isPlaceholder && getGenerationPrimaryImageUrl(item)"
+            type="button"
+            class="secondary-btn"
+            data-test="history-detail"
+            @click="openDetail(item)"
+          >
+            查看
+          </button>
+          <button v-if="!(item as any).isPlaceholder" type="button" class="secondary-btn" data-test="history-delete" @click="removeItem(item.id)">删除</button>
+        </div>
+      </div>
 
-        <div v-if="item.type === 'videoScript'" class="history-copy">
-          <p v-if="asVideoScript(item)?.creativeConcept">
-            <strong>核心创意：</strong>{{ asVideoScript(item)?.creativeConcept }}
-          </p>
-          <p v-else-if="item.summary"><strong>内容摘要：</strong>{{ item.summary }}</p>
-        </div>
-        <div v-else-if="item.type === 'moments'" class="history-copy">
-          <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
-          <p v-if="item.payload?.visualDirection"><strong>视觉方向：</strong>{{ item.payload?.visualDirection }}</p>
-        </div>
-        <div v-else-if="item.type === 'wechat'" class="history-copy">
-          <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
-          <p v-if="item.payload?.intro"><strong>文章导语：</strong>{{ item.payload?.intro }}</p>
-        </div>
-        <div v-else class="history-copy">
-          <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
-          <p v-if="item.payload?.publishCaption"><strong>发布文案：</strong>{{ item.payload?.publishCaption }}</p>
-        </div>
+      <div v-if="item.type === 'videoScript'" class="history-copy">
+        <p v-if="asVideoScript(item)?.creativeConcept">
+          <strong>核心创意：</strong>{{ asVideoScript(item)?.creativeConcept }}
+        </p>
+        <p v-else-if="item.summary"><strong>内容摘要：</strong>{{ item.summary }}</p>
+      </div>
+      <div v-else-if="item.type === 'moments'" class="history-copy">
+        <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
+        <p v-if="item.payload?.visualDirection"><strong>视觉方向：</strong>{{ item.payload?.visualDirection }}</p>
+        <template v-else-if="(item as any).isPlaceholder">
+          <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
+          <div class="skeleton-line skeleton-copy short"></div>
+        </template>
+      </div>
+      <div v-else-if="item.type === 'wechat'" class="history-copy">
+        <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
+        <p v-if="item.payload?.intro"><strong>文章导语：</strong>{{ item.payload?.intro }}</p>
+        <template v-else-if="(item as any).isPlaceholder">
+          <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
+          <div class="skeleton-line skeleton-copy short"></div>
+        </template>
+      </div>
+      <div v-else class="history-copy">
+        <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
+        <p v-if="item.payload?.publishCaption"><strong>发布文案：</strong>{{ item.payload?.publishCaption }}</p>
+        <template v-else-if="(item as any).isPlaceholder">
+          <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
+          <div class="skeleton-line skeleton-copy short"></div>
+        </template>
+      </div>
 
         <!-- 脚本卡片展示概要 -->
         <div
@@ -411,6 +501,22 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="item.type === 'xhsCarousel'" class="history-grid">
+          <template v-if="(item as any).isPlaceholder">
+            <div v-for="slide in placeholderSlides(item)" :key="slide.index" class="history-slide-cell">
+              <img v-if="slide.imageUrl || slide.previewUrl" :src="safeImageSrc(slide.imageUrl || slide.previewUrl)" :alt="slide.title || slide.pageLabel || ''" />
+              <div v-else-if="slide.status === 'submitting' || slide.status === 'polling'" class="history-placeholder-cell is-generating" data-test="history-slide-loading">
+                <span class="history-spinner-sm"></span>
+                <span>{{ slide.pageLabel }} · 生成中</span>
+              </div>
+              <div v-else-if="slide.status === 'failed'" class="history-placeholder-cell is-failed" data-test="history-slide-failed">
+                <span>{{ slide.pageLabel }} · 失败</span>
+              </div>
+              <div v-else class="history-placeholder-cell is-idle" data-test="history-slide-idle">
+                <span>{{ slide.pageLabel }} · 未生成</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
           <div v-for="(slide, index) in slideImages(item)" :key="index" class="history-slide-cell">
             <div v-if="isImageFailed(slide.src)" class="history-image-error" data-test="history-image-error">
               <span>图片加载失败</span>
@@ -433,6 +539,14 @@ onUnmounted(() => {
               @error="onHistoryImageError(slide.src)"
             />
           </div>
+          </template>
+        </div>
+        <div v-else-if="(item as any).isPlaceholder" class="history-placeholder-image" data-test="history-placeholder-image">
+          <img v-if="previewSrc(item)" :src="previewSrc(item)" :alt="item.cardTitle || ''" />
+          <template v-else>
+            <span class="history-spinner"></span>
+            <span>AI 正在生成图片中…</span>
+          </template>
         </div>
         <button
           v-else-if="previewSrc(item)"
@@ -773,6 +887,138 @@ onUnmounted(() => {
 
 .history-slide-cell {
   min-width: 0;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #f0eae6 25%, #fbf8f6 50%, #f0eae6 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+
+.skeleton-title {
+  height: 20px;
+  width: 60%;
+  margin: 10px 0 8px;
+}
+
+.skeleton-ref {
+  height: 12px;
+  width: 40%;
+  margin-bottom: 6px;
+}
+
+.skeleton-copy {
+  width: 90%;
+  margin-bottom: 6px;
+}
+
+.skeleton-copy.short {
+  width: 65%;
+}
+
+.history-placeholder-image {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1px dashed rgba(216, 68, 68, 0.24);
+  border-radius: var(--radius-md);
+  background: #fff9f8;
+  color: #b83a3d;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.history-placeholder-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+
+.history-placeholder-cell {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: #faf7f5;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.history-placeholder-cell.is-generating {
+  border-color: rgba(216, 68, 68, 0.35);
+  background: #fff7f5;
+  color: #b83a3d;
+  font-weight: 600;
+}
+
+.history-placeholder-cell.is-idle {
+  border-color: var(--color-border);
+  background: #faf7f5;
+  color: var(--color-text-secondary);
+}
+
+.history-placeholder-cell.is-failed {
+  border-color: rgba(201, 42, 42, 0.35);
+  background: #fff5f5;
+  color: #c92a2a;
+}
+
+.history-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(216, 68, 68, 0.2);
+  border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.history-spinner-sm {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(216, 68, 68, 0.2);
+  border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.history-spinner-xs {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border: 2px solid rgba(216, 68, 68, 0.25);
+  border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.is-generating-tag {
+  background: #ffebe8 !important;
+  color: #b83a3d !important;
+  border: 1px solid rgba(216, 68, 68, 0.25) !important;
+  display: inline-flex;
+  align-items: center;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .history-image-error {

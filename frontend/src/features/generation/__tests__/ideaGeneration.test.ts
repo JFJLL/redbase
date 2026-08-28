@@ -301,7 +301,7 @@ describe("idea generation through the real ideas entry", () => {
     expect(deleted).toBe(false);
   });
 
-  it("stops polling when the view unmounts mid-generation", async () => {
+  it("keeps background polling running when the dialog view unmounts mid-generation", async () => {
     vi.useFakeTimers();
     try {
       const { wrapper, fetchMock } = await mountIdeasGeneration(
@@ -334,7 +334,7 @@ describe("idea generation through the real ideas entry", () => {
 
       wrapper.unmount();
       await vi.advanceTimersByTimeAsync(IMAGE_JOB_POLL_INTERVAL_MS * 10);
-      expect(pollCount()).toBe(2);
+      expect(pollCount()).toBeGreaterThanOrEqual(3);
     } finally {
       vi.useRealTimers();
     }
