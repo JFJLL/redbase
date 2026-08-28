@@ -431,7 +431,7 @@ onUnmounted(() => {
         </div>
         <div class="history-card-actions">
           <button
-            v-if="item.type === 'videoScript'"
+            v-if="item.type === 'videoScript' && !(item as any).isPlaceholder"
             type="button"
             class="secondary-btn"
             data-test="history-detail"
@@ -457,6 +457,10 @@ onUnmounted(() => {
           <strong>核心创意：</strong>{{ asVideoScript(item)?.creativeConcept }}
         </p>
         <p v-else-if="item.summary"><strong>内容摘要：</strong>{{ item.summary }}</p>
+        <template v-else-if="(item as any).isPlaceholder">
+          <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
+          <div class="skeleton-line skeleton-copy short"></div>
+        </template>
       </div>
       <div v-else-if="item.type === 'moments'" class="history-copy">
         <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
@@ -487,15 +491,21 @@ onUnmounted(() => {
         <div
           v-if="item.type === 'videoScript'"
           class="history-script-box"
-          @click="openDetail(item)"
+          @click="!(item as any).isPlaceholder && openDetail(item)"
         >
           <div class="script-box-inner">
             <span class="script-icon">🎬</span>
             <div class="script-info">
-              <strong>{{ asVideoScript(item)?.title || item.cardTitle }}</strong>
-              <small>
-                共 {{ asVideoScript(item)?.clips?.length || 0 }} 个分镜提示词 · 时长 {{ asVideoScript(item)?.totalDurationSec || 30 }} 秒 · 比例 {{ item.payload?.aspectRatio || '9:16' }}
-              </small>
+              <template v-if="(item as any).isPlaceholder">
+                <strong>{{ item.cardTitle || '视频分镜脚本生成中…' }}</strong>
+                <small>AI 正在构思分镜镜头、视觉提示词与配音文案…</small>
+              </template>
+              <template v-else>
+                <strong>{{ asVideoScript(item)?.title || item.cardTitle }}</strong>
+                <small>
+                  共 {{ asVideoScript(item)?.clips?.length || 0 }} 个分镜提示词 · 时长 {{ asVideoScript(item)?.totalDurationSec || 30 }} 秒 · 比例 {{ item.payload?.aspectRatio || '9:16' }}
+                </small>
+              </template>
             </div>
           </div>
         </div>

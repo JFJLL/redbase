@@ -533,4 +533,50 @@ describe("Background Generation Coordinator & UX Contracts", () => {
 
     wrapper.unmount();
   });
+
+  it("8. 视频脚本生成：启动视频脚本生成后，左侧栏历史生成显示旋转加载器，完成后更新侧栏并展示结果", async () => {
+    const fetchMock = createMockFetch({
+      "POST /api/brands/7/trends/501/ideas/0/video-script": () => {
+        return jsonResponse(200, {
+          videoScript: {
+            title: "生成好的视频脚本",
+            creativeConcept: "脚本核心创意",
+            totalDurationSec: 15,
+            clips: [{ index: 1, durationSec: 15, purpose: "演示", prompt: "镜头提示词" }],
+          },
+          generation: { id: 333, cardTitle: "生成好的视频脚本", summary: "脚本摘要" },
+          user: { id: "u1", credits: 49 },
+        });
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", credits: 50 };
+    auth.sessionLoaded = true;
+
+    const router = makeRouter();
+    await router.push({ name: "ideas" });
+    await router.isReady();
+
+    const tasksStore = useGenerationTasksStore();
+    const wrapper = mount({ template: "<router-view />" }, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+
+    // 点击一键生成脚本
+    await wrapper.find('[data-test="idea-generate-script-0"]').trigger("click");
+    await flushPromises();
+
+    // 验证：视频脚本任务已注册进 tasksStore，并在侧栏历史生成旁触发旋转动画
+    expect(tasksStore.tasks.length).toBe(1);
+    expect(tasksStore.tasks[0].type).toBe("videoScript");
+    expect(tasksStore.tasks[0].status).toBe("completed");
+    expect(tasksStore.tasks[0].cardTitle).toBe("生成好的视频脚本");
+    expect(tasksStore.hasUnviewedSuccess).toBe(true);
+    expect(wrapper.find('[data-test="sidebar-task-completed"]').exists()).toBe(true);
+
+    wrapper.unmount();
+  });
 });

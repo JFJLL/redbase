@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useInsightsStore } from "@/features/trends/stores/insights";
 import {
   getIdeaCreativeSettings,
@@ -76,20 +76,37 @@ onMounted(() => {
   generateScript();
 });
 
+const isClosing = ref(false);
+
 function handleRegenerate() {
   reset();
   generateScript();
 }
 
 function handleClose() {
-  emit("close");
+  if (isClosing.value) return;
+  isClosing.value = true;
+  const prefersReduced =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const isTest = typeof process !== "undefined" && process.env.NODE_ENV === "test";
+  if (isTest) {
+    emit("close");
+    return;
+  }
+  const duration = prefersReduced ? 150 : 280;
+  setTimeout(() => {
+    emit("close");
+  }, duration);
 }
 </script>
 
 <template>
-  <div class="video-script-backdrop" data-test="idea-video-script-dialog" @click.self="handleClose">
+  <div class="video-script-backdrop" :class="{ 'is-closing': isClosing }" data-test="idea-video-script-dialog" @click.self="handleClose">
     <section
       class="video-script-dialog-panel"
+      :class="{ 'is-closing': isClosing }"
       role="dialog"
       aria-modal="true"
       aria-labelledby="videoScriptDialogTitle"
@@ -168,6 +185,12 @@ function handleClose() {
   background: rgba(30, 20, 22, 0.48);
   backdrop-filter: blur(3px);
   overflow-y: auto;
+  opacity: 1;
+  transition: opacity 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.video-script-backdrop.is-closing {
+  opacity: 0;
 }
 
 .video-script-dialog-panel {
@@ -181,6 +204,24 @@ function handleClose() {
   color: var(--workspace-text, #222);
   box-shadow: 0 24px 64px rgba(45, 25, 30, 0.2);
   overflow: hidden;
+  transform: translate(0, 0) scale(1);
+  transform-origin: 10% 55%;
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1), opacity 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.video-script-dialog-panel.is-closing {
+  transform: translate(-30vw, 2vh) scale(0.18);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .video-script-backdrop {
+    transition: opacity 150ms ease !important;
+  }
+  .video-script-dialog-panel {
+    transition: opacity 150ms ease !important;
+    transform: none !important;
+  }
 }
 
 .dialog-header {

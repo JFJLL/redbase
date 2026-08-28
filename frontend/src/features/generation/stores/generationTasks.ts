@@ -11,6 +11,7 @@ import {
   previewXhsCarousel,
   submitMomentsImage,
   submitStyleImage,
+  submitVideoScript,
   submitWechatLongImage,
   submitXhsCarouselSlide,
   type BrandDetail,
@@ -20,9 +21,12 @@ import {
   type ProductImageInput,
   type RecoverableImageJob,
   type TrendDetail,
+  type VideoScript,
+  type VideoScriptRequest,
+  type VideoScriptSubmitResult,
 } from "../api";
 
-export type GenerationTaskType = "moments" | "wechat" | "xhsCarousel" | "styleImage";
+export type GenerationTaskType = "moments" | "wechat" | "xhsCarousel" | "styleImage" | "videoScript";
 export type GenerationTaskStatus = "idle" | "submitting" | "polling" | "completed" | "failed";
 
 export interface CarouselSlideItem {
@@ -55,11 +59,13 @@ export interface GenerationTaskItem {
   trendTitle: string;
   ideaTitle: string;
   cardTitle: string;
+  summary?: string;
   aspectRatio?: string;
   status: GenerationTaskStatus;
   createdAt: number;
   completedAt?: number;
   completing?: boolean;
+  videoScript?: VideoScript;
   imageUrl?: string;
   previewUrl?: string;
   error?: string;
@@ -89,6 +95,8 @@ function channelLabelForType(type: GenerationTaskType): string {
       return "小红书组图";
     case "styleImage":
       return "风格化图";
+    case "videoScript":
+      return "视频脚本";
     default:
       return "图片生成";
   }
@@ -501,6 +509,95 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         if (isAbortError(error) || controller.signal.aborted) return task;
         task.status = "failed";
         task.error = (error as Error).message || "图片生成失败";
+        await auth.refreshUser().catch(() => {});
+        throw error;
+      } finally {
+        this.controllers.delete(clientTaskId);
+      }
+    },
+
+    async startVideoScriptTask(params: {
+      brandId: number;
+      trendId: number;
+      ideaIndex: number;
+      brandName?: string;
+      trendTitle?: string;
+      ideaTitle?: string;
+      cardTitle?: string;
+      summary?: string;
+      payload: VideoScriptRequest;
+    }): Promise<GenerationTaskItem> {
+      const auth = useAuthStore();
+      const historyStore = useHistoryStore();
+      const clientTaskId = `vs_${params.brandId}_${params.trendId}_${params.ideaIndex}_${Date.now()}`;
+
+      const existingIndex = this.tasks.findIndex(
+        (t) =>
+          t.type === "videoScript" &&
+          Number(t.brandId) === Number(params.brandId) &&
+          Number(t.trendId) === Number(params.trendId) &&
+          Number(t.ideaIndex) === Number(params.ideaIndex),
+      );
+      if (existingIndex >= 0) {
+        this.tasks.splice(existingIndex, 1);
+      }
+
+      const task: GenerationTaskItem = reactive({
+        id: clientTaskId,
+        type: "videoScript",
+        channelLabel: "视频脚本",
+        brandId: params.brandId,
+        trendId: params.trendId,
+        ideaIndex: params.ideaIndex,
+        brandName: params.brandName || "",
+        trendTitle: params.trendTitle || "",
+        ideaTitle: params.ideaTitle || "",
+        cardTitle: params.cardTitle || params.ideaTitle || "视频脚本",
+        aspectRatio: params.payload.aspectRatioSelection || "9:16",
+        status: "submitting",
+        createdAt: Date.now(),
+        viewed: false,
+        summary: params.summary || "",
+      });
+
+      this.tasks.unshift(task);
+
+      const controller = new AbortController();
+      this.controllers.set(clientTaskId, controller);
+
+      try {
+        const result: VideoScriptSubmitResult = await submitVideoScript(
+          params.brandId,
+          params.trendId,
+          params.ideaIndex,
+          params.payload,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return task;
+        if (result.user) auth.user = { ...auth.user, ...result.user };
+
+        const generatedScript = (result.videoScript ||
+          (result.generation?.payload as Record<string, unknown> | undefined)?.videoScript ||
+          null) as VideoScript | null;
+        task.videoScript = generatedScript || undefined;
+        if (result.generation?.id) task.generationId = Number(result.generation.id);
+        if (typeof result.generation?.cardTitle === "string") task.cardTitle = result.generation.cardTitle;
+        if (typeof result.generation?.summary === "string") task.summary = result.generation.summary;
+        task.status = "completed";
+        task.completedAt = Date.now();
+
+        if (result.generation) {
+          historyStore.upsertGeneration(result.generation as any);
+        }
+        if (!result.user) {
+          await auth.refreshUser().catch(() => {});
+        }
+        await historyStore.refresh().catch(() => {});
+        return task;
+      } catch (error) {
+        if (isAbortError(error) || controller.signal.aborted) return task;
+        task.status = "failed";
+        task.error = (error as Error).message || "视频脚本生成失败";
         await auth.refreshUser().catch(() => {});
         throw error;
       } finally {

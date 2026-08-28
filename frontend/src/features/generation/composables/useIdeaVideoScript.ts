@@ -1,15 +1,13 @@
 import { computed, ref, type Ref } from "vue";
 import { isAbortError, isUnauthorized } from "@/shared/api/client";
 import { useAuthStore } from "@/shared/stores/auth";
-import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
+import { useGenerationTasksStore } from "../stores/generationTasks";
 import type { GenerationHistoryItem } from "@/features/history/api";
-import {
-  submitVideoScript,
-  type ProductImageInput,
-  type VideoScript,
-  type VideoScriptRequest,
-  type VideoScriptSubmitResult,
+import type {
+  ProductImageInput,
+  VideoScript,
+  VideoScriptRequest,
 } from "../api";
 
 export interface UseIdeaVideoScriptOptions {
@@ -35,13 +33,53 @@ function generateRequestId(): string {
 export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
   const auth = useAuthStore();
   const historyStore = useHistoryStore();
-  const scope = useAbortScope();
+  const tasksStore = useGenerationTasksStore();
 
-  const loading = ref(false);
-  const error = ref("");
-  const script = ref<VideoScript | null>(null);
-  const generation = ref<GenerationHistoryItem | null>(null);
+  const activeTask = computed(() => {
+    if (options.brandId.value == null || options.trendId.value == null || options.ideaIndex.value == null) {
+      return undefined;
+    }
+    return tasksStore.findTask(
+      "videoScript",
+      Number(options.brandId.value),
+      Number(options.trendId.value),
+      Number(options.ideaIndex.value),
+    );
+  });
+
+  const localLoading = ref(false);
+  const localError = ref("");
+  const localScript = ref<VideoScript | null>(null);
+  const localGeneration = ref<GenerationHistoryItem | null>(null);
   const currentRequestId = ref<string>(generateRequestId());
+
+  const loading = computed(() => {
+    const t = activeTask.value;
+    if (!t) return localLoading.value;
+    return t.status === "submitting" || t.status === "polling";
+  });
+
+  const error = computed(() => {
+    const t = activeTask.value;
+    if (t?.status === "failed" && t.error) return t.error;
+    return localError.value;
+  });
+
+  const script = computed<VideoScript | null>(() => {
+    const t = activeTask.value;
+    if (t?.status === "completed" && t.videoScript) {
+      return t.videoScript;
+    }
+    return localScript.value;
+  });
+
+  const generation = computed<GenerationHistoryItem | null>(() => {
+    const t = activeTask.value;
+    if (t?.generationId) {
+      return historyStore.items.find((item) => Number(item.id) === Number(t.generationId)) || localGeneration.value;
+    }
+    return localGeneration.value;
+  });
 
   const canGenerate = computed(() => {
     return (
@@ -60,9 +98,8 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
     const ideaIndex = Number(options.ideaIndex.value);
     const reqId = customRequestId || currentRequestId.value;
 
-    loading.value = true;
-    error.value = "";
-    const signal = scope.signalFor("video-script");
+    localLoading.value = true;
+    localError.value = "";
 
     const payload: VideoScriptRequest = {
       requestId: reqId,
@@ -75,33 +112,15 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
     };
 
     try {
-      const result: VideoScriptSubmitResult = await submitVideoScript(
+      const task = await tasksStore.startVideoScriptTask({
         brandId,
         trendId,
         ideaIndex,
         payload,
-        signal,
-      );
-
-      if (result.user) {
-        auth.user = { ...auth.user, ...result.user };
-      } else {
-        await auth.refreshUser().catch(() => {});
-      }
-
-      const generatedScript = (result.videoScript ||
-        (result.generation?.payload as Record<string, unknown> | undefined)?.videoScript ||
-        null) as VideoScript | null;
-      script.value = generatedScript;
-      generation.value = (result.generation as GenerationHistoryItem) || null;
-
-      if (generation.value) {
-        historyStore.upsertGeneration(generation.value);
-      } else {
-        historyStore.refresh().catch(() => {});
-      }
-
-      return generatedScript;
+      });
+      localScript.value = task.videoScript || null;
+      localLoading.value = false;
+      return task.videoScript || null;
     } catch (err) {
       if (isAbortError(err)) return null;
       if (options.onUnauthorized && (await options.onUnauthorized(err))) return null;
@@ -109,10 +128,9 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
         auth.handleUnauthorized();
         return null;
       }
-      error.value = (err as Error).message || "视频脚本生成失败，请重试。";
+      localError.value = (err as Error).message || "视频脚本生成失败，请重试。";
+      localLoading.value = false;
       return null;
-    } finally {
-      loading.value = false;
     }
   }
 
@@ -122,10 +140,10 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
 
   function reset(): void {
     currentRequestId.value = generateRequestId();
-    script.value = null;
-    generation.value = null;
-    error.value = "";
-    loading.value = false;
+    localScript.value = null;
+    localGeneration.value = null;
+    localError.value = "";
+    localLoading.value = false;
   }
 
   return {
@@ -140,3 +158,4 @@ export function useIdeaVideoScript(options: UseIdeaVideoScriptOptions) {
     reset,
   };
 }
+
