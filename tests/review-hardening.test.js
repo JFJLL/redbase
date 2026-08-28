@@ -28,6 +28,10 @@ test("text provider defaults use the selected OpenAI-compatible DeepSeek endpoin
   assert.equal(DEFAULT_APP_CONFIG.textProvider.model, "deepseek/deepseek-v4-flash");
   assert.equal(DEFAULT_APP_CONFIG.textProvider.openaiBaseUrl, "https://llm.runninghub.ai/v1");
   assert.equal(DEFAULT_APP_CONFIG.textProvider.anthropicBaseUrl, "");
+  assert.equal(DEFAULT_APP_CONFIG.video.runninghub.baseUrl, "https://www.runninghub.ai/openapi/v2");
+  assert.equal(DEFAULT_APP_CONFIG.video.runninghub.submitPath, "/rhart-video/sparkvideo-2.0/multimodal-video");
+  assert.equal(DEFAULT_APP_CONFIG.video.runninghub.pollPath, "/query");
+  assert.deepEqual(DEFAULT_APP_CONFIG.video.runninghub.outputHosts, ["runninghub.ai", "runninghub.cn"]);
 });
 
 test("trend routes preserve actionable AnySearch and model validation errors", () => {

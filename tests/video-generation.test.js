@@ -281,6 +281,7 @@ test("D2 and G2 provider adapters send only the approved product contract fields
   const g2 = createG2Provider({ appConfig: { video: { agnes: { baseUrl: "https://api.agnes-ai.cn" } } }, fetchImpl });
   await d2.submitClip({ prompt: "d2 prompt", resolution: "720p", durationSec: 10, aspectRatio: "9:16", referenceUrls: ["https://redbase.example/a"] });
   await g2.submitClip({ apiKey: "g2-key", prompt: "g2 prompt", durationSec: 5, aspectRatio: "9:16", mode: "reference", referenceUrls: ["https://redbase.example/a"] });
+  assert.equal(calls[0].url, "https://www.runninghub.ai/openapi/v2/rhart-video/sparkvideo-2.0/multimodal-video");
   const d2Body = JSON.parse(calls[0].options.body);
   const g2Body = JSON.parse(calls[1].options.body);
   assert.deepEqual(d2Body, {
@@ -306,6 +307,25 @@ test("D2 and G2 provider adapters send only the approved product contract fields
     n: 1,
     images: ["https://redbase.example/a"],
   });
+
+  const customD2Calls = [];
+  const customD2 = createD2Provider({
+    appConfig: {
+      video: {
+        runninghub: {
+          baseUrl: "https://custom.runninghub.ai/api",
+          apiKey: "custom-key",
+          submitPath: "/custom-model/generate",
+        },
+      },
+    },
+    fetchImpl: async (url, options) => {
+      customD2Calls.push({ url: String(url), options });
+      return { ok: true, status: 200, async json() { return { taskId: "custom-task" }; } };
+    },
+  });
+  await customD2.submitClip({ prompt: "custom prompt", resolution: "720p", durationSec: 5, aspectRatio: "16:9" });
+  assert.equal(customD2Calls[0].url, "https://custom.runninghub.ai/api/custom-model/generate");
 });
 
 test("FFmpeg helpers inject the binary, prefer the stable tail offset, retry failures, and clean temp files", async () => {

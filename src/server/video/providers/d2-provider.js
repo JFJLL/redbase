@@ -113,6 +113,7 @@ function createD2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
   const config = getVideoModelConfig("d2");
   const providerConfig = appConfig.video?.runninghub || {};
   const baseUrl = String(providerConfig.baseUrl || "https://www.runninghub.ai/openapi/v2").replace(/\/+$/, "");
+  const submitPath = String(providerConfig.submitPath || "/rhart-video/sparkvideo-2.0/multimodal-video").trim();
   const apiKey = String(providerConfig.apiKey || "").trim();
   const submitTimeoutMs = Number(appConfig.video?.submitTimeoutMs || 45000);
   const pollTimeoutMs = Number(appConfig.video?.pollTimeoutMs || 20000);
@@ -166,7 +167,7 @@ function createD2Provider({ appConfig = {}, fetchImpl = fetch } = {}) {
       // RedBase's no-watermark product policy in the prompt/endpoint default,
       // but do not send an undocumented field to this endpoint.
       if (boundedReferenceUrls.length) body.imageUrls = boundedReferenceUrls;
-      const payload = await request(joinUrl(baseUrl, "/rhart-video/sparkvideo-2.0/multimodal-video"), {
+      const payload = await request(joinUrl(baseUrl, submitPath || "/rhart-video/sparkvideo-2.0/multimodal-video"), {
         method: "POST",
         body: JSON.stringify(body),
         signal,

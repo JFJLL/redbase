@@ -7,7 +7,7 @@ import { safeImageSrc } from "../api";
 
 const props = defineProps<{
   target: ImageEditTarget | null;
-  /** 面板标题，默认“继续改图”。 */
+  /** 面板标题，默认"继续改图"。 */
   label?: string;
 }>();
 
@@ -45,10 +45,11 @@ function submit(): void {
       {{ error }}
     </div>
     <label class="form-field">
-      <span>{{ label || "继续改图提示词" }}</span>
+      <span class="form-field-label">{{ label || "继续改图提示词" }}</span>
       <textarea
         v-model="prompt"
-        rows="2"
+        rows="3"
+        class="form-field-textarea"
         data-test="image-edit-prompt"
         :disabled="busy"
         placeholder="描述希望修改的内容（例如：把背景换成夜晚咖啡馆）"
@@ -56,7 +57,7 @@ function submit(): void {
     </label>
     <button
       type="button"
-      class="secondary-btn"
+      class="image-edit-submit"
       data-test="image-edit-submit"
       :disabled="!canSubmit"
       @click="submit"
@@ -70,47 +71,131 @@ function submit(): void {
 <style scoped>
 .image-edit-panel {
   display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--workspace-border, #e3e6ea);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
   border-radius: var(--workspace-radius, 10px);
-  background: var(--workspace-surface-soft, #f6f8fa);
+  background: var(--workspace-surface-soft, #faf7f5);
 }
 
 .image-edit-status {
-  color: var(--workspace-muted, #687385);
-  font-size: 0.9rem;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
+  border-radius: var(--workspace-radius-sm, 8px);
+  background: var(--workspace-surface, #ffffff);
+  color: var(--workspace-text-muted, #6f6368);
+  font-size: 0.86rem;
+  line-height: 1.6;
 }
 
 .image-edit-status.is-done {
+  border-color: rgba(29, 127, 76, 0.25);
+  background: #f1faf4;
   color: var(--workspace-success, #1d7f4c);
 }
 
 .image-edit-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(192, 57, 43, 0.18);
+  border-radius: var(--workspace-radius-sm, 8px);
+  background: #fff1f1;
   color: var(--workspace-danger, #c0392b);
-  font-size: 0.9rem;
+  font-size: 0.86rem;
+  line-height: 1.6;
 }
 
 .image-edit-result {
   display: block;
   max-width: 220px;
   margin-top: 8px;
-  border-radius: 8px;
+  border-radius: var(--workspace-radius-sm, 8px);
+  border: 1px solid var(--workspace-border, rgba(18, 16, 17, 0.12));
 }
 
 .image-edit-hint {
   margin: 0;
-  color: var(--workspace-muted, #687385);
+  color: var(--workspace-text-muted, #6f6368);
   font-size: 0.85rem;
 }
 
 .form-field {
   display: grid;
-  gap: 4px;
+  min-width: 0;
+  gap: 7px;
 }
 
-.form-field textarea {
-  min-height: 56px;
+.form-field-label {
+  color: var(--workspace-brand-ink, #bb3f3f);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.form-field-textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 84px;
+  padding: 10px 12px;
+  border: 1px solid var(--workspace-border-strong, rgba(18, 16, 17, 0.12));
+  border-radius: var(--workspace-radius, 8px);
+  background: var(--workspace-surface, #ffffff);
+  color: var(--workspace-text, #120f10);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.65;
   resize: vertical;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.form-field-textarea::placeholder {
+  color: var(--workspace-text-faint, #8a7c80);
+}
+
+.form-field-textarea:focus {
+  border-color: rgba(229, 72, 77, 0.48);
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.08);
+}
+
+.form-field-textarea:disabled {
+  cursor: not-allowed;
+  background: var(--workspace-surface-soft, #faf7f5);
+  color: var(--workspace-text-muted, #6f6368);
+}
+
+.image-edit-submit {
+  display: inline-flex;
+  align-self: flex-start;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid var(--workspace-brand-border, rgba(216, 68, 68, 0.14));
+  border-radius: var(--workspace-radius-sm, 6px);
+  background: var(--workspace-surface, #ffffff);
+  color: var(--workspace-text-body, #4b4244);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.image-edit-submit:hover:not(:disabled) {
+  border-color: rgba(216, 68, 68, 0.28);
+  background: #fff8f7;
+  color: var(--workspace-brand, #d84444);
+}
+
+.image-edit-submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.16);
+}
+
+.image-edit-submit:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
 }
 </style>

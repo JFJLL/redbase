@@ -7,10 +7,9 @@ import { useAbortScope } from "@/shared/composables/useAbortScope";
 import { useHistoryStore } from "@/features/history/stores/history";
 import { useGenerationTasksStore } from "@/features/generation/stores/generationTasks";
 import {
+  createVideoProject,
   fetchVideoProject,
-  regenerateVideoProjectClip,
   retryVideoProjectAssembly,
-  retryVideoProjectClipResult,
   type VideoProject,
   type VideoScript,
 } from "@/features/generation/api";
@@ -45,8 +44,9 @@ const loadError = computed(() => historyStore.error);
 const detailItem = ref<GenerationHistoryItem | null>(null);
 const detailSlideIndex = ref<number | null>(null);
 const editEntryId = ref<string | null>(null);
-const retryingVideoClip = ref<string | null>(null);
 const retryingVideoAssembly = ref(false);
+const startingVideoProject = ref(false);
+const startVideoError = ref("");
 const videoClipPrompts = reactive<Record<string, string>>({});
 let videoProjectRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -259,16 +259,41 @@ function videoScriptContext(item: GenerationHistoryItem): { brandId: number; tre
 async function continueVideoFromScript(item: GenerationHistoryItem): Promise<void> {
   const context = videoScriptContext(item);
   if (!context) return;
-  closeDetail();
-  await router.push({
-    name: "ideas",
-    query: {
-      brandId: String(context.brandId),
-      trendId: String(context.trendId),
-      ideaIndex: String(context.ideaIndex),
-      action: "videoScript",
-    },
-  });
+  const videoScriptGenerationId = Number(item.id);
+  if (!Number.isSafeInteger(videoScriptGenerationId) || videoScriptGenerationId <= 0) return;
+  startingVideoProject.value = true;
+  startVideoError.value = "";
+  try {
+    const response = await createVideoProject(
+      context.brandId,
+      context.trendId,
+      context.ideaIndex,
+      {
+        requestId: videoRequestId(),
+        videoScriptGenerationId,
+        model: String(item.payload?.videoModel || "d2"),
+        mode: String(item.payload?.videoMode || "text"),
+        resolution: String(item.payload?.videoResolution || "720p"),
+        aspectRatio: String(item.payload?.aspectRatio || asVideoScript(item)?.aspectRatio || "9:16"),
+        totalDurationSec: Number(item.payload?.videoDuration || asVideoScript(item)?.totalDurationSec || 30),
+        referenceAssetIds: Array.isArray(item.payload?.referenceAssetIds)
+          ? (item.payload?.referenceAssetIds as unknown[]).map((entry) => Number(entry)).filter((entry) => Number.isSafeInteger(entry) && entry > 0)
+          : [],
+      },
+      scope.signalFor(`history-video-create-${videoScriptGenerationId}`),
+    );
+    if (response.user) auth.user = { ...auth.user, ...response.user };
+    else await auth.refreshUser().catch(() => {});
+    startVideoError.value = "";
+    await historyStore.refresh();
+    closeDetail();
+  } catch (error) {
+    if (isAbortError(error)) return;
+    if (await handleUnauthorizedError(error)) return;
+    startVideoError.value = (error as Error).message || "启动视频生成失败，请稍后再试。";
+  } finally {
+    startingVideoProject.value = false;
+  }
 }
 
 function asVideoScript(item: GenerationHistoryItem | null): VideoScript | null {
@@ -307,13 +332,6 @@ function videoProjectThumbnailUrl(item: GenerationHistoryItem | null): string {
 
 function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<string, unknown>> {
   return Array.isArray(item?.payload?.videoClips) ? item.payload.videoClips : [];
-}
-
-function shouldShowVideoProjectClip(item: GenerationHistoryItem | null, clip: Record<string, unknown>): boolean {
-  return Boolean(
-    (videoProjectClips(item).length > 1 || !videoProjectVideoUrl(item))
-    && safeImageSrc(String(clip.videoUrl || "")),
-  );
 }
 
 function videoProjectStatusLabel(item: GenerationHistoryItem | null): string {
@@ -398,67 +416,6 @@ function scheduleVideoProjectRefresh(projectId: number, generationId: number, de
 function videoRequestId(): string {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `history-video-retry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-async function retryHistoryVideoClip(clip: Record<string, unknown>): Promise<void> {
-  const item = detailItem.value;
-  const projectId = Number(item?.payload?.projectId);
-  const clipIndex = Number(clip.index);
-  if (!item || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(clipIndex) || clipIndex <= 0) return;
-  retryingVideoClip.value = String(clipIndex);
-  try {
-    const prompt = String(videoClipPrompts[String(clipIndex)] || clip.prompt || "").trim();
-    const response = await regenerateVideoProjectClip(projectId, clipIndex, videoRequestId(), prompt, scope.signalFor(`history-video-retry-${clipIndex}`));
-    if (response.user) auth.user = { ...auth.user, ...response.user };
-    else await auth.refreshUser().catch(() => {});
-    updateVideoProjectDetail(item, response.project);
-    scheduleVideoProjectRefresh(projectId, Number(item.id), 600);
-  } catch (error) {
-    if (isAbortError(error)) return;
-    if (await handleUnauthorizedError(error)) return;
-    alert(`当前镜头重试失败：${(error as Error).message}`);
-  } finally {
-    retryingVideoClip.value = null;
-  }
-}
-
-async function retryHistoryVideoClipResult(clip: Record<string, unknown>): Promise<void> {
-  const item = detailItem.value;
-  const projectId = Number(item?.payload?.projectId);
-  const clipIndex = Number(clip.index);
-  if (!item || !Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(clipIndex) || clipIndex <= 0) return;
-  retryingVideoClip.value = String(clipIndex);
-  try {
-    const response = await retryVideoProjectClipResult(projectId, clipIndex, videoRequestId(), scope.signalFor(`history-video-retry-result-${clipIndex}`));
-    if (response.user) auth.user = { ...auth.user, ...response.user };
-    else await auth.refreshUser().catch(() => {});
-    const project = response.project;
-    detailItem.value = {
-      ...item,
-      payload: {
-        ...(item.payload || {}),
-        projectId: project.id,
-        videoModel: project.model,
-        videoMode: project.mode,
-        videoResolution: project.resolution,
-        videoDuration: project.totalDurationSec,
-        videoAspectRatio: project.aspectRatio,
-        videoStatus: project.status,
-        finalVideoUrl: project.finalVideoUrl || "",
-        finalPosterUrl: project.finalPosterUrl || "",
-        videoClips: project.clips,
-      },
-    };
-    await historyStore.refresh();
-    const refreshed = historyStore.items.find((candidate) => Number(candidate.id) === Number(item.id));
-    if (refreshed) detailItem.value = refreshed;
-  } catch (error) {
-    if (isAbortError(error)) return;
-    if (await handleUnauthorizedError(error)) return;
-    alert(`重新处理生成结果失败：${(error as Error).message}`);
-  } finally {
-    retryingVideoClip.value = null;
-  }
 }
 
 async function retryHistoryVideoAssembly(): Promise<void> {
@@ -695,15 +652,6 @@ onUnmounted(() => {
           </div>
           <div class="history-card-actions">
             <button
-              v-if="item.type === 'videoScript' && !(item as any).isPlaceholder && videoScriptContext(item)"
-              type="button"
-              class="primary-btn"
-              data-test="history-video-continue"
-              @click="continueVideoFromScript(item)"
-            >
-              继续生成视频
-            </button>
-            <button
               v-if="item.type === 'videoScript' && !(item as any).isPlaceholder"
               type="button"
               class="secondary-btn"
@@ -900,12 +848,18 @@ onUnmounted(() => {
 
         <!-- 视频脚本详情 -->
         <template v-if="detailItem.type === 'videoScript'">
+          <p v-if="startVideoError" class="history-script-empty" data-test="history-script-start-error">{{ startVideoError }}</p>
           <VideoScriptResult
             v-if="asVideoScript(detailItem)"
             :script="asVideoScript(detailItem)!"
             :show-actions="true"
             :show-regenerate="false"
+            :show-start-video="videoScriptContext(detailItem) != null && !(detailItem as any).isPlaceholder"
+            start-video-label="一键生成整段视频"
+            :starting-video="startingVideoProject"
+            :start-video-error="startVideoError"
             @close="closeDetail"
+            @start-video="continueVideoFromScript(detailItem)"
           />
           <div v-else class="history-script-empty" data-test="history-script-empty">
             <p>该历史记录中未包含有效的分镜脚本数据。</p>
@@ -953,21 +907,22 @@ onUnmounted(() => {
             <div class="history-video-section-heading is-clips">
               <div>
                 <span>分段镜头</span>
-                <strong>可编辑提示词并单独重新生成</strong>
+                <strong>查看每段进度并调整提示词</strong>
               </div>
               <small>共 {{ videoProjectClips(detailItem).length }} 段</small>
             </div>
-            <p class="history-video-workflow-hint">重新生成任意一段后，系统会自动替换该段并重新合并最终成片。</p>
-            <div class="history-video-clips">
+            <p class="history-video-workflow-hint">每段视频生成完毕后会自动替换该段并重新合并最终成片。</p>
+            <div v-if="!videoProjectVideoUrl(detailItem) || detailItem.payload?.videoStatus !== 'completed'" class="history-video-clips">
               <article v-for="clip in videoProjectClips(detailItem)" :key="String(clip.id || clip.index)" class="history-video-clip">
                 <div class="history-video-clip-heading">
                   <strong>镜头 {{ clip.index }}</strong>
                   <span>{{ clip.status === 'completed' ? '已完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'cancelled' ? '已取消' : '排队中' }}</span>
                   <span>{{ clip.durationSec }} 秒</span>
                 </div>
-                <div class="history-video-clip-body" :class="{ 'is-prompt-only': !shouldShowVideoProjectClip(detailItem, clip) }">
-                  <div v-if="shouldShowVideoProjectClip(detailItem, clip)" class="history-video-clip-media">
+                <div class="history-video-clip-body">
+                  <div class="history-video-clip-media">
                     <video
+                      v-if="safeImageSrc(String(clip.videoUrl || ''))"
                       class="history-clip-player"
                       controls
                       playsinline
@@ -975,6 +930,22 @@ onUnmounted(() => {
                       :src="safeImageSrc(String(clip.videoUrl || ''))"
                       :poster="safeImageSrc(String(clip.posterUrl || ''))"
                     ></video>
+                    <div v-else-if="String(clip.posterUrl || '') || String(clip.continuityFrameUrl || '')" class="history-clip-poster">
+                      <img
+                        :src="safeImageSrc(String(clip.posterUrl || clip.continuityFrameUrl || ''))"
+                        :alt="`镜头 ${clip.index} 首帧`"
+                        loading="lazy"
+                      />
+                      <div class="history-clip-poster-overlay" data-test="history-clip-poster-overlay">
+                        <span class="history-clip-spinner" aria-hidden="true"></span>
+                        <strong>{{ clip.status === 'queued' || clip.status === 'submitting' ? '排队中' : clip.status === 'running' ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
+                      </div>
+                    </div>
+                    <div v-else class="history-clip-placeholder" data-test="history-clip-placeholder">
+                      <span class="history-clip-spinner" aria-hidden="true"></span>
+                      <strong>{{ clip.status === 'queued' || clip.status === 'submitting' ? '排队中' : clip.status === 'running' ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
+                      <small>视频生成完成后会自动出现在这里</small>
+                    </div>
                   </div>
                   <div class="history-video-clip-editor">
                     <label class="history-video-prompt-editor">
@@ -993,26 +964,6 @@ onUnmounted(() => {
                     >失败原因：{{ clip.error }}</small>
                     <div class="history-video-clip-actions">
                       <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download>下载本段</a>
-                      <button
-                        v-if="clip.status === 'result_processing_failed'"
-                        type="button"
-                        class="secondary-btn"
-                        data-test="history-retry-result"
-                        :disabled="retryingVideoClip === String(clip.index)"
-                        @click="retryHistoryVideoClipResult(clip)"
-                      >
-                        {{ retryingVideoClip === String(clip.index) ? '处理中…' : '重新处理结果 · 0积分' }}
-                      </button>
-                      <button
-                        v-else-if="['completed', 'failed', 'uncertain_submission', 'cancelled'].includes(String(clip.status))"
-                        type="button"
-                        class="history-regenerate-btn"
-                        data-test="history-retry-clip"
-                        :disabled="retryingVideoClip === String(clip.index) || !String(videoClipPrompts[String(clip.index)] || '').trim()"
-                        @click="retryHistoryVideoClip(clip)"
-                      >
-                        {{ retryingVideoClip === String(clip.index) ? '提交中…' : `重新生成本段 · ${clip.creditCost || 0}积分` }}
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -1417,6 +1368,7 @@ onUnmounted(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  justify-content: flex-end;
 }
 
 .history-video-clip-heading {
@@ -1429,14 +1381,10 @@ onUnmounted(() => {
 
 .history-video-clip-body {
   display: grid;
-  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.08fr);
+  grid-template-columns: minmax(260px, 0.95fr) minmax(0, 1.05fr);
   align-items: stretch;
   gap: 18px;
   min-width: 0;
-}
-
-.history-video-clip-body.is-prompt-only {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .history-video-clip-media {
@@ -1456,6 +1404,71 @@ onUnmounted(() => {
   border-radius: inherit;
   background: #211d1d;
   object-fit: contain;
+}
+
+.history-clip-poster {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.history-clip-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.7);
+}
+
+.history-clip-poster-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  color: #fff5f0;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(33, 29, 29, 0.18), rgba(33, 29, 29, 0.62));
+}
+
+.history-clip-poster-overlay strong {
+  font-size: 14px;
+}
+
+.history-clip-placeholder {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  background: repeating-linear-gradient(135deg, #2a2424 0 12px, #211d1d 12px 24px);
+  color: #fff5f0;
+  text-align: center;
+}
+
+.history-clip-placeholder strong {
+  font-size: 14px;
+}
+
+.history-clip-placeholder small {
+  color: #d9c8c2;
+  font-size: 12px;
+}
+
+.history-clip-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(255, 245, 240, 0.25);
+  border-top-color: #fff5f0;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .history-video-clip-editor {
@@ -1528,45 +1541,6 @@ onUnmounted(() => {
 .history-video-clip-actions a:hover {
   border-color: rgba(216, 68, 68, 0.34);
   background: #fff1ef;
-}
-
-.history-regenerate-btn {
-  display: inline-flex;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  padding: 0 16px;
-  border: 1px solid var(--workspace-brand, var(--color-brand));
-  border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
-  background: var(--workspace-brand, var(--color-brand));
-  color: #fff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-}
-
-.history-regenerate-btn:hover:not(:disabled) {
-  border-color: #c6373c;
-  background: #c6373c;
-  box-shadow: 0 6px 16px rgba(216, 68, 68, 0.2);
-  transform: translateY(-1px);
-}
-
-.history-regenerate-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.16);
-}
-
-.history-regenerate-btn:disabled {
-  border-color: #d9cfcb;
-  background: #d9cfcb;
-  color: #fff;
-  cursor: not-allowed;
-  box-shadow: none;
-  transform: none;
 }
 
 .history-video-refund {
@@ -2327,11 +2301,6 @@ onUnmounted(() => {
   .history-video-clip-actions {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .history-regenerate-btn {
-    width: 100%;
-    margin-left: 0;
   }
 
   .history-filter-search {

@@ -113,6 +113,7 @@ const DEFAULT_APP_CONFIG = {
     runninghub: {
       baseUrl: "https://www.runninghub.ai/openapi/v2",
       apiKey: "",
+      submitPath: "/rhart-video/sparkvideo-2.0/multimodal-video",
       pollPath: "/query",
       outputHosts: ["runninghub.ai", "runninghub.cn"],
     },
@@ -582,6 +583,7 @@ function loadAppConfig() {
       runninghub: {
         baseUrl: String(process.env.RUNNINGHUB_VIDEO_BASE_URL || merged.video?.runninghub?.baseUrl || "https://www.runninghub.ai/openapi/v2").replace(/\/+$/, ""),
         apiKey: String(process.env.RUNNINGHUB_VIDEO_API_KEY || merged.video?.runninghub?.apiKey || "").trim(),
+        submitPath: String(process.env.RUNNINGHUB_VIDEO_SUBMIT_PATH || merged.video?.runninghub?.submitPath || "/rhart-video/sparkvideo-2.0/multimodal-video").trim(),
         pollPath: String(merged.video?.runninghub?.pollPath || "/query").trim(),
         outputHosts: parseListConfig(process.env.RUNNINGHUB_VIDEO_OUTPUT_HOSTS, merged.video?.runninghub?.outputHosts, "runninghub.ai"),
       },

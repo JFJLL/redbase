@@ -69,6 +69,7 @@
     "runninghub": {
       "baseUrl": "https://www.runninghub.ai/openapi/v2",
       "apiKey": "",
+      "submitPath": "/rhart-video/sparkvideo-2.0/multimodal-video",
       "pollPath": "/query",
       "outputHosts": ["runninghub.ai", "runninghub.cn"]
     },

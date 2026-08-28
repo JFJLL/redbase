@@ -8,16 +8,29 @@ const props = withDefaults(
     script: VideoScript;
     showActions?: boolean;
     showRegenerate?: boolean;
+    /** 显示「一键生成视频」主按钮（默认隐藏，由历史生成弹窗按需开启）。 */
+    showStartVideo?: boolean;
+    /** 「一键生成视频」按钮文案，默认「一键生成视频」。 */
+    startVideoLabel?: string;
+    /** 视频生成进行中：禁用按钮并切换文案。 */
+    startingVideo?: boolean;
+    /** 视频生成失败/前置条件缺失的提示文本，弹窗内以提示条形式呈现。 */
+    startVideoError?: string;
   }>(),
   {
     showActions: true,
     showRegenerate: false,
+    showStartVideo: false,
+    startVideoLabel: "一键生成视频",
+    startingVideo: false,
+    startVideoError: "",
   },
 );
 
 const emit = defineEmits<{
   (e: "regenerate"): void;
   (e: "close"): void;
+  (e: "start-video"): void;
 }>();
 
 const copiedAllScript = ref(false);
@@ -181,6 +194,10 @@ function exportMarkdown() {
         <span v-for="[key, value] in visualBibleEntries" :key="key">{{ key }}：{{ value }}</span>
       </div>
 
+      <div v-if="startVideoError" class="script-start-video-error" data-test="video-script-start-error" role="alert">
+        {{ startVideoError }}
+      </div>
+
       <div class="script-notice" role="note">
         💡 这里只生成供 AI 视频模型使用的分镜与提示词，不会直接生成视频。可直接复制提示词给 AI 视频工具使用。
       </div>
@@ -218,6 +235,17 @@ function exportMarkdown() {
           @click="emit('regenerate')"
         >
           重新生成
+        </button>
+        <button
+          v-if="showStartVideo"
+          type="button"
+          class="primary-btn script-start-video-btn"
+          data-test="video-script-start"
+          :disabled="startingVideo"
+          @click="emit('start-video')"
+        >
+          <span v-if="startingVideo" class="script-start-video-spinner" aria-hidden="true"></span>
+          {{ startingVideo ? "正在创建视频项目…" : startVideoLabel }}
         </button>
       </div>
     </header>
@@ -355,6 +383,37 @@ function exportMarkdown() {
   color: #8c6314;
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.script-start-video-error {
+  padding: 10px 14px;
+  border: 1px solid rgba(180, 35, 24, 0.18);
+  border-radius: var(--workspace-radius-sm, 8px);
+  background: #fff1f1;
+  color: #b42318;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.script-start-video-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.script-start-video-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: script-start-video-spin 0.8s linear infinite;
+}
+
+@keyframes script-start-video-spin {
+  to { transform: rotate(360deg); }
 }
 
 .script-toolbar {

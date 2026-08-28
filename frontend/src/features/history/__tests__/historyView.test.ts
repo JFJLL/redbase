@@ -159,14 +159,58 @@ describe("HistoryView", () => {
     expect(wrapper.find('img[src="/api/generated-images/2/slides/0/file?sig=bbb"]').exists()).toBe(true);
   });
 
-  it("renders videoScript history cards without images and opens video script modal", async () => {
-    const { wrapper, router } = await mountView();
+  it("renders videoScript history cards without images and exposes start-video inside the script modal", async () => {
+    const videoProjectCreateResponse = {
+      project: {
+        id: 901,
+        generationId: 901,
+        brandId: 7,
+        trendId: 5,
+        ideaIndex: 0,
+        model: "d2",
+        mode: "text",
+        resolution: "720p",
+        aspectRatio: "9:16",
+        totalDurationSec: 30,
+        status: "queued",
+        referenceAssetIds: [],
+        visualBible: {},
+        estimatedCredits: 30,
+        chargedCredits: 30,
+        refundedCredits: 0,
+        finalVideoUrl: "",
+        clips: GENERATIONS[2].payload?.videoScript?.clips?.map((clip, index) => ({
+          id: 9100 + index,
+          index: (index + 1),
+          startSec: clip.startSec,
+          endSec: clip.endSec,
+          durationSec: clip.durationSec,
+          status: "queued",
+          prompt: clip.prompt,
+          continuityMode: "text",
+          referenceAssetIds: [],
+          creditCost: 30,
+          attempt: 1,
+          retryCount: 0,
+          error: "",
+        })) || [],
+        script: GENERATIONS[2].payload?.videoScript,
+      },
+      user: { id: "1", credits: 8 },
+    };
+    const { wrapper, calls, router } = await mountView((url, init) => {
+      if (url === "/api/brands/7/trends/5/ideas/0/video-project" && init?.method === "POST") {
+        return jsonResponse(200, videoProjectCreateResponse);
+      }
+      return undefined;
+    });
     const scriptCard = wrapper.findAll('[data-test="history-card"]')[2];
 
     expect(scriptCard.text()).toContain("视频脚本");
     expect(scriptCard.text()).toContain("30 秒");
     expect(scriptCard.text()).toContain("1 个片段");
     expect(scriptCard.text()).toContain("用手冲咖啡开启自然之旅");
+    expect(scriptCard.find('[data-test="history-video-continue"]').exists()).toBe(false);
 
     const detailBtn = scriptCard.find('[data-test="history-detail"]');
     expect(detailBtn.text()).toBe("查看脚本");
@@ -177,13 +221,31 @@ describe("HistoryView", () => {
     expect(wrapper.find('[data-test="video-script-title"]').text()).toBe("露营咖啡视频脚本");
     expect(wrapper.find('[data-test="image-edit-panel"]').exists()).toBe(false);
 
-    await scriptCard.find('[data-test="history-video-continue"]').trigger("click");
+    const startVideoBtn = wrapper.find('[data-test="video-script-start"]');
+    expect(startVideoBtn.exists()).toBe(true);
+    expect(startVideoBtn.text()).toContain("一键生成整段视频");
+    await startVideoBtn.trigger("click");
     await flushPromises();
-    expect(router.currentRoute.value.name).toBe("ideas");
-    expect(router.currentRoute.value.query).toEqual({ brandId: "7", trendId: "5", ideaIndex: "0", action: "videoScript" });
+
+    const createCall = calls.find(
+      (call) => call.url === "/api/brands/7/trends/5/ideas/0/video-project" && call.init?.method === "POST",
+    );
+    expect(createCall).toBeTruthy();
+    expect(JSON.parse(String(createCall?.init?.body))).toMatchObject({
+      videoScriptGenerationId: 3,
+      model: "d2",
+      mode: "text",
+      resolution: "720p",
+      aspectRatio: "9:16",
+      totalDurationSec: 30,
+      referenceAssetIds: [],
+    });
+    // 详情弹窗关闭，页面停留在历史生成路由上，不再跳转 ideas。
+    expect(router.currentRoute.value.name).not.toBe("ideas");
+    expect(wrapper.find('[data-test="video-script-result"]').exists()).toBe(false);
   });
 
-  it("renders video project clip playback, download, failure refund, and retry controls", async () => {
+  it("renders video project clip playback, download, and keeps the left media area for every clip (including pending/failed)", async () => {
     const project = {
       id: 77,
       generationId: 177,
@@ -204,19 +266,11 @@ describe("HistoryView", () => {
       finalVideoUrl: "",
       clips: [
         { id: 7701, index: 1, startSec: 0, endSec: 10, durationSec: 10, status: "completed", prompt: "镜头一原提示词", continuityMode: "text", referenceAssetIds: [], creditCost: 20, attempt: 1, retryCount: 0, videoUrl: "/api/video-projects/77/assets/clip/1?assetExpires=9999999999999&assetSignature=clip-one", posterUrl: "/api/video-projects/77/assets/poster/1?assetExpires=9999999999999&assetSignature=poster-one", error: "" },
-        { id: 7702, index: 2, startSec: 10, endSec: 15, durationSec: 5, status: "failed", prompt: "镜头二原提示词", continuityMode: "image", referenceAssetIds: [], creditCost: 10, attempt: 1, retryCount: 0, error: "供应商暂时不可用" },
+        { id: 7702, index: 2, startSec: 10, endSec: 15, durationSec: 5, status: "failed", prompt: "镜头二原提示词", continuityMode: "image", referenceAssetIds: [], creditCost: 10, attempt: 1, retryCount: 0, error: "供应商暂时不可用", posterUrl: "/api/video-projects/77/assets/poster/2?assetExpires=9999999999999&assetSignature=poster-two" },
       ],
       script: GENERATIONS[2].payload?.videoScript,
     };
-    const retryResponse = {
-      ...project,
-      status: "queued",
-      clips: project.clips.map((clip) => clip.index === 2 ? { ...clip, status: "queued", error: "" } : clip),
-    };
-    const { wrapper, calls } = await mountView((url, init) => {
-      if (url === "/api/video-projects/77/clips/2/retry" && init?.method === "POST") {
-        return jsonResponse(200, { project: retryResponse });
-      }
+    const { wrapper, calls } = await mountView((url) => {
       if (url.startsWith("/api/history")) {
         return jsonResponse(200, {
           generations: [{
@@ -262,20 +316,31 @@ describe("HistoryView", () => {
     const detail = wrapper.find('[data-test="history-video-project-detail"]');
     expect(detail.exists()).toBe(true);
     expect(detail.text()).toContain("累计退款 5 积分");
-    expect(detail.findAll("video")).toHaveLength(1);
+    // finalVideoUrl 为空时，最终成片区域展示占位，剪辑区域展开。
+    expect(detail.findAll(".history-video-player")).toHaveLength(0);
+    expect(detail.find(".history-video-placeholder.large").exists()).toBe(true);
     expect(detail.text()).toContain("供应商暂时不可用");
-    expect(detail.text()).toContain("重新生成任意一段后，系统会自动替换该段并重新合并最终成片");
+    expect(detail.text()).toContain("查看每段进度并调整提示词");
+    // 单段重试按钮已移除，回到「查看脚本」弹窗统一触发。
+    expect(detail.find('[data-test="history-retry-clip"]').exists()).toBe(false);
+    expect(detail.find('[data-test="history-retry-result"]').exists()).toBe(false);
     expect(detail.findAll(".history-video-clip-body")).toHaveLength(2);
+    // 即使失败/未生成，左侧视频区域也保留（首帧 + 进度浮层）。
+    expect(detail.findAll(".history-video-clip-media")).toHaveLength(2);
+    expect(detail.findAll(".history-clip-poster")).toHaveLength(1);
+    expect(detail.findAll(".history-clip-placeholder")).toHaveLength(0);
+    const failedClipBody = detail.findAll(".history-video-clip-body")[1];
+    expect(failedClipBody.classes()).not.toContain("is-prompt-only");
+    expect(failedClipBody.find(".history-video-prompt-editor").exists()).toBe(true);
+    expect(failedClipBody.find(".history-clip-poster-overlay").text()).toContain("生成失败");
     expect(detail.find(".history-video-clip-media .history-clip-player").attributes("preload")).toBe("metadata");
     expect(detail.find(".history-video-clip-media .history-clip-player").attributes("poster")).toContain("video-projects/77/assets/poster/1");
     expect(detail.find(".history-video-clip-editor .history-video-prompt-editor").exists()).toBe(true);
-    expect(detail.find('[data-test="history-retry-clip"]').classes()).toContain("history-regenerate-btn");
-    await detail.findAll('[data-test="history-clip-prompt"]')[1].setValue("镜头二改为缓慢推进产品特写");
-    await detail.findAll('[data-test="history-retry-clip"]')[1].trigger("click");
-    await flushPromises();
-    expect(calls.some((call) => call.url === "/api/video-projects/77/clips/2/retry")).toBe(true);
-    const retryCall = calls.find((call) => call.url === "/api/video-projects/77/clips/2/retry");
-    expect(JSON.parse(String(retryCall?.init?.body))).toMatchObject({ prompt: "镜头二改为缓慢推进产品特写" });
+    expect(detail.findAll('[data-test="history-clip-prompt"]')).toHaveLength(2);
+    // 没成功生成视频的剪辑不显示「下载本段」按钮。
+    expect(detail.findAll(".history-video-clip-actions a")).toHaveLength(1);
+    // 确保没有触发单段重试请求。
+    expect(calls.some((call) => call.url === "/api/video-projects/77/clips/2/retry")).toBe(false);
   });
 
   it("renders assembly_failed separately and retries assembly without clip billing", async () => {
@@ -336,7 +401,10 @@ describe("HistoryView", () => {
     const detail = wrapper.find('[data-test="history-video-project-detail"]');
     expect(detail.find('[data-test="history-assembly-failed"]').text()).toContain("视频片段均已生成完成");
     expect(detail.find('[data-test="history-retry-assembly"]').text()).toContain("0积分");
-    expect(detail.find('[data-test="history-retry-clip"]').exists()).toBe(true);
+    // 单段重试按钮已移除；只剩下载链接 + 成片重试。
+    expect(detail.find('[data-test="history-retry-clip"]').exists()).toBe(false);
+    expect(detail.find('[data-test="history-retry-result"]').exists()).toBe(false);
+    expect(detail.findAll(".history-video-clip-body")).toHaveLength(1);
     expect(detail.text()).not.toContain("状态查询限流");
     expect(detail.findAll("video")).toHaveLength(1);
     expect(detail.find(".history-clip-player").exists()).toBe(true);
@@ -352,8 +420,7 @@ describe("HistoryView", () => {
     expect(completedDetail.find(".history-clip-player").exists()).toBe(false);
   });
 
-  it("renders result_processing_failed status and handles 0-credit retry-result action", async () => {
-    let retryResultCalled = false;
+  it("renders result_processing_failed status with placeholder media and no per-clip retry buttons", async () => {
     const failedProject = {
       id: 88,
       generationId: 188,
@@ -391,18 +458,7 @@ describe("HistoryView", () => {
       ],
       script: GENERATIONS[2].payload?.videoScript,
     };
-    const completedProject = {
-      ...failedProject,
-      status: "completed",
-      clips: [{ ...failedProject.clips[0], status: "completed", videoUrl: "/api/video-projects/88/assets/clip/1" }],
-      finalVideoUrl: "/api/video-projects/88/assets/final",
-    };
-
-    const { wrapper, calls } = await mountView((url, init) => {
-      if (url === "/api/video-projects/88/clips/1/retry-result" && init?.method === "POST") {
-        retryResultCalled = true;
-        return jsonResponse(200, { project: completedProject, user: { id: "1", credits: 8 } });
-      }
+    const { wrapper } = await mountView((url) => {
       if (url.startsWith("/api/history")) {
         return jsonResponse(200, {
           generations: [{
@@ -423,10 +479,10 @@ describe("HistoryView", () => {
               videoResolution: failedProject.resolution,
               videoDuration: failedProject.totalDurationSec,
               videoAspectRatio: failedProject.aspectRatio,
-              videoStatus: retryResultCalled ? "completed" : failedProject.status,
+              videoStatus: failedProject.status,
               refundedCredits: failedProject.refundedCredits,
-              finalVideoUrl: retryResultCalled ? completedProject.finalVideoUrl : "",
-              videoClips: retryResultCalled ? completedProject.clips : failedProject.clips,
+              finalVideoUrl: failedProject.finalVideoUrl,
+              videoClips: failedProject.clips,
               script: failedProject.script,
             },
           }],
@@ -443,18 +499,16 @@ describe("HistoryView", () => {
 
     const detail = wrapper.find('[data-test="history-video-project-detail"]');
     expect(detail.text()).toContain("结果处理失败");
-    const retryResultBtn = detail.find('[data-test="history-retry-result"]');
-    expect(retryResultBtn.exists()).toBe(true);
-    expect(retryResultBtn.text()).toContain("重新处理结果 · 0积分");
+    // 单段重试/重处理按钮已移除，回到「查看脚本」弹窗统一触发。
+    expect(detail.find('[data-test="history-retry-result"]').exists()).toBe(false);
     expect(detail.find('[data-test="history-retry-clip"]').exists()).toBe(false);
-
-    await retryResultBtn.trigger("click");
-    await flushPromises();
-
-    expect(calls.some((call) => call.url === "/api/video-projects/88/clips/1/retry-result")).toBe(true);
-    expect(wrapper.find(".history-video-player").exists()).toBe(true);
-    expect(wrapper.find(".history-clip-player").exists()).toBe(false);
-    expect(wrapper.find(".history-video-clip-actions a").text()).toContain("下载本段");
+    // 失败信息以提示条形式呈现，并保留左侧视频占位。
+    expect(detail.find(".history-video-clip-error").text()).toContain("生成结果暂未保存成功");
+    expect(detail.findAll(".history-video-clip-media")).toHaveLength(1);
+    expect(detail.findAll(".history-clip-placeholder")).toHaveLength(1);
+    expect(detail.find(".history-clip-placeholder").text()).toContain("准备中");
+    // 没有生成视频，自然也没有下载链接。
+    expect(detail.findAll(".history-video-clip-actions a")).toHaveLength(0);
   });
 
 
