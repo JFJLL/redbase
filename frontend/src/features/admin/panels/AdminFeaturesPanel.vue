@@ -76,6 +76,7 @@ import AdminErrorState from "../components/AdminErrorState.vue";
 const props = defineProps<{
   filters: AdminFilters;
 }>();
+const emit = defineEmits<{ (e: "coverage-update", coverage: any): void }>();
 
 const loading = ref(false);
 const error = ref("");
@@ -92,6 +93,7 @@ async function loadData() {
     const params = computeDateParams(props.filters);
     const res = await fetchFeaturesAnalytics(params, abortController.signal);
     data.value = res;
+    emit("coverage-update", res.coverage);
   } catch (err: any) {
     if (err?.name === "AbortError") return;
     error.value = err?.message || "加载功能指标数据失败";

@@ -732,6 +732,8 @@ async function createImageJob(
       brandName: brand?.name || metadata.brandName || "",
       industry: brand?.industry || metadata.industry || "",
       providerTaskId: submission.taskId,
+      attemptNo: 1,
+      attemptStartedAt: new Date(requestStartedAt).toISOString(),
       aspectRatio: outputAspectRatio,
       sourceImageUrls: isKeystone ? sourceUrls : [...sourceUrls, ...uploadedSourceUrls],
       referenceImageName: referenceImages[0]?.name || "",
@@ -753,7 +755,7 @@ async function createImageJob(
   if (job.status === "completed") {
     recordImageJobEvaluation(job, { success: true });
   }
-  try {
+  if (imageUrl) try {
     recordImageTaskAttempt({
       jobId: job.id,
       feature: String(metadata?.contentType || "style_image"),
@@ -761,7 +763,7 @@ async function createImageJob(
       model: String(job.model || KEYSTONE_DEFAULT_MODEL),
       attemptKind: "initial",
       attemptNo: 1,
-      status: imageUrl ? "completed" : "pending",
+      status: "completed",
       startedAt: new Date(requestStartedAt).toISOString(),
       completedAt: imageUrl ? new Date().toISOString() : "",
       durationMs: imageUrl ? Math.max(0, Date.now() - requestStartedAt) : 0,
@@ -1094,9 +1096,9 @@ async function resolveImageJob(appConfig, jobOrId) {
           provider: String(job.provider || "keystone"),
           model: String(job.model || KEYSTONE_DEFAULT_MODEL),
           attemptKind: "initial",
-          attemptNo: 1,
+          attemptNo: Number(job.metadata?.attemptNo || 1),
           status: "completed",
-          startedAt: new Date(job.createdAt).toISOString(),
+          startedAt: job.metadata?.attemptStartedAt || new Date(job.createdAt).toISOString(),
           completedAt: new Date().toISOString(),
           durationMs: Math.max(0, Date.now() - Number(job.createdAt || Date.now())),
           actorUserId: job.ownerUserId,
@@ -1119,12 +1121,12 @@ async function resolveImageJob(appConfig, jobOrId) {
           provider: String(job.provider || "keystone"),
           model: String(job.model || KEYSTONE_DEFAULT_MODEL),
           attemptKind: "initial",
-          attemptNo: 1,
+          attemptNo: Number(job.metadata?.attemptNo || 1),
           status: "failed",
           errorStage: "provider",
           errorCode: "PROVIDER_FAILED",
           errorMessage: String(job.error || "").slice(0, 500),
-          startedAt: new Date(job.createdAt).toISOString(),
+          startedAt: job.metadata?.attemptStartedAt || new Date(job.createdAt).toISOString(),
           completedAt: new Date().toISOString(),
           durationMs: Math.max(0, Date.now() - Number(job.createdAt || Date.now())),
           actorUserId: job.ownerUserId,

@@ -327,7 +327,7 @@ function buildMultimodalAnalysis(note, board, vision) {
   };
 }
 
-async function analyzeWithOptionalModel(appConfig, note, board, { textModelImpl } = {}) {
+async function analyzeWithOptionalModel(appConfig, note, board, { textModelImpl, analyticsContext } = {}) {
   const base = buildMetadataOnlyAnalysis(note, board);
 
   const modelImpl = textModelImpl || callTextModelJson;
@@ -373,6 +373,7 @@ async function analyzeWithOptionalModel(appConfig, note, board, { textModelImpl 
       temperature: 0.2,
       maxOutputTokens: 1200,
       maxAttempts: 2,
+      analyticsContext,
     });
     return normalizeAnalysis({ ...raw, analysisMode: "metadata_only" }, note, board);
   } catch (_error) {
@@ -491,6 +492,14 @@ async function analyzeExcellentNoteForRemix(appConfig, options = {}) {
 
         const analysis = await analyzeWithOptionalModel(appConfig, note, boardDef.value, {
           textModelImpl: options.textModelImpl,
+          analyticsContext: {
+            feature: "excellent_direction",
+            taskType: "text_generation",
+            actorUserId: options.actorUserId ?? options.userId ?? null,
+            accountType: options.accountType || "",
+            entityType: "excellent_note",
+            entityId: `${noteId}:analysis`,
+          },
         });
         if (visionOutcome?.warning) {
           // 多模态尝试过但未成功：向用户诚实说明本次分析依据。

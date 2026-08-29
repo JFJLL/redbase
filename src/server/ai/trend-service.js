@@ -3569,10 +3569,12 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
         || (options.textModelImpl ? null : callTextModelJson);
       if (rerankImpl) {
         const rerankPlan = await buildRerankedEvidencePlan(appConfig, brand, selectedBucketMeta, anySearchEvidence, {
-          trendCount: TREND_ITEMS_PER_BUCKET,
-          textModelImpl: rerankImpl,
-          aiBudget,
-        });
+           trendCount: TREND_ITEMS_PER_BUCKET,
+           textModelImpl: rerankImpl,
+           aiBudget,
+           actorUserId: options.actorUserId ?? options.userId ?? null,
+           accountType: options.accountType || "",
+         });
         analysisWarnings.push(...rerankPlan.warnings);
         if (rerankPlan.slots.length && rerankPlan.evidence.length) {
           effectiveAnySearchEvidence = {
@@ -3765,9 +3767,17 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           maxOutputTokens: requestMaxOutputTokens,
           // The browser still receives one atomic JSON result. Streaming only keeps
           // the server-to-RunningHub connection active during the long 10-card decode.
-          stream: true,
-          budget: usesProviderBudget ? aiBudget : undefined,
-          onTelemetry(event) {
+           stream: true,
+           budget: usesProviderBudget ? aiBudget : undefined,
+           analyticsContext: {
+             feature: "trend_analysis",
+             taskType: "text_generation",
+             actorUserId: options.actorUserId ?? options.userId ?? null,
+             accountType: options.accountType || "",
+             entityType: "trend_analysis",
+             entityId: `${options.analysisId || baseId}:${selectedBucketMeta.map((bucket) => bucket.key).join("+")}:${generationAttempt + 1}:${requestMode}`,
+           },
+           onTelemetry(event) {
             if (event.type === "attempt") requestTransportAttempts = Math.max(requestTransportAttempts, Number(event.attempt || 0));
             if (event.type === "first-byte" && modelTiming.ttfbMs == null) modelTiming.ttfbMs = event.elapsedMs;
             if (event.type === "usage") modelTiming.usage = event.usage;
@@ -4266,10 +4276,18 @@ async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt, optio
           TREND_MODEL_REQUEST_TIMEOUT_MS,
           Number(options.textTimeoutMs || TREND_MODEL_REQUEST_TIMEOUT_MS),
         )),
-        maxAttempts: 1,
-        maxOutputTokens: Number(options.maxOutputTokens || 16384),
-        stream: false,
-      });
+         maxAttempts: 1,
+         maxOutputTokens: Number(options.maxOutputTokens || 16384),
+         stream: false,
+         analyticsContext: {
+           feature: "trend_analysis",
+           taskType: "text_generation",
+           actorUserId: options.actorUserId ?? options.userId ?? null,
+           accountType: options.accountType || "",
+           entityType: "trend_idea_regeneration",
+           entityId: `${brand?.id || "unknown"}:${trend?.id || "unknown"}:${attempt + 1}`,
+         },
+       });
       const ideas = Array.isArray(result?.ideas) ? result.ideas : [];
       if (!ideas.length) throw new Error("文本模型未返回可用选题结果。");
       const normalizedIdeas = ideas.slice(0, 2).map((idea) => {
@@ -4364,10 +4382,18 @@ async function ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex, 
           TREND_MODEL_REQUEST_TIMEOUT_MS,
           Number(options.textTimeoutMs || TREND_MODEL_REQUEST_TIMEOUT_MS),
         )),
-        maxAttempts: 1,
-        maxOutputTokens: Number(options.maxOutputTokens || 16384),
-        stream: false,
-      });
+         maxAttempts: 1,
+         maxOutputTokens: Number(options.maxOutputTokens || 16384),
+         stream: false,
+         analyticsContext: {
+           feature: "trend_analysis",
+           taskType: "text_generation",
+           actorUserId: options.actorUserId ?? options.userId ?? null,
+           accountType: options.accountType || "",
+           entityType: "trend_content_asset_enrichment",
+           entityId: `${brand?.id || "unknown"}:${trend?.id || "unknown"}:${ideaIndex}:${attempt + 1}`,
+         },
+       });
       const rawAssets = result?.contentAssets || result?.content_assets || result?.idea?.contentAssets || result?.idea?.content_assets || result;
       const contentAssets = normalizeIdeaContentAssets({ contentAssets: rawAssets });
       const candidateIdea = { ...idea, contentAssets };

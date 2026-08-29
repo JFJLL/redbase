@@ -83,7 +83,7 @@ test("records video attempts with distinct attempt kinds and stages", () => {
     durationMs: 14000,
   });
 
-  // 3. Result Processing Retry
+  // 3. First result processing is an initial attempt, not a retry.
   recordVideoResultProcessingAttempt({
     projectId,
     clipId: 1,
@@ -114,7 +114,7 @@ test("records video attempts with distinct attempt kinds and stages", () => {
   assert.equal(projectAttempts[0].status, "failed");
   assert.equal(projectAttempts[1].attempt_kind, "auto_retry");
   assert.equal(projectAttempts[1].status, "completed");
-  assert.equal(projectAttempts[2].attempt_kind, "result_retry");
+  assert.equal(projectAttempts[2].attempt_kind, "initial");
   assert.equal(projectAttempts[3].attempt_kind, "assembly_initial");
 });
 

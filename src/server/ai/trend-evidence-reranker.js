@@ -220,10 +220,18 @@ async function buildRerankedEvidencePlan(appConfig, brand, bucketMeta, searchEvi
       temperature: 0,
       timeoutMs: Math.max(1000, Number(options.timeoutMs || RERANK_REQUEST_TIMEOUT_MS)),
       maxAttempts: 1,
-      maxOutputTokens: RERANK_MAX_OUTPUT_TOKENS,
-      stream: false,
-      budget: usesProviderBudget ? aiBudget : undefined,
-    });
+       maxOutputTokens: RERANK_MAX_OUTPUT_TOKENS,
+       stream: false,
+       budget: usesProviderBudget ? aiBudget : undefined,
+       analyticsContext: {
+         feature: "trend_analysis",
+         taskType: "text_generation",
+         actorUserId: options.actorUserId ?? options.userId ?? null,
+         accountType: options.accountType || "",
+         entityType: "trend_evidence_rerank",
+         entityId: `${brand?.id || "unknown"}:${bucketKey}`,
+       },
+     });
     modelSlots = normalizeModelSlots(result, candidates, brand, bucketKey, trendCount);
     usedModel = modelSlots.length > 0;
     if (!usedModel) {

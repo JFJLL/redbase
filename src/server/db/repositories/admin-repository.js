@@ -54,16 +54,20 @@ function insertCreditEvent(input) {
   );
   const row = mapCreditEventRow(db.prepare(`SELECT ${CREDIT_EVENT_COLUMNS} FROM credit_events WHERE id = ?`).get(id));
   try {
+    const targetUser = findUserById(Number(input.userId));
+    const accountType = targetUser?.accountType || targetUser?.account_type || "";
     const delta = Number(input.creditDelta || 0);
     if (delta < 0) {
       recordCreditConsumed({
         creditEventId: id,
         userId: Number(input.userId),
+        accountType,
         actionType: input.actionType,
         creditDelta: delta,
         creditCost: Number(input.creditCost || Math.abs(delta)),
         generationId: input.generationId,
         createdAt: input.createdAt,
+        metadata: input.payload || {},
       });
     } else if (delta > 0) {
       const action = String(input.actionType || "").toLowerCase();
@@ -71,15 +75,18 @@ function insertCreditEvent(input) {
         recordCreditRefunded({
           creditEventId: id,
           userId: Number(input.userId),
+          accountType,
           actionType: input.actionType,
           creditDelta: delta,
           refundForCreditEventId: input.payload?.refundForCreditEventId,
           createdAt: input.createdAt,
+          metadata: input.payload || {},
         });
       } else if (!action.includes("recharge")) {
         recordCreditGranted({
           creditEventId: id,
           userId: Number(input.userId),
+          accountType,
           actionType: input.actionType,
           creditDelta: delta,
           adminUserId: input.adminUserId,
@@ -540,9 +547,7 @@ function deleteUserCascadeRows(userId) {
     if (backfillResult && backfillResult.ok === false) {
       throw new Error(`用户分析事实回填失败：${backfillResult.error || "未知错误"}`);
     }
-    try {
-      recordUserDeleted({ userId: user.id });
-    } catch (_) {}
+    recordUserDeleted({ userId: user.id });
     db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id);
     db.prepare("DELETE FROM verification_codes WHERE phone = ?").run(user.phone);
     db.prepare("DELETE FROM credit_events WHERE user_id = ? OR admin_user_id = ?").run(user.id, user.id);

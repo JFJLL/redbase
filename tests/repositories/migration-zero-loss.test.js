@@ -95,7 +95,7 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='payment_orders'").get().count, 1);
   assert.deepEqual(
     db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   );
   expectColumns("video_projects", ["script_generation_id", "input_assets_json", "assembly_request_id", "assembly_attempt"]);
   expectColumns("video_clips", ["provider_key_ref", "reservation_credit_event_id", "submission_attempt", "last_successful_poll_at", "poll_failure_count", "result_processing_failure_count", "last_result_processing_error", "last_result_processing_at"]);
@@ -108,6 +108,9 @@ test("versioned migrations preserve users/sessions/credit_events exactly and cle
   expectColumns("image_jobs", ["asset_status", "asset_bytes", "assets_deleted_at"]);
   expectColumns("video_projects", ["started_at", "completed_at", "failed_at", "assembly_started_at", "assembly_completed_at", "asset_status", "asset_count", "asset_bytes", "assets_deleted_at"]);
   expectColumns("video_clips", ["first_submitted_at", "completed_at", "failed_at", "asset_status", "asset_bytes", "assets_deleted_at"]);
+  expectColumns("video_clips", ["attempt_started_at", "next_attempt_kind", "retry_origin", "billing_operation"]);
+  expectColumns("analytics_events", ["is_admin"]);
+  expectColumns("ai_task_attempts", ["is_admin"]);
   expectColumns("brands", ["created_at", "updated_at"]);
 
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='analytics_events'").get().count, 1);

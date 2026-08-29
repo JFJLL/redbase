@@ -1170,7 +1170,7 @@ function createVideoProjectService(options = {}) {
         const referenceBundle = await getReferenceBundle(currentProject, currentClip, provider);
         const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(currentProject.ownerUserId);
         const accountType = userRow?.account_type || "customer";
-        const attemptKind = Number(clip.retryCount || 0) > 0 ? "manual_retry" : Number(clip.submissionAttempt || 0) > 0 ? "auto_retry" : "initial";
+        const attemptKind = String(currentClip.nextAttemptKind || "initial");
         const attemptNo = Math.max(1, Number(clip.submissionAttempt || 0) + 1);
         // A G2 project is only considered running after this worker has a
         // concrete key lease and is about to submit. A missing RPM slot keeps
@@ -1184,6 +1184,7 @@ function createVideoProjectService(options = {}) {
         const persisted = updateClip(clip.id, {
           status: "submitting",
           firstSubmittedAt: clip.firstSubmittedAt || submitStartedAt,
+          attemptStartedAt: submitStartedAt,
           providerKeyRef: lease?.keyRef || "",
           submissionAttempt: Number(clip.submissionAttempt || 0) + 1,
           error: "",
@@ -1205,6 +1206,7 @@ function createVideoProjectService(options = {}) {
           updateProject(project.id, { status: "running", error: "" });
           try {
             recordVideoClipAttempt({
+              taskType: "video_submission",
               projectId: currentProject.id,
               clipId: clip.id,
               clipIndex: clip.index,
@@ -1218,7 +1220,7 @@ function createVideoProjectService(options = {}) {
               startedAt: submitStartedAt,
               completedAt: new Date(now()).toISOString(),
               durationMs: Math.max(0, Date.now() - Date.parse(submitStartedAt)),
-              creditCost: Number(clip.creditCost || 0),
+              creditCost: 0,
               actorUserId: currentProject.ownerUserId,
               accountType,
             });
@@ -1228,6 +1230,7 @@ function createVideoProjectService(options = {}) {
         } catch (submitErr) {
           try {
             recordVideoClipAttempt({
+              taskType: "video_submission",
               projectId: currentProject.id,
               clipId: clip.id,
               clipIndex: clip.index,
@@ -1281,6 +1284,9 @@ function createVideoProjectService(options = {}) {
       status: "queued",
       providerTaskId: "",
       retryCount: Number(clip.retryCount || 0) + 1,
+      nextAttemptKind: "auto_retry",
+      retryOrigin: "system_key_rotation",
+      billingOperation: "",
       pollFailureCount: 0,
       error: "",
     });
@@ -1369,15 +1375,15 @@ function createVideoProjectService(options = {}) {
           model: project.model,
           providerKeyRef: clip.providerKeyRef || "",
           providerTaskId: clip.providerTaskId || "",
-          attemptKind: Number(clip.retryCount || 0) > 0 ? "manual_retry" : Number(clip.submissionAttempt || 0) > 1 ? "auto_retry" : "initial",
+          attemptKind: clip.nextAttemptKind || "initial",
           attemptNo: Math.max(1, Number(clip.submissionAttempt || 1)),
           status: "failed",
           errorStage: "provider",
           errorCode: "PROVIDER_FAILED",
           errorMessage: String(result?.error || "供应商生成失败").slice(0, 500),
-          startedAt: clip.firstSubmittedAt || new Date(now()).toISOString(),
+          startedAt: clip.attemptStartedAt || new Date(now()).toISOString(),
           completedAt: new Date(now()).toISOString(),
-          durationMs: clip.firstSubmittedAt ? Math.max(0, Date.now() - Date.parse(clip.firstSubmittedAt)) : 0,
+          durationMs: clip.attemptStartedAt ? Math.max(0, Date.now() - Date.parse(clip.attemptStartedAt)) : 0,
           actorUserId: project.ownerUserId,
           accountType: userRow?.account_type || "customer",
         });
@@ -1386,6 +1392,29 @@ function createVideoProjectService(options = {}) {
       await failClip(project, clip, result.error || "供应商生成失败");
       return;
     }
+
+   try {
+     const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(project.ownerUserId);
+     recordVideoClipAttempt({
+       projectId: project.id,
+       clipId: clip.id,
+       clipIndex: clip.index,
+       provider: provider.provider || project.model,
+       model: project.model,
+       providerKeyRef: clip.providerKeyRef || "",
+       providerTaskId: clip.providerTaskId || "",
+       attemptKind: clip.nextAttemptKind || "initial",
+       attemptNo: Math.max(1, Number(clip.submissionAttempt || 1)),
+       status: "completed",
+       startedAt: clip.attemptStartedAt || new Date(now()).toISOString(),
+       providerCompletedAt: successAt,
+       completedAt: successAt,
+       durationMs: clip.attemptStartedAt ? Math.max(0, Date.now() - Date.parse(clip.attemptStartedAt)) : 0,
+       creditCost: Number(clip.creditCost || 0),
+       actorUserId: project.ownerUserId,
+       accountType: userRow?.account_type || "customer",
+     });
+   } catch (_) {}
 
    const processingClip = updateClip(clip.id, {
      status: "processing_result",

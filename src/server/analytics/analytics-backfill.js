@@ -1,5 +1,12 @@
 const { getDbProxy } = require("../db/connection");
-const { insertAnalyticsEvent, insertAiTaskAttempt, setAnalyticsMeta, getAnalyticsMeta } = require("./analytics-repository");
+const {
+  insertAnalyticsEvent,
+  insertAiTaskAttempt,
+  setAnalyticsMeta,
+  getAnalyticsMeta,
+  getAnalyticsWriteStats,
+  runWithStrictAnalyticsWrites,
+} = require("./analytics-repository");
 const { ANALYTICS_FEATURES, GENERATION_TYPE_TO_FEATURE } = require("./analytics-constants");
 
 function actionTypeToFeature(actionType) {
@@ -18,6 +25,15 @@ function actionTypeToFeature(actionType) {
 }
 
 const db = getDbProxy();
+
+function parseMetadata(value) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
 
 function tableExists(name) {
   return db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(name).count > 0;
@@ -161,7 +177,7 @@ function ensureAnalyticsBackfill() {
           sourceId: e.generation_id ? String(e.generation_id) : "",
           creditDelta: -cost,
           creditCost: cost,
-          metadata: { actionType: e.action_type },
+          metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
         });
         if (ins) backfilledEvents++;
       } else if (delta > 0) {
@@ -177,7 +193,7 @@ function ensureAnalyticsBackfill() {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type },
+            metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
           });
           if (ins) backfilledEvents++;
         } else if (!action.includes("recharge")) {
@@ -190,7 +206,7 @@ function ensureAnalyticsBackfill() {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type, adminUserId: e.admin_user_id },
+            metadata: { actionType: e.action_type, adminUserId: e.admin_user_id, ...parseMetadata(e.payload_json) },
           });
           if (ins) backfilledEvents++;
         }
@@ -412,6 +428,7 @@ function ensureAnalyticsBackfill() {
         aspectRatio: p.aspect_ratio,
         mediaDurationSec: Number(p.total_duration_sec || 0),
         creditCost: Number(p.estimated_credits || 0),
+        metadata: { estimatedCredits: Number(p.estimated_credits || 0) },
       });
       if (p.status === "completed") {
         const netCredits = Number(p.charged_credits || 0) - Number(p.refunded_credits || 0);
@@ -431,6 +448,11 @@ function ensureAnalyticsBackfill() {
           aspectRatio: p.aspect_ratio,
           mediaDurationSec: Number(p.total_duration_sec || 0),
           creditCost: netCredits,
+          metadata: {
+            chargedCredits: Number(p.charged_credits || 0),
+            refundedCredits: Number(p.refunded_credits || 0),
+            completedAt: p.updated_at || p.created_at,
+          },
         });
         if (ins) backfilledEvents++;
       } else if (["failed", "project_data_failed"].includes(p.status)) {
@@ -446,6 +468,14 @@ function ensureAnalyticsBackfill() {
           entityId: String(p.id),
           model: p.video_model,
           mode: p.mode,
+          resolution: p.resolution,
+          aspectRatio: p.aspect_ratio,
+          mediaDurationSec: Number(p.total_duration_sec || 0),
+          metadata: {
+            chargedCredits: Number(p.charged_credits || 0),
+            refundedCredits: Number(p.refunded_credits || 0),
+            failedAt: p.updated_at || p.created_at,
+          },
         });
         if (ins) backfilledEvents++;
       }
@@ -463,7 +493,7 @@ function ensureAnalyticsBackfill() {
       const startedAt = j.created_at_ms ? new Date(j.created_at_ms).toISOString() : new Date().toISOString();
       updateMaxDate(startedAt);
       const ins = insertAiTaskAttempt({
-        attemptKey: `image_job_backfill:${j.id}`,
+        attemptKey: `image_generation:${j.id}:1`,
         feature: "style_image",
         taskType: "image_generation",
         entityType: "image_job",
@@ -495,9 +525,10 @@ function ensureAnalyticsBackfill() {
     for (const c of clips) {
       const startedAt = c.created_at || new Date().toISOString();
       updateMaxDate(startedAt);
-      const clipStatus = ["completed", "failed"].includes(c.status) ? c.status : "running";
+      if (!["completed", "failed"].includes(c.status)) continue;
+      const clipStatus = c.status;
       const ins = insertAiTaskAttempt({
-        attemptKey: `video_clip_backfill:${c.project_id}:${c.clip_index}`,
+        attemptKey: `video_clip_generation:${c.id}:${Math.max(1, Number(c.attempt || 1))}`,
         feature: "video_project",
         taskType: "video_clip_generation",
         entityType: "video_project",
@@ -522,6 +553,8 @@ function ensureAnalyticsBackfill() {
   }
 
   const nowIso = new Date().toISOString();
+  setAnalyticsMeta("backfill_status", "completed");
+  setAnalyticsMeta("backfill_error", "");
   setAnalyticsMeta("backfill_completed_at", nowIso);
   if (maxSourceDate) {
     setAnalyticsMeta("backfill_source_max_at", maxSourceDate);
@@ -535,7 +568,7 @@ function ensureAnalyticsBackfill() {
   };
 }
 
-function ensureUserAnalyticsBackfill(userId) {
+function ensureUserAnalyticsBackfillImpl(userId) {
   const uid = Number(userId);
   if (!uid) return { ok: false, error: "Invalid userId" };
 
@@ -638,7 +671,7 @@ function ensureUserAnalyticsBackfill(userId) {
           sourceId: e.generation_id ? String(e.generation_id) : "",
           creditDelta: -cost,
           creditCost: cost,
-          metadata: { actionType: e.action_type },
+          metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
         });
       } else if (delta > 0) {
         const action = String(e.action_type || "").toLowerCase();
@@ -653,7 +686,7 @@ function ensureUserAnalyticsBackfill(userId) {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type },
+            metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
           });
         } else if (!action.includes("recharge")) {
           insertAnalyticsEvent({
@@ -665,7 +698,7 @@ function ensureUserAnalyticsBackfill(userId) {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type, adminUserId: e.admin_user_id },
+            metadata: { actionType: e.action_type, adminUserId: e.admin_user_id, ...parseMetadata(e.payload_json) },
           });
         }
       }
@@ -723,6 +756,7 @@ function ensureUserAnalyticsBackfill(userId) {
         aspectRatio: p.aspect_ratio,
         mediaDurationSec: Number(p.total_duration_sec || 0),
         creditCost: Number(p.estimated_credits || 0),
+        metadata: { estimatedCredits: Number(p.estimated_credits || 0) },
       });
       if (p.status === "completed") {
         const netCredits = Number(p.charged_credits || 0) - Number(p.refunded_credits || 0);
@@ -742,6 +776,11 @@ function ensureUserAnalyticsBackfill(userId) {
           aspectRatio: p.aspect_ratio,
           mediaDurationSec: Number(p.total_duration_sec || 0),
           creditCost: netCredits,
+          metadata: {
+            chargedCredits: Number(p.charged_credits || 0),
+            refundedCredits: Number(p.refunded_credits || 0),
+            completedAt: p.updated_at || p.created_at,
+          },
         });
       } else if (["failed", "project_data_failed"].includes(p.status)) {
         insertAnalyticsEvent({
@@ -756,12 +795,78 @@ function ensureUserAnalyticsBackfill(userId) {
           entityId: String(p.id),
           model: p.video_model,
           mode: p.mode,
+          resolution: p.resolution,
+          aspectRatio: p.aspect_ratio,
+          mediaDurationSec: Number(p.total_duration_sec || 0),
+          metadata: {
+            chargedCredits: Number(p.charged_credits || 0),
+            refundedCredits: Number(p.refunded_credits || 0),
+            failedAt: p.updated_at || p.created_at,
+          },
         });
       }
     }
   }
 
+  if (tableExists("video_clips") && tableExists("video_projects")) {
+    const clips = db.prepare(`
+      SELECT c.id, c.project_id, c.clip_index, c.status, c.provider, c.attempt,
+        c.provider_key_ref, c.error, c.created_at, c.updated_at
+      FROM video_clips c
+      JOIN video_projects p ON p.id = c.project_id
+      WHERE p.owner_user_id = ? AND c.status IN ('completed', 'failed')
+    `).all(uid);
+    for (const c of clips) {
+      insertAiTaskAttempt({
+        attemptKey: `video_clip_generation:${c.id}:${Math.max(1, Number(c.attempt || 1))}`,
+        feature: "video_project",
+        taskType: "video_clip_generation",
+        entityType: "video_project",
+        entityId: String(c.project_id),
+        projectId: c.project_id,
+        clipId: c.id,
+        provider: c.provider || "",
+        providerKeyRef: c.provider_key_ref || "",
+        attemptKind: "historical_summary",
+        attemptNo: Math.max(1, Number(c.attempt || 1)),
+        status: c.status,
+        errorStage: c.error ? "provider" : "",
+        errorMessage: c.error || "",
+        startedAt: c.created_at || new Date().toISOString(),
+        completedAt: c.updated_at || c.created_at || new Date().toISOString(),
+        actorUserId: uid,
+        accountType: user.account_type || "",
+        isBackfilled: 1,
+      });
+    }
+  }
+
   return { ok: true };
+}
+
+function ensureUserAnalyticsBackfill(userId) {
+  const before = getAnalyticsWriteStats();
+  try {
+    runWithStrictAnalyticsWrites(() => ensureUserAnalyticsBackfillImpl(userId));
+  } catch (error) {
+    const after = getAnalyticsWriteStats();
+    return {
+      ok: false,
+      expected: after.expected - before.expected,
+      inserted: after.inserted - before.inserted,
+      existing: after.existing - before.existing,
+      failed: Math.max(1, after.failed - before.failed),
+      error: String(error?.message || "analytics backfill failed").slice(0, 500),
+    };
+  }
+  const after = getAnalyticsWriteStats();
+  const result = {
+    expected: after.expected - before.expected,
+    inserted: after.inserted - before.inserted,
+    existing: after.existing - before.existing,
+    failed: after.failed - before.failed,
+  };
+  return { ok: result.failed === 0 && result.expected === result.inserted + result.existing, ...result };
 }
 
 module.exports = {

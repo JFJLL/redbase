@@ -47,7 +47,7 @@ export function computeDateParams(filters: AdminFilters): Record<string, string>
   } else if (filters.preset === "custom") {
     if (filters.customFrom) params.from = filters.customFrom;
     if (filters.customTo) {
-      params.to = /^d{4}-d{2}-d{2}$/.test(filters.customTo) ? nextDayStr(filters.customTo) : filters.customTo;
+      params.to = /^\d{4}-\d{2}-\d{2}$/.test(filters.customTo) ? nextDayStr(filters.customTo) : filters.customTo;
     }
   }
 

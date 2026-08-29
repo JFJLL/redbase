@@ -1,5 +1,7 @@
 const { getDbProxy } = require("./connection");
 const { transaction } = require("./connection");
+const { loadAppConfig } = require("../config");
+const { isAdminUser } = require("../api/domain-utils");
 
 const db = getDbProxy();
 
@@ -478,6 +480,45 @@ const VERSIONED_MIGRATIONS = [
             AND credit_event_id IS NOT NULL
         );
       `);
+    },
+  },
+  {
+    version: 11,
+    name: "analytics-admin-snapshots-and-backfill-status",
+    apply() {
+      const addColumnIfMissing = (tableName, columnName, definition) => {
+        const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+        if (!columns.some((column) => column.name === columnName)) {
+          db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+        }
+      };
+      addColumnIfMissing("analytics_events", "is_admin", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissing("ai_task_attempts", "is_admin", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissing("video_clips", "attempt_started_at", "TEXT NOT NULL DEFAULT ''");
+      addColumnIfMissing("video_clips", "next_attempt_kind", "TEXT NOT NULL DEFAULT 'initial'");
+      addColumnIfMissing("video_clips", "retry_origin", "TEXT NOT NULL DEFAULT ''");
+      addColumnIfMissing("video_clips", "billing_operation", "TEXT NOT NULL DEFAULT ''");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_admin_occurred
+          ON analytics_events(is_admin, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_attempts_admin_started
+          ON ai_task_attempts(is_admin, started_at);
+      `);
+
+      const appConfig = loadAppConfig();
+      const adminIds = db.prepare("SELECT id, phone FROM users").all()
+        .filter((user) => isAdminUser(user, appConfig))
+        .map((user) => Number(user.id));
+      if (adminIds.length) {
+        const placeholders = adminIds.map(() => "?").join(",");
+        db.prepare(`UPDATE analytics_events SET is_admin = 1 WHERE actor_user_id IN (${placeholders})`).run(...adminIds);
+        db.prepare(`UPDATE ai_task_attempts SET is_admin = 1 WHERE actor_user_id IN (${placeholders})`).run(...adminIds);
+      }
+
+      const now = new Date().toISOString();
+      const insertMeta = db.prepare("INSERT OR IGNORE INTO analytics_meta (key, value, updated_at) VALUES (?, ?, ?)");
+      insertMeta.run("backfill_status", "pending", now);
+      insertMeta.run("backfill_error", "", now);
     },
   },
 ];

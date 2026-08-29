@@ -31,7 +31,7 @@ function recordUserActiveDay({ userId, accountType, occurredAt } = {}) {
     eventName: "user_active_day",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
   });
 }
 
@@ -44,7 +44,7 @@ function recordUserRegistered({ userId, accountType, createdAt } = {}) {
     eventName: "user_registered",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     entityType: "user",
     entityId: String(userId),
   });
@@ -59,7 +59,7 @@ function recordBrandCreated({ brandId, userId, accountType, createdAt } = {}) {
     eventName: "brand_created",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     entityType: "brand",
     entityId: String(brandId),
   });
@@ -209,7 +209,7 @@ function recordOutputCompleted({
     eventName: "output_completed",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     feature,
     status: "completed",
     entityType: entityType || "generation",
@@ -244,7 +244,7 @@ function recordOutputFailed({
     eventName: "output_failed",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     feature,
     status: "failed",
     entityType: entityType || "generation",
@@ -256,7 +256,7 @@ function recordOutputFailed({
   });
 }
 
-function recordVideoScriptStarted({ requestId, userId, brandId, createdAt } = {}) {
+function recordVideoScriptStarted({ requestId, userId, accountType, brandId, createdAt } = {}) {
   if (!requestId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `video_script_started:${requestId}`;
@@ -265,6 +265,7 @@ function recordVideoScriptStarted({ requestId, userId, brandId, createdAt } = {}
     eventName: "video_script_started",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType,
     feature: ANALYTICS_FEATURES.VIDEO_SCRIPT,
     entityType: "video_script",
     entityId: String(requestId),
@@ -272,7 +273,7 @@ function recordVideoScriptStarted({ requestId, userId, brandId, createdAt } = {}
   });
 }
 
-function recordVideoScriptCompleted({ requestId, userId, generationId, creditCost, durationMs, completedAt } = {}) {
+function recordVideoScriptCompleted({ requestId, userId, accountType, generationId, creditCost, durationMs, completedAt } = {}) {
   if (!requestId) return false;
   const nowIso = completedAt || new Date().toISOString();
   const eventKey = `video_script_completed:${requestId}`;
@@ -281,6 +282,7 @@ function recordVideoScriptCompleted({ requestId, userId, generationId, creditCos
     eventName: "video_script_completed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType,
     feature: ANALYTICS_FEATURES.VIDEO_SCRIPT,
     status: "completed",
     entityType: "video_script",
@@ -292,7 +294,7 @@ function recordVideoScriptCompleted({ requestId, userId, generationId, creditCos
   });
 }
 
-function recordVideoScriptFailed({ requestId, userId, error, failedAt } = {}) {
+function recordVideoScriptFailed({ requestId, userId, accountType, error, failedAt } = {}) {
   if (!requestId) return false;
   const nowIso = failedAt || new Date().toISOString();
   const eventKey = `video_script_failed:${requestId}`;
@@ -301,6 +303,7 @@ function recordVideoScriptFailed({ requestId, userId, error, failedAt } = {}) {
     eventName: "video_script_failed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType,
     feature: ANALYTICS_FEATURES.VIDEO_SCRIPT,
     status: "failed",
     entityType: "video_script",
@@ -309,7 +312,7 @@ function recordVideoScriptFailed({ requestId, userId, error, failedAt } = {}) {
   });
 }
 
-function recordVideoProjectCreated({ projectId, userId, model, mode, resolution, aspectRatio, totalDurationSec, estimatedCredits, createdAt } = {}) {
+function recordVideoProjectCreated({ projectId, userId, accountType, model, mode, resolution, aspectRatio, totalDurationSec, estimatedCredits, createdAt } = {}) {
   if (!projectId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `video_project_created:${projectId}`;
@@ -318,6 +321,7 @@ function recordVideoProjectCreated({ projectId, userId, model, mode, resolution,
     eventName: "video_project_created",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType,
     feature: ANALYTICS_FEATURES.VIDEO_PROJECT,
     entityType: "video_project",
     entityId: String(projectId),
@@ -327,10 +331,11 @@ function recordVideoProjectCreated({ projectId, userId, model, mode, resolution,
     aspectRatio: String(aspectRatio || ""),
     mediaDurationSec: Number(totalDurationSec || 0),
     creditCost: Number(estimatedCredits || 0),
+    metadata: { estimatedCredits: Number(estimatedCredits || 0) },
   });
 }
 
-function recordVideoProjectCompleted({ projectId, userId, model, mode, resolution, aspectRatio, totalDurationSec, chargedCredits, refundedCredits, durationMs, completedAt } = {}) {
+function recordVideoProjectCompleted({ projectId, userId, accountType, model, mode, resolution, aspectRatio, totalDurationSec, chargedCredits, refundedCredits, durationMs, completedAt } = {}) {
   if (!projectId) return false;
   const nowIso = completedAt || new Date().toISOString();
   const eventKey = `video_project_completed:${projectId}`;
@@ -340,6 +345,7 @@ function recordVideoProjectCompleted({ projectId, userId, model, mode, resolutio
     eventName: "video_project_completed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType,
     feature: ANALYTICS_FEATURES.VIDEO_PROJECT,
     status: "completed",
     entityType: "video_project",
@@ -351,10 +357,15 @@ function recordVideoProjectCompleted({ projectId, userId, model, mode, resolutio
     mediaDurationSec: Number(totalDurationSec || 0),
     creditCost: netCredits,
     durationMs: Number(durationMs || 0),
+    metadata: {
+      chargedCredits: Number(chargedCredits || 0),
+      refundedCredits: Number(refundedCredits || 0),
+      completedAt: nowIso,
+    },
   });
 }
 
-function recordVideoProjectFailed({ projectId, userId, model, mode, error, failedAt } = {}) {
+function recordVideoProjectFailed({ projectId, userId, accountType, model, mode, resolution, aspectRatio, totalDurationSec, chargedCredits, refundedCredits, error, failedAt } = {}) {
   if (!projectId) return false;
   const nowIso = failedAt || new Date().toISOString();
   const eventKey = `video_project_failed:${projectId}`;
@@ -363,13 +374,22 @@ function recordVideoProjectFailed({ projectId, userId, model, mode, error, faile
     eventName: "video_project_failed",
     occurredAt: nowIso,
     actorUserId: userId,
+    accountType,
     feature: ANALYTICS_FEATURES.VIDEO_PROJECT,
     status: "failed",
     entityType: "video_project",
     entityId: String(projectId),
     model: String(model || ""),
     mode: String(mode || ""),
-    metadata: { error: String(error || "").slice(0, 200) },
+    resolution: String(resolution || ""),
+    aspectRatio: String(aspectRatio || ""),
+    mediaDurationSec: Number(totalDurationSec || 0),
+    metadata: {
+      error: String(error || "").slice(0, 200),
+      chargedCredits: Number(chargedCredits || 0),
+      refundedCredits: Number(refundedCredits || 0),
+      failedAt: nowIso,
+    },
   });
 }
 
@@ -382,7 +402,7 @@ function recordPaymentOrderCreated({ orderId, userId, accountType, amountFen, pl
     eventName: "payment_order_created",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     entityType: "payment_order",
     entityId: String(orderId),
     provider: String(provider || ""),
@@ -400,7 +420,7 @@ function recordPaymentPaid({ orderId, userId, accountType, amountFen, planId, pl
     eventName: "payment_paid",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     status: "paid",
     entityType: "payment_order",
     entityId: String(orderId),
@@ -420,7 +440,7 @@ function recordPaymentFailed({ orderId, userId, accountType, amountFen, provider
     eventName: "payment_failed",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     status: "failed",
     entityType: "payment_order",
     entityId: String(orderId),
@@ -430,7 +450,7 @@ function recordPaymentFailed({ orderId, userId, accountType, amountFen, provider
   });
 }
 
-function recordCreditConsumed({ creditEventId, userId, accountType, actionType, feature, creditDelta, creditCost, generationId, createdAt } = {}) {
+function recordCreditConsumed({ creditEventId, userId, accountType, actionType, feature, creditDelta, creditCost, generationId, createdAt, metadata } = {}) {
   if (!creditEventId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_consumed:${creditEventId}`;
@@ -441,7 +461,7 @@ function recordCreditConsumed({ creditEventId, userId, accountType, actionType, 
     eventName: "credit_consumed",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     feature: feat,
     entityType: "credit_event",
     entityId: String(creditEventId),
@@ -449,11 +469,11 @@ function recordCreditConsumed({ creditEventId, userId, accountType, actionType, 
     sourceId: generationId ? String(generationId) : "",
     creditDelta: -cost,
     creditCost: cost,
-    metadata: { actionType },
+    metadata: { actionType, ...(metadata && typeof metadata === "object" ? metadata : {}) },
   });
 }
 
-function recordCreditRefunded({ creditEventId, userId, accountType, actionType, feature, creditDelta, refundForCreditEventId, createdAt } = {}) {
+function recordCreditRefunded({ creditEventId, userId, accountType, actionType, feature, creditDelta, refundForCreditEventId, createdAt, metadata } = {}) {
   if (!creditEventId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_refunded:${creditEventId}`;
@@ -464,12 +484,12 @@ function recordCreditRefunded({ creditEventId, userId, accountType, actionType, 
     eventName: "credit_refunded",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     feature: feat,
     entityType: "credit_event",
     entityId: String(creditEventId),
     creditDelta: amount,
-    metadata: { actionType, refundForCreditEventId },
+    metadata: { actionType, refundForCreditEventId, ...(metadata && typeof metadata === "object" ? metadata : {}) },
   });
 }
 
@@ -482,7 +502,7 @@ function recordCreditGranted({ creditEventId, userId, accountType, actionType, c
     eventName: "credit_granted",
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     entityType: "credit_event",
     entityId: String(creditEventId),
     creditDelta: Number(creditDelta || 0),
@@ -537,9 +557,7 @@ function recordUserDeleted({ userId, deletedAt } = {}) {
   if (!userId) return false;
   const nowIso = deletedAt || new Date().toISOString();
   const eventKey = `user_deleted:${userId}`;
-  // Anonymize user records in analytics facts
-  anonymizeUserAnalytics(userId);
-  return insertAnalyticsEvent({
+  const inserted = insertAnalyticsEvent({
     eventKey,
     eventName: "user_deleted",
     occurredAt: nowIso,
@@ -547,7 +565,11 @@ function recordUserDeleted({ userId, deletedAt } = {}) {
     actorUserId: null,
     entityType: "user",
     entityId: String(userId),
-  });
+  }, { strict: true });
+  // Keep immutable dimensions but remove the direct user foreign identifier in
+  // the same surrounding database transaction as the business-row deletion.
+  anonymizeUserAnalytics(userId);
+  return inserted;
 }
 
 function recordClientEvent({ eventName, userId, accountType, metadata } = {}) {
@@ -581,7 +603,7 @@ function recordClientEvent({ eventName, userId, accountType, metadata } = {}) {
     eventName,
     occurredAt: nowIso,
     actorUserId: userId,
-    accountType: accountType || "customer",
+    accountType,
     metadata: safeMeta,
   });
 }

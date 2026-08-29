@@ -52,6 +52,12 @@
                 <th>时长</th>
                 <th class="text-right">项目数</th>
                 <th class="text-right">完成率</th>
+                <th class="text-right">首次成功率</th>
+                <th class="text-right">自动/人工重试率</th>
+                <th class="text-right">救援成功率</th>
+                <th class="text-right">P50 / P95</th>
+                <th class="text-right">成熟/活跃/待配置</th>
+                <th class="text-right">Gross / Refund / Net</th>
                 <th class="text-right">平均 Net 积分</th>
                 <th class="text-right">每秒 Net 积分</th>
                 <th class="text-right">真实成本</th>
@@ -66,8 +72,14 @@
                 <td>{{ v.totalDurationSec }}s</td>
                 <td class="text-right">{{ v.projectCount }}</td>
                 <td class="text-right font-semibold">{{ v.completionRate !== null ? `${v.completionRate}%` : '-' }}</td>
-                <td class="text-right">{{ v.avgNetCredits }}</td>
-                <td class="text-right">{{ v.netCreditsPerSuccessSecond }}</td>
+                <td class="text-right">{{ v.firstSuccessRate !== null ? `${v.firstSuccessRate}%` : '-' }}</td>
+                <td class="text-right">{{ v.autoRetryRate !== null ? `${v.autoRetryRate}%` : '-' }} / {{ v.manualRetryRate !== null ? `${v.manualRetryRate}%` : '-' }}</td>
+                <td class="text-right">{{ v.rescueRate !== null ? `${v.rescueRate}%` : '-' }}</td>
+                <td class="text-right">{{ v.p50DurationMs !== null ? `${(v.p50DurationMs / 1000).toFixed(1)}s` : '-' }} / {{ v.p95DurationMs !== null ? `${(v.p95DurationMs / 1000).toFixed(1)}s` : '-' }}</td>
+                <td class="text-right">{{ v.matureCount }} / {{ v.activeCount }} / {{ v.waitingConfigCount }}</td>
+                <td class="text-right">{{ v.grossCredits }} / {{ v.refundCredits }} / {{ v.netCredits }}</td>
+                <td class="text-right">{{ v.avgNetCredits ?? '-' }}</td>
+                <td class="text-right">{{ v.netCreditsPerSuccessSecond ?? '-' }}</td>
                 <td class="text-right text-muted">{{ v.vendorCostLabel }}</td>
               </tr>
             </tbody>
@@ -141,6 +153,7 @@ import AdminErrorState from "../components/AdminErrorState.vue";
 const props = defineProps<{
   filters: AdminFilters;
 }>();
+const emit = defineEmits<{ (e: "coverage-update", coverage: any): void }>();
 
 const loading = ref(false);
 const error = ref("");
@@ -157,6 +170,7 @@ async function loadData() {
     const params = computeDateParams(props.filters);
     const res = await fetchAiAnalytics(params, abortController.signal);
     data.value = res;
+    emit("coverage-update", res.coverage);
   } catch (err: any) {
     if (err?.name === "AbortError") return;
     error.value = err?.message || "加载 AI 运行数据失败";

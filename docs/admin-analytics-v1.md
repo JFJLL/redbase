@@ -12,7 +12,7 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 - **分析事实层 (Analytics Facts)**：包含 `analytics_events` 和 `ai_task_attempts`，属于 append-only 的事实流。不设外键约束，当用户或业务记录物理删除时，匿名事实与聚合数据完整保留。
 - **可观测分析层 (AI Observability)**：每一个文本、图片、视频模型物理调用、重试与拼接均记录为独立的 `ai_task_attempts`，区分 `initial`、`auto_retry`、`manual_retry`、`result_retry`、`assembly_initial`、`assembly_retry` 与 `historical_summary`。
 - **多维聚合计算层 (SQL Metrics)**：由后端 SQL 进行时区自然日分组（Asia/Shanghai）、区间统计与缓存（15~30s 短 TTL 缓存），避免前端拉取全量明细后在客户端计算。
-- **前端后台壳层 (Vue SPA)**：单页应用路由维持 `/admin/`，通过 URL hash (`#overview`、`#users`、`#features`、`#ai`、`#finance`、`#system`、`#management`) 实现模块懒加载与浏览器导航历史同步。
+- **前端后台壳层 (Vue SPA)**：单页应用路由维持 `/admin/`，通过 URL hash (`#overview`、`#users`、`#features`、`#ai`、`#finance`、`#system`、`#management`) 导航；各 Panel 使用 `defineAsyncComponent(() => import(...))` 独立懒加载 chunk。
 
 ---
 
@@ -97,6 +97,10 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 
 `ai_task_attempts` 记录所有底层物理模型调用与拼接过程：
 
+- **Primary task types**：`text_generation`、`image_generation`、`video_clip_generation`。后台“整体 AI 成功率”只使用这些生成终态事实。
+- **Auxiliary task types**：`video_submission`、`image_status_poll`、`video_status_poll`、`video_result_processing`、`video_assembly`。它们单独用于提交、轮询、结果保存和合成诊断，不进入整体生成成功率。
+- Provider 接受 `taskId` 只形成 `video_submission:completed`；只有 Provider 最终成功/失败时才形成唯一的 `video_clip_generation` 终态 Attempt。异步图片同样不记录 pending Attempt。
+
 - **Attempt 类型 (`attempt_kind`)**：
   - `initial`: 初始调用
   - `auto_retry`: 自动换 Key 或重试
@@ -120,15 +124,16 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 | **总览** | 新增用户 | 选定时间内注册的用户数 | `analytics_events(user_registered)` |
 | **总览** | 有效创作用户 | 至少成功生成 1 次内容的去重用户数 | `analytics_events(output_completed)` |
 | **总览** | 付费用户 | 产生成功支付的去重用户数 | `analytics_events(payment_paid)` |
-| **总览** | 累计营收 | 实收订单金额 (分 / 100) | `payment_orders(paid_at, status='paid')` |
+| **总览** | 累计营收 | 实收订单金额 (分 / 100) | `analytics_events(payment_paid)`；`payment_orders` 仅用于当前订单管理与对账 |
 | **总览** | Net 积分消耗 | Gross 扣除积分 - 退款积分 | `analytics_events(credit_consumed, credit_refunded)` |
-| **总览** | AI 成功率 | 终止 Attempt 中 `status='completed'` / 总终止数 | `ai_task_attempts(status IN ('completed', 'failed'))` |
+| **总览** | AI 成功率 | Primary 终止 Attempt 中 `status='completed'` / 总终止数 | `ai_task_attempts(task_type IN primary, status IN ('completed', 'failed'))` |
 | **转化** | 产品主漏斗 | 注册 -> 品牌 -> 探索 -> 首次生成 -> 复购生成 -> 充值页 -> 下单 -> 支付成功 | 每一层按用户去重计算转化率 |
-| **视频** | 视频完成率 | `completed` / (成熟终止 + 需要操作项目数) | 运行中任务不入分母；阻塞项目单列 |
-| **视频** | 首次成功率 | 最终 `completed` 且无任何 retry attempt 的项目数 / 完成数 | `ai_task_attempts` 关联 `video_projects` |
-| **视频** | 重试挽救率 | 曾进入失败或需操作状态，后续最终 `completed` 的项目比例 | `video_projects` 状态历史 |
-| **财务** | ARPPU | 营业收入 / 付费用户数 | `payment_orders` |
-| **财务** | 订单支付转化率 | 支付成功订单数 / 创建订单总数 | `payment_orders` |
+| **视频** | 视频完成率 | `video_project_completed` / (`video_project_completed` + `video_project_failed`) | `analytics_events` 不可变项目事实 |
+| **视频** | 首次成功率 | 第一个 `video_clip_generation` Attempt 成功的成熟项目 / 成熟项目 | `ai_task_attempts` 不可变 Attempt 事实 |
+| **视频** | 自动/人工重试率与救援率 | 分别按 `auto_retry`、`manual_retry` 和重试后完成项目计算 | `ai_task_attempts` + `video_project_*` 事实；不依赖业务表状态历史 |
+| **视频** | Gross/Refund/Net 与每成功秒 Net | 视频项目 `credit_consumed`、`credit_refunded` 聚合 | `analytics_events` 积分事实 |
+| **财务** | ARPPU | 营业收入 / 付费用户数 | `analytics_events(payment_paid)` |
+| **财务** | 订单支付转化率 | 所选范围内创建订单中最终存在 `payment_paid` 的订单 / 同一 created cohort 总数 | `analytics_events(payment_order_created, payment_paid)`；不会超过 100% |
 | **系统** | 超时卡住任务 | 图片任务活跃 > 10min；视频任务活跃 > 2h | `image_jobs`, `video_projects` |
 
 ---
@@ -143,6 +148,10 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 ---
 
 ## 8. 数据回填与覆盖说明
+
+- 服务在 `ensureStore()` 完成后、开始监听请求前自动执行 `ensureAnalyticsBackfill()`。
+- 成功写入 `backfill_status=completed` 与 `backfill_completed_at`；失败不阻塞服务启动，写入脱敏的 `backfill_error`，所有 Panel 将 `coverage.isPartial=true` 传到顶部并显示“历史回填部分覆盖”。
+- 事实在写入时固化 `account_type` 与 `is_admin`。管理员依据当前配置和 `isAdminUser` 判断，与 `account_type` 无关；经营指标默认 `is_admin=0`，不会误排除全部易美账号。历史回填按当前管理员配置补齐快照，用户删除后快照仍保留。
 
 - **可回填数据**：
   - 存量用户 (`users` -> `user_registered`)

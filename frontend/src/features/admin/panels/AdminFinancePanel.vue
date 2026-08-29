@@ -27,7 +27,8 @@
           <span class="fin-val">
             {{ data.overview.conversionRate !== null ? `${data.overview.conversionRate}%` : '-' }}
           </span>
-          <span class="fin-sub">{{ data.overview.paidOrders }} 笔成功 / {{ data.overview.totalOrders }} 笔创建</span>
+          <span class="fin-sub">创建 cohort：{{ data.overview.cohortPaid }} 笔最终支付 / {{ data.overview.createdInPeriod }} 笔创建</span>
+          <span class="fin-sub">期间支付 {{ data.overview.paidInPeriod }}；待支付 {{ data.overview.pendingUnexpired }}；失败/过期 {{ data.overview.expiredOrFailed }}</span>
         </div>
         <div class="fin-card">
           <span class="fin-label">用户剩余积分总量</span>
@@ -115,6 +116,7 @@ import AdminErrorState from "../components/AdminErrorState.vue";
 const props = defineProps<{
   filters: AdminFilters;
 }>();
+const emit = defineEmits<{ (e: "coverage-update", coverage: any): void }>();
 
 const loading = ref(false);
 const error = ref("");
@@ -131,6 +133,7 @@ async function loadData() {
     const params = computeDateParams(props.filters);
     const res = await fetchFinanceAnalytics(params, abortController.signal);
     data.value = res;
+    emit("coverage-update", res.coverage);
   } catch (err: any) {
     if (err?.name === "AbortError") return;
     error.value = err?.message || "加载财务与积分数据失败";

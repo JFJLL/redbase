@@ -27,13 +27,23 @@ function calcDeltaPercent(curr, prev) {
   return Math.round(((c - p) / p) * 1000) / 10;
 }
 
+function percentile(values, ratio) {
+  const sorted = values.map(Number).filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+}
+
 function getCoverageInfo(fromIso) {
   const meta = getAllAnalyticsMeta();
   const trackingStartedAt = meta.tracking_started_at || "";
   const clientTrackingStartedAt = meta.client_tracking_started_at || "";
   const backfillCompletedAt = meta.backfill_completed_at || "";
-  const isPartial = Boolean(trackingStartedAt && fromIso < trackingStartedAt);
+  const backfillFailed = meta.backfill_status === "failed";
+  const isPartial = backfillFailed || Boolean(trackingStartedAt && fromIso < trackingStartedAt);
   const notes = [];
+  if (backfillFailed) {
+    notes.push(`历史回填部分覆盖：${meta.backfill_error || "启动回填失败，请检查服务日志。"}`);
+  }
   if (isPartial) {
     notes.push("部分数据基于历史数据回填，用户留存与客户端步骤漏斗仅在埋点启用后完全覆盖。");
   }
@@ -47,9 +57,9 @@ function getCoverageInfo(fromIso) {
 }
 
 function buildAccountFilter(accountType, alias = "e") {
-  if (accountType === "customer") return `AND ${alias}.account_type = 'customer'`;
-  if (accountType === "yimei") return `AND ${alias}.account_type = 'yimei'`;
-  return `AND (${alias}.account_type IS NULL OR ${alias}.account_type != 'admin')`;
+  if (accountType === "customer") return `AND ${alias}.is_admin = 0 AND ${alias}.account_type = 'customer'`;
+  if (accountType === "yimei") return `AND ${alias}.is_admin = 0 AND ${alias}.account_type = 'yimei'`;
+  return `AND ${alias}.is_admin = 0`;
 }
 
 function getOverviewMetrics(query = {}) {
@@ -122,9 +132,11 @@ function getOverviewMetrics(query = {}) {
     SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ?
       AND status IN ('completed', 'failed')
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
+      ${buildAccountFilter(accountType, "a")}
   `).get(fromIso, toIso);
   const aiAttemptsTotal = Number(aiRow?.total || 0);
   const aiSuccessRate = safePercent(aiRow?.completed, aiAttemptsTotal);
@@ -191,9 +203,11 @@ function getOverviewMetrics(query = {}) {
     SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
-    FROM ai_task_attempts
+    FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ?
       AND status IN ('completed', 'failed')
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
+      ${buildAccountFilter(accountType, "a")}
   `).get(comparisonFromIso, comparisonToIso);
   const prevAiSuccessRate = safePercent(prevAiRow?.completed, prevAiRow?.total);
 
@@ -297,10 +311,11 @@ function getUsersMetrics(query = {}) {
   const accFilter = buildAccountFilter(accountType, "e");
 
   // DAU / WAU / MAU
-  const nowMs = Date.now();
-  const todayShanghai = toShanghaiDateString(nowMs);
-  const last7dStart = new Date(nowMs - 7 * DAY_MS).toISOString();
-  const last30dStart = new Date(nowMs - 30 * DAY_MS).toISOString();
+  const anchorExclusiveMs = Date.parse(toIso);
+  const anchorInclusiveMs = anchorExclusiveMs - 1;
+  const todayShanghai = toShanghaiDateString(anchorInclusiveMs);
+  const last7dStart = new Date(anchorExclusiveMs - 7 * DAY_MS).toISOString();
+  const last30dStart = new Date(anchorExclusiveMs - 30 * DAY_MS).toISOString();
 
   const todayDau = db.prepare(`
     SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
@@ -312,16 +327,16 @@ function getUsersMetrics(query = {}) {
   const wau = db.prepare(`
     SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
     WHERE event_name = 'user_active_day'
-      AND occurred_at >= ?
+      AND occurred_at >= ? AND occurred_at < ?
       ${accFilter}
-  `).get(last7dStart)?.cnt || 0;
+  `).get(last7dStart, toIso)?.cnt || 0;
 
   const mau = db.prepare(`
     SELECT COUNT(DISTINCT actor_key) AS cnt FROM analytics_events e
     WHERE event_name = 'user_active_day'
-      AND occurred_at >= ?
+      AND occurred_at >= ? AND occurred_at < ?
       ${accFilter}
-  `).get(last30dStart)?.cnt || 0;
+  `).get(last30dStart, toIso)?.cnt || 0;
 
   // Main conversion funnel (strictly sequential cohort-based)
   const funnelRow = db.prepare(`
@@ -470,7 +485,7 @@ function getUsersMetrics(query = {}) {
   ];
 
   // Retention (D1, D7, D30) for mature cohorts in range (computed via single CTE query)
-  const todayJdRow = db.prepare("SELECT julianday(date('now', '+8 hours')) AS jd").get();
+  const todayJdRow = db.prepare("SELECT julianday(date(datetime(?, '+8 hours'))) AS jd").get(new Date(anchorInclusiveMs).toISOString());
   const todayJd = Number(todayJdRow?.jd || 0);
 
   const retentionRow = db.prepare(`
@@ -526,7 +541,8 @@ function getUsersMetrics(query = {}) {
   // Account type distribution
   const accountDistribution = db.prepare(`
     SELECT account_type, COUNT(*) AS count
-    FROM users
+    FROM analytics_events e
+    WHERE event_name = 'user_registered' AND is_admin = 0
     GROUP BY account_type
   `).all().map((r) => ({
     accountType: r.account_type,
@@ -644,7 +660,6 @@ function getAiMetrics(query = {}) {
   const { fromIso, toIso, accountType } = range;
   const coverage = getCoverageInfo(fromIso);
   const attFilter = buildAccountFilter(accountType, "a");
-  const projAccFilter = accountType ? `AND owner_user_id IN (SELECT id FROM users WHERE account_type = '${accountType}')` : "";
 
   // Summary across all AI attempts
   const summaryRow = db.prepare(`
@@ -656,6 +671,7 @@ function getAiMetrics(query = {}) {
       AVG(CASE WHEN duration_ms > 0 THEN duration_ms ELSE NULL END) AS avg_duration
     FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ?
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
       ${attFilter}
   `).get(fromIso, toIso);
 
@@ -670,6 +686,7 @@ function getAiMetrics(query = {}) {
   const durations = db.prepare(`
     SELECT duration_ms FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ? AND duration_ms > 0
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
       ${attFilter}
     ORDER BY duration_ms ASC
   `).all(fromIso, toIso).map((r) => r.duration_ms);
@@ -695,6 +712,7 @@ function getAiMetrics(query = {}) {
       SUM(CASE WHEN attempt_kind IN ('auto_retry', 'manual_retry') THEN 1 ELSE 0 END) AS retry_count
     FROM ai_task_attempts a
     WHERE started_at >= ? AND started_at < ?
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
       ${attFilter}
     GROUP BY feature, provider, model
     ORDER BY total_count DESC
@@ -740,42 +758,113 @@ function getAiMetrics(query = {}) {
     sampleMessage: r.sample_message || "",
   }));
 
-  // Video D2 vs G2 comparison
-  const videoComparison = db.prepare(`
-    SELECT
-      video_model AS model,
-      mode,
-      resolution,
-      aspect_ratio,
-      total_duration_sec,
-      COUNT(*) AS project_count,
-      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
-      SUM(CASE WHEN status IN ('failed', 'project_data_failed', 'result_processing_failed', 'partial_failed', 'uncertain', 'assembly_failed', 'cancelled') THEN 1 ELSE 0 END) AS failed_count,
-      SUM(CASE WHEN status IN ('running', 'submitting', 'processing_result', 'assembling', 'queued', 'preparing') THEN 1 ELSE 0 END) AS active_count,
-      SUM(CASE WHEN status = 'waiting_configuration' THEN 1 ELSE 0 END) AS waiting_config_count,
-      SUM(CASE WHEN charged_credits > 0 THEN charged_credits ELSE 0 END) AS gross_credits,
-      SUM(CASE WHEN refunded_credits > 0 THEN refunded_credits ELSE 0 END) AS refund_credits
-    FROM video_projects
-    WHERE created_at >= ? AND created_at < ?
-      ${projAccFilter}
-    GROUP BY video_model, mode, resolution, aspect_ratio, total_duration_sec
-  `).all(fromIso, toIso).map((r) => {
-    const matureProjects = Number(r.completed_count || 0) + Number(r.failed_count || 0);
-    const netCredits = Number(r.gross_credits || 0) - Number(r.refund_credits || 0);
-    const totalSuccessSec = Number(r.completed_count || 0) * Number(r.total_duration_sec || 0);
+  // Immutable video facts are the historical source of truth. Runtime queue
+  // rows are intentionally not joined so deleting a user cannot change history.
+  const createdProjects = db.prepare(`
+    SELECT entity_id, model, mode, resolution, aspect_ratio, media_duration_sec
+    FROM analytics_events e
+    WHERE event_name = 'video_project_created'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${buildAccountFilter(accountType, "e")}
+  `).all(fromIso, toIso);
+  const terminalFacts = db.prepare(`
+    SELECT entity_id, event_name
+    FROM analytics_events e
+    WHERE event_name IN ('video_project_completed', 'video_project_failed')
+      ${buildAccountFilter(accountType, "e")}
+  `).all();
+  const terminalByProject = new Map(terminalFacts.map((row) => [String(row.entity_id), row.event_name]));
+  const videoAttempts = db.prepare(`
+    SELECT project_id, attempt_no, attempt_kind, status, duration_ms
+    FROM ai_task_attempts a
+    WHERE task_type = 'video_clip_generation'
+      AND status IN ('completed', 'failed')
+      ${attFilter}
+  `).all();
+  const attemptsByProject = new Map();
+  for (const attempt of videoAttempts) {
+    const key = String(attempt.project_id || "");
+    if (!attemptsByProject.has(key)) attemptsByProject.set(key, []);
+    attemptsByProject.get(key).push(attempt);
+  }
+  const creditFacts = db.prepare(`
+    SELECT event_name, credit_cost, credit_delta,
+      CAST(json_extract(metadata_json, '$.projectId') AS TEXT) AS project_id
+    FROM analytics_events e
+    WHERE event_name IN ('credit_consumed', 'credit_refunded')
+      AND feature = 'video_project'
+      ${buildAccountFilter(accountType, "e")}
+  `).all();
+  const creditsByProject = new Map();
+  for (const fact of creditFacts) {
+    const key = String(fact.project_id || "");
+    if (!key) continue;
+    const totals = creditsByProject.get(key) || { gross: 0, refund: 0 };
+    if (fact.event_name === "credit_consumed") totals.gross += Number(fact.credit_cost || 0);
+    else totals.refund += Number(fact.credit_delta || 0);
+    creditsByProject.set(key, totals);
+  }
+  const groups = new Map();
+  for (const project of createdProjects) {
+    const groupKey = [project.model, project.mode, project.resolution, project.aspect_ratio, project.media_duration_sec].join("|");
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(project);
+  }
+  const videoComparison = [...groups.values()].map((projects) => {
+    const sample = projects[0];
+    let completedCount = 0;
+    let failedCount = 0;
+    let firstSuccessCount = 0;
+    let autoRetryCount = 0;
+    let manualRetryCount = 0;
+    let rescueCount = 0;
+    let grossCredits = 0;
+    let refundCredits = 0;
+    const durations = [];
+    for (const project of projects) {
+      const projectId = String(project.entity_id);
+      const terminal = terminalByProject.get(projectId);
+      if (terminal === "video_project_completed") completedCount += 1;
+      if (terminal === "video_project_failed") failedCount += 1;
+      const attempts = (attemptsByProject.get(projectId) || []).sort((a, b) => Number(a.attempt_no) - Number(b.attempt_no));
+      if (attempts[0]?.status === "completed") firstSuccessCount += 1;
+      const hasAuto = attempts.some((attempt) => attempt.attempt_kind === "auto_retry");
+      const hasManual = attempts.some((attempt) => attempt.attempt_kind === "manual_retry");
+      if (hasAuto) autoRetryCount += 1;
+      if (hasManual) manualRetryCount += 1;
+      if (terminal === "video_project_completed" && (hasAuto || hasManual)) rescueCount += 1;
+      durations.push(...attempts.map((attempt) => Number(attempt.duration_ms || 0)));
+      const credit = creditsByProject.get(projectId) || { gross: 0, refund: 0 };
+      grossCredits += credit.gross;
+      refundCredits += credit.refund;
+    }
+    const matureCount = completedCount + failedCount;
+    const netCredits = grossCredits - refundCredits;
+    const successSeconds = projects
+      .filter((project) => terminalByProject.get(String(project.entity_id)) === "video_project_completed")
+      .reduce((sum, project) => sum + Number(project.media_duration_sec || 0), 0);
     return {
-      model: r.model,
-      mode: r.mode,
-      resolution: r.resolution,
-      aspectRatio: r.aspect_ratio,
-      totalDurationSec: r.total_duration_sec,
-      projectCount: Number(r.project_count || 0),
-      matureCount: matureProjects,
-      activeCount: Number(r.active_count || 0),
-      waitingConfigCount: Number(r.waiting_config_count || 0),
-      completionRate: safePercent(r.completed_count, matureProjects),
-      avgNetCredits: r.project_count > 0 ? Math.round(netCredits / r.project_count) : 0,
-      netCreditsPerSuccessSecond: totalSuccessSec > 0 ? Math.round((netCredits / totalSuccessSec) * 10) / 10 : 0,
+      model: sample.model,
+      mode: sample.mode,
+      resolution: sample.resolution,
+      aspectRatio: sample.aspect_ratio,
+      totalDurationSec: Number(sample.media_duration_sec || 0),
+      projectCount: projects.length,
+      matureCount,
+      activeCount: projects.length - matureCount,
+      waitingConfigCount: 0,
+      completionRate: safePercent(completedCount, matureCount),
+      firstSuccessRate: safePercent(firstSuccessCount, matureCount),
+      autoRetryRate: safePercent(autoRetryCount, matureCount),
+      manualRetryRate: safePercent(manualRetryCount, matureCount),
+      rescueRate: safePercent(rescueCount, completedCount),
+      p50DurationMs: percentile(durations, 0.5),
+      p95DurationMs: percentile(durations, 0.95),
+      grossCredits,
+      refundCredits,
+      netCredits,
+      avgNetCredits: projects.length ? Math.round((netCredits / projects.length) * 10) / 10 : null,
+      netCreditsPerSuccessSecond: successSeconds ? Math.round((netCredits / successSeconds) * 10) / 10 : null,
       vendorCost: null,
       vendorCostLabel: "未配置",
     };
@@ -806,7 +895,7 @@ function getFinanceMetrics(query = {}) {
   const { fromIso, toIso, intervals, accountType } = range;
   const coverage = getCoverageInfo(fromIso);
   const accFilter = buildAccountFilter(accountType, "e");
-  const userAccFilter = accountType ? `WHERE account_type = '${accountType}'` : "";
+  const userAccFilter = accountType ? `AND u.account_type = '${accountType}'` : "";
 
   // Total Revenue & Paid Orders from payment_paid facts (by occurred_at = paid_at)
   const paidRow = db.prepare(`
@@ -823,7 +912,21 @@ function getFinanceMetrics(query = {}) {
   // Total Orders Created from payment_order_created facts (by occurred_at = created_at)
   const createdRow = db.prepare(`
     SELECT
-      COUNT(*) AS total_orders
+      COUNT(*) AS total_orders,
+      SUM(CASE WHEN EXISTS (
+        SELECT 1 FROM analytics_events paid
+        WHERE paid.event_name = 'payment_paid'
+          AND paid.entity_type = e.entity_type
+          AND paid.entity_id = e.entity_id
+          AND paid.is_admin = 0
+      ) THEN 1 ELSE 0 END) AS cohort_paid,
+      SUM(CASE WHEN EXISTS (
+        SELECT 1 FROM analytics_events failed
+        WHERE failed.event_name = 'payment_failed'
+          AND failed.entity_type = e.entity_type
+          AND failed.entity_id = e.entity_id
+          AND failed.is_admin = 0
+      ) THEN 1 ELSE 0 END) AS expired_or_failed
     FROM analytics_events e
     WHERE event_name = 'payment_order_created'
       AND occurred_at >= ? AND occurred_at < ?
@@ -831,12 +934,15 @@ function getFinanceMetrics(query = {}) {
   `).get(fromIso, toIso);
 
   const totalOrders = Number(createdRow?.total_orders || 0);
-  const paidOrders = Number(paidRow?.paid_orders || 0);
+  const paidInPeriod = Number(paidRow?.paid_orders || 0);
+  const cohortPaid = Number(createdRow?.cohort_paid || 0);
+  const expiredOrFailed = Number(createdRow?.expired_or_failed || 0);
+  const pendingUnexpired = Math.max(0, totalOrders - cohortPaid - expiredOrFailed);
   const paidAmountFen = Number(paidRow?.paid_amount_fen || 0);
   const payingUsers = Number(paidRow?.paying_users || 0);
   const revenueYuan = paidAmountFen / 100;
   const arppu = payingUsers > 0 ? Math.round((revenueYuan / payingUsers) * 10) / 10 : 0;
-  const conversionRate = safePercent(paidOrders, totalOrders);
+  const conversionRate = safePercent(cohortPaid, totalOrders);
 
   // Channel comparison: Alipay vs WeChat from payment_paid facts
   const channelComparison = db.prepare(`
@@ -904,7 +1010,13 @@ function getFinanceMetrics(query = {}) {
   const adminGrantedCredits = Number(creditsRow?.admin_granted_credits || 0);
 
   const currentRemainingCredits = db.prepare(`
-    SELECT COALESCE(SUM(credits), 0) AS total FROM users
+    SELECT COALESCE(SUM(u.credits), 0) AS total FROM users u
+    WHERE NOT EXISTS (
+      SELECT 1 FROM analytics_events e
+      WHERE e.event_name = 'user_registered'
+        AND e.entity_id = CAST(u.id AS TEXT)
+        AND e.is_admin = 1
+    )
     ${userAccFilter}
   `).get()?.total || 0;
 
@@ -919,7 +1031,12 @@ function getFinanceMetrics(query = {}) {
       payingUsers,
       arppu,
       totalOrders,
-      paidOrders,
+      paidOrders: paidInPeriod,
+      paidInPeriod,
+      createdInPeriod: totalOrders,
+      cohortPaid,
+      pendingUnexpired,
+      expiredOrFailed,
       conversionRate,
       grossCredits,
       refundCredits,
@@ -935,6 +1052,8 @@ function getFinanceMetrics(query = {}) {
 }
 
 function getSystemMetrics(query = {}, { videoProjectService } = {}) {
+  const systemRange = parseQueryRange(query);
+  const coverage = getCoverageInfo(systemRange.fromIso);
   const dbStats = getDbStats();
   const nowIso = new Date().toISOString();
   const nowMs = Date.now();
@@ -990,14 +1109,16 @@ function getSystemMetrics(query = {}, { videoProjectService } = {}) {
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
     FROM ai_task_attempts
-    WHERE started_at >= ?
+    WHERE started_at >= ? AND is_admin = 0
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
   `).get(last24hIso);
   const aiErrorsLast24h = Number(ai24h?.failed || 0);
   const aiSuccessRateLast24h = safePercent(ai24h?.completed, Number(ai24h?.completed || 0) + Number(ai24h?.failed || 0));
 
   const lat24h = db.prepare(`
     SELECT duration_ms FROM ai_task_attempts
-    WHERE started_at >= ? AND duration_ms > 0
+    WHERE started_at >= ? AND duration_ms > 0 AND is_admin = 0
+      AND task_type IN ('text_generation', 'image_generation', 'video_clip_generation')
     ORDER BY duration_ms ASC
   `).all(last24hIso).map((r) => r.duration_ms);
   let p95LatencyLast24h = null;
@@ -1029,6 +1150,7 @@ function getSystemMetrics(query = {}, { videoProjectService } = {}) {
 
   return {
     generatedAt: nowIso,
+    coverage,
     database: dbStats,
     imageJobs: {
       pending: imagePending,

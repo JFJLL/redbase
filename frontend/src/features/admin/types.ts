@@ -85,6 +85,9 @@ export interface UsersResponse {
   videoFunnel: FunnelStep[];
   retention: {
     cohortSize: number;
+    d1CohortSize: number;
+    d7CohortSize: number;
+    d30CohortSize: number;
     d1Rate: number | null;
     d7Rate: number | null;
     d30Rate: number | null;
@@ -142,9 +145,21 @@ export interface VideoComparisonItem {
   aspectRatio: string;
   totalDurationSec: number;
   projectCount: number;
+  matureCount: number;
+  activeCount: number;
+  waitingConfigCount: number;
   completionRate: number | null;
-  avgNetCredits: number;
-  netCreditsPerSuccessSecond: number;
+  firstSuccessRate: number | null;
+  autoRetryRate: number | null;
+  manualRetryRate: number | null;
+  rescueRate: number | null;
+  p50DurationMs: number | null;
+  p95DurationMs: number | null;
+  grossCredits: number;
+  refundCredits: number;
+  netCredits: number;
+  avgNetCredits: number | null;
+  netCreditsPerSuccessSecond: number | null;
   vendorCost: string | null;
   vendorCostLabel: string;
 }
@@ -178,6 +193,11 @@ export interface FinanceResponse {
     arppu: number;
     totalOrders: number;
     paidOrders: number;
+    paidInPeriod: number;
+    createdInPeriod: number;
+    cohortPaid: number;
+    pendingUnexpired: number;
+    expiredOrFailed: number;
     conversionRate: number | null;
     currentRemainingCredits: number;
     adminGrantedCredits: number;
@@ -201,6 +221,7 @@ export interface FinanceResponse {
 
 export interface SystemResponse {
   generatedAt: string;
+  coverage: CoverageInfo;
   database: {
     databaseAvailable: boolean;
     dbSizeBytes: number;

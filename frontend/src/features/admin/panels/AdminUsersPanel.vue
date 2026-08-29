@@ -29,7 +29,7 @@
             {{ data.retention.d7Rate !== null ? `${data.retention.d7Rate}%` : '-' }} /
             {{ data.retention.d30Rate !== null ? `${data.retention.d30Rate}%` : '-' }}
           </span>
-          <span class="act-note" v-if="data.retention.cohortSize">同期样本: {{ data.retention.cohortSize }} 人</span>
+          <span class="act-note">D1 {{ data.retention.d1CohortSize }} / D7 {{ data.retention.d7CohortSize }} / D30 {{ data.retention.d30CohortSize }} 人</span>
         </div>
       </div>
 
@@ -83,6 +83,7 @@ import AdminErrorState from "../components/AdminErrorState.vue";
 const props = defineProps<{
   filters: AdminFilters;
 }>();
+const emit = defineEmits<{ (e: "coverage-update", coverage: any): void }>();
 
 const loading = ref(false);
 const error = ref("");
@@ -99,6 +100,7 @@ async function loadData() {
     const params = computeDateParams(props.filters);
     const res = await fetchUsersAnalytics(params, abortController.signal);
     data.value = res;
+    emit("coverage-update", res.coverage);
   } catch (err: any) {
     if (err?.name === "AbortError") return;
     error.value = err?.message || "加载用户与转化数据失败";

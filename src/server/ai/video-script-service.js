@@ -415,7 +415,7 @@ function validateAndNormalizeVideoScript(raw, {
   };
 }
 
-async function repairVideoScript(appConfig, brokenScript, errorMessage, context) {
+async function repairVideoScript(appConfig, brokenScript, errorMessage, context, analyticsContext = {}) {
   const systemPrompt = `你是一位脚本修复专家。之前生成的 AI 视频脚本存在以下问题：
 ${errorMessage}
 
@@ -428,6 +428,10 @@ ${errorMessage}
     userPrompt,
     temperature: 0.2,
     maxOutputTokens: 8192,
+    analyticsContext: {
+      ...analyticsContext,
+      entityId: analyticsContext.entityId ? `${analyticsContext.entityId}:repair` : "",
+    },
   });
 
   return validateAndNormalizeVideoScript(raw, context);
@@ -459,6 +463,7 @@ async function generateVideoScript(
     mode = "text",
     visualBible = null,
     referenceAssetIds = [],
+    analyticsContext = {},
   } = {},
 ) {
   const normalizedModel = model ? normalizeModelId(model) : "";
@@ -494,6 +499,7 @@ async function generateVideoScript(
       temperature: 0.3,
       maxOutputTokens: 8192,
       maxAttempts: 2,
+      analyticsContext,
     });
   } else {
     rawScript = await callTextModelJson(appConfig, {
@@ -502,6 +508,7 @@ async function generateVideoScript(
       temperature: 0.3,
       maxOutputTokens: 8192,
       maxAttempts: 2,
+      analyticsContext,
     });
   }
 
@@ -528,7 +535,7 @@ async function generateVideoScript(
         mode,
         visualBible,
         referenceAssetIds,
-      });
+      }, analyticsContext);
     } catch (_repairError) {
       throw validationError;
     }

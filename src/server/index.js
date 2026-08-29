@@ -23,6 +23,8 @@ const {
   createGeneratedAssetReferenceLookup,
 } = require("./db/repositories/generation-repository");
 const { isProductImageStoredPathReferenced } = require("./db/repositories/product-image-repository");
+const { ensureAnalyticsBackfill } = require("./analytics/analytics-backfill");
+const { setAnalyticsMeta, sanitizeErrorMessage } = require("./analytics/analytics-repository");
 
 async function start() {
   const appConfig = loadAppConfig();
@@ -74,6 +76,16 @@ async function start() {
   });
 
   await ensureStore();
+  try {
+    ensureAnalyticsBackfill();
+  } catch (error) {
+    const safeError = sanitizeErrorMessage(error?.message || "analytics backfill failed");
+    console.warn("[analytics] startup backfill failed", { error: safeError });
+    try {
+      setAnalyticsMeta("backfill_status", "failed");
+      setAnalyticsMeta("backfill_error", safeError);
+    } catch (_) {}
+  }
   try {
     const recoveredVideoScriptRequests = recoverStaleVideoScriptRequests();
     if (recoveredVideoScriptRequests.length) {

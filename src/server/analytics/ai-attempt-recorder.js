@@ -3,11 +3,16 @@ const { insertAiTaskAttempt } = require("./analytics-repository");
 function recordTextTaskAttempt(input = {}) {
   const startedAt = input.startedAt || new Date().toISOString();
   const rand = Math.random().toString(36).slice(2, 8);
-  const attemptKey = input.attemptKey || `text:${input.taskType || "text"}:${Date.now()}:${rand}`;
+  const taskType = input.taskType || "text_generation";
+  const attemptKey = input.attemptKey || (input.entityId
+    ? `${taskType}:${input.entityId}:${input.attemptNo || 1}`
+    : `text:${taskType}:${Date.now()}:${rand}`);
   return insertAiTaskAttempt({
     attemptKey,
     feature: input.feature || "trend_analysis",
-    taskType: input.taskType || "text_generation",
+    taskType,
+    entityType: input.entityType || "",
+    entityId: String(input.entityId || ""),
     provider: input.provider || "",
     model: input.model || "",
     attemptKind: input.attemptKind || "initial",
@@ -32,11 +37,12 @@ function recordTextTaskAttempt(input = {}) {
 
 function recordImageTaskAttempt(input = {}) {
   const startedAt = input.startedAt || (input.createdAt ? new Date(input.createdAt).toISOString() : new Date().toISOString());
-  const attemptKey = input.attemptKey || `image:${input.jobId || "job"}:${input.attemptNo || 1}:${startedAt}`;
+  const taskType = input.taskType || "image_generation";
+  const attemptKey = input.attemptKey || `${taskType}:${input.jobId || "job"}:${input.attemptNo || 1}`;
   return insertAiTaskAttempt({
     attemptKey,
     feature: input.feature || "style_image",
-    taskType: input.taskType || "image_generation",
+    taskType,
     entityType: "image_job",
     entityId: String(input.jobId || ""),
     provider: input.provider || "",
@@ -59,11 +65,13 @@ function recordImageTaskAttempt(input = {}) {
 
 function recordVideoClipAttempt(input = {}) {
   const startedAt = input.startedAt || new Date().toISOString();
-  const attemptKey = input.attemptKey || `video_clip:${input.projectId}:${input.clipIndex || 0}:${input.attemptNo || 1}:${startedAt}`;
+  const taskType = input.taskType || "video_clip_generation";
+  const stableEntityId = input.clipId || `${input.projectId}:${input.clipIndex || 0}`;
+  const attemptKey = input.attemptKey || `${taskType}:${stableEntityId}:${input.attemptNo || 1}`;
   return insertAiTaskAttempt({
     attemptKey,
     feature: "video_project",
-    taskType: input.taskType || "video_clip_generation",
+    taskType,
     entityType: "video_project",
     entityId: String(input.projectId || ""),
     projectId: input.projectId == null ? null : Number(input.projectId),
@@ -106,7 +114,7 @@ function recordVideoResultProcessingAttempt(input = {}) {
     clipId: input.clipId == null ? null : Number(input.clipId),
     provider: input.provider || "",
     model: input.model || "",
-    attemptKind: "result_retry",
+    attemptKind: input.attemptKind || (Number(input.attemptNo || 1) > 1 ? "result_retry" : "initial"),
     attemptNo: Number(input.attemptNo || 1),
     status: input.status || "completed",
     errorStage: input.errorStage || "",

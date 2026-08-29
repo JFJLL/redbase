@@ -883,7 +883,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       const rechecked = freshSnapshot();
       if (rechecked.freshIdea && isIdeaAssetsComplete(rechecked.freshIdea)) return rechecked.freshIdea;
       const fillTrend = rechecked.freshTrend || trend;
-      const result = await ensureTrendIdeaContentAssets(brand, fillTrend, targetIndex);
+      const result = await ensureTrendIdeaContentAssets(brand, fillTrend, targetIndex, {
+        actorUserId: user.id,
+        accountType: user.accountType,
+      });
       if (result.filled) {
         const persisted = updateCurrentTrendIdeaContentAssets(
           brand.id,

@@ -1,15 +1,33 @@
 const { getDbProxy } = require("../db/connection");
 const { safeParseObject } = require("../db/snapshot-utils");
 const { getReleaseSha } = require("./analytics-constants");
+const { loadAppConfig } = require("../config");
+const { isAdminUser } = require("../api/domain-utils");
 
 const db = getDbProxy();
+const analyticsWriteStats = { expected: 0, inserted: 0, existing: 0, failed: 0 };
+let strictWriteDepth = 0;
 
 function sanitizeErrorMessage(msg) {
   if (!msg) return "";
   return String(msg).replace(/[A-Za-z0-9+/=]{32,}/g, "[REDACTED]").slice(0, 500);
 }
 
-function insertAnalyticsEvent(input = {}) {
+function resolveActorSnapshot(input = {}) {
+  const actorUserId = input.actorUserId == null ? null : Number(input.actorUserId);
+  const user = actorUserId == null
+    ? null
+    : db.prepare("SELECT id, phone, account_type FROM users WHERE id = ?").get(actorUserId);
+  return {
+    actorUserId,
+    accountType: String(input.accountType || user?.account_type || ""),
+    isAdmin: input.isAdmin == null
+      ? Number(Boolean(user && isAdminUser(user, loadAppConfig())))
+      : Number(Boolean(input.isAdmin)),
+  };
+}
+
+function insertAnalyticsEvent(input = {}, options = {}) {
   if (!input.eventKey || !input.eventName || !input.occurredAt) {
     return null;
   }
@@ -19,30 +37,37 @@ function insertAnalyticsEvent(input = {}) {
   const metadataJson = typeof input.metadata === "string"
     ? input.metadata
     : JSON.stringify(safeParseObject(JSON.stringify(input.metadata || {})));
+  const actor = resolveActorSnapshot(input);
+  const existedBefore = Boolean(db.prepare("SELECT 1 FROM analytics_events WHERE event_key = ?").get(String(input.eventKey)));
+  analyticsWriteStats.expected += 1;
 
   try {
     const stmt = db.prepare(`
-      INSERT OR IGNORE INTO analytics_events (
-        event_key, event_name, occurred_at, actor_key, actor_user_id, account_type,
+      INSERT INTO analytics_events (
+        event_key, event_name, occurred_at, actor_key, actor_user_id, account_type, is_admin,
         feature, entity_type, entity_id, source_table, source_id, status,
         provider, model, mode, resolution, aspect_ratio, duration_ms,
         media_duration_sec, credit_delta, credit_cost, amount_fen, quantity,
         asset_bytes, metadata_json, release_sha, created_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?
-      )
+      ) ON CONFLICT(event_key) DO UPDATE SET
+        account_type = CASE WHEN analytics_events.account_type = '' THEN excluded.account_type ELSE analytics_events.account_type END,
+        is_admin = CASE WHEN analytics_events.is_admin = 0 AND excluded.is_admin = 1 THEN 1 ELSE analytics_events.is_admin END,
+        feature = CASE WHEN analytics_events.feature = '' THEN excluded.feature ELSE analytics_events.feature END
     `);
     const result = stmt.run(
       String(input.eventKey),
       String(input.eventName),
       String(input.occurredAt),
       String(actorKey),
-      input.actorUserId == null ? null : Number(input.actorUserId),
-      String(input.accountType || ""),
+      actor.actorUserId,
+      actor.accountType,
+      actor.isAdmin,
       String(input.feature || ""),
       String(input.entityType || ""),
       String(input.entityId || ""),
@@ -65,14 +90,31 @@ function insertAnalyticsEvent(input = {}) {
       releaseSha,
       nowIso,
     );
-    return result.changes > 0;
+    if (existedBefore) analyticsWriteStats.existing += 1;
+    else analyticsWriteStats.inserted += 1;
+    return !existedBefore && result.changes > 0;
   } catch (error) {
+    analyticsWriteStats.failed += 1;
+    if (options.strict || strictWriteDepth > 0) throw error;
     console.warn("[analytics] failed to insert event:", error.message);
     return false;
   }
 }
 
-function insertAiTaskAttempt(input = {}) {
+function getAnalyticsWriteStats() {
+  return { ...analyticsWriteStats };
+}
+
+function runWithStrictAnalyticsWrites(fn) {
+  strictWriteDepth += 1;
+  try {
+    return fn();
+  } finally {
+    strictWriteDepth -= 1;
+  }
+}
+
+function insertAiTaskAttempt(input = {}, options = {}) {
   if (!input.attemptKey || !input.feature || !input.taskType || !input.startedAt || !input.status) {
     return null;
   }
@@ -83,12 +125,13 @@ function insertAiTaskAttempt(input = {}) {
     ? input.metadata
     : JSON.stringify(safeParseObject(JSON.stringify(input.metadata || {})));
   const errorMsg = sanitizeErrorMessage(input.errorMessage);
+  const actor = resolveActorSnapshot(input);
 
   try {
     const stmt = db.prepare(`
       INSERT OR IGNORE INTO ai_task_attempts (
         attempt_key, feature, task_type, entity_type, entity_id, project_id, clip_id,
-        actor_key, actor_user_id, account_type, provider, model, provider_key_ref,
+        actor_key, actor_user_id, account_type, is_admin, provider, model, provider_key_ref,
         provider_task_id, attempt_kind, attempt_no, status, error_stage, error_code,
         error_message, started_at, accepted_at, provider_completed_at,
         result_processing_started_at, result_processing_completed_at, completed_at,
@@ -96,7 +139,7 @@ function insertAiTaskAttempt(input = {}) {
         credit_cost, vendor_cost_fen, is_backfilled, metadata_json, release_sha, created_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
@@ -113,8 +156,9 @@ function insertAiTaskAttempt(input = {}) {
       input.projectId == null ? null : Number(input.projectId),
       input.clipId == null ? null : Number(input.clipId),
       String(actorKey),
-      input.actorUserId == null ? null : Number(input.actorUserId),
-      String(input.accountType || ""),
+      actor.actorUserId,
+      actor.accountType,
+      actor.isAdmin,
       String(input.provider || ""),
       String(input.model || ""),
       String(input.providerKeyRef || ""),
@@ -145,6 +189,7 @@ function insertAiTaskAttempt(input = {}) {
     );
     return result.changes > 0;
   } catch (error) {
+    if (options.strict || strictWriteDepth > 0) throw error;
     console.warn("[analytics] failed to insert ai attempt:", error.message);
     return false;
   }
@@ -202,6 +247,10 @@ function getDbStats() {
 }
 
 module.exports = {
+  sanitizeErrorMessage,
+  resolveActorSnapshot,
+  getAnalyticsWriteStats,
+  runWithStrictAnalyticsWrites,
   insertAnalyticsEvent,
   insertAiTaskAttempt,
   getAnalyticsMeta,

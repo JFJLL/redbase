@@ -660,6 +660,7 @@ async function generateContentDirections(
       industryPath: safeIndustryPath,
       textModelImpl,
       visionModelImpl,
+      actorUserId: userId,
     });
   }
 
@@ -670,6 +671,13 @@ async function generateContentDirections(
   if (appConfig?.textProvider?.apiKey && typeof modelImpl === "function") {
     try {
       const raw = await modelImpl(appConfig, {
+        analyticsContext: {
+          feature: "excellent_direction",
+          taskType: "text_generation",
+          actorUserId: userId,
+          entityType: "excellent_direction",
+          entityId: `${noteId}:directions`,
+        },
         systemPrompt:
           `你为${isPersonalProfile(brand) ? "个人 IP" : "品牌"}生成3个明显不同的小红书内容方向。不得复制参考标题，不得使用原品牌，${
             isPersonalProfile(brand) ? "不得虚构个人经历、成绩、案例或背书" : "不得编造功效"
@@ -1728,6 +1736,7 @@ async function generatePublishReadyFusionPlan(
     contentBundle,
     draftPlan,
     textModelImpl,
+    analyticsContext,
   },
 ) {
   const modelImpl = textModelImpl || callTextModelJson;
@@ -1743,6 +1752,7 @@ async function generatePublishReadyFusionPlan(
     const raw = await settleWithin(
       () =>
         modelImpl(appConfig, {
+          analyticsContext,
           systemPrompt: [
             `你是资深小红书图文编辑。请把输入的${isPersonalProfile(brand) ? "个人 IP 档案与真实素材" : "品牌事实"}、内容方向和四页角色，写成用户拿到后可直接发布的原创图文成稿。`,
             "只输出 JSON：{title,publishTitle,publishCaption,slides:[{title,copy,visualDirection} × 4]}。",
@@ -1875,6 +1885,7 @@ async function buildExcellentRemixFusionPlan(appConfig, options = {}) {
       industryPath: options.industryPath || "",
       textModelImpl: options.textModelImpl,
       visionModelImpl: options.visionModelImpl,
+      actorUserId: userId,
     });
   }
 
@@ -1904,6 +1915,13 @@ async function buildExcellentRemixFusionPlan(appConfig, options = {}) {
     contentBundle,
     draftPlan,
     textModelImpl: options.textModelImpl,
+    analyticsContext: {
+      feature: "excellent_fusion",
+      taskType: "text_generation",
+      actorUserId: userId,
+      entityType: "excellent_fusion",
+      entityId: `${noteId}:${options.requestId || "fusion"}`,
+    },
   });
 
   if (!plan.carouselPack?.slides || plan.carouselPack.slides.length !== XHS_CAROUSEL_SLIDE_COUNT) {

@@ -35,6 +35,7 @@
             :is="currentPanelComponent"
             ref="activePanelRef"
             :filters="filters"
+            @coverage-update="onCoverageUpdate"
           />
         </div>
       </main>
@@ -43,19 +44,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, defineAsyncComponent, onMounted, onUnmounted } from "vue";
 import type { AdminSection, AdminFilters, CoverageInfo } from "../types";
 import { fetchSession } from "../api";
 import AdminSidebar from "../components/AdminSidebar.vue";
 import AdminGlobalFilters from "../components/AdminGlobalFilters.vue";
 import AdminErrorState from "../components/AdminErrorState.vue";
-import AdminOverviewPanel from "../panels/AdminOverviewPanel.vue";
-import AdminUsersPanel from "../panels/AdminUsersPanel.vue";
-import AdminFeaturesPanel from "../panels/AdminFeaturesPanel.vue";
-import AdminAiPanel from "../panels/AdminAiPanel.vue";
-import AdminFinancePanel from "../panels/AdminFinancePanel.vue";
-import AdminSystemPanel from "../panels/AdminSystemPanel.vue";
-import AdminManagementPanel from "../panels/AdminManagementPanel.vue";
+const AdminOverviewPanel = defineAsyncComponent(() => import("../panels/AdminOverviewPanel.vue"));
+const AdminUsersPanel = defineAsyncComponent(() => import("../panels/AdminUsersPanel.vue"));
+const AdminFeaturesPanel = defineAsyncComponent(() => import("../panels/AdminFeaturesPanel.vue"));
+const AdminAiPanel = defineAsyncComponent(() => import("../panels/AdminAiPanel.vue"));
+const AdminFinancePanel = defineAsyncComponent(() => import("../panels/AdminFinancePanel.vue"));
+const AdminSystemPanel = defineAsyncComponent(() => import("../panels/AdminSystemPanel.vue"));
+const AdminManagementPanel = defineAsyncComponent(() => import("../panels/AdminManagementPanel.vue"));
 
 const VALID_SECTIONS: Set<AdminSection> = new Set([
   "overview",
@@ -105,7 +106,12 @@ function syncFromHash() {
 function switchSection(sec: AdminSection) {
   if (activeSection.value === sec) return;
   activeSection.value = sec;
+  coverage.value = undefined;
   window.location.hash = `#${sec}`;
+}
+
+function onCoverageUpdate(nextCoverage: CoverageInfo | undefined) {
+  coverage.value = nextCoverage;
 }
 
 function onFiltersUpdate(newFilters: AdminFilters) {

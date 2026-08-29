@@ -219,9 +219,10 @@ async function handleTrendRoutes(context, req, res, pathname) {
       ({ analysisId, trendBase } = allocateTrendIds());
       generatedTrends = await generateAiTrendSet(brand, trendBase, {
         bucketKey: selectedBucket.key,
-        xhsCategoryPath,
-        userId: user.id,
-        analysisId,
+         xhsCategoryPath,
+         userId: user.id,
+         accountType: user.accountType,
+         analysisId,
       });
       const generatedBuckets = Array.isArray(generatedTrends) ? generatedTrends : [];
       const generatedBucket = generatedBuckets[0];
@@ -371,7 +372,10 @@ async function handleTrendRoutes(context, req, res, pathname) {
     }
     let next;
     try {
-      next = await regenerateTrendIdeas(brand, trend, customPrompt);
+      next = await regenerateTrendIdeas(brand, trend, customPrompt, {
+        actorUserId: user.id,
+        accountType: user.accountType,
+      });
     } catch (error) {
       refundCreditEventIfNeeded({
         creditEventId: spendResult.creditEvent.id,

@@ -21,7 +21,7 @@ const FIXTURE_GENERATIONS: GenerationHistoryItem[] = [
     brandId: 1,
     channelLabel: "朋友圈",
     createdAt: "2026-08-01T10:00:00.000Z",
-    previewUrl: "/api/generated-images/101/file?assetExpires=1788000000000&sig=abc",
+    previewUrl: "/api/generated-images/101/file?assetExpires=1893456000000&sig=abc",
     payload: { caption: "周末露营装备", visualDirection: "自然质感" },
   },
   {

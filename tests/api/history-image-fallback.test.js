@@ -341,7 +341,7 @@ test("history generated-image route serves remote fallback bytes through the sha
   });
   const context = {
     appConfig: { security: { assetSigningSecret: "test-secret" } },
-    historyRetentionNowMs: Date.now(),
+    historyRetentionNowMs: Date.parse("2026-08-20T00:00:00.000Z"),
     verifySignedAssetRequest: () => true,
     serveStoredGeneratedImage: (res, asset, generation) =>
       serveStoredGeneratedImage(res, asset, missingFileStorage(), generation, {

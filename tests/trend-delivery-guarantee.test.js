@@ -202,16 +202,22 @@ test("rerank model failure degrades to deterministic slots with a warning and ke
 
 test("model rerank output is validated, deduplicated, and mapped to S evidence ids", async () => {
   const searchEvidence = { evidence: [], candidates: mixedCandidateFixture() };
+  let capturedAnalyticsContext = null;
   const plan = await buildRerankedEvidencePlan({ textProvider: {} }, brand, [{ key: "track", title: "赛道热点趋势" }], searchEvidence, {
     trendCount: 10,
-    textModelImpl: async () => ({
-      slots: [
-        { candidateId: "C2", topic: "家居照明小空间", bucketFit: 90, brandFit: 85, brandLink: "从小空间照明切入", allowedClaims: ["小空间照明被讨论"], avoidClaims: ["销量领先"] },
-        { candidateId: "C2", topic: "家居照明小空间", bucketFit: 90, brandFit: 85 },
-        { candidateId: "C1", topic: "LightMate 用户口碑", bucketFit: 80, brandFit: 92 },
-        { candidateId: "C9", topic: "不存在的候选" },
-      ],
-    }),
+    userId: 42,
+    accountType: "yimei",
+    textModelImpl: async (_config, request) => {
+      capturedAnalyticsContext = request.analyticsContext;
+      return {
+        slots: [
+          { candidateId: "C2", topic: "家居照明小空间", bucketFit: 90, brandFit: 85, brandLink: "从小空间照明切入", allowedClaims: ["小空间照明被讨论"], avoidClaims: ["销量领先"] },
+          { candidateId: "C2", topic: "家居照明小空间", bucketFit: 90, brandFit: 85 },
+          { candidateId: "C1", topic: "LightMate 用户口碑", bucketFit: 80, brandFit: 92 },
+          { candidateId: "C9", topic: "不存在的候选" },
+        ],
+      };
+    },
   });
   assert.equal(plan.usedModel, true);
   // Duplicate topic + unknown candidate are dropped.
@@ -219,6 +225,14 @@ test("model rerank output is validated, deduplicated, and mapped to S evidence i
   assert.deepEqual(plan.evidence.map((item) => item.id), ["S1", "S2"]);
   assert.deepEqual(plan.slots.map((slot) => slot.evidenceIds[0]), ["S1", "S2"]);
   assert.deepEqual(plan.slots[0].allowedClaims, ["小空间照明被讨论"]);
+  assert.deepEqual(capturedAnalyticsContext, {
+    feature: "trend_analysis",
+    taskType: "text_generation",
+    actorUserId: 42,
+    accountType: "yimei",
+    entityType: "trend_evidence_rerank",
+    entityId: `${brand.id}:track`,
+  });
 });
 
 test("TREND_RERANK_MODEL overrides the model only for rerank calls and falls back when unset", () => {

@@ -10,7 +10,8 @@ const { insertUser, createSessionForUser, findUserById } = require("../src/serve
 const { insertGeneration, findGenerationById, upsertGeneration } = require("../src/server/db/repositories/generation-repository");
 const { insertPaymentOrder, settlePaidPaymentOrder } = require("../src/server/db/repositories/payment-repository");
 const { createProjectWithBilling, updateProject, updateClip, getProject } = require("../src/server/db/repositories/video-project-repository");
-const { deleteUserCascadeRows } = require("../src/server/db/repositories/admin-repository");
+const { deleteUserCascadeRows, insertCreditEvent } = require("../src/server/db/repositories/admin-repository");
+const { upsertImageJob } = require("../src/server/db/repositories/image-job-repository");
 const { purgeGenerationAssetsPreservingData } = require("../src/server/assets/generation-deletion-service");
 const { createVideoProjectService } = require("../src/server/video/video-project-service");
 const { callTextModelJson } = require("../src/server/ai/text-provider");
@@ -23,6 +24,8 @@ const {
 } = require("../src/server/analytics/analytics-metrics");
 const { parseQueryRange, isValidCalendarDate } = require("../src/server/analytics/analytics-query-range");
 const { createApiHandler } = require("../src/server/api");
+const { recordUserActiveDay, recordUserRegistered, recordPaymentOrderCreated, recordPaymentPaid } = require("../src/server/analytics/analytics-recorder");
+const { recordVideoClipAttempt, recordImageTaskAttempt } = require("../src/server/analytics/ai-attempt-recorder");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -196,6 +199,14 @@ test("3. text model and video project attempts record real attempt metrics and l
       userPrompt: "user",
       maxAttempts: 1,
       timeoutMs: 500,
+      analyticsContext: {
+        feature: "video_script",
+        taskType: "text_generation",
+        actorUserId: userId,
+        accountType: "customer",
+        entityType: "video_script",
+        entityId: "analytics-context-9003",
+      },
     });
   } catch (_) {}
 
@@ -203,6 +214,9 @@ test("3. text model and video project attempts record real attempt metrics and l
   assert.ok(textAttempts, "Physical text call must produce an attempt record");
   assert.equal(textAttempts.model, "gpt-4o");
   assert.equal(textAttempts.status, "failed");
+  assert.equal(textAttempts.feature, "video_script");
+  assert.equal(textAttempts.actor_user_id, userId);
+  assert.equal(textAttempts.account_type, "customer");
 
   // Test video service real flow
   const videoService = createVideoProjectService({
@@ -444,4 +458,132 @@ test("7. client events endpoint enforces 2KB payload limit and rate limit", asyn
   const res2 = makeRes();
   await handleApi(req2, res2, "/api/analytics/events");
   assert.equal(res2.statusCode, 413, "Events > 2KB must return 413");
+});
+
+test("8. provider submission is auxiliary and one physical generation attempt has one terminal fact", () => {
+  const userId = 9006;
+  insertUser({ id: userId, name: "Attempt User", phone: "13900009006", password: "hash", accountType: "customer", credits: 10, createdAt: "2026-08-26T00:00:00.000Z" });
+  recordVideoClipAttempt({
+    taskType: "video_submission", projectId: 99006, clipId: 990061, clipIndex: 1,
+    attemptNo: 1, status: "completed", providerTaskId: "accepted-task", actorUserId: userId,
+    startedAt: "2026-08-26T10:00:00.000Z", completedAt: "2026-08-26T10:00:01.000Z",
+  });
+  recordVideoClipAttempt({
+    projectId: 99006, clipId: 990061, clipIndex: 1, attemptNo: 1,
+    status: "failed", errorStage: "provider", actorUserId: userId,
+    startedAt: "2026-08-26T10:00:00.000Z", completedAt: "2026-08-26T10:00:05.000Z",
+  });
+  const facts = db.prepare("SELECT task_type, status FROM ai_task_attempts WHERE project_id = ? ORDER BY id").all(99006);
+  assert.deepEqual(facts, [
+    { task_type: "video_submission", status: "completed" },
+    { task_type: "video_clip_generation", status: "failed" },
+  ]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM ai_task_attempts WHERE project_id = ? AND task_type = 'video_clip_generation'").get(99006).count, 1);
+
+  recordImageTaskAttempt({ jobId: "async-9006", attemptNo: 1, status: "completed", actorUserId: userId, startedAt: "2026-08-26T10:00:00.000Z" });
+  recordImageTaskAttempt({ jobId: "async-9006", attemptNo: 1, status: "failed", actorUserId: userId, startedAt: "2026-08-26T10:00:00.000Z" });
+  const imageFacts = db.prepare("SELECT status FROM ai_task_attempts WHERE attempt_key = 'image_generation:async-9006:1'").all();
+  assert.deepEqual(imageFacts, [{ status: "completed" }], "stable attempt identity prevents completed+failed double facts");
+});
+
+test("9. finance conversion uses the created-order cohort and cannot exceed 100%", () => {
+  const userId = 9007;
+  insertUser({ id: userId, name: "Cohort User", phone: "13900009007", password: "hash", accountType: "customer", credits: 0, createdAt: "2026-08-01T00:00:00.000Z" });
+  recordPaymentOrderCreated({ orderId: 9900701, userId, accountType: "customer", amountFen: 100, provider: "wxpay", createdAt: "2026-08-20T00:00:00.000Z" });
+  recordPaymentPaid({ orderId: 9900701, userId, accountType: "customer", amountFen: 100, provider: "wxpay", paidAt: "2026-08-27T01:00:00.000Z" });
+  recordPaymentOrderCreated({ orderId: 9900702, userId, accountType: "customer", amountFen: 200, provider: "wxpay", createdAt: "2026-08-27T02:00:00.000Z" });
+  recordPaymentPaid({ orderId: 9900702, userId, accountType: "customer", amountFen: 200, provider: "wxpay", paidAt: "2026-08-29T01:00:00.000Z" });
+  const finance = getFinanceMetrics({ from: "2026-08-27", to: "2026-08-28" });
+  assert.equal(finance.overview.paidInPeriod, 1);
+  assert.equal(finance.overview.createdInPeriod, 1);
+  assert.equal(finance.overview.cohortPaid, 1);
+  assert.equal(finance.overview.conversionRate, 100);
+});
+
+test("10. configured admins are excluded without excluding yimei users", () => {
+  const previousPhones = process.env.ADMIN_PHONES;
+  process.env.ADMIN_PHONES = "13900009008";
+  try {
+    insertUser({ id: 9008, name: "Configured Admin", phone: "13900009008", password: "hash", accountType: "yimei", credits: 10, createdAt: "2026-08-27T00:00:00.000Z" });
+    insertUser({ id: 9009, name: "Yimei User", phone: "13900009009", password: "hash", accountType: "yimei", credits: 10, createdAt: "2026-08-27T00:00:00.000Z" });
+    recordUserActiveDay({ userId: 9008, accountType: "yimei", occurredAt: "2026-08-27T05:00:00.000Z" });
+    recordUserActiveDay({ userId: 9009, accountType: "yimei", occurredAt: "2026-08-27T05:00:00.000Z" });
+    recordVideoClipAttempt({ projectId: 99008, clipId: 990081, attemptNo: 1, status: "completed", actorUserId: 9008, startedAt: "2026-08-27T05:00:00.000Z" });
+    recordVideoClipAttempt({ projectId: 99009, clipId: 990091, attemptNo: 1, status: "completed", actorUserId: 9009, startedAt: "2026-08-27T05:00:00.000Z" });
+    const users = getUsersMetrics({ from: "2026-08-27", to: "2026-08-28", accountType: "yimei" });
+    const ai = getAiMetrics({ from: "2026-08-27", to: "2026-08-28", accountType: "yimei" });
+    assert.equal(users.activity.todayDau, 1);
+    assert.equal(ai.summary.totalRequests, 1);
+  } finally {
+    if (previousPhones == null) delete process.env.ADMIN_PHONES;
+    else process.env.ADMIN_PHONES = previousPhones;
+  }
+});
+
+test("11. strict analytics failure prevents user deletion", () => {
+  const userId = 9010;
+  insertUser({ id: userId, name: "Delete Guard", phone: "13900009010", password: "hash", accountType: "customer", credits: 10, createdAt: "2026-08-27T00:00:00.000Z" });
+  db.prepare("DELETE FROM analytics_events WHERE event_key = ?").run(`user_registered:${userId}`);
+  db.exec(`CREATE TRIGGER fail_analytics_delete_guard BEFORE INSERT ON analytics_events
+    WHEN NEW.actor_user_id = ${userId} BEGIN SELECT RAISE(ABORT, 'forced analytics failure'); END;`);
+  assert.throws(() => deleteUserCascadeRows(userId), /用户分析事实回填失败/);
+  assert.ok(findUserById(userId), "user row must remain after analytics failure");
+  db.exec("DROP TRIGGER fail_analytics_delete_guard");
+});
+
+test("12. D2/G2 fact metrics remain identical after user deletion", () => {
+  const userId = 9011;
+  insertUser({ id: userId, name: "Fact History", phone: "13900009011", password: "hash", accountType: "customer", credits: 100, createdAt: "2026-08-27T00:00:00.000Z" });
+  const created = createProjectWithBilling({
+    project: {
+      ownerUserId: userId, requestId: "fact-history-9011", brandId: 1, trendId: 1, ideaIndex: 0,
+      model: "g2", mode: "text", resolution: "720p", aspectRatio: "9:16", totalDurationSec: 10,
+      status: "queued", createdAt: "2026-08-27T03:00:00.000Z",
+    },
+    clips: [{ clipIndex: 1, startSec: 0, endSec: 10, durationSec: 10, status: "queued", creditCost: 2 }],
+    generation: { ownerUserId: userId, type: "videoProject", channelLabel: "AI视频", brandId: 1, brandName: "B", trendId: 1, trendTitle: "T", ideaTitle: "I", cardTitle: "V", createdAt: "2026-08-27T03:00:00.000Z" },
+    billing: { creditCost: 2, event: { actionType: "videoProject", actionLabel: "视频生成", payload: {} } },
+  });
+  const clip = created.project.clips[0];
+  recordVideoClipAttempt({ projectId: created.project.id, clipId: clip.id, attemptNo: 1, attemptKind: "initial", status: "failed", actorUserId: userId, startedAt: "2026-08-27T03:00:00.000Z", completedAt: "2026-08-27T03:00:05.000Z", durationMs: 5000 });
+  recordVideoClipAttempt({ projectId: created.project.id, clipId: clip.id, attemptNo: 2, attemptKind: "auto_retry", status: "completed", actorUserId: userId, startedAt: "2026-08-27T03:00:06.000Z", completedAt: "2026-08-27T03:00:14.000Z", durationMs: 8000 });
+  updateProject(created.project.id, { status: "completed", completedAt: "2026-08-27T03:00:20.000Z" });
+  const query = { from: "2026-08-27", to: "2026-08-28", accountType: "customer" };
+  const before = getAiMetrics(query).videoComparison;
+  deleteUserCascadeRows(userId);
+  const after = getAiMetrics(query).videoComparison;
+  assert.deepEqual(after, before);
+});
+
+test("13. backfill repairs a missing account_type dimension without changing the fact", () => {
+  const userId = 9012;
+  insertUser({ id: userId, name: "Dimension Repair", phone: "13900009012", password: "hash", accountType: "yimei", credits: 10, createdAt: "2026-08-27T00:00:00.000Z" });
+  db.prepare("UPDATE analytics_events SET account_type = '' WHERE event_key = ?").run(`user_registered:${userId}`);
+  recordUserRegistered({ userId, createdAt: "2026-08-27T00:00:00.000Z" });
+  const repaired = db.prepare("SELECT account_type, occurred_at FROM analytics_events WHERE event_key = ?").get(`user_registered:${userId}`);
+  assert.equal(repaired.account_type, "yimei");
+  assert.equal(repaired.occurred_at, "2026-08-27T00:00:00.000Z");
+});
+
+test("14. yimei credit facts never fall back to customer", () => {
+  const userId = 9013;
+  insertUser({ id: userId, name: "Yimei Credits", phone: "13900009013", password: "hash", accountType: "yimei", credits: 10, createdAt: "2026-08-27T00:00:00.000Z" });
+  const credit = insertCreditEvent({ userId, actionType: "styleImage", actionLabel: "风格图", creditDelta: -1, creditCost: 1, createdAt: "2026-08-27T01:00:00.000Z" });
+  const fact = db.prepare("SELECT account_type FROM analytics_events WHERE event_key = ?").get(`credit_consumed:${credit.id}`);
+  assert.equal(fact.account_type, "yimei");
+});
+
+test("15. async image pending state never obscures the final generation terminal fact", () => {
+  const userId = 9014;
+  insertUser({ id: userId, name: "Async Image", phone: "13900009014", password: "hash", accountType: "customer", credits: 10, createdAt: "2026-08-27T00:00:00.000Z" });
+  const base = { ownerUserId: userId, provider: "fake", model: "image-v1", createdAt: Date.parse("2026-08-27T01:00:00.000Z"), metadata: { attemptNo: 1, attemptStartedAt: "2026-08-27T01:00:00.000Z" }, generationContext: { type: "styleImage" } };
+  upsertImageJob(userId, { ...base, id: "async-complete-9014", status: "pending" });
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM ai_task_attempts WHERE entity_id = ?").get("async-complete-9014").count, 0);
+  upsertImageJob(userId, { ...base, id: "async-complete-9014", status: "completed", imageUrl: "https://example.com/result.png", completedAt: "2026-08-27T01:00:05.000Z" });
+  upsertImageJob(userId, { ...base, id: "async-failed-9014", status: "pending" });
+  upsertImageJob(userId, { ...base, id: "async-failed-9014", status: "failed", error: "provider failed" });
+  assert.deepEqual(db.prepare("SELECT entity_id, status FROM ai_task_attempts WHERE entity_id IN (?, ?) ORDER BY entity_id").all("async-complete-9014", "async-failed-9014"), [
+    { entity_id: "async-complete-9014", status: "completed" },
+    { entity_id: "async-failed-9014", status: "failed" },
+  ]);
 });

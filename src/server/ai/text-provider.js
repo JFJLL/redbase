@@ -558,6 +558,7 @@ async function callTextModelJson(appConfig, {
   stream = false,
   onTelemetry,
   budget = null,
+  analyticsContext = {},
 }) {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
@@ -626,8 +627,10 @@ async function callTextModelJson(appConfig, {
       const result = await task(attempt, interceptTelemetry);
       try {
         recordTextTaskAttempt({
-          feature: "trend_analysis",
-          taskType: "text_generation",
+          feature: analyticsContext.feature || "other",
+          taskType: analyticsContext.taskType || "text_generation",
+          entityType: analyticsContext.entityType || "",
+          entityId: analyticsContext.entityId || "",
           provider: provider.provider || provider.apiStyle || "text_provider",
           model: provider.model || "",
           attemptKind: attempt === 1 ? "initial" : "auto_retry",
@@ -640,6 +643,8 @@ async function callTextModelJson(appConfig, {
           inputTokens: attemptUsage?.prompt_tokens ?? attemptUsage?.input_tokens ?? null,
           outputTokens: attemptUsage?.completion_tokens ?? attemptUsage?.output_tokens ?? null,
           totalTokens: attemptUsage?.total_tokens ?? null,
+          actorUserId: analyticsContext.actorUserId ?? null,
+          accountType: analyticsContext.accountType || "",
         });
       } catch (_) {}
       return result;
@@ -647,8 +652,10 @@ async function callTextModelJson(appConfig, {
       try {
         const isTimeout = err.code === "ETIMEDOUT" || String(err.message || "").includes("timeout");
         recordTextTaskAttempt({
-          feature: "trend_analysis",
-          taskType: "text_generation",
+          feature: analyticsContext.feature || "other",
+          taskType: analyticsContext.taskType || "text_generation",
+          entityType: analyticsContext.entityType || "",
+          entityId: analyticsContext.entityId || "",
           provider: provider.provider || provider.apiStyle || "text_provider",
           model: provider.model || "",
           attemptKind: attempt === 1 ? "initial" : "auto_retry",
@@ -664,6 +671,8 @@ async function callTextModelJson(appConfig, {
           inputTokens: attemptUsage?.prompt_tokens ?? attemptUsage?.input_tokens ?? null,
           outputTokens: attemptUsage?.completion_tokens ?? attemptUsage?.output_tokens ?? null,
           totalTokens: attemptUsage?.total_tokens ?? null,
+          actorUserId: analyticsContext.actorUserId ?? null,
+          accountType: analyticsContext.accountType || "",
         });
       } catch (_) {}
       throw err;

@@ -34,7 +34,8 @@ const CLIP_COLUMNS = `
   depends_on_clip_index, prompt, provider, provider_task_id, continuity_mode,
   reference_asset_ids_json, continuity_state_json, output_video_json,
   continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
-  reservation_credit_event_id, submission_attempt, last_successful_poll_at,
+  reservation_credit_event_id, submission_attempt, attempt_started_at, next_attempt_kind,
+  retry_origin, billing_operation, last_successful_poll_at,
   poll_failure_count, error, result_processing_failure_count,
   last_result_processing_error, last_result_processing_at,
   first_submitted_at, completed_at, failed_at, asset_status, asset_bytes, assets_deleted_at,
@@ -75,6 +76,10 @@ function mapClipRow(row) {
     providerKeyRef: String(row.provider_key_ref || ""),
     reservationCreditEventId: row.reservation_credit_event_id == null ? null : Number(row.reservation_credit_event_id),
     submissionAttempt: Number(row.submission_attempt || 0),
+    attemptStartedAt: String(row.attempt_started_at || ""),
+    nextAttemptKind: String(row.next_attempt_kind || "initial"),
+    retryOrigin: String(row.retry_origin || ""),
+    billingOperation: String(row.billing_operation || ""),
     lastSuccessfulPollAt: String(row.last_successful_poll_at || ""),
     pollFailureCount: Number(row.poll_failure_count || 0),
     error: String(row.error || ""),
@@ -387,9 +392,11 @@ function createProjectWithBilling({ project, clips, generation, billing, prevent
     updateVideoBillingRequest(reservation.id, { status: "committed" });
     const finalProject = getProject(projectId, { ownerUserId: project.ownerUserId });
     try {
+      const actor = findUserById(project.ownerUserId);
       recordVideoProjectCreated({
         projectId,
         userId: project.ownerUserId,
+        accountType: actor?.accountType || actor?.account_type || "",
         model: project.model,
         mode: project.mode,
         resolution: project.resolution,
@@ -506,6 +513,9 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
         error: "",
         retryCount: Number(clip.retryCount || 0) + (clip.index === target.index ? 1 : 0),
         reservationCreditEventId: charged.creditEvent.id,
+        nextAttemptKind: clip.index === target.index ? "manual_retry" : clip.nextAttemptKind,
+        retryOrigin: clip.index === target.index ? "user" : clip.retryOrigin,
+        billingOperation: clip.index === target.index ? "videoProjectRetry" : clip.billingOperation,
         pollFailureCount: 0,
         lastSuccessfulPollAt: "",
       });
@@ -713,7 +723,8 @@ function insertClip(input) {
       depends_on_clip_index, prompt, provider, provider_task_id, continuity_mode,
       reference_asset_ids_json, continuity_state_json, output_video_json,
       continuity_frame_json, credit_cost, attempt, retry_count, provider_key_ref,
-      reservation_credit_event_id, submission_attempt, last_successful_poll_at,
+      reservation_credit_event_id, submission_attempt, attempt_started_at, next_attempt_kind,
+      retry_origin, billing_operation, last_successful_poll_at,
       poll_failure_count, error, result_processing_failure_count,
       last_result_processing_error, last_result_processing_at,
       first_submitted_at, completed_at, failed_at, asset_status, asset_bytes, assets_deleted_at,
@@ -722,7 +733,7 @@ function insertClip(input) {
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).run(
     Number(id), Number(input.projectId), Number(input.clipIndex), Number(input.startSec), Number(input.endSec),
@@ -732,7 +743,8 @@ function insertClip(input) {
     JSON.stringify(input.continuityState || {}), JSON.stringify(input.outputVideo || {}),
     JSON.stringify(input.continuityFrame || {}), Number(input.creditCost || 0), Number(input.attempt || 0),
     Number(input.retryCount || 0), String(input.providerKeyRef || ""), input.reservationCreditEventId ?? null,
-    Number(input.submissionAttempt || 0), String(input.lastSuccessfulPollAt || ""), Number(input.pollFailureCount || 0),
+    Number(input.submissionAttempt || 0), String(input.attemptStartedAt || ""), String(input.nextAttemptKind || "initial"),
+    String(input.retryOrigin || ""), String(input.billingOperation || ""), String(input.lastSuccessfulPollAt || ""), Number(input.pollFailureCount || 0),
     String(input.error || ""), Number(input.resultProcessingFailureCount || 0),
     String(input.lastResultProcessingError || ""), String(input.lastResultProcessingAt || ""),
     String(input.firstSubmittedAt || ""), String(input.completedAt || ""), String(input.failedAt || ""),
@@ -801,6 +813,7 @@ function updateProject(projectId, patch = {}) {
       recordVideoProjectCompleted({
         projectId,
         userId: next.ownerUserId,
+        accountType: userRow?.account_type || "",
         model: next.model,
         mode: next.mode,
         resolution: next.resolution,
@@ -824,11 +837,18 @@ function updateProject(projectId, patch = {}) {
     } catch (_) {}
   } else if (["failed", "project_data_failed"].includes(patch.status)) {
     try {
+      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(next.ownerUserId);
       recordVideoProjectFailed({
         projectId,
         userId: next.ownerUserId,
+        accountType: userRow?.account_type || "",
         model: next.model,
         mode: next.mode,
+        resolution: next.resolution,
+        aspectRatio: next.aspectRatio,
+        totalDurationSec: next.totalDurationSec,
+        chargedCredits: next.chargedCredits,
+        refundedCredits: next.refundedCredits,
         error: next.error,
         failedAt: next.failedAt || updatedAt,
       });
@@ -847,6 +867,7 @@ function updateClip(clipId, patch = {}) {
       continuity_mode = ?, reference_asset_ids_json = ?, continuity_state_json = ?,
       output_video_json = ?, continuity_frame_json = ?, credit_cost = ?, attempt = ?,
       retry_count = ?, provider_key_ref = ?, reservation_credit_event_id = ?, submission_attempt = ?,
+      attempt_started_at = ?, next_attempt_kind = ?, retry_origin = ?, billing_operation = ?,
       last_successful_poll_at = ?, poll_failure_count = ?, error = ?,
       result_processing_failure_count = ?, last_result_processing_error = ?,
       last_result_processing_at = ?,
@@ -861,7 +882,9 @@ function updateClip(clipId, patch = {}) {
     JSON.stringify(next.continuityFrame || existing.continuityFrame || {}), Number(next.creditCost ?? existing.creditCost ?? 0),
     Number(next.attempt ?? existing.attempt ?? 0), Number(next.retryCount ?? existing.retryCount ?? 0),
     String(next.providerKeyRef ?? existing.providerKeyRef ?? ""), next.reservationCreditEventId ?? existing.reservationCreditEventId ?? null,
-    Number(next.submissionAttempt ?? existing.submissionAttempt ?? 0), String(next.lastSuccessfulPollAt ?? existing.lastSuccessfulPollAt ?? ""),
+    Number(next.submissionAttempt ?? existing.submissionAttempt ?? 0), String(next.attemptStartedAt ?? existing.attemptStartedAt ?? ""),
+    String(next.nextAttemptKind ?? existing.nextAttemptKind ?? "initial"), String(next.retryOrigin ?? existing.retryOrigin ?? ""),
+    String(next.billingOperation ?? existing.billingOperation ?? ""), String(next.lastSuccessfulPollAt ?? existing.lastSuccessfulPollAt ?? ""),
     Number(next.pollFailureCount ?? existing.pollFailureCount ?? 0), String(next.error ?? existing.error ?? ""),
     Number(next.resultProcessingFailureCount ?? existing.resultProcessingFailureCount ?? 0),
     String(next.lastResultProcessingError ?? existing.lastResultProcessingError ?? ""),

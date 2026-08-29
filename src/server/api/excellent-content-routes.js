@@ -489,6 +489,8 @@ async function handleExcellentContentRoutes(context, req, res, pathname) {
         contentSource: contentSourceRaw,
         categoryPath: normalizePgyCategoryPath(payload.categoryPath || ""),
         industryPath: normalizePgyIndustryPath(payload.industryPath || ""),
+        actorUserId: user.id,
+        accountType: user.accountType || user.account_type || "",
       });
       json(res, 200, { analysis });
     } catch (error) {

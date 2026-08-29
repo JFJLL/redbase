@@ -368,6 +368,14 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
         mode,
         visualBible,
         referenceAssetIds: resolvedVideoReferenceIds,
+        analyticsContext: {
+          feature: "video_script",
+          taskType: "text_generation",
+          actorUserId: user.id,
+          accountType: user.accountType || user.account_type || "",
+          entityType: "video_script",
+          entityId: requestId,
+        },
       });
 
       const generation = {

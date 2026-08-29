@@ -3,6 +3,17 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import AdminDashboardView from "../views/AdminDashboardView.vue";
 import AdminMediaPreview from "../components/AdminMediaPreview.vue";
+import { computeDateParams } from "../dateRange";
+
+async function waitForStableUi(predicate: () => boolean, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await flushPromises();
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("async admin panel did not stabilize before timeout");
+}
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -64,9 +75,11 @@ const MOCK_CREDIT_EVENTS_DATA = {
 };
 
 type FetchCall = { url: string; init?: RequestInit };
+const mountedWrappers: Array<{ unmount: () => void }> = [];
 
 describe("AdminDashboardView", () => {
   afterEach(() => {
+    while (mountedWrappers.length) mountedWrappers.pop()?.unmount();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -94,8 +107,10 @@ describe("AdminDashboardView", () => {
       }),
     );
     const wrapper = mount(AdminDashboardView, { global: { plugins: [createPinia()] } });
-    await flushPromises();
-    await flushPromises();
+    mountedWrappers.push(wrapper);
+    await waitForStableUi(() => wrapper.find(".panel-content").exists()
+      || wrapper.find('[data-test="credit-form"]').exists()
+      || wrapper.find('[data-test="admin-error"]').exists());
     return { wrapper, calls };
   }
 
@@ -112,8 +127,7 @@ describe("AdminDashboardView", () => {
     const { wrapper } = await mountView();
 
     await wrapper.find('[data-test="nav-management"]').trigger("click");
-    await flushPromises();
-    await flushPromises();
+    await waitForStableUi(() => wrapper.find('[data-test="credit-form"]').exists());
 
     expect(window.location.hash).toBe("#management");
     expect(wrapper.find('[data-test="credit-form"]').exists()).toBe(true);
@@ -192,5 +206,49 @@ describe("AdminDashboardView", () => {
     expect(purgedWrapper.text()).toContain("媒体文件已按保留策略清理");
     expect(purgedWrapper.find("video").exists()).toBe(false);
     expect(purgedWrapper.find("img").exists()).toBe(false);
+  });
+
+  it("sends a custom inclusive end date as the next exclusive day", () => {
+    expect(computeDateParams({ preset: "custom", customFrom: "2026-08-01", customTo: "2026-08-31" })).toMatchObject({
+      from: "2026-08-01",
+      to: "2026-09-01",
+    });
+  });
+
+  it("shows the historical partial-coverage warning returned by a panel", async () => {
+    const partialOverview = {
+      ...MOCK_OVERVIEW,
+      coverage: { ...MOCK_OVERVIEW.coverage, isPartial: true, notes: ["启动回填失败"] },
+    };
+    const { wrapper } = await mountView((url) => {
+      if (url.startsWith("/api/admin/analytics/overview")) return jsonResponse(200, partialOverview);
+      return undefined;
+    });
+    expect(wrapper.text()).toContain("历史回填部分覆盖");
+  });
+
+  it("renders the complete D2/G2 correctness metric set", async () => {
+    window.location.hash = "#ai";
+    const aiPayload = {
+      generatedAt: "2026-08-29T00:00:00.000Z",
+      range: MOCK_OVERVIEW.range,
+      coverage: MOCK_OVERVIEW.coverage,
+      summary: { totalRequests: 2, completedCount: 1, failedCount: 1, successRate: 50, retryRate: 50, p50LatencyMs: 5000, p95LatencyMs: 8000 },
+      breakdown: [], errorStages: [], topErrorCodes: [],
+      videoComparison: [{
+        model: "g2", mode: "text", resolution: "720p", aspectRatio: "9:16", totalDurationSec: 10,
+        projectCount: 2, matureCount: 2, activeCount: 0, waitingConfigCount: 0, completionRate: 50,
+        firstSuccessRate: 50, autoRetryRate: 50, manualRetryRate: 0, rescueRate: 100,
+        p50DurationMs: 5000, p95DurationMs: 8000, grossCredits: 4, refundCredits: 1, netCredits: 3,
+        avgNetCredits: 1.5, netCreditsPerSuccessSecond: 0.3, vendorCost: null, vendorCostLabel: "未配置",
+      }],
+    };
+    const { wrapper } = await mountView((url) => {
+      if (url.startsWith("/api/admin/analytics/ai")) return jsonResponse(200, aiPayload);
+      return undefined;
+    });
+    expect(wrapper.text()).toContain("首次成功率");
+    expect(wrapper.text()).toContain("自动/人工重试率");
+    expect(wrapper.text()).toContain("Gross / Refund / Net");
   });
 });

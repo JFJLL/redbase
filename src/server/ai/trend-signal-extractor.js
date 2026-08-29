@@ -209,10 +209,18 @@ async function extractMarketSignalsWithModel(appConfig, options = {}) {
       systemPrompt: options.systemPrompt || "Extract market signals as JSON: {\"signals\":[...]}",
       userPrompt: options.userPrompt || "",
       temperature: 0.1,
-      maxAttempts: Math.min(2, Math.max(1, budget.remaining())),
-      budget: usesProviderBudget ? budget : undefined,
-      stream: false,
-    });
+       maxAttempts: Math.min(2, Math.max(1, budget.remaining())),
+       budget: usesProviderBudget ? budget : undefined,
+       stream: false,
+       analyticsContext: {
+         feature: "trend_analysis",
+         taskType: "text_generation",
+         actorUserId: options.actorUserId ?? options.userId ?? null,
+         accountType: options.accountType || "",
+         entityType: "trend_signal_extraction",
+         entityId: String(options.entityId || options.analysisId || "standalone"),
+       },
+     });
     const signals = Array.isArray(result?.signals) ? result.signals : [];
     return { signals };
   } catch (error) {
