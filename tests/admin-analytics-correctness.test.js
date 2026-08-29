@@ -25,7 +25,10 @@ const {
 const { parseQueryRange, isValidCalendarDate } = require("../src/server/analytics/analytics-query-range");
 const { createApiHandler } = require("../src/server/api");
 const { recordUserActiveDay, recordUserRegistered, recordPaymentOrderCreated, recordPaymentPaid } = require("../src/server/analytics/analytics-recorder");
-const { recordVideoClipAttempt, recordImageTaskAttempt } = require("../src/server/analytics/ai-attempt-recorder");
+const { recordTextTaskAttempt, recordVideoClipAttempt, recordImageTaskAttempt } = require("../src/server/analytics/ai-attempt-recorder");
+const { insertAnalyticsEvent, getAnalyticsMeta } = require("../src/server/analytics/analytics-repository");
+const { ensureAnalyticsBackfill, ensureUserAnalyticsBackfill } = require("../src/server/analytics/analytics-backfill");
+const { generateVisualBible } = require("../src/server/ai/video-script-service");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -586,4 +589,244 @@ test("15. async image pending state never obscures the final generation terminal
     { entity_id: "async-complete-9014", status: "completed" },
     { entity_id: "async-failed-9014", status: "failed" },
   ]);
+});
+
+test("16. credit analytics metadata strictly whitelists fields in realtime and backfill paths", () => {
+  const userId = 9015;
+  insertUser({ id: userId, name: "Safe Metadata", phone: "13900009015", password: "hash", accountType: "customer", credits: 10, createdAt: "2026-09-01T00:00:00.000Z" });
+  const payload = {
+    projectId: 5515,
+    clipIndex: 2,
+    provider: "fake",
+    retryOperation: "videoProjectRetry",
+    generationPayload: {
+      prompt: "secret prompt",
+      objectKey: "private/object-key",
+      storedPath: "uploads/private.png",
+      imageUrl: "https://private.example/image.png",
+    },
+    headers: { Authorization: "Bearer secret-token-value" },
+  };
+  const credit = insertCreditEvent({
+    userId,
+    actionType: "videoProjectRetry",
+    actionLabel: "视频重试",
+    creditDelta: -2,
+    creditCost: 2,
+    createdAt: "2026-09-01T01:00:00.000Z",
+    payload,
+  });
+  const assertSafe = () => {
+    const row = db.prepare("SELECT metadata_json FROM analytics_events WHERE event_key = ?").get(`credit_consumed:${credit.id}`);
+    const metadata = JSON.parse(row.metadata_json);
+    assert.deepEqual(metadata, {
+      actionType: "videoProjectRetry",
+      projectId: 5515,
+      clipIndex: 2,
+      provider: "fake",
+      retryOperation: "videoProjectRetry",
+    });
+    for (const forbidden of ["generationPayload", "prompt", "objectKey", "storedPath", "imageUrl", "headers", "secret prompt", "private/object-key"]) {
+      assert.equal(row.metadata_json.includes(forbidden), false, `${forbidden} must not enter analytics metadata`);
+    }
+  };
+  assertSafe();
+  db.prepare("UPDATE analytics_events SET metadata_json = ? WHERE event_key = ?").run(JSON.stringify(payload), `credit_consumed:${credit.id}`);
+  const backfill = ensureUserAnalyticsBackfill(userId);
+  assert.equal(backfill.ok, true);
+  assertSafe();
+});
+
+test("17. average DAU includes zero-activity natural days and reports the full sample size", () => {
+  for (let i = 0; i < 70; i += 1) {
+    insertAnalyticsEvent({
+      eventKey: `avg-dau-70:${i}`,
+      eventName: "user_active_day",
+      occurredAt: "2026-09-02T04:00:00.000Z",
+      actorKey: `avg-dau-user:${i}`,
+      accountType: "customer",
+    });
+  }
+  const metrics = getOverviewMetrics({ from: "2026-09-02", to: "2026-09-09", accountType: "customer" });
+  assert.equal(metrics.kpis.dau.value, 10);
+  assert.equal(metrics.kpis.dau.sampleSize, 7);
+});
+
+test("18. retention aggregates one flag per actor before cohort counting", () => {
+  const userId = 9016;
+  recordUserRegistered({ userId, accountType: "customer", createdAt: "2026-09-10T01:00:00.000Z" });
+  recordUserActiveDay({ userId, accountType: "customer", occurredAt: "2026-09-11T01:00:00.000Z" });
+  recordUserActiveDay({ userId, accountType: "customer", occurredAt: "2026-09-12T01:00:00.000Z" });
+  recordUserActiveDay({ userId, accountType: "customer", occurredAt: "2026-09-13T01:00:00.000Z" });
+  const metrics = getUsersMetrics({ from: "2026-09-10", to: "2026-09-15", accountType: "customer" });
+  assert.equal(metrics.retention.d1CohortSize, 1);
+  assert.equal(metrics.retention.d1Retained, 1);
+  assert.equal(metrics.retention.d1Rate, 100);
+});
+
+test("19. multi-clip retry project is not first-success and is counted as rescued", () => {
+  const projectId = 99016;
+  insertAnalyticsEvent({
+    eventKey: `video_project_created:${projectId}`,
+    eventName: "video_project_created",
+    occurredAt: "2026-09-16T01:00:00.000Z",
+    actorKey: "multi-clip-user",
+    accountType: "customer",
+    feature: "video_project",
+    entityType: "video_project",
+    entityId: String(projectId),
+    model: "g2",
+    mode: "image",
+    resolution: "1080p",
+    aspectRatio: "16:9",
+    mediaDurationSec: 16,
+  });
+  insertAnalyticsEvent({
+    eventKey: `video_project_completed:${projectId}`,
+    eventName: "video_project_completed",
+    occurredAt: "2026-09-16T01:00:20.000Z",
+    actorKey: "multi-clip-user",
+    accountType: "customer",
+    feature: "video_project",
+    entityType: "video_project",
+    entityId: String(projectId),
+    model: "g2",
+    mode: "image",
+    resolution: "1080p",
+    aspectRatio: "16:9",
+    mediaDurationSec: 16,
+    durationMs: 20000,
+  });
+  recordVideoClipAttempt({ projectId, clipId: 990161, clipIndex: 1, attemptNo: 1, attemptKind: "initial", status: "completed", durationMs: 5000, accountType: "customer", startedAt: "2026-09-16T01:00:00.000Z" });
+  recordVideoClipAttempt({ projectId, clipId: 990162, clipIndex: 2, attemptNo: 1, attemptKind: "initial", status: "failed", durationMs: 4000, accountType: "customer", startedAt: "2026-09-16T01:00:05.000Z" });
+  recordVideoClipAttempt({ projectId, clipId: 990162, clipIndex: 2, attemptNo: 2, attemptKind: "auto_retry", status: "completed", durationMs: 7000, accountType: "customer", startedAt: "2026-09-16T01:00:10.000Z" });
+  const row = getAiMetrics({ from: "2026-09-16", to: "2026-09-17", accountType: "customer" }).videoComparison
+    .find((item) => item.model === "g2" && item.mode === "image" && item.resolution === "1080p");
+  assert.ok(row);
+  assert.equal(row.firstSuccessRate, 0);
+  assert.equal(row.autoRetryRate, 100);
+  assert.equal(row.rescueRate, 100);
+  assert.equal(row.p50DurationMs, 20000);
+  assert.equal(row.clipP50DurationMs, 5000);
+});
+
+test("20. image attempt features are canonical and never expose raw camelCase types", () => {
+  const mappings = {
+    xhsCarousel: "xhs_carousel",
+    xhsCarouselSlide: "xhs_carousel",
+    imageEdit: "image_edit",
+    styleImage: "style_image",
+    wechatImage: "wechat_long_image",
+    momentsImage: "moments",
+    wechat: "wechat_long_image",
+    moments: "moments",
+  };
+  for (const [raw, expected] of Object.entries(mappings)) {
+    const jobId = `feature-${raw}`;
+    recordImageTaskAttempt({ jobId, feature: raw, status: "completed", startedAt: "2026-09-17T01:00:00.000Z" });
+    const row = db.prepare("SELECT feature FROM ai_task_attempts WHERE entity_id = ?").get(jobId);
+    assert.equal(row.feature, expected);
+  }
+});
+
+test("21. Visual Bible forwards auxiliary vision analytics context and does not affect primary success rate", async () => {
+  const analyticsContext = {
+    feature: "video_script",
+    taskType: "vision_analysis",
+    actorUserId: 9018,
+    accountType: "customer",
+    entityType: "video_script",
+    entityId: "request-9018:visual-bible",
+  };
+  let captured = null;
+  await generateVisualBible({}, {
+    brand: { name: "Visual Brand" },
+    idea: { title: "Visual Idea" },
+    images: [{ mimeType: "image/png", dataBase64: "aW1n" }],
+    analyticsContext,
+    visionModelImpl: async (_config, request) => {
+      captured = request.analyticsContext;
+      return { subject: "product" };
+    },
+  });
+  assert.deepEqual(captured, analyticsContext);
+  recordTextTaskAttempt({ ...analyticsContext, attemptKey: "vision-aux-9018", status: "failed", startedAt: "2026-09-18T01:00:00.000Z" });
+  recordTextTaskAttempt({ feature: "video_script", taskType: "text_generation", entityId: "request-9018", attemptKey: "primary-9018", status: "completed", accountType: "customer", startedAt: "2026-09-18T01:00:01.000Z" });
+  const overview = getOverviewMetrics({ from: "2026-09-18", to: "2026-09-19", accountType: "customer" });
+  assert.equal(overview.kpis.aiSuccessRate.value, 100);
+  assert.equal(overview.kpis.aiSuccessRate.sampleSize, 1);
+});
+
+test("22. startup backfill marks partial coverage when one analytics insert fails", () => {
+  const userId = 9017;
+  insertUser({ id: userId, name: "Backfill Failure", phone: "13900009017", password: "hash", accountType: "customer", credits: 10, createdAt: "2026-09-19T00:00:00.000Z" });
+  db.prepare("DELETE FROM analytics_events WHERE event_key = ?").run(`user_registered:${userId}`);
+  db.exec(`CREATE TRIGGER fail_startup_backfill BEFORE INSERT ON analytics_events
+    WHEN NEW.event_key = 'user_registered:${userId}' BEGIN SELECT RAISE(ABORT, 'forced startup backfill failure'); END;`);
+  let failure;
+  try {
+    ensureAnalyticsBackfill();
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure);
+  assert.ok(failure.backfillStats.failed >= 1);
+  assert.equal(getAnalyticsMeta("backfill_status"), "failed");
+  const coverage = getOverviewMetrics({ from: "2026-09-19", to: "2026-09-20" }).coverage;
+  assert.equal(coverage.isPartial, true);
+  db.exec("DROP TRIGGER fail_startup_backfill");
+  const recovered = ensureAnalyticsBackfill();
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.failed, 0);
+  assert.equal(recovered.expected, recovered.inserted + recovered.existing);
+});
+
+test("23. account distribution honors range/account type and paid orders supersede earlier failures", () => {
+  recordUserRegistered({ userId: 9020, accountType: "customer", createdAt: "2026-09-20T01:00:00.000Z" });
+  recordUserRegistered({ userId: 9021, accountType: "yimei", createdAt: "2026-09-21T01:00:00.000Z" });
+  const users = getUsersMetrics({ from: "2026-09-20", to: "2026-09-21", accountType: "customer" });
+  assert.deepEqual(users.accountDistribution, [{ accountType: "customer", label: "客户账号", count: 1 }]);
+  for (const [eventName, occurredAt] of [
+    ["payment_order_created", "2026-09-20T02:00:00.000Z"],
+    ["payment_failed", "2026-09-20T02:01:00.000Z"],
+    ["payment_paid", "2026-09-20T02:02:00.000Z"],
+  ]) {
+    insertAnalyticsEvent({
+      eventKey: `${eventName}:final-paid-9020`,
+      eventName,
+      occurredAt,
+      actorKey: "user:9020",
+      accountType: "customer",
+      entityType: "payment_order",
+      entityId: "final-paid-9020",
+      amountFen: 100,
+    });
+  }
+  const finance = getFinanceMetrics({ from: "2026-09-20", to: "2026-09-21", accountType: "customer" });
+  assert.equal(finance.overview.cohortPaid, 1);
+  assert.equal(finance.overview.expiredOrFailed, 0);
+});
+
+test("24. nested analytics errors redact secrets recursively and cap stored length", () => {
+  recordTextTaskAttempt({
+    attemptKey: "text_generation:redaction-9022:1",
+    feature: "trend_analysis",
+    taskType: "text_generation",
+    entityType: "trend_analysis",
+    entityId: "redaction-9022",
+    status: "failed",
+    errorMessage: {
+      message: "provider failed",
+      debug: {
+        token: "never-store-this-token",
+        response: `Bearer secret-bearer-value ${"x".repeat(700)}`,
+      },
+    },
+    startedAt: "2026-09-21T01:00:00.000Z",
+  });
+  const row = db.prepare("SELECT error_message FROM ai_task_attempts WHERE attempt_key = ?").get("text_generation:redaction-9022:1");
+  assert.ok(row.error_message.length <= 500);
+  assert.equal(row.error_message.includes("never-store-this-token"), false);
+  assert.equal(row.error_message.includes("secret-bearer-value"), false);
+  assert.match(row.error_message, /\[REDACTED\]/);
 });

@@ -1,4 +1,5 @@
 const { insertAiTaskAttempt } = require("./analytics-repository");
+const { normalizeAnalyticsFeature } = require("./analytics-constants");
 
 function recordTextTaskAttempt(input = {}) {
   const startedAt = input.startedAt || new Date().toISOString();
@@ -41,7 +42,7 @@ function recordImageTaskAttempt(input = {}) {
   const attemptKey = input.attemptKey || `${taskType}:${input.jobId || "job"}:${input.attemptNo || 1}`;
   return insertAiTaskAttempt({
     attemptKey,
-    feature: input.feature || "style_image",
+    feature: normalizeAnalyticsFeature(input.feature, "style_image"),
     taskType,
     entityType: "image_job",
     entityId: String(input.jobId || ""),
@@ -114,7 +115,7 @@ function recordVideoResultProcessingAttempt(input = {}) {
     clipId: input.clipId == null ? null : Number(input.clipId),
     provider: input.provider || "",
     model: input.model || "",
-    attemptKind: input.attemptKind || (Number(input.attemptNo || 1) > 1 ? "result_retry" : "initial"),
+    attemptKind: input.attemptKind || "initial",
     attemptNo: Number(input.attemptNo || 1),
     status: input.status || "completed",
     errorStage: input.errorStage || "",

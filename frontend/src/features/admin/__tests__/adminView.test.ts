@@ -239,7 +239,8 @@ describe("AdminDashboardView", () => {
         model: "g2", mode: "text", resolution: "720p", aspectRatio: "9:16", totalDurationSec: 10,
         projectCount: 2, matureCount: 2, activeCount: 0, waitingConfigCount: 0, completionRate: 50,
         firstSuccessRate: 50, autoRetryRate: 50, manualRetryRate: 0, rescueRate: 100,
-        p50DurationMs: 5000, p95DurationMs: 8000, grossCredits: 4, refundCredits: 1, netCredits: 3,
+         p50DurationMs: 5000, p95DurationMs: 8000, grossCredits: 4, refundCredits: 1, netCredits: 3,
+         clipP50DurationMs: 2500, clipP95DurationMs: 4000,
         avgNetCredits: 1.5, netCreditsPerSuccessSecond: 0.3, vendorCost: null, vendorCostLabel: "未配置",
       }],
     };

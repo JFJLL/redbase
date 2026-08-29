@@ -889,6 +889,7 @@ async function callVisionModelJson(appConfig, {
   maxResponseBytes,
   onTelemetry,
   budget = null,
+  analyticsContext = {},
 }) {
   const provider = appConfig?.textProvider || {};
   assertConfigured(provider.apiKey, "文本模型 API Key");
@@ -940,12 +941,58 @@ async function callVisionModelJson(appConfig, {
     delayMs,
   });
 
-  const runWithRetries = (task) => withRetries((attempt) => {
+  const runWithRetries = (task) => withRetries(async (attempt) => {
     if (budget && typeof budget.consume === "function") {
       budget.consume();
     }
+    const attemptStartedAt = Date.now();
+    const startedAt = new Date(attemptStartedAt).toISOString();
     onTelemetry?.({ type: "attempt", attempt });
-    return task(attempt);
+    try {
+      const result = await task(attempt);
+      try {
+        recordTextTaskAttempt({
+          feature: analyticsContext.feature || "other",
+          taskType: analyticsContext.taskType || "vision_analysis",
+          entityType: analyticsContext.entityType || "",
+          entityId: analyticsContext.entityId || "",
+          provider: provider.provider || provider.apiStyle || "vision_provider",
+          model: provider.model || "",
+          attemptKind: attempt === 1 ? "initial" : "auto_retry",
+          attemptNo: attempt,
+          status: "completed",
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - attemptStartedAt,
+          actorUserId: analyticsContext.actorUserId ?? null,
+          accountType: analyticsContext.accountType || "",
+        });
+      } catch (_) {}
+      return result;
+    } catch (error) {
+      try {
+        recordTextTaskAttempt({
+          feature: analyticsContext.feature || "other",
+          taskType: analyticsContext.taskType || "vision_analysis",
+          entityType: analyticsContext.entityType || "",
+          entityId: analyticsContext.entityId || "",
+          provider: provider.provider || provider.apiStyle || "vision_provider",
+          model: provider.model || "",
+          attemptKind: attempt === 1 ? "initial" : "auto_retry",
+          attemptNo: attempt,
+          status: "failed",
+          errorStage: "provider",
+          errorCode: String(error?.code || "VISION_MODEL_ERROR"),
+          errorMessage: error,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - attemptStartedAt,
+          actorUserId: analyticsContext.actorUserId ?? null,
+          accountType: analyticsContext.accountType || "",
+        });
+      } catch (_) {}
+      throw error;
+    }
   }, retryOptions);
 
   if (provider.apiStyle === "google") {

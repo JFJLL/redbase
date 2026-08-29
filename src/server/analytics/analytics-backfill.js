@@ -7,22 +7,8 @@ const {
   getAnalyticsWriteStats,
   runWithStrictAnalyticsWrites,
 } = require("./analytics-repository");
-const { ANALYTICS_FEATURES, GENERATION_TYPE_TO_FEATURE } = require("./analytics-constants");
-
-function actionTypeToFeature(actionType) {
-  const t = String(actionType || "");
-  if (t === "momentsImage") return "moments";
-  if (t === "wechatImage") return "wechat_long_image";
-  if (t === "xhsCarousel" || t === "xhsCarouselSlide") return "xhs_carousel";
-  if (t === "styleImage") return "style_image";
-  if (t === "imageEdit") return "image_edit";
-  if (t === "videoScript") return "video_script";
-  if (t === "videoProject" || t === "videoProjectRetry") return "video_project";
-  if (t === "trend_analysis" || t === "trendAnalysis") return "trend_analysis";
-  if (t === "excellent_direction" || t === "excellentDirection") return "excellent_direction";
-  if (t === "excellent_fusion" || t === "excellentFusion") return "excellent_fusion";
-  return "";
-}
+const { ANALYTICS_FEATURES, normalizeAnalyticsFeature } = require("./analytics-constants");
+const { buildSafeCreditAnalyticsMetadata } = require("./analytics-metadata");
 
 const db = getDbProxy();
 
@@ -35,11 +21,17 @@ function parseMetadata(value) {
   }
 }
 
+function elapsedMs(startedAt, completedAt) {
+  const startMs = Date.parse(startedAt || "");
+  const completedMs = Date.parse(completedAt || "");
+  return Number.isFinite(startMs) && Number.isFinite(completedMs) ? Math.max(0, completedMs - startMs) : 0;
+}
+
 function tableExists(name) {
   return db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(name).count > 0;
 }
 
-function ensureAnalyticsBackfill() {
+function ensureAnalyticsBackfillImpl() {
   let backfilledEvents = 0;
   let backfilledAttempts = 0;
   let maxSourceDate = "";
@@ -161,7 +153,7 @@ function ensureAnalyticsBackfill() {
     for (const e of events) {
       updateMaxDate(e.created_at);
       const delta = Number(e.credit_delta || 0);
-      const feature = actionTypeToFeature(e.action_type);
+      const feature = normalizeAnalyticsFeature(e.action_type, "");
       if (delta < 0) {
         const cost = Math.abs(Number(e.credit_cost || delta));
         const ins = insertAnalyticsEvent({
@@ -177,7 +169,8 @@ function ensureAnalyticsBackfill() {
           sourceId: e.generation_id ? String(e.generation_id) : "",
           creditDelta: -cost,
           creditCost: cost,
-          metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
+          metadata: buildSafeCreditAnalyticsMetadata({ ...parseMetadata(e.payload_json), actionType: e.action_type }),
+          replaceMetadata: true,
         });
         if (ins) backfilledEvents++;
       } else if (delta > 0) {
@@ -193,7 +186,8 @@ function ensureAnalyticsBackfill() {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
+            metadata: buildSafeCreditAnalyticsMetadata({ ...parseMetadata(e.payload_json), actionType: e.action_type }),
+            replaceMetadata: true,
           });
           if (ins) backfilledEvents++;
         } else if (!action.includes("recharge")) {
@@ -206,7 +200,8 @@ function ensureAnalyticsBackfill() {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type, adminUserId: e.admin_user_id, ...parseMetadata(e.payload_json) },
+            metadata: buildSafeCreditAnalyticsMetadata({ ...parseMetadata(e.payload_json), actionType: e.action_type }),
+            replaceMetadata: true,
           });
           if (ins) backfilledEvents++;
         }
@@ -223,7 +218,7 @@ function ensureAnalyticsBackfill() {
     `).all();
     for (const g of gens) {
       updateMaxDate(g.created_at);
-      const feature = GENERATION_TYPE_TO_FEATURE[g.type] || g.type || "other";
+      const feature = normalizeAnalyticsFeature(g.type);
       // Check if truly completed
       if (g.type === "videoProject") {
         const project = db.prepare("SELECT status FROM video_projects WHERE generation_id = ?").get(g.id);
@@ -406,7 +401,7 @@ function ensureAnalyticsBackfill() {
   // 9. Video Projects & Video Clips
   if (tableExists("video_projects")) {
     const projects = db.prepare(`
-      SELECT p.id, p.owner_user_id, p.video_model, p.mode, p.resolution, p.aspect_ratio, p.total_duration_sec, p.status, p.estimated_credits, p.charged_credits, p.refunded_credits, p.created_at, p.updated_at, u.account_type
+      SELECT p.id, p.owner_user_id, p.video_model, p.mode, p.resolution, p.aspect_ratio, p.total_duration_sec, p.status, p.estimated_credits, p.charged_credits, p.refunded_credits, p.created_at, p.started_at, p.completed_at, p.updated_at, u.account_type
       FROM video_projects p
       LEFT JOIN users u ON u.id = p.owner_user_id
     `).all();
@@ -435,7 +430,7 @@ function ensureAnalyticsBackfill() {
         const ins = insertAnalyticsEvent({
           eventKey: `video_project_completed:${p.id}`,
           eventName: "video_project_completed",
-          occurredAt: p.updated_at || p.created_at,
+          occurredAt: p.completed_at || p.updated_at || p.created_at,
           actorUserId: p.owner_user_id,
           accountType: p.account_type || "customer",
           feature: ANALYTICS_FEATURES.VIDEO_PROJECT,
@@ -448,10 +443,11 @@ function ensureAnalyticsBackfill() {
           aspectRatio: p.aspect_ratio,
           mediaDurationSec: Number(p.total_duration_sec || 0),
           creditCost: netCredits,
+          durationMs: elapsedMs(p.started_at || p.created_at, p.completed_at || p.updated_at || p.created_at),
           metadata: {
             chargedCredits: Number(p.charged_credits || 0),
             refundedCredits: Number(p.refunded_credits || 0),
-            completedAt: p.updated_at || p.created_at,
+            completedAt: p.completed_at || p.updated_at || p.created_at,
           },
         });
         if (ins) backfilledEvents++;
@@ -485,16 +481,19 @@ function ensureAnalyticsBackfill() {
   // 10. AI Task Attempts: Historical Image Jobs
   if (tableExists("image_jobs")) {
     const jobs = db.prepare(`
-      SELECT j.id, j.owner_user_id, j.status, j.provider, j.model, j.error, j.created_at_ms, j.updated_at, j.completed_at, u.account_type
+      SELECT j.id, j.owner_user_id, j.status, j.provider, j.model, j.error,
+        j.metadata_json, j.generation_context_json, j.created_at_ms, j.updated_at, j.completed_at, u.account_type
       FROM image_jobs j
       LEFT JOIN users u ON u.id = j.owner_user_id
     `).all();
     for (const j of jobs) {
       const startedAt = j.created_at_ms ? new Date(j.created_at_ms).toISOString() : new Date().toISOString();
       updateMaxDate(startedAt);
+      const metadata = parseMetadata(j.metadata_json);
+      const generationContext = parseMetadata(j.generation_context_json);
       const ins = insertAiTaskAttempt({
         attemptKey: `image_generation:${j.id}:1`,
-        feature: "style_image",
+        feature: normalizeAnalyticsFeature(generationContext.type || metadata.contentType, "style_image"),
         taskType: "image_generation",
         entityType: "image_job",
         entityId: String(j.id),
@@ -553,9 +552,6 @@ function ensureAnalyticsBackfill() {
   }
 
   const nowIso = new Date().toISOString();
-  setAnalyticsMeta("backfill_status", "completed");
-  setAnalyticsMeta("backfill_error", "");
-  setAnalyticsMeta("backfill_completed_at", nowIso);
   if (maxSourceDate) {
     setAnalyticsMeta("backfill_source_max_at", maxSourceDate);
   }
@@ -566,6 +562,45 @@ function ensureAnalyticsBackfill() {
     backfillCompletedAt: nowIso,
     backfillSourceMaxAt: maxSourceDate,
   };
+}
+
+function ensureAnalyticsBackfill() {
+  const before = getAnalyticsWriteStats();
+  setAnalyticsMeta("backfill_status", "running");
+  setAnalyticsMeta("backfill_error", "");
+  try {
+    const detail = runWithStrictAnalyticsWrites(() => ensureAnalyticsBackfillImpl());
+    const after = getAnalyticsWriteStats();
+    const stats = {
+      expected: after.expected - before.expected,
+      inserted: after.inserted - before.inserted,
+      existing: after.existing - before.existing,
+      failed: after.failed - before.failed,
+    };
+    if (stats.failed !== 0 || stats.expected !== stats.inserted + stats.existing) {
+      const error = new Error(`analytics backfill incomplete: expected=${stats.expected}, inserted=${stats.inserted}, existing=${stats.existing}, failed=${stats.failed}`);
+      error.backfillStats = stats;
+      throw error;
+    }
+    const completedAt = new Date().toISOString();
+    setAnalyticsMeta("backfill_status", "completed");
+    setAnalyticsMeta("backfill_error", "");
+    setAnalyticsMeta("backfill_completed_at", completedAt);
+    return { ok: true, ...detail, ...stats, backfillCompletedAt: completedAt };
+  } catch (error) {
+    const after = getAnalyticsWriteStats();
+    const stats = error.backfillStats || {
+      expected: after.expected - before.expected,
+      inserted: after.inserted - before.inserted,
+      existing: after.existing - before.existing,
+      failed: Math.max(1, after.failed - before.failed),
+    };
+    const safeError = String(error?.message || "analytics backfill failed").slice(0, 500);
+    setAnalyticsMeta("backfill_status", "failed");
+    setAnalyticsMeta("backfill_error", safeError);
+    error.backfillStats = stats;
+    throw error;
+  }
 }
 
 function ensureUserAnalyticsBackfillImpl(userId) {
@@ -655,7 +690,7 @@ function ensureUserAnalyticsBackfillImpl(userId) {
     const events = db.prepare("SELECT id, user_id, action_type, credit_delta, credit_cost, created_at, generation_id, admin_user_id, payload_json FROM credit_events WHERE user_id = ?").all(uid);
     for (const e of events) {
       const delta = Number(e.credit_delta || 0);
-      const feature = actionTypeToFeature(e.action_type);
+      const feature = normalizeAnalyticsFeature(e.action_type, "");
       if (delta < 0) {
         const cost = Math.abs(Number(e.credit_cost || delta));
         insertAnalyticsEvent({
@@ -671,7 +706,8 @@ function ensureUserAnalyticsBackfillImpl(userId) {
           sourceId: e.generation_id ? String(e.generation_id) : "",
           creditDelta: -cost,
           creditCost: cost,
-          metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
+          metadata: buildSafeCreditAnalyticsMetadata({ ...parseMetadata(e.payload_json), actionType: e.action_type }),
+          replaceMetadata: true,
         });
       } else if (delta > 0) {
         const action = String(e.action_type || "").toLowerCase();
@@ -686,7 +722,8 @@ function ensureUserAnalyticsBackfillImpl(userId) {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type, ...parseMetadata(e.payload_json) },
+            metadata: buildSafeCreditAnalyticsMetadata({ ...parseMetadata(e.payload_json), actionType: e.action_type }),
+            replaceMetadata: true,
           });
         } else if (!action.includes("recharge")) {
           insertAnalyticsEvent({
@@ -698,7 +735,8 @@ function ensureUserAnalyticsBackfillImpl(userId) {
             entityType: "credit_event",
             entityId: String(e.id),
             creditDelta: delta,
-            metadata: { actionType: e.action_type, adminUserId: e.admin_user_id, ...parseMetadata(e.payload_json) },
+            metadata: buildSafeCreditAnalyticsMetadata({ ...parseMetadata(e.payload_json), actionType: e.action_type }),
+            replaceMetadata: true,
           });
         }
       }
@@ -709,7 +747,7 @@ function ensureUserAnalyticsBackfillImpl(userId) {
   if (tableExists("generations")) {
     const gens = db.prepare("SELECT id, owner_user_id, type, created_at, preview_url, payload_json FROM generations WHERE owner_user_id = ?").all(uid);
     for (const g of gens) {
-      const feature = GENERATION_TYPE_TO_FEATURE[g.type] || g.type || "other";
+      const feature = normalizeAnalyticsFeature(g.type);
       if (g.type === "videoProject") {
         const project = db.prepare("SELECT status FROM video_projects WHERE generation_id = ?").get(g.id);
         if (!project || project.status !== "completed") continue;
@@ -739,7 +777,7 @@ function ensureUserAnalyticsBackfillImpl(userId) {
 
   // 6. Video Projects & Clips
   if (tableExists("video_projects")) {
-    const projects = db.prepare("SELECT id, owner_user_id, video_model, mode, resolution, aspect_ratio, total_duration_sec, status, estimated_credits, charged_credits, refunded_credits, created_at, updated_at FROM video_projects WHERE owner_user_id = ?").all(uid);
+    const projects = db.prepare("SELECT id, owner_user_id, video_model, mode, resolution, aspect_ratio, total_duration_sec, status, estimated_credits, charged_credits, refunded_credits, created_at, started_at, completed_at, updated_at FROM video_projects WHERE owner_user_id = ?").all(uid);
     for (const p of projects) {
       insertAnalyticsEvent({
         eventKey: `video_project_created:${p.id}`,
@@ -763,7 +801,7 @@ function ensureUserAnalyticsBackfillImpl(userId) {
         insertAnalyticsEvent({
           eventKey: `video_project_completed:${p.id}`,
           eventName: "video_project_completed",
-          occurredAt: p.updated_at || p.created_at,
+          occurredAt: p.completed_at || p.updated_at || p.created_at,
           actorUserId: p.owner_user_id,
           accountType: user.account_type || "customer",
           feature: ANALYTICS_FEATURES.VIDEO_PROJECT,
@@ -776,10 +814,11 @@ function ensureUserAnalyticsBackfillImpl(userId) {
           aspectRatio: p.aspect_ratio,
           mediaDurationSec: Number(p.total_duration_sec || 0),
           creditCost: netCredits,
+          durationMs: elapsedMs(p.started_at || p.created_at, p.completed_at || p.updated_at || p.created_at),
           metadata: {
             chargedCredits: Number(p.charged_credits || 0),
             refundedCredits: Number(p.refunded_credits || 0),
-            completedAt: p.updated_at || p.created_at,
+            completedAt: p.completed_at || p.updated_at || p.created_at,
           },
         });
       } else if (["failed", "project_data_failed"].includes(p.status)) {

@@ -98,7 +98,7 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 `ai_task_attempts` 记录所有底层物理模型调用与拼接过程：
 
 - **Primary task types**：`text_generation`、`image_generation`、`video_clip_generation`。后台“整体 AI 成功率”只使用这些生成终态事实。
-- **Auxiliary task types**：`video_submission`、`image_status_poll`、`video_status_poll`、`video_result_processing`、`video_assembly`。它们单独用于提交、轮询、结果保存和合成诊断，不进入整体生成成功率。
+- **Auxiliary task types**：`video_submission`、`image_status_poll`、`video_status_poll`、`video_result_processing`、`video_assembly`、`vision_analysis`。它们单独用于提交、轮询、结果保存、视觉解析和合成诊断，不进入整体生成成功率。
 - Provider 接受 `taskId` 只形成 `video_submission:completed`；只有 Provider 最终成功/失败时才形成唯一的 `video_clip_generation` 终态 Attempt。异步图片同样不记录 pending Attempt。
 
 - **Attempt 类型 (`attempt_kind`)**：
@@ -120,7 +120,7 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 
 | 模块 | 指标名称 | 口径与公式 | 数据源与字段 |
 | :--- | :--- | :--- | :--- |
-| **总览** | 平均 DAU | 选定范围内每日去重 `actor_key` 均值 | `analytics_events(user_active_day)` |
+| **总览** | 平均 DAU | 选定范围内完整自然日的每日去重 `actor_key` 均值；无活跃的日期按 0 计入，`sampleSize` 为自然日数 | `analytics_events(user_active_day)` |
 | **总览** | 新增用户 | 选定时间内注册的用户数 | `analytics_events(user_registered)` |
 | **总览** | 有效创作用户 | 至少成功生成 1 次内容的去重用户数 | `analytics_events(output_completed)` |
 | **总览** | 付费用户 | 产生成功支付的去重用户数 | `analytics_events(payment_paid)` |
@@ -129,8 +129,9 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 | **总览** | AI 成功率 | Primary 终止 Attempt 中 `status='completed'` / 总终止数 | `ai_task_attempts(task_type IN primary, status IN ('completed', 'failed'))` |
 | **转化** | 产品主漏斗 | 注册 -> 品牌 -> 探索 -> 首次生成 -> 复购生成 -> 充值页 -> 下单 -> 支付成功 | 每一层按用户去重计算转化率 |
 | **视频** | 视频完成率 | `video_project_completed` / (`video_project_completed` + `video_project_failed`) | `analytics_events` 不可变项目事实 |
-| **视频** | 首次成功率 | 第一个 `video_clip_generation` Attempt 成功的成熟项目 / 成熟项目 | `ai_task_attempts` 不可变 Attempt 事实 |
-| **视频** | 自动/人工重试率与救援率 | 分别按 `auto_retry`、`manual_retry` 和重试后完成项目计算 | `ai_task_attempts` + `video_project_*` 事实；不依赖业务表状态历史 |
+| **视频** | 首次成功率 | 所有片段的初始 Attempt 均完成、没有初始失败或任何重试，且项目最终完成 / 成熟项目 | `ai_task_attempts` 不可变 Attempt 事实 |
+| **视频** | 自动/人工重试率与救援率 | 分别按 `auto_retry`、`manual_retry` 计算；救援率为重试后完成项目 / 已成熟重试项目 | `ai_task_attempts` + `video_project_*` 事实；不依赖业务表状态历史 |
+| **视频** | 项目与片段 P50/P95 | 项目耗时来自 `video_project_completed.duration_ms`；片段耗时独立来自 `video_clip_generation.duration_ms` | 两种粒度不混用 |
 | **视频** | Gross/Refund/Net 与每成功秒 Net | 视频项目 `credit_consumed`、`credit_refunded` 聚合 | `analytics_events` 积分事实 |
 | **财务** | ARPPU | 营业收入 / 付费用户数 | `analytics_events(payment_paid)` |
 | **财务** | 订单支付转化率 | 所选范围内创建订单中最终存在 `payment_paid` 的订单 / 同一 created cohort 总数 | `analytics_events(payment_order_created, payment_paid)`；不会超过 100% |
@@ -152,6 +153,8 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 - 服务在 `ensureStore()` 完成后、开始监听请求前自动执行 `ensureAnalyticsBackfill()`。
 - 成功写入 `backfill_status=completed` 与 `backfill_completed_at`；失败不阻塞服务启动，写入脱敏的 `backfill_error`，所有 Panel 将 `coverage.isPartial=true` 传到顶部并显示“历史回填部分覆盖”。
 - 事实在写入时固化 `account_type` 与 `is_admin`。管理员依据当前配置和 `isAdminUser` 判断，与 `account_type` 无关；经营指标默认 `is_admin=0`，不会误排除全部易美账号。历史回填按当前管理员配置补齐快照，用户删除后快照仍保留。
+- 积分分析元数据仅允许 `actionType`、`projectId`、`clipIndex`、`refundForCreditEventId`、`planId`、`provider`、`retryOperation`；实时与历史回填共用同一白名单和递归脱敏逻辑，不保存 Prompt、媒体地址、存储路径、请求头或密钥。
+- Migration 12 为视频片段增加明确的 `next_result_attempt_kind`：首次结果处理为 `initial`，只有用户主动重新处理才是 `result_retry`，领取重试任务不会清零历史失败次数。
 
 - **可回填数据**：
   - 存量用户 (`users` -> `user_registered`)

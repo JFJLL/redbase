@@ -2,24 +2,10 @@ const { insertAnalyticsEvent, anonymizeUserAnalytics } = require("./analytics-re
 const { toShanghaiDateString } = require("./analytics-query-range");
 const {
   ANALYTICS_FEATURES,
-  GENERATION_TYPE_TO_FEATURE,
   CLIENT_EVENT_WHITELIST,
+  normalizeAnalyticsFeature,
 } = require("./analytics-constants");
-
-function actionTypeToFeature(actionType) {
-  const t = String(actionType || "");
-  if (t === "momentsImage") return "moments";
-  if (t === "wechatImage") return "wechat_long_image";
-  if (t === "xhsCarousel" || t === "xhsCarouselSlide") return "xhs_carousel";
-  if (t === "styleImage") return "style_image";
-  if (t === "imageEdit") return "image_edit";
-  if (t === "videoScript") return "video_script";
-  if (t === "videoProject" || t === "videoProjectRetry") return "video_project";
-  if (t === "trend_analysis" || t === "trendAnalysis") return "trend_analysis";
-  if (t === "excellent_direction" || t === "excellentDirection") return "excellent_direction";
-  if (t === "excellent_fusion" || t === "excellentFusion") return "excellent_fusion";
-  return "";
-}
+const { buildSafeCreditAnalyticsMetadata } = require("./analytics-metadata");
 
 function recordUserActiveDay({ userId, accountType, occurredAt } = {}) {
   if (!userId) return false;
@@ -202,7 +188,7 @@ function recordOutputCompleted({
   const key = eventKey || (generationId ? `output_completed:${generationId}` : "");
   if (!key) return false;
   const nowIso = completedAt || new Date().toISOString();
-  const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "other";
+  const feature = normalizeAnalyticsFeature(type);
   const effectiveEntityId = entityId != null ? String(entityId) : (generationId ? String(generationId) : "");
   return insertAnalyticsEvent({
     eventKey: key,
@@ -237,7 +223,7 @@ function recordOutputFailed({
   const key = eventKey || (generationId ? `output_failed:${generationId}` : "");
   if (!key) return false;
   const nowIso = failedAt || new Date().toISOString();
-  const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "other";
+  const feature = normalizeAnalyticsFeature(type);
   const effectiveEntityId = entityId != null ? String(entityId) : (generationId ? String(generationId) : "");
   return insertAnalyticsEvent({
     eventKey: key,
@@ -455,7 +441,7 @@ function recordCreditConsumed({ creditEventId, userId, accountType, actionType, 
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_consumed:${creditEventId}`;
   const cost = Math.abs(Number(creditCost || creditDelta || 0));
-  const feat = feature || actionTypeToFeature(actionType);
+  const feat = normalizeAnalyticsFeature(feature || actionType, "");
   return insertAnalyticsEvent({
     eventKey,
     eventName: "credit_consumed",
@@ -469,7 +455,8 @@ function recordCreditConsumed({ creditEventId, userId, accountType, actionType, 
     sourceId: generationId ? String(generationId) : "",
     creditDelta: -cost,
     creditCost: cost,
-    metadata: { actionType, ...(metadata && typeof metadata === "object" ? metadata : {}) },
+    metadata: buildSafeCreditAnalyticsMetadata({ ...(metadata && typeof metadata === "object" ? metadata : {}), actionType }),
+    replaceMetadata: true,
   });
 }
 
@@ -478,7 +465,7 @@ function recordCreditRefunded({ creditEventId, userId, accountType, actionType, 
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `credit_refunded:${creditEventId}`;
   const amount = Math.abs(Number(creditDelta || 0));
-  const feat = feature || actionTypeToFeature(actionType);
+  const feat = normalizeAnalyticsFeature(feature || actionType, "");
   return insertAnalyticsEvent({
     eventKey,
     eventName: "credit_refunded",
@@ -489,7 +476,8 @@ function recordCreditRefunded({ creditEventId, userId, accountType, actionType, 
     entityType: "credit_event",
     entityId: String(creditEventId),
     creditDelta: amount,
-    metadata: { actionType, refundForCreditEventId, ...(metadata && typeof metadata === "object" ? metadata : {}) },
+    metadata: buildSafeCreditAnalyticsMetadata({ ...(metadata && typeof metadata === "object" ? metadata : {}), actionType, refundForCreditEventId }),
+    replaceMetadata: true,
   });
 }
 
@@ -506,7 +494,8 @@ function recordCreditGranted({ creditEventId, userId, accountType, actionType, c
     entityType: "credit_event",
     entityId: String(creditEventId),
     creditDelta: Number(creditDelta || 0),
-    metadata: { actionType, adminUserId },
+    metadata: buildSafeCreditAnalyticsMetadata({ actionType }),
+    replaceMetadata: true,
   });
 }
 

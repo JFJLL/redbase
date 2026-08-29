@@ -37,7 +37,7 @@ const CLIP_COLUMNS = `
   reservation_credit_event_id, submission_attempt, attempt_started_at, next_attempt_kind,
   retry_origin, billing_operation, last_successful_poll_at,
   poll_failure_count, error, result_processing_failure_count,
-  last_result_processing_error, last_result_processing_at,
+  last_result_processing_error, last_result_processing_at, next_result_attempt_kind,
   first_submitted_at, completed_at, failed_at, asset_status, asset_bytes, assets_deleted_at,
   created_at, updated_at
 `;
@@ -86,6 +86,7 @@ function mapClipRow(row) {
     resultProcessingFailureCount: Number(row.result_processing_failure_count || 0),
     lastResultProcessingError: String(row.last_result_processing_error || ""),
     lastResultProcessingAt: String(row.last_result_processing_at || ""),
+    nextResultAttemptKind: String(row.next_result_attempt_kind || "initial"),
     firstSubmittedAt: String(row.first_submitted_at || ""),
     completedAt: String(row.completed_at || ""),
     failedAt: String(row.failed_at || ""),
@@ -516,6 +517,7 @@ function retryProjectWithBilling({ projectId, ownerUserId, clipIndex, requestId,
         nextAttemptKind: clip.index === target.index ? "manual_retry" : clip.nextAttemptKind,
         retryOrigin: clip.index === target.index ? "user" : clip.retryOrigin,
         billingOperation: clip.index === target.index ? "videoProjectRetry" : clip.billingOperation,
+        nextResultAttemptKind: "initial",
         pollFailureCount: 0,
         lastSuccessfulPollAt: "",
       });
@@ -598,7 +600,7 @@ function claimVideoResultRetry({ userId, requestId, projectId, clipIndex }) {
    });
    updateClip(clip.id, {
      status: "processing_result",
-     resultProcessingFailureCount: 0,
+     nextResultAttemptKind: "result_retry",
      lastResultProcessingError: "",
      error: "",
    });
@@ -726,14 +728,14 @@ function insertClip(input) {
       reservation_credit_event_id, submission_attempt, attempt_started_at, next_attempt_kind,
       retry_origin, billing_operation, last_successful_poll_at,
       poll_failure_count, error, result_processing_failure_count,
-      last_result_processing_error, last_result_processing_at,
+      last_result_processing_error, last_result_processing_at, next_result_attempt_kind,
       first_submitted_at, completed_at, failed_at, asset_status, asset_bytes, assets_deleted_at,
       created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).run(
     Number(id), Number(input.projectId), Number(input.clipIndex), Number(input.startSec), Number(input.endSec),
@@ -747,6 +749,7 @@ function insertClip(input) {
     String(input.retryOrigin || ""), String(input.billingOperation || ""), String(input.lastSuccessfulPollAt || ""), Number(input.pollFailureCount || 0),
     String(input.error || ""), Number(input.resultProcessingFailureCount || 0),
     String(input.lastResultProcessingError || ""), String(input.lastResultProcessingAt || ""),
+    String(input.nextResultAttemptKind || "initial"),
     String(input.firstSubmittedAt || ""), String(input.completedAt || ""), String(input.failedAt || ""),
     String(input.assetStatus || "available"), Number(input.assetBytes || 0), String(input.assetsDeletedAt || ""),
     now, now,
@@ -821,7 +824,7 @@ function updateProject(projectId, patch = {}) {
         totalDurationSec: next.totalDurationSec,
         chargedCredits: next.chargedCredits,
         refundedCredits: next.refundedCredits,
-        durationMs: next.startedAt ? Math.max(0, Date.now() - Date.parse(next.startedAt)) : 0,
+        durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(next.startedAt || next.createdAt || completedAt)),
         completedAt,
       });
       recordOutputCompleted({
@@ -870,7 +873,7 @@ function updateClip(clipId, patch = {}) {
       attempt_started_at = ?, next_attempt_kind = ?, retry_origin = ?, billing_operation = ?,
       last_successful_poll_at = ?, poll_failure_count = ?, error = ?,
       result_processing_failure_count = ?, last_result_processing_error = ?,
-      last_result_processing_at = ?,
+      last_result_processing_at = ?, next_result_attempt_kind = ?,
       first_submitted_at = ?, completed_at = ?, failed_at = ?, asset_status = ?, asset_bytes = ?, assets_deleted_at = ?,
       updated_at = ?
     WHERE id = ?
@@ -889,6 +892,7 @@ function updateClip(clipId, patch = {}) {
     Number(next.resultProcessingFailureCount ?? existing.resultProcessingFailureCount ?? 0),
     String(next.lastResultProcessingError ?? existing.lastResultProcessingError ?? ""),
     String(next.lastResultProcessingAt ?? existing.lastResultProcessingAt ?? ""),
+    String(next.nextResultAttemptKind ?? existing.nextResultAttemptKind ?? "initial"),
     String(next.firstSubmittedAt ?? existing.firstSubmittedAt ?? ""),
     String(next.completedAt ?? existing.completedAt ?? ""),
     String(next.failedAt ?? existing.failedAt ?? ""),

@@ -437,15 +437,22 @@ ${errorMessage}
   return validateAndNormalizeVideoScript(raw, context);
 }
 
-async function generateVisualBible(appConfig, { brand, idea, images = [] } = {}) {
+async function generateVisualBible(appConfig, {
+  brand,
+  idea,
+  images = [],
+  analyticsContext = {},
+  visionModelImpl = callVisionModelJson,
+} = {}) {
   if (!Array.isArray(images) || images.length === 0) return normalizeVisualBible({});
-  const raw = await callVisionModelJson(appConfig, {
+  const raw = await visionModelImpl(appConfig, {
     systemPrompt: `你是视觉理解分析器。只输出纯 JSON，不要 Markdown。请把参考图片中的产品/主体身份锚点整理为后续 AI 视频生成可复用的 Visual Bible。不得臆造图片中不存在的文字、结构或品牌信息。Schema：{"subject":"主体身份","appearance":"外观结构","materials":"材质","colors":"颜色","logoAndText":"Logo与可读文字","environment":"适合延续的环境","lighting":"光线","camera":"构图与镜头锚点","continuity":"跨镜头必须保持的特征","exclusions":"不能改变或不能复制的内容"}`,
     userPrompt: `品牌：${brand?.name || "未命名品牌"}\n选题：${idea?.title || ""}\n请分析随附参考图片并输出 Visual Bible。`,
     images,
     temperature: 0.1,
     maxOutputTokens: 3000,
     maxAttempts: 2,
+    analyticsContext,
   });
   return normalizeVisualBible(raw);
 }

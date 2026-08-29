@@ -1,6 +1,6 @@
 const { getDbProxy } = require("../db/connection");
-const { safeParseObject } = require("../db/snapshot-utils");
-const { getReleaseSha } = require("./analytics-constants");
+const { getReleaseSha, normalizeAnalyticsFeature } = require("./analytics-constants");
+const { sanitizeAnalyticsError, sanitizeAnalyticsMetadata } = require("./analytics-metadata");
 const { loadAppConfig } = require("../config");
 const { isAdminUser } = require("../api/domain-utils");
 
@@ -9,8 +9,7 @@ const analyticsWriteStats = { expected: 0, inserted: 0, existing: 0, failed: 0 }
 let strictWriteDepth = 0;
 
 function sanitizeErrorMessage(msg) {
-  if (!msg) return "";
-  return String(msg).replace(/[A-Za-z0-9+/=]{32,}/g, "[REDACTED]").slice(0, 500);
+  return sanitizeAnalyticsError(msg);
 }
 
 function resolveActorSnapshot(input = {}) {
@@ -34,9 +33,7 @@ function insertAnalyticsEvent(input = {}, options = {}) {
   const nowIso = new Date().toISOString();
   const actorKey = input.actorKey || (input.actorUserId ? `user:${input.actorUserId}` : "");
   const releaseSha = input.releaseSha != null ? String(input.releaseSha) : getReleaseSha();
-  const metadataJson = typeof input.metadata === "string"
-    ? input.metadata
-    : JSON.stringify(safeParseObject(JSON.stringify(input.metadata || {})));
+  const metadataJson = JSON.stringify(sanitizeAnalyticsMetadata(input.metadata));
   const actor = resolveActorSnapshot(input);
   const existedBefore = Boolean(db.prepare("SELECT 1 FROM analytics_events WHERE event_key = ?").get(String(input.eventKey)));
   analyticsWriteStats.expected += 1;
@@ -58,7 +55,9 @@ function insertAnalyticsEvent(input = {}, options = {}) {
       ) ON CONFLICT(event_key) DO UPDATE SET
         account_type = CASE WHEN analytics_events.account_type = '' THEN excluded.account_type ELSE analytics_events.account_type END,
         is_admin = CASE WHEN analytics_events.is_admin = 0 AND excluded.is_admin = 1 THEN 1 ELSE analytics_events.is_admin END,
-        feature = CASE WHEN analytics_events.feature = '' THEN excluded.feature ELSE analytics_events.feature END
+        feature = CASE WHEN analytics_events.feature = '' THEN excluded.feature ELSE analytics_events.feature END,
+        duration_ms = CASE WHEN analytics_events.duration_ms = 0 AND excluded.duration_ms > 0 THEN excluded.duration_ms ELSE analytics_events.duration_ms END,
+        metadata_json = CASE WHEN ? = 1 THEN excluded.metadata_json ELSE analytics_events.metadata_json END
     `);
     const result = stmt.run(
       String(input.eventKey),
@@ -68,7 +67,7 @@ function insertAnalyticsEvent(input = {}, options = {}) {
       actor.actorUserId,
       actor.accountType,
       actor.isAdmin,
-      String(input.feature || ""),
+      normalizeAnalyticsFeature(input.feature, input.feature ? "other" : ""),
       String(input.entityType || ""),
       String(input.entityId || ""),
       String(input.sourceTable || ""),
@@ -89,6 +88,7 @@ function insertAnalyticsEvent(input = {}, options = {}) {
       metadataJson,
       releaseSha,
       nowIso,
+      Number(Boolean(input.replaceMetadata)),
     );
     if (existedBefore) analyticsWriteStats.existing += 1;
     else analyticsWriteStats.inserted += 1;
@@ -121,11 +121,11 @@ function insertAiTaskAttempt(input = {}, options = {}) {
   const nowIso = new Date().toISOString();
   const actorKey = input.actorKey || (input.actorUserId ? `user:${input.actorUserId}` : "");
   const releaseSha = input.releaseSha != null ? String(input.releaseSha) : getReleaseSha();
-  const metadataJson = typeof input.metadata === "string"
-    ? input.metadata
-    : JSON.stringify(safeParseObject(JSON.stringify(input.metadata || {})));
+  const metadataJson = JSON.stringify(sanitizeAnalyticsMetadata(input.metadata));
   const errorMsg = sanitizeErrorMessage(input.errorMessage);
   const actor = resolveActorSnapshot(input);
+  const existedBefore = Boolean(db.prepare("SELECT 1 FROM ai_task_attempts WHERE attempt_key = ?").get(String(input.attemptKey)));
+  analyticsWriteStats.expected += 1;
 
   try {
     const stmt = db.prepare(`
@@ -149,7 +149,7 @@ function insertAiTaskAttempt(input = {}, options = {}) {
     `);
     const result = stmt.run(
       String(input.attemptKey),
-      String(input.feature),
+      normalizeAnalyticsFeature(input.feature, "other"),
       String(input.taskType),
       String(input.entityType || ""),
       String(input.entityId || ""),
@@ -187,8 +187,11 @@ function insertAiTaskAttempt(input = {}, options = {}) {
       releaseSha,
       nowIso,
     );
-    return result.changes > 0;
+    if (existedBefore) analyticsWriteStats.existing += 1;
+    else analyticsWriteStats.inserted += 1;
+    return !existedBefore && result.changes > 0;
   } catch (error) {
+    analyticsWriteStats.failed += 1;
     if (options.strict || strictWriteDepth > 0) throw error;
     console.warn("[analytics] failed to insert ai attempt:", error.message);
     return false;

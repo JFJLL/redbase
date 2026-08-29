@@ -64,7 +64,7 @@ function buildAccountFilter(accountType, alias = "e") {
 
 function getOverviewMetrics(query = {}) {
   const range = parseQueryRange(query);
-  const { fromIso, toIso, comparisonFromIso, comparisonToIso, intervals, accountType } = range;
+  const { fromIso, toIso, comparisonFromIso, comparisonToIso, intervals, daysCount, accountType } = range;
   const coverage = getCoverageInfo(fromIso);
   const accFilter = buildAccountFilter(accountType, "e");
 
@@ -77,8 +77,8 @@ function getOverviewMetrics(query = {}) {
       ${accFilter}
     GROUP BY day
   `).all(fromIso, toIso);
-  const avgDau = currDauDays.length
-    ? Math.round(currDauDays.reduce((s, r) => s + r.cnt, 0) / currDauDays.length)
+  const avgDau = daysCount
+    ? Math.round(currDauDays.reduce((s, r) => s + Number(r.cnt || 0), 0) / daysCount)
     : 0;
 
   const newUsers = db.prepare(`
@@ -150,8 +150,8 @@ function getOverviewMetrics(query = {}) {
       ${accFilter}
     GROUP BY day
   `).all(comparisonFromIso, comparisonToIso);
-  const prevAvgDau = prevDauDays.length
-    ? Math.round(prevDauDays.reduce((s, r) => s + r.cnt, 0) / prevDauDays.length)
+  const prevAvgDau = daysCount
+    ? Math.round(prevDauDays.reduce((s, r) => s + Number(r.cnt || 0), 0) / daysCount)
     : 0;
 
   const prevNewUsers = db.prepare(`
@@ -284,7 +284,7 @@ function getOverviewMetrics(query = {}) {
     comparisonRange: { from: comparisonFromIso, to: comparisonToIso },
     coverage,
     kpis: {
-      dau: { value: avgDau, prevValue: prevAvgDau, deltaPercent: calcDeltaPercent(avgDau, prevAvgDau), sampleSize: currDauDays.length },
+      dau: { value: avgDau, prevValue: prevAvgDau, deltaPercent: calcDeltaPercent(avgDau, prevAvgDau), sampleSize: daysCount },
       newUsers: { value: newUsers, prevValue: prevNewUsers, deltaPercent: calcDeltaPercent(newUsers, prevNewUsers) },
       effectiveCreators: { value: effectiveCreators, prevValue: prevEffectiveCreators, deltaPercent: calcDeltaPercent(effectiveCreators, prevEffectiveCreators) },
       payingUsers: { value: payingUsers, prevValue: prevPayingUsers, deltaPercent: calcDeltaPercent(payingUsers, prevPayingUsers) },
@@ -490,13 +490,14 @@ function getUsersMetrics(query = {}) {
 
   const retentionRow = db.prepare(`
     WITH reg_users AS (
-      SELECT DISTINCT
+      SELECT
         actor_key,
-        julianday(date(datetime(occurred_at, '+8 hours'))) AS reg_jd
+        MIN(julianday(date(datetime(occurred_at, '+8 hours')))) AS reg_jd
       FROM analytics_events e
       WHERE event_name = 'user_registered'
         AND occurred_at >= ? AND occurred_at < ?
         ${accFilter}
+      GROUP BY actor_key
     ),
     active_days AS (
       SELECT DISTINCT
@@ -505,17 +506,27 @@ function getUsersMetrics(query = {}) {
       FROM analytics_events e
       WHERE event_name = 'user_active_day'
         ${accFilter}
+    ),
+    retention_flags AS (
+      SELECT
+        reg_users.actor_key,
+        reg_users.reg_jd,
+        MAX(CASE WHEN act.act_jd = reg_users.reg_jd + 1 THEN 1 ELSE 0 END) AS d1_retained,
+        MAX(CASE WHEN act.act_jd = reg_users.reg_jd + 7 THEN 1 ELSE 0 END) AS d7_retained,
+        MAX(CASE WHEN act.act_jd = reg_users.reg_jd + 30 THEN 1 ELSE 0 END) AS d30_retained
+      FROM reg_users
+      LEFT JOIN active_days act ON act.actor_key = reg_users.actor_key
+      GROUP BY reg_users.actor_key, reg_users.reg_jd
     )
     SELECT
-      COUNT(CASE WHEN reg_jd <= ? - 1 THEN 1 END) AS d1_cohort,
-      COUNT(DISTINCT CASE WHEN reg_jd <= ? - 1 AND act.act_jd = reg_users.reg_jd + 1 THEN reg_users.actor_key END) AS d1_retained,
-      COUNT(CASE WHEN reg_jd <= ? - 7 THEN 1 END) AS d7_cohort,
-      COUNT(DISTINCT CASE WHEN reg_jd <= ? - 7 AND act.act_jd = reg_users.reg_jd + 7 THEN reg_users.actor_key END) AS d7_retained,
-      COUNT(CASE WHEN reg_jd <= ? - 30 THEN 1 END) AS d30_cohort,
-      COUNT(DISTINCT CASE WHEN reg_jd <= ? - 30 AND act.act_jd = reg_users.reg_jd + 30 THEN reg_users.actor_key END) AS d30_retained,
+      SUM(CASE WHEN reg_jd <= ? - 1 THEN 1 ELSE 0 END) AS d1_cohort,
+      SUM(CASE WHEN reg_jd <= ? - 1 THEN d1_retained ELSE 0 END) AS d1_retained,
+      SUM(CASE WHEN reg_jd <= ? - 7 THEN 1 ELSE 0 END) AS d7_cohort,
+      SUM(CASE WHEN reg_jd <= ? - 7 THEN d7_retained ELSE 0 END) AS d7_retained,
+      SUM(CASE WHEN reg_jd <= ? - 30 THEN 1 ELSE 0 END) AS d30_cohort,
+      SUM(CASE WHEN reg_jd <= ? - 30 THEN d30_retained ELSE 0 END) AS d30_retained,
       COUNT(*) AS total_cohort
-    FROM reg_users
-    LEFT JOIN active_days act ON act.actor_key = reg_users.actor_key
+    FROM retention_flags
   `).get(fromIso, toIso, todayJd, todayJd, todayJd, todayJd, todayJd, todayJd);
 
   const d1Cohort = Number(retentionRow?.d1_cohort || 0);
@@ -542,9 +553,11 @@ function getUsersMetrics(query = {}) {
   const accountDistribution = db.prepare(`
     SELECT account_type, COUNT(*) AS count
     FROM analytics_events e
-    WHERE event_name = 'user_registered' AND is_admin = 0
+    WHERE event_name = 'user_registered'
+      AND occurred_at >= ? AND occurred_at < ?
+      ${accFilter}
     GROUP BY account_type
-  `).all().map((r) => ({
+  `).all(fromIso, toIso).map((r) => ({
     accountType: r.account_type,
     label: r.account_type === "yimei" ? "易美内部账号" : "客户账号",
     count: Number(r.count || 0),
@@ -768,14 +781,16 @@ function getAiMetrics(query = {}) {
       ${buildAccountFilter(accountType, "e")}
   `).all(fromIso, toIso);
   const terminalFacts = db.prepare(`
-    SELECT entity_id, event_name
+    SELECT entity_id, event_name, duration_ms, occurred_at
     FROM analytics_events e
     WHERE event_name IN ('video_project_completed', 'video_project_failed')
       ${buildAccountFilter(accountType, "e")}
+    ORDER BY occurred_at ASC
   `).all();
-  const terminalByProject = new Map(terminalFacts.map((row) => [String(row.entity_id), row.event_name]));
+  const terminalByProject = new Map();
+  for (const row of terminalFacts) terminalByProject.set(String(row.entity_id), row);
   const videoAttempts = db.prepare(`
-    SELECT project_id, attempt_no, attempt_kind, status, duration_ms
+    SELECT project_id, clip_id, attempt_no, attempt_kind, status, duration_ms
     FROM ai_task_attempts a
     WHERE task_type = 'video_clip_generation'
       AND status IN ('completed', 'failed')
@@ -818,22 +833,38 @@ function getAiMetrics(query = {}) {
     let autoRetryCount = 0;
     let manualRetryCount = 0;
     let rescueCount = 0;
+    let retryMatureCount = 0;
     let grossCredits = 0;
     let refundCredits = 0;
-    const durations = [];
+    const projectDurations = [];
+    const clipDurations = [];
     for (const project of projects) {
       const projectId = String(project.entity_id);
       const terminal = terminalByProject.get(projectId);
-      if (terminal === "video_project_completed") completedCount += 1;
-      if (terminal === "video_project_failed") failedCount += 1;
+      const isCompleted = terminal?.event_name === "video_project_completed";
+      const isFailed = terminal?.event_name === "video_project_failed";
+      if (isCompleted) {
+        completedCount += 1;
+        projectDurations.push(Number(terminal.duration_ms || 0));
+      }
+      if (isFailed) failedCount += 1;
       const attempts = (attemptsByProject.get(projectId) || []).sort((a, b) => Number(a.attempt_no) - Number(b.attempt_no));
-      if (attempts[0]?.status === "completed") firstSuccessCount += 1;
+      const initialAttempts = attempts.filter((attempt) => attempt.attempt_kind === "initial");
       const hasAuto = attempts.some((attempt) => attempt.attempt_kind === "auto_retry");
       const hasManual = attempts.some((attempt) => attempt.attempt_kind === "manual_retry");
+      const clipIds = new Set(attempts.map((attempt) => String(attempt.clip_id || "")).filter(Boolean));
+      const allClipInitialAttemptsCompleted = clipIds.size > 0
+        && [...clipIds].every((clipId) => {
+          const clipInitialAttempts = initialAttempts.filter((attempt) => String(attempt.clip_id || "") === clipId);
+          return clipInitialAttempts.length > 0 && clipInitialAttempts.every((attempt) => attempt.status === "completed");
+        });
+      const hasInitialFailure = initialAttempts.some((attempt) => attempt.status === "failed");
+      if (isCompleted && allClipInitialAttemptsCompleted && !hasInitialFailure && !hasAuto && !hasManual) firstSuccessCount += 1;
       if (hasAuto) autoRetryCount += 1;
       if (hasManual) manualRetryCount += 1;
-      if (terminal === "video_project_completed" && (hasAuto || hasManual)) rescueCount += 1;
-      durations.push(...attempts.map((attempt) => Number(attempt.duration_ms || 0)));
+      if ((isCompleted || isFailed) && (hasAuto || hasManual)) retryMatureCount += 1;
+      if (isCompleted && (hasAuto || hasManual)) rescueCount += 1;
+      clipDurations.push(...attempts.map((attempt) => Number(attempt.duration_ms || 0)));
       const credit = creditsByProject.get(projectId) || { gross: 0, refund: 0 };
       grossCredits += credit.gross;
       refundCredits += credit.refund;
@@ -841,7 +872,7 @@ function getAiMetrics(query = {}) {
     const matureCount = completedCount + failedCount;
     const netCredits = grossCredits - refundCredits;
     const successSeconds = projects
-      .filter((project) => terminalByProject.get(String(project.entity_id)) === "video_project_completed")
+      .filter((project) => terminalByProject.get(String(project.entity_id))?.event_name === "video_project_completed")
       .reduce((sum, project) => sum + Number(project.media_duration_sec || 0), 0);
     return {
       model: sample.model,
@@ -857,9 +888,11 @@ function getAiMetrics(query = {}) {
       firstSuccessRate: safePercent(firstSuccessCount, matureCount),
       autoRetryRate: safePercent(autoRetryCount, matureCount),
       manualRetryRate: safePercent(manualRetryCount, matureCount),
-      rescueRate: safePercent(rescueCount, completedCount),
-      p50DurationMs: percentile(durations, 0.5),
-      p95DurationMs: percentile(durations, 0.95),
+      rescueRate: safePercent(rescueCount, retryMatureCount),
+      p50DurationMs: percentile(projectDurations, 0.5),
+      p95DurationMs: percentile(projectDurations, 0.95),
+      clipP50DurationMs: percentile(clipDurations, 0.5),
+      clipP95DurationMs: percentile(clipDurations, 0.95),
       grossCredits,
       refundCredits,
       netCredits,
@@ -926,6 +959,12 @@ function getFinanceMetrics(query = {}) {
           AND failed.entity_type = e.entity_type
           AND failed.entity_id = e.entity_id
           AND failed.is_admin = 0
+      ) AND NOT EXISTS (
+        SELECT 1 FROM analytics_events paid
+        WHERE paid.event_name = 'payment_paid'
+          AND paid.entity_type = e.entity_type
+          AND paid.entity_id = e.entity_id
+          AND paid.is_admin = 0
       ) THEN 1 ELSE 0 END) AS expired_or_failed
     FROM analytics_events e
     WHERE event_name = 'payment_order_created'

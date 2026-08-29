@@ -1,7 +1,7 @@
 const { getDbProxy } = require("../connection");
 const { safeParseObject } = require("../snapshot-utils");
 const { recordImageTaskAttempt } = require("../../analytics/ai-attempt-recorder");
-const { GENERATION_TYPE_TO_FEATURE } = require("../../analytics/analytics-constants");
+const { normalizeAnalyticsFeature } = require("../../analytics/analytics-constants");
 
 const db = getDbProxy();
 
@@ -136,7 +136,7 @@ function upsertImageJob(ownerUserId, job) {
   try {
     if (job.status === "completed") {
       const type = job.generationContext?.type || "";
-      const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "style_image";
+      const feature = normalizeAnalyticsFeature(type, "style_image");
       recordImageTaskAttempt({
         jobId: job.id,
         feature,
@@ -152,7 +152,7 @@ function upsertImageJob(ownerUserId, job) {
       });
     } else if (job.status === "failed") {
       const type = job.generationContext?.type || "";
-      const feature = GENERATION_TYPE_TO_FEATURE[type] || type || "style_image";
+      const feature = normalizeAnalyticsFeature(type, "style_image");
       recordImageTaskAttempt({
         jobId: job.id,
         feature,

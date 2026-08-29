@@ -444,6 +444,8 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   const failedProject = service.getProject(created.project.id, ownerUserId);
   assert.equal(failedProject.status, "result_processing_failed");
   assert.equal(failedProject.clips[0].status, "result_processing_failed");
+  const failureCountBeforeResultRetry = failedProject.clips[0].resultProcessingFailureCount;
+  assert.ok(failureCountBeforeResultRetry > 0);
   assert.equal(findUserById(ownerUserId).credits, 70, "credits must stay deducted, no refund");
   assert.equal(clip1SubmitCount, 1);
 
@@ -457,6 +459,9 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   ffmpegFails = false;
   const retryResult = await service.retryClipResult(created.project.id, ownerUserId, 1, "retry-res-01");
   assert.equal(retryResult.project.clips[0].status, "processing_result");
+  const claimedClip = getProject(created.project.id).clips[0];
+  assert.equal(claimedClip.resultProcessingFailureCount, failureCountBeforeResultRetry, "claim must not reset failureCount to infer attempt kind");
+  assert.equal(claimedClip.nextResultAttemptKind, "result_retry");
   for (let i = 0; i < 10; i += 1) {
     await new Promise((r) => setTimeout(r, 5));
     await service.pump();
@@ -464,6 +469,13 @@ test("42.D & 8: Native frame + FFmpeg both fail -> result_processing_failed -> 0
   }
   const completedAfterRetry = service.getProject(created.project.id, ownerUserId);
   assert.equal(completedAfterRetry.clips[0].status, "completed");
+  const completedResultAttempt = db.prepare(`
+    SELECT attempt_kind, status
+    FROM ai_task_attempts
+    WHERE project_id = ? AND clip_id = ? AND task_type = 'video_result_processing' AND status = 'completed'
+    ORDER BY id DESC LIMIT 1
+  `).get(created.project.id, created.project.clips[0].id);
+  assert.deepEqual(completedResultAttempt, { attempt_kind: "result_retry", status: "completed" });
   assert.equal(findUserById(ownerUserId).credits, 70, "0 credits deducted for retry-result");
   assert.equal(clip1SubmitCount, 2, "clip 1 submit is 1, clip 2 submit is 2");
   updateProject(created.project.id, { status: "completed" });

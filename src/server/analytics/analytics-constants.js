@@ -37,15 +37,29 @@ const ANALYTICS_FEATURE_LABELS = {
   video_project: "AI 视频",
 };
 
-const GENERATION_TYPE_TO_FEATURE = {
+const RAW_FEATURE_TO_ANALYTICS_FEATURE = {
   moments: "moments",
+  momentsImage: "moments",
   wechat: "wechat_long_image",
+  wechatImage: "wechat_long_image",
   xhsCarousel: "xhs_carousel",
+  xhsCarouselSlide: "xhs_carousel",
   styleImage: "style_image",
   imageEdit: "image_edit",
   videoScript: "video_script",
   videoProject: "video_project",
+  videoProjectRetry: "video_project",
+  trendAnalysis: "trend_analysis",
+  excellentDirection: "excellent_direction",
+  excellentFusion: "excellent_fusion",
 };
+
+function normalizeAnalyticsFeature(value, fallback = "other") {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  if (ANALYTICS_FEATURE_NAMES.includes(raw)) return raw;
+  return RAW_FEATURE_TO_ANALYTICS_FEATURE[raw] || fallback;
+}
 
 const CLIENT_EVENT_WHITELIST = new Set([
   "video_studio_opened",
@@ -87,7 +101,7 @@ module.exports = {
   ANALYTICS_FEATURES,
   ANALYTICS_FEATURE_NAMES,
   ANALYTICS_FEATURE_LABELS,
-  GENERATION_TYPE_TO_FEATURE,
+  normalizeAnalyticsFeature,
   CLIENT_EVENT_WHITELIST,
   ATTEMPT_KINDS,
   ERROR_STAGES,

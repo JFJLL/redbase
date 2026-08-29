@@ -355,7 +355,19 @@ async function handleVideoScriptRoutes(context, req, res, pathname) {
 
     try {
       const visualBible = model && mode === "image"
-        ? await generateVisualBible(appConfig, { brand, idea, images: resolvedImages })
+        ? await generateVisualBible(appConfig, {
+          brand,
+          idea,
+          images: resolvedImages,
+          analyticsContext: {
+            feature: "video_script",
+            taskType: "vision_analysis",
+            actorUserId: user.id,
+            accountType: user.accountType || user.account_type || "",
+            entityType: "video_script",
+            entityId: `${requestId}:visual-bible`,
+          },
+        })
         : {};
       const script = await generateVideoScript(appConfig, {
         brand,

@@ -521,6 +521,16 @@ const VERSIONED_MIGRATIONS = [
       insertMeta.run("backfill_error", "", now);
     },
   },
+  {
+    version: 12,
+    name: "video-result-attempt-kind",
+    apply() {
+      const columns = db.prepare("PRAGMA table_info(video_clips)").all();
+      if (!columns.some((column) => column.name === "next_result_attempt_kind")) {
+        db.exec("ALTER TABLE video_clips ADD COLUMN next_result_attempt_kind TEXT NOT NULL DEFAULT 'initial'");
+      }
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

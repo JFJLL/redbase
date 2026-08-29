@@ -155,6 +155,8 @@ export interface VideoComparisonItem {
   rescueRate: number | null;
   p50DurationMs: number | null;
   p95DurationMs: number | null;
+  clipP50DurationMs: number | null;
+  clipP95DurationMs: number | null;
   grossCredits: number;
   refundCredits: number;
   netCredits: number;
