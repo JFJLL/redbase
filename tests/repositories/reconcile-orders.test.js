@@ -8,6 +8,7 @@ const { openDatabase, getDbProxy } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
 const { getAlipayProvider } = require("../../src/server/integrations/alipay");
 const { reconcileOrders } = require("../../src/server/billing/reconcile-orders");
+const { getFinanceMetrics } = require("../../src/server/analytics/analytics-metrics");
 const {
   insertUser,
   findUserByPhone,
@@ -72,7 +73,23 @@ test("an expired unpaid order is marked expired and stays reconcilable", async (
   const summary = await reconcileOrders({ gateway, nowIso: NOW });
 
   assert.equal(summary.expired, 1);
-  assert.equal(findPaymentOrderByOutTradeNo(outTradeNo).status, "expired");
+  const order = findPaymentOrderByOutTradeNo(outTradeNo);
+  assert.equal(order.status, "expired");
+  const failedEventKey = `payment_failed:${order.id}`;
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM analytics_events WHERE event_key = ?").get(failedEventKey).count,
+    1,
+  );
+
+  const finance = getFinanceMetrics({ from: "2026-08-04", to: "2026-08-05", accountType: "customer" });
+  assert.equal(finance.overview.expiredOrFailed, 1);
+  assert.equal(finance.overview.pendingUnexpired, 0);
+
+  await reconcileOrders({ gateway, nowIso: NOW });
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM analytics_events WHERE event_key = ?").get(failedEventKey).count,
+    1,
+  );
 });
 
 test("a closed order that was actually paid is flagged for audit, never silently dropped", async () => {

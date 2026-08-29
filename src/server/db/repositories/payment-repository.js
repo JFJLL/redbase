@@ -273,12 +273,27 @@ function closePaymentOrder({ userId, outTradeNo, nowIso }) {
 }
 
 function markPaymentOrderExpired({ outTradeNo, nowIso }) {
-  db.prepare(`
+  const result = db.prepare(`
     UPDATE payment_orders
     SET status = 'expired', updated_at = ?
     WHERE out_trade_no = ? AND status IN ('created', 'pending')
   `).run(String(nowIso), String(outTradeNo || ""));
-  return findPaymentOrderByOutTradeNo(outTradeNo);
+  const order = findPaymentOrderByOutTradeNo(outTradeNo);
+  if (result.changes > 0 && order) {
+    try {
+      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
+      recordPaymentFailed({
+        orderId: order.id,
+        userId: order.userId,
+        accountType: userRow?.account_type || "customer",
+        amountFen: order.amountFen,
+        provider: order.provider,
+        error: "expired",
+        failedAt: String(nowIso),
+      });
+    } catch (_) {}
+  }
+  return order;
 }
 
 function markPaymentOrderAudit({ outTradeNo, reason, nowIso, extraPayload = {} }) {

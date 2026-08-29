@@ -76,7 +76,8 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 | `video_project_failed` | 视频项目最终失败 | `status: failed` |
 | `payment_order_created` | 充值订单创建 | `amount_fen`, `provider`, `metadata.planId` |
 | `payment_paid` | 充值订单支付成功 | `amount_fen`, `credit_delta`, `provider` |
-| `payment_failed` | 充值订单超时失效或失败 | `amount_fen`, `provider` |
+| `payment_failed` | 充值订单超时失效或失败；`expired` 状态使用此终态事实 | `amount_fen`, `provider` |
+| `payment_closed` | 用户主动关闭充值订单 | `amount_fen`, `provider` |
 | `credit_consumed` | 积分实际扣除 | `credit_delta < 0`, `credit_cost` |
 | `credit_refunded` | 任务失败自动退款 | `credit_delta > 0`, `metadata.refundForCreditEventId` |
 | `credit_granted` | 管理员手动赠送额度 | `credit_delta > 0`, `metadata.adminUserId` |
@@ -158,7 +159,7 @@ RedBase 管理后台采用 **业务事务分离、事件事实驱动、独立聚
 
 - **可回填数据**：
   - 存量用户 (`users` -> `user_registered`)
-  - 历史支付 (`payment_orders` -> `payment_order_created`, `payment_paid`, `payment_failed`)
+  - 历史支付 (`payment_orders` -> `payment_order_created`, `payment_paid`, `payment_failed`, `payment_closed`)；其中 `expired` 映射为 `payment_failed` 事实
   - 历史积分流水 (`credit_events` -> `credit_consumed`, `credit_refunded`, `credit_granted`)
   - 历史生成内容与视频项目 (`generations`, `video_projects` -> `output_completed`, `video_project_created`, `video_project_completed`)
   - 历史图片任务与视频片段 (`image_jobs`, `video_clips` -> `historical_summary` attempt)
