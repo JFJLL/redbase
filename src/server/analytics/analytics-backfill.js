@@ -139,6 +139,20 @@ function ensureAnalyticsBackfillImpl() {
           amountFen: Number(o.amount_fen || 0),
         });
         if (fIns) backfilledEvents++;
+      } else if (o.status === "closed") {
+        const closedIns = insertAnalyticsEvent({
+          eventKey: `payment_closed:${o.id}`,
+          eventName: "payment_closed",
+          occurredAt: o.updated_at || o.created_at || new Date().toISOString(),
+          actorUserId: o.user_id,
+          accountType: o.account_type || "customer",
+          status: "closed",
+          entityType: "payment_order",
+          entityId: String(o.id),
+          provider: o.provider,
+          amountFen: Number(o.amount_fen || 0),
+        });
+        if (closedIns) backfilledEvents++;
       }
     }
   }
@@ -401,7 +415,9 @@ function ensureAnalyticsBackfillImpl() {
   // 9. Video Projects & Video Clips
   if (tableExists("video_projects")) {
     const projects = db.prepare(`
-      SELECT p.id, p.owner_user_id, p.video_model, p.mode, p.resolution, p.aspect_ratio, p.total_duration_sec, p.status, p.estimated_credits, p.charged_credits, p.refunded_credits, p.created_at, p.started_at, p.completed_at, p.updated_at, u.account_type
+      SELECT p.id, p.owner_user_id, p.video_model, p.mode, p.resolution, p.aspect_ratio, p.total_duration_sec, p.status, p.estimated_credits, p.charged_credits, p.refunded_credits, p.created_at, p.started_at, p.completed_at, p.updated_at, u.account_type,
+             (SELECT COUNT(*) FROM video_clips c WHERE c.project_id = p.id) AS expected_clip_count,
+             (SELECT json_group_array(c.id) FROM video_clips c WHERE c.project_id = p.id) AS expected_clip_ids_json
       FROM video_projects p
       LEFT JOIN users u ON u.id = p.owner_user_id
     `).all();
@@ -423,7 +439,12 @@ function ensureAnalyticsBackfillImpl() {
         aspectRatio: p.aspect_ratio,
         mediaDurationSec: Number(p.total_duration_sec || 0),
         creditCost: Number(p.estimated_credits || 0),
-        metadata: { estimatedCredits: Number(p.estimated_credits || 0) },
+        metadata: {
+          estimatedCredits: Number(p.estimated_credits || 0),
+          expectedClipCount: Number(p.expected_clip_count || 0),
+          expectedClipIds: JSON.parse(p.expected_clip_ids_json || "[]"),
+        },
+        replaceMetadata: true,
       });
       if (p.status === "completed") {
         const netCredits = Number(p.charged_credits || 0) - Number(p.refunded_credits || 0);
@@ -681,6 +702,19 @@ function ensureUserAnalyticsBackfillImpl(userId) {
           provider: o.provider,
           amountFen: Number(o.amount_fen || 0),
         });
+      } else if (o.status === "closed") {
+        insertAnalyticsEvent({
+          eventKey: `payment_closed:${o.id}`,
+          eventName: "payment_closed",
+          occurredAt: o.updated_at || o.created_at || new Date().toISOString(),
+          actorUserId: o.user_id,
+          accountType: user.account_type || "customer",
+          status: "closed",
+          entityType: "payment_order",
+          entityId: String(o.id),
+          provider: o.provider,
+          amountFen: Number(o.amount_fen || 0),
+        });
       }
     }
   }
@@ -777,7 +811,15 @@ function ensureUserAnalyticsBackfillImpl(userId) {
 
   // 6. Video Projects & Clips
   if (tableExists("video_projects")) {
-    const projects = db.prepare("SELECT id, owner_user_id, video_model, mode, resolution, aspect_ratio, total_duration_sec, status, estimated_credits, charged_credits, refunded_credits, created_at, started_at, completed_at, updated_at FROM video_projects WHERE owner_user_id = ?").all(uid);
+    const projects = db.prepare(`
+      SELECT p.id, p.owner_user_id, p.video_model, p.mode, p.resolution, p.aspect_ratio,
+             p.total_duration_sec, p.status, p.estimated_credits, p.charged_credits,
+             p.refunded_credits, p.created_at, p.started_at, p.completed_at, p.updated_at,
+             (SELECT COUNT(*) FROM video_clips c WHERE c.project_id = p.id) AS expected_clip_count,
+             (SELECT json_group_array(c.id) FROM video_clips c WHERE c.project_id = p.id) AS expected_clip_ids_json
+      FROM video_projects p
+      WHERE p.owner_user_id = ?
+    `).all(uid);
     for (const p of projects) {
       insertAnalyticsEvent({
         eventKey: `video_project_created:${p.id}`,
@@ -794,7 +836,12 @@ function ensureUserAnalyticsBackfillImpl(userId) {
         aspectRatio: p.aspect_ratio,
         mediaDurationSec: Number(p.total_duration_sec || 0),
         creditCost: Number(p.estimated_credits || 0),
-        metadata: { estimatedCredits: Number(p.estimated_credits || 0) },
+        metadata: {
+          estimatedCredits: Number(p.estimated_credits || 0),
+          expectedClipCount: Number(p.expected_clip_count || 0),
+          expectedClipIds: JSON.parse(p.expected_clip_ids_json || "[]"),
+        },
+        replaceMetadata: true,
       });
       if (p.status === "completed") {
         const netCredits = Number(p.charged_credits || 0) - Number(p.refunded_credits || 0);

@@ -148,6 +148,9 @@ export interface VideoComparisonItem {
   matureCount: number;
   activeCount: number;
   waitingConfigCount: number;
+  actionableCount: number;
+  attemptMetricSampleSize: number;
+  attemptMetricCoverageRate: number | null;
   completionRate: number | null;
   firstSuccessRate: number | null;
   autoRetryRate: number | null;

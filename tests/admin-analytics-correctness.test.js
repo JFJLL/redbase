@@ -8,7 +8,7 @@ const { openDatabase, getDbProxy } = require("../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../src/server/db/schema");
 const { insertUser, createSessionForUser, findUserById } = require("../src/server/db/repositories/auth-repository");
 const { insertGeneration, findGenerationById, upsertGeneration } = require("../src/server/db/repositories/generation-repository");
-const { insertPaymentOrder, settlePaidPaymentOrder } = require("../src/server/db/repositories/payment-repository");
+const { insertPaymentOrder, settlePaidPaymentOrder, closePaymentOrder } = require("../src/server/db/repositories/payment-repository");
 const { createProjectWithBilling, updateProject, updateClip, getProject } = require("../src/server/db/repositories/video-project-repository");
 const { deleteUserCascadeRows, insertCreditEvent } = require("../src/server/db/repositories/admin-repository");
 const { upsertImageJob } = require("../src/server/db/repositories/image-job-repository");
@@ -680,6 +680,7 @@ test("19. multi-clip retry project is not first-success and is counted as rescue
     resolution: "1080p",
     aspectRatio: "16:9",
     mediaDurationSec: 16,
+    metadata: { expectedClipCount: 2, expectedClipIds: [990161, 990162] },
   });
   insertAnalyticsEvent({
     eventKey: `video_project_completed:${projectId}`,
@@ -829,4 +830,178 @@ test("24. nested analytics errors redact secrets recursively and cap stored leng
   assert.equal(row.error_message.includes("never-store-this-token"), false);
   assert.equal(row.error_message.includes("secret-bearer-value"), false);
   assert.match(row.error_message, /\[REDACTED\]/);
+});
+
+test("25. active retrying projects never enter the mature Attempt retry-rate numerator", () => {
+  const userId = 9023;
+  insertUser({ id: userId, name: "Retry Boundary", phone: "13900009023", password: "hash", accountType: "customer", credits: 100, createdAt: "2026-09-22T00:00:00.000Z" });
+  const makeProject = (suffix, status) => createProjectWithBilling({
+    preventDuplicateActiveProject: false,
+    project: {
+      ownerUserId: userId, requestId: `retry-boundary-${suffix}`, brandId: 1, trendId: 1, ideaIndex: suffix,
+      model: "d2", mode: "text", resolution: "retry-boundary", aspectRatio: "9:16", totalDurationSec: 10,
+      status, createdAt: `2026-09-22T0${suffix}:00:00.000Z`,
+    },
+    clips: [{ clipIndex: 1, startSec: 0, endSec: 10, durationSec: 10, status: "queued", creditCost: 1 }],
+    generation: { ownerUserId: userId, type: "videoProject", channelLabel: "AI视频", brandId: 1, brandName: "B", trendId: 1, trendTitle: "T", ideaTitle: "I", cardTitle: `V${suffix}`, createdAt: `2026-09-22T0${suffix}:00:00.000Z` },
+    billing: { creditCost: 1, event: { actionType: "videoProject", actionLabel: "视频生成", payload: {} } },
+  }).project;
+
+  const mature = makeProject(1, "running");
+  recordVideoClipAttempt({ projectId: mature.id, clipId: mature.clips[0].id, attemptNo: 1, attemptKind: "initial", status: "completed", accountType: "customer", startedAt: "2026-09-22T01:00:00.000Z" });
+  updateProject(mature.id, { status: "completed", completedAt: "2026-09-22T01:01:00.000Z" });
+
+  const running = makeProject(2, "running");
+  const waiting = makeProject(3, "waiting_configuration");
+  for (const project of [running, waiting]) {
+    recordVideoClipAttempt({ projectId: project.id, clipId: project.clips[0].id, attemptNo: 2, attemptKind: "auto_retry", status: "completed", accountType: "customer", startedAt: "2026-09-22T03:00:00.000Z" });
+  }
+
+  const row = getAiMetrics({ from: "2026-09-22", to: "2026-09-23", accountType: "customer" }).videoComparison
+    .find((item) => item.model === "d2" && item.resolution === "retry-boundary");
+  assert.ok(row);
+  assert.equal(row.matureCount, 1);
+  assert.equal(row.attemptMetricSampleSize, 1);
+  assert.equal(row.autoRetryRate, 0);
+  assert.ok(row.autoRetryRate <= 100);
+  assert.equal(row.activeCount, 2);
+  assert.equal(row.waitingConfigCount, 1);
+  assert.equal(row.actionableCount, 1);
+});
+
+test("26. historical_summary proves completion but never fabricates zero-percent Attempt metrics", () => {
+  const projectId = 99024;
+  const common = {
+    actorKey: "historical-summary-user",
+    accountType: "customer",
+    feature: "video_project",
+    entityType: "video_project",
+    entityId: String(projectId),
+    model: "g2",
+    mode: "text",
+    resolution: "historical-only",
+    aspectRatio: "9:16",
+    mediaDurationSec: 10,
+  };
+  insertAnalyticsEvent({ ...common, eventKey: `video_project_created:${projectId}`, eventName: "video_project_created", occurredAt: "2026-09-23T01:00:00.000Z", metadata: { expectedClipCount: 1, expectedClipIds: [990241] } });
+  insertAnalyticsEvent({ ...common, eventKey: `video_project_completed:${projectId}`, eventName: "video_project_completed", occurredAt: "2026-09-23T01:01:00.000Z", status: "completed" });
+  recordVideoClipAttempt({ projectId, clipId: 990241, attemptNo: 1, attemptKind: "historical_summary", status: "completed", isBackfilled: 1, accountType: "customer", startedAt: "2026-09-23T01:00:00.000Z" });
+
+  const row = getAiMetrics({ from: "2026-09-23", to: "2026-09-24", accountType: "customer" }).videoComparison
+    .find((item) => item.resolution === "historical-only");
+  assert.ok(row);
+  assert.equal(row.completionRate, 100);
+  assert.equal(row.attemptMetricSampleSize, 0);
+  assert.equal(row.attemptMetricCoverageRate, 0);
+  assert.equal(row.firstSuccessRate, null);
+  assert.equal(row.autoRetryRate, null);
+  assert.equal(row.manualRetryRate, null);
+  assert.equal(row.rescueRate, null);
+});
+
+test("27. closed payment orders are terminal and never remain pending", () => {
+  const userId = 9025;
+  insertUser({ id: userId, name: "Closed Payment", phone: "13900009025", password: "hash", accountType: "customer", credits: 0, createdAt: "2026-09-24T00:00:00.000Z" });
+  // Keep the target order ID distinct from the immutable fact left by test 2
+  // after that test deletes its source payment row.
+  insertPaymentOrder({
+    outTradeNo: "closed-payment-id-guard-9025",
+    userId,
+    idempotencyKey: "closed-payment-id-guard-idem-9025",
+    plan: { id: "guard-plan", name: "ID Guard", credits: 1, amountFen: 1 },
+    status: "pending",
+    provider: "alipay",
+    nowIso: "2026-01-01T01:00:00.000Z",
+    expiresAtIso: "2026-01-01T02:00:00.000Z",
+  });
+  const order = insertPaymentOrder({
+    outTradeNo: "closed-payment-9025",
+    userId,
+    idempotencyKey: "closed-payment-idem-9025",
+    plan: { id: "closed-plan", name: "关闭套餐", credits: 10, amountFen: 100 },
+    status: "pending",
+    provider: "alipay",
+    nowIso: "2026-09-24T01:00:00.000Z",
+    expiresAtIso: "2026-09-24T02:00:00.000Z",
+  });
+  closePaymentOrder({ userId, outTradeNo: order.outTradeNo, nowIso: "2026-09-24T01:05:00.000Z" });
+
+  const closedFacts = db.prepare("SELECT event_name, status FROM analytics_events WHERE event_key = ?").all(`payment_closed:${order.id}`);
+  assert.deepEqual(closedFacts, [{ event_name: "payment_closed", status: "closed" }]);
+  const createdFact = db.prepare("SELECT event_name, occurred_at, account_type, is_admin FROM analytics_events WHERE event_key = ?").get(`payment_order_created:${order.id}`);
+  assert.deepEqual(createdFact, { event_name: "payment_order_created", occurred_at: "2026-09-24T01:00:00.000Z", account_type: "customer", is_admin: 0 });
+  const finance = getFinanceMetrics({ from: "2026-09-24", to: "2026-09-25", accountType: "customer" });
+  assert.equal(finance.overview.totalOrders, 1);
+  assert.equal(finance.overview.cohortPaid, 0);
+  assert.equal(finance.overview.pendingUnexpired, 0);
+  assert.equal(finance.overview.expiredOrFailed, 1);
+});
+
+test("28. an unknown terminal Clip cannot substitute for a missing expected Clip", () => {
+  const projectId = 99026;
+  const common = {
+    actorKey: "clip-identity-user",
+    accountType: "customer",
+    feature: "video_project",
+    entityType: "video_project",
+    entityId: String(projectId),
+    model: "g2",
+    mode: "text",
+    resolution: "clip-identity",
+    aspectRatio: "9:16",
+    mediaDurationSec: 10,
+  };
+  insertAnalyticsEvent({
+    ...common,
+    eventKey: `video_project_created:${projectId}`,
+    eventName: "video_project_created",
+    occurredAt: "2026-09-25T01:00:00.000Z",
+    metadata: { expectedClipCount: 2, expectedClipIds: [990261, 990262] },
+  });
+  insertAnalyticsEvent({ ...common, eventKey: `video_project_completed:${projectId}`, eventName: "video_project_completed", occurredAt: "2026-09-25T01:01:00.000Z", status: "completed" });
+  recordVideoClipAttempt({ projectId, clipId: 990261, attemptNo: 1, attemptKind: "initial", status: "completed", accountType: "customer", startedAt: "2026-09-25T01:00:00.000Z" });
+  recordVideoClipAttempt({ projectId, clipId: 999999, attemptNo: 2, attemptKind: "auto_retry", status: "completed", accountType: "customer", startedAt: "2026-09-25T01:00:30.000Z" });
+
+  const row = getAiMetrics({ from: "2026-09-25", to: "2026-09-26", accountType: "customer" }).videoComparison
+    .find((item) => item.resolution === "clip-identity");
+  assert.ok(row);
+  assert.equal(row.completionRate, 100);
+  assert.equal(row.attemptMetricSampleSize, 0);
+  assert.equal(row.attemptMetricCoverageRate, 0);
+  assert.equal(row.firstSuccessRate, null);
+  assert.equal(row.autoRetryRate, null);
+});
+
+test("29. an extra unknown terminal Clip does not invalidate complete expected Clips", () => {
+  const projectId = 99027;
+  const common = {
+    actorKey: "extra-clip-user",
+    accountType: "customer",
+    feature: "video_project",
+    entityType: "video_project",
+    entityId: String(projectId),
+    model: "g2",
+    mode: "text",
+    resolution: "extra-clip",
+    aspectRatio: "9:16",
+    mediaDurationSec: 10,
+  };
+  insertAnalyticsEvent({
+    ...common,
+    eventKey: `video_project_created:${projectId}`,
+    eventName: "video_project_created",
+    occurredAt: "2026-09-26T01:00:00.000Z",
+    metadata: { expectedClipCount: 2, expectedClipIds: [990271, 990272] },
+  });
+  insertAnalyticsEvent({ ...common, eventKey: `video_project_completed:${projectId}`, eventName: "video_project_completed", occurredAt: "2026-09-26T01:01:00.000Z", status: "completed" });
+  for (const clipId of [990271, 990272, 999998]) {
+    recordVideoClipAttempt({ projectId, clipId, attemptNo: 1, attemptKind: "initial", status: "completed", accountType: "customer", startedAt: "2026-09-26T01:00:00.000Z" });
+  }
+
+  const row = getAiMetrics({ from: "2026-09-26", to: "2026-09-27", accountType: "customer" }).videoComparison
+    .find((item) => item.resolution === "extra-clip");
+  assert.ok(row);
+  assert.equal(row.attemptMetricSampleSize, 1);
+  assert.equal(row.attemptMetricCoverageRate, 100);
+  assert.equal(row.firstSuccessRate, 100);
 });

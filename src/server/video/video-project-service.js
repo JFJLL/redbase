@@ -1465,6 +1465,7 @@ function createVideoProjectService(options = {}) {
          updateClip(clip.id, {
            status: "processing_result",
            resultProcessingFailureCount: failureCount,
+           nextResultAttemptKind: "result_retry",
            lastResultProcessingError: errMsg,
            lastResultProcessingAt: new Date(now()).toISOString(),
            error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
@@ -1556,6 +1557,7 @@ function createVideoProjectService(options = {}) {
      updateClip(clip.id, {
        status: "processing_result",
        resultProcessingFailureCount: failureCount,
+       nextResultAttemptKind: "result_retry",
        lastResultProcessingError: errMsg,
        lastResultProcessingAt: new Date(now()).toISOString(),
        error: `视频已生成，正在保存生成结果（第 ${failureCount} 次重试）`,
@@ -1576,6 +1578,7 @@ function createVideoProjectService(options = {}) {
       lastSuccessfulPollAt: new Date(now()).toISOString(),
       pollFailureCount: 0,
       resultProcessingFailureCount: 0,
+      nextResultAttemptKind: "initial",
       lastResultProcessingError: "",
       error: "",
     });

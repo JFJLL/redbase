@@ -298,7 +298,7 @@ function recordVideoScriptFailed({ requestId, userId, accountType, error, failed
   });
 }
 
-function recordVideoProjectCreated({ projectId, userId, accountType, model, mode, resolution, aspectRatio, totalDurationSec, estimatedCredits, createdAt } = {}) {
+function recordVideoProjectCreated({ projectId, userId, accountType, model, mode, resolution, aspectRatio, totalDurationSec, expectedClipCount, expectedClipIds, estimatedCredits, createdAt } = {}) {
   if (!projectId) return false;
   const nowIso = createdAt || new Date().toISOString();
   const eventKey = `video_project_created:${projectId}`;
@@ -317,7 +317,11 @@ function recordVideoProjectCreated({ projectId, userId, accountType, model, mode
     aspectRatio: String(aspectRatio || ""),
     mediaDurationSec: Number(totalDurationSec || 0),
     creditCost: Number(estimatedCredits || 0),
-    metadata: { estimatedCredits: Number(estimatedCredits || 0) },
+    metadata: {
+      estimatedCredits: Number(estimatedCredits || 0),
+      expectedClipCount: Number(expectedClipCount || 0),
+      expectedClipIds: Array.isArray(expectedClipIds) ? expectedClipIds.map(Number).filter(Number.isFinite) : [],
+    },
   });
 }
 
@@ -433,6 +437,24 @@ function recordPaymentFailed({ orderId, userId, accountType, amountFen, provider
     provider: String(provider || ""),
     amountFen: Number(amountFen || 0),
     metadata: { error: String(error || "").slice(0, 200) },
+  });
+}
+
+function recordPaymentClosed({ orderId, userId, accountType, amountFen, provider, closedAt } = {}) {
+  if (!orderId) return false;
+  const nowIso = closedAt || new Date().toISOString();
+  const eventKey = `payment_closed:${orderId}`;
+  return insertAnalyticsEvent({
+    eventKey,
+    eventName: "payment_closed",
+    occurredAt: nowIso,
+    actorUserId: userId,
+    accountType,
+    status: "closed",
+    entityType: "payment_order",
+    entityId: String(orderId),
+    provider: String(provider || ""),
+    amountFen: Number(amountFen || 0),
   });
 }
 
@@ -619,6 +641,7 @@ module.exports = {
   recordPaymentOrderCreated,
   recordPaymentPaid,
   recordPaymentFailed,
+  recordPaymentClosed,
   recordCreditConsumed,
   recordCreditRefunded,
   recordCreditGranted,

@@ -318,6 +318,15 @@ test("42.B: Storage saveFile throws 503 error on first try -> NO refund, NO prov
   const projectAfterFail = service.getProject(created.project.id, ownerUserId);
   assert.equal(projectAfterFail.clips[0].status, "processing_result");
   assert.equal(projectAfterFail.clips[0].resultProcessingFailureCount, 1);
+  assert.equal(getProject(created.project.id).clips[0].nextResultAttemptKind, "result_retry");
+  assert.deepEqual(db.prepare(`
+    SELECT attempt_kind, attempt_no, status
+    FROM ai_task_attempts
+    WHERE project_id = ? AND clip_id = ? AND task_type = 'video_result_processing'
+    ORDER BY id ASC
+  `).all(created.project.id, created.project.clips[0].id), [
+    { attempt_kind: "initial", attempt_no: 1, status: "failed" },
+  ]);
   assert.equal(submitCount, 1);
   assert.equal(findUserById(ownerUserId).credits, 80);
 
@@ -327,6 +336,18 @@ test("42.B: Storage saveFile throws 503 error on first try -> NO refund, NO prov
   const completed = service.getProject(created.project.id, ownerUserId);
   assert.equal(completed.status, "completed");
   assert.equal(submitCount, 1);
+  const storedCompletedClip = getProject(created.project.id).clips[0];
+  assert.equal(storedCompletedClip.resultProcessingFailureCount, 0);
+  assert.equal(storedCompletedClip.nextResultAttemptKind, "initial");
+  assert.deepEqual(db.prepare(`
+    SELECT attempt_kind, attempt_no, status
+    FROM ai_task_attempts
+    WHERE project_id = ? AND clip_id = ? AND task_type = 'video_result_processing'
+    ORDER BY id ASC
+  `).all(created.project.id, created.project.clips[0].id), [
+    { attempt_kind: "initial", attempt_no: 1, status: "failed" },
+    { attempt_kind: "result_retry", attempt_no: 2, status: "completed" },
+  ]);
 });
 
 test("42.C: Native last frame download fails -> FFmpeg fallback succeeds -> Clip completed with submitCount = 1", async () => {

@@ -28,7 +28,7 @@
             {{ data.overview.conversionRate !== null ? `${data.overview.conversionRate}%` : '-' }}
           </span>
           <span class="fin-sub">创建 cohort：{{ data.overview.cohortPaid }} 笔最终支付 / {{ data.overview.createdInPeriod }} 笔创建</span>
-          <span class="fin-sub">期间支付 {{ data.overview.paidInPeriod }}；待支付 {{ data.overview.pendingUnexpired }}；失败/过期 {{ data.overview.expiredOrFailed }}</span>
+          <span class="fin-sub">期间支付 {{ data.overview.paidInPeriod }}；待支付 {{ data.overview.pendingUnexpired }}；失败/过期/关闭 {{ data.overview.expiredOrFailed }}</span>
         </div>
         <div class="fin-card">
           <span class="fin-label">用户剩余积分总量</span>

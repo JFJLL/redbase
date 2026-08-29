@@ -2,7 +2,12 @@
 
 const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
-const { recordPaymentOrderCreated, recordPaymentPaid, recordPaymentFailed } = require("../../analytics/analytics-recorder");
+const {
+  recordPaymentOrderCreated,
+  recordPaymentPaid,
+  recordPaymentFailed,
+  recordPaymentClosed,
+} = require("../../analytics/analytics-recorder");
 
 const db = getDbProxy();
 
@@ -101,18 +106,19 @@ function updatePaymentOrderStatus({ outTradeNo, status, nowIso, extra = {} }) {
   }
   values.push(String(outTradeNo || ""));
   const updated = db.prepare(`UPDATE payment_orders SET ${sets.join(", ")} WHERE out_trade_no = ?`).run(...values).changes > 0;
-  if (updated && ["failed", "expired"].includes(String(status))) {
+  if (updated && ["failed", "expired", "closed"].includes(String(status))) {
     try {
       const order = findPaymentOrderByOutTradeNo(outTradeNo);
       if (order && order.status !== "paid") {
         const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
-        recordPaymentFailed({
+        const recordTerminalFact = String(status) === "closed" ? recordPaymentClosed : recordPaymentFailed;
+        recordTerminalFact({
           orderId: order.id,
           userId: order.userId,
           accountType: userRow?.account_type || "customer",
           amountFen: order.amountFen,
           provider: order.provider,
-          failedAt: String(nowIso),
+          ...(String(status) === "closed" ? { closedAt: String(nowIso) } : { failedAt: String(nowIso) }),
         });
       }
     } catch (_) {}
@@ -250,7 +256,20 @@ function closePaymentOrder({ userId, outTradeNo, nowIso }) {
     SET status = 'closed', updated_at = ?
     WHERE user_id = ? AND out_trade_no = ? AND status IN ('created', 'pending', 'expired')
   `).run(String(nowIso), Number(userId), String(outTradeNo || ""));
-  return result.changes > 0 ? findPaymentOrderByOutTradeNo(outTradeNo) : null;
+  if (result.changes === 0) return null;
+  const order = findPaymentOrderByOutTradeNo(outTradeNo);
+  try {
+    const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
+    recordPaymentClosed({
+      orderId: order.id,
+      userId: order.userId,
+      accountType: userRow?.account_type || "customer",
+      amountFen: order.amountFen,
+      provider: order.provider,
+      closedAt: String(nowIso),
+    });
+  } catch (_) {}
+  return order;
 }
 
 function markPaymentOrderExpired({ outTradeNo, nowIso }) {

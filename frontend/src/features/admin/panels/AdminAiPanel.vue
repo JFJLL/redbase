@@ -55,9 +55,10 @@
                 <th class="text-right">首次成功率</th>
                 <th class="text-right">自动/人工重试率</th>
                 <th class="text-right">救援成功率</th>
+                <th class="text-right">Attempt 明细样本/覆盖率</th>
                 <th class="text-right">项目 P50 / P95</th>
                 <th class="text-right">Clip P50 / P95</th>
-                <th class="text-right">成熟/活跃/待配置</th>
+                <th class="text-right">成熟/活跃/待配置/待处理</th>
                 <th class="text-right">Gross / Refund / Net</th>
                 <th class="text-right">平均 Net 积分</th>
                 <th class="text-right">每秒 Net 积分</th>
@@ -76,9 +77,12 @@
                 <td class="text-right">{{ v.firstSuccessRate !== null ? `${v.firstSuccessRate}%` : '-' }}</td>
                 <td class="text-right">{{ v.autoRetryRate !== null ? `${v.autoRetryRate}%` : '-' }} / {{ v.manualRetryRate !== null ? `${v.manualRetryRate}%` : '-' }}</td>
                 <td class="text-right">{{ v.rescueRate !== null ? `${v.rescueRate}%` : '-' }}</td>
+                <td class="text-right">
+                  {{ v.attemptMetricSampleSize === 0 ? '历史明细不可回填' : `${v.attemptMetricSampleSize} / ${v.attemptMetricCoverageRate}%` }}
+                </td>
                 <td class="text-right">{{ v.p50DurationMs !== null ? `${(v.p50DurationMs / 1000).toFixed(1)}s` : '-' }} / {{ v.p95DurationMs !== null ? `${(v.p95DurationMs / 1000).toFixed(1)}s` : '-' }}</td>
                 <td class="text-right">{{ v.clipP50DurationMs !== null ? `${(v.clipP50DurationMs / 1000).toFixed(1)}s` : '-' }} / {{ v.clipP95DurationMs !== null ? `${(v.clipP95DurationMs / 1000).toFixed(1)}s` : '-' }}</td>
-                <td class="text-right">{{ v.matureCount }} / {{ v.activeCount }} / {{ v.waitingConfigCount }}</td>
+                <td class="text-right">{{ v.matureCount }} / {{ v.activeCount }} / {{ v.waitingConfigCount }} / {{ v.actionableCount }}</td>
                 <td class="text-right">{{ v.grossCredits }} / {{ v.refundCredits }} / {{ v.netCredits }}</td>
                 <td class="text-right">{{ v.avgNetCredits ?? '-' }}</td>
                 <td class="text-right">{{ v.netCreditsPerSuccessSecond ?? '-' }}</td>

@@ -5,8 +5,16 @@ const {
   ANALYTICS_FEATURE_LABELS,
 } = require("./analytics-constants");
 const { getAllAnalyticsMeta, getDbStats } = require("./analytics-repository");
+const { ACTIVE_PROJECT_STATUSES } = require("../video/video-project-statuses");
 
 const db = getDbProxy();
+const ACTIONABLE_VIDEO_PROJECT_STATUSES = new Set([
+  "waiting_configuration",
+  "result_processing_failed",
+  "partial_failed",
+  "uncertain",
+  "assembly_failed",
+]);
 
 function safeDiv(num, den) {
   const n = Number(num || 0);
@@ -17,7 +25,7 @@ function safeDiv(num, den) {
 
 function safePercent(num, den) {
   const res = safeDiv(num, den);
-  return res == null ? null : Math.round(res * 1000) / 10;
+  return res == null ? null : Math.min(100, Math.max(0, Math.round(res * 1000) / 10));
 }
 
 function calcDeltaPercent(curr, prev) {
@@ -774,7 +782,9 @@ function getAiMetrics(query = {}) {
   // Immutable video facts are the historical source of truth. Runtime queue
   // rows are intentionally not joined so deleting a user cannot change history.
   const createdProjects = db.prepare(`
-    SELECT entity_id, model, mode, resolution, aspect_ratio, media_duration_sec
+    SELECT entity_id, model, mode, resolution, aspect_ratio, media_duration_sec,
+      CAST(json_extract(metadata_json, '$.expectedClipCount') AS INTEGER) AS expected_clip_count,
+      json_extract(metadata_json, '$.expectedClipIds') AS expected_clip_ids_json
     FROM analytics_events e
     WHERE event_name = 'video_project_created'
       AND occurred_at >= ? AND occurred_at < ?
@@ -790,7 +800,7 @@ function getAiMetrics(query = {}) {
   const terminalByProject = new Map();
   for (const row of terminalFacts) terminalByProject.set(String(row.entity_id), row);
   const videoAttempts = db.prepare(`
-    SELECT project_id, clip_id, attempt_no, attempt_kind, status, duration_ms
+    SELECT project_id, clip_id, attempt_no, attempt_kind, status, duration_ms, is_backfilled
     FROM ai_task_attempts a
     WHERE task_type = 'video_clip_generation'
       AND status IN ('completed', 'failed')
@@ -802,6 +812,9 @@ function getAiMetrics(query = {}) {
     if (!attemptsByProject.has(key)) attemptsByProject.set(key, []);
     attemptsByProject.get(key).push(attempt);
   }
+  const runtimeStatusByProject = new Map(db.prepare(`
+    SELECT id, status FROM video_projects
+  `).all().map((row) => [String(row.id), String(row.status || "")]));
   const creditFacts = db.prepare(`
     SELECT event_name, credit_cost, credit_delta,
       CAST(json_extract(metadata_json, '$.projectId') AS TEXT) AS project_id
@@ -834,6 +847,10 @@ function getAiMetrics(query = {}) {
     let manualRetryCount = 0;
     let rescueCount = 0;
     let retryMatureCount = 0;
+    let attemptMetricSampleSize = 0;
+    let activeCount = 0;
+    let waitingConfigCount = 0;
+    let actionableCount = 0;
     let grossCredits = 0;
     let refundCredits = 0;
     const projectDurations = [];
@@ -843,27 +860,48 @@ function getAiMetrics(query = {}) {
       const terminal = terminalByProject.get(projectId);
       const isCompleted = terminal?.event_name === "video_project_completed";
       const isFailed = terminal?.event_name === "video_project_failed";
+      const isMature = isCompleted || isFailed;
+      const runtimeStatus = runtimeStatusByProject.get(projectId) || "";
+      if (ACTIVE_PROJECT_STATUSES.has(runtimeStatus)) activeCount += 1;
+      if (runtimeStatus === "waiting_configuration") waitingConfigCount += 1;
+      if (ACTIONABLE_VIDEO_PROJECT_STATUSES.has(runtimeStatus)) actionableCount += 1;
       if (isCompleted) {
         completedCount += 1;
         projectDurations.push(Number(terminal.duration_ms || 0));
       }
       if (isFailed) failedCount += 1;
       const attempts = (attemptsByProject.get(projectId) || []).sort((a, b) => Number(a.attempt_no) - Number(b.attempt_no));
-      const initialAttempts = attempts.filter((attempt) => attempt.attempt_kind === "initial");
-      const hasAuto = attempts.some((attempt) => attempt.attempt_kind === "auto_retry");
-      const hasManual = attempts.some((attempt) => attempt.attempt_kind === "manual_retry");
-      const clipIds = new Set(attempts.map((attempt) => String(attempt.clip_id || "")).filter(Boolean));
+      const realAttempts = attempts.filter((attempt) => !Number(attempt.is_backfilled)
+        && attempt.attempt_kind !== "historical_summary");
+      const expectedClipCount = Number(project.expected_clip_count || 0);
+      let expectedClipIds = [];
+      try {
+        expectedClipIds = JSON.parse(project.expected_clip_ids_json || "[]");
+      } catch (_) {}
+      const expectedClipIdSet = new Set(expectedClipIds.map((clipId) => String(clipId || "")).filter(Boolean));
+      const realTerminalClipIds = new Set(realAttempts
+        .map((attempt) => String(attempt.clip_id || ""))
+        .filter(Boolean));
+      const isAttemptMetricSample = isMature
+        && expectedClipCount > 0
+        && expectedClipIdSet.size === expectedClipCount
+        && [...expectedClipIdSet].every((clipId) => realTerminalClipIds.has(clipId));
+      if (isAttemptMetricSample) attemptMetricSampleSize += 1;
+      const initialAttempts = realAttempts.filter((attempt) => attempt.attempt_kind === "initial");
+      const hasAuto = realAttempts.some((attempt) => attempt.attempt_kind === "auto_retry");
+      const hasManual = realAttempts.some((attempt) => attempt.attempt_kind === "manual_retry");
+      const clipIds = realTerminalClipIds;
       const allClipInitialAttemptsCompleted = clipIds.size > 0
         && [...clipIds].every((clipId) => {
           const clipInitialAttempts = initialAttempts.filter((attempt) => String(attempt.clip_id || "") === clipId);
           return clipInitialAttempts.length > 0 && clipInitialAttempts.every((attempt) => attempt.status === "completed");
         });
       const hasInitialFailure = initialAttempts.some((attempt) => attempt.status === "failed");
-      if (isCompleted && allClipInitialAttemptsCompleted && !hasInitialFailure && !hasAuto && !hasManual) firstSuccessCount += 1;
-      if (hasAuto) autoRetryCount += 1;
-      if (hasManual) manualRetryCount += 1;
-      if ((isCompleted || isFailed) && (hasAuto || hasManual)) retryMatureCount += 1;
-      if (isCompleted && (hasAuto || hasManual)) rescueCount += 1;
+      if (isAttemptMetricSample && isCompleted && allClipInitialAttemptsCompleted && !hasInitialFailure && !hasAuto && !hasManual) firstSuccessCount += 1;
+      if (isAttemptMetricSample && hasAuto) autoRetryCount += 1;
+      if (isAttemptMetricSample && hasManual) manualRetryCount += 1;
+      if (isAttemptMetricSample && (hasAuto || hasManual)) retryMatureCount += 1;
+      if (isAttemptMetricSample && isCompleted && (hasAuto || hasManual)) rescueCount += 1;
       clipDurations.push(...attempts.map((attempt) => Number(attempt.duration_ms || 0)));
       const credit = creditsByProject.get(projectId) || { gross: 0, refund: 0 };
       grossCredits += credit.gross;
@@ -882,12 +920,15 @@ function getAiMetrics(query = {}) {
       totalDurationSec: Number(sample.media_duration_sec || 0),
       projectCount: projects.length,
       matureCount,
-      activeCount: projects.length - matureCount,
-      waitingConfigCount: 0,
+      activeCount,
+      waitingConfigCount,
+      actionableCount,
+      attemptMetricSampleSize,
+      attemptMetricCoverageRate: safePercent(attemptMetricSampleSize, matureCount),
       completionRate: safePercent(completedCount, matureCount),
-      firstSuccessRate: safePercent(firstSuccessCount, matureCount),
-      autoRetryRate: safePercent(autoRetryCount, matureCount),
-      manualRetryRate: safePercent(manualRetryCount, matureCount),
+      firstSuccessRate: safePercent(firstSuccessCount, attemptMetricSampleSize),
+      autoRetryRate: safePercent(autoRetryCount, attemptMetricSampleSize),
+      manualRetryRate: safePercent(manualRetryCount, attemptMetricSampleSize),
       rescueRate: safePercent(rescueCount, retryMatureCount),
       p50DurationMs: percentile(projectDurations, 0.5),
       p95DurationMs: percentile(projectDurations, 0.95),
@@ -955,7 +996,7 @@ function getFinanceMetrics(query = {}) {
       ) THEN 1 ELSE 0 END) AS cohort_paid,
       SUM(CASE WHEN EXISTS (
         SELECT 1 FROM analytics_events failed
-        WHERE failed.event_name = 'payment_failed'
+        WHERE failed.event_name IN ('payment_failed', 'payment_closed')
           AND failed.entity_type = e.entity_type
           AND failed.entity_id = e.entity_id
           AND failed.is_admin = 0

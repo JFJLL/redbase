@@ -404,6 +404,8 @@ function createProjectWithBilling({ project, clips, generation, billing, prevent
         aspectRatio: project.aspectRatio,
         totalDurationSec: project.totalDurationSec,
         estimatedCredits: billing.creditCost,
+        expectedClipCount: createdClips.length,
+        expectedClipIds: createdClips.map((clip) => clip.id),
         createdAt: finalProject.createdAt,
       });
     } catch (_) {}
