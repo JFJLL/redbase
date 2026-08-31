@@ -309,6 +309,10 @@ export interface AdminBrandItem {
   description?: string;
   product?: string;
   goal?: string;
+  knowledgeBase?: string;
+  assetTags?: string[];
+  logoName?: string;
+  hasLogo?: boolean;
   profileType: string;
   createdAt: string;
   updatedAt?: string;
@@ -331,6 +335,7 @@ export interface AdminGenerationItem {
   createdAt: string;
   previewUrl?: string;
   summary?: string;
+  payload?: Record<string, unknown>;
   visibilityStatus: "active" | "expired";
   assetStatus: "available" | "purged" | "none" | "purge_failed";
   assetCount: number;

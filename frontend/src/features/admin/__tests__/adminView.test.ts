@@ -3,6 +3,8 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import AdminDashboardView from "../views/AdminDashboardView.vue";
 import AdminMediaPreview from "../components/AdminMediaPreview.vue";
+import AdminMetricChart from "../components/AdminMetricChart.vue";
+import AdminSelect from "../components/AdminSelect.vue";
 import { computeDateParams } from "../dateRange";
 
 async function waitForStableUi(predicate: () => boolean, timeoutMs = 5000) {
@@ -74,6 +76,56 @@ const MOCK_CREDIT_EVENTS_DATA = {
   ],
 };
 
+const MOCK_BRANDS_DATA = {
+  total: 1,
+  page: 1,
+  pageSize: 20,
+  items: [{
+    id: 51,
+    ownerUserId: 2,
+    name: "验收品牌A",
+    industry: "美妆",
+    audience: "关注成分与功效的年轻消费者",
+    description: "强调可靠成分和真实体验。",
+    product: "修护精华",
+    goal: "建立专业可信的品牌认知",
+    knowledgeBase: "品牌坚持透明配方与长期主义。",
+    assetTags: ["成分", "修护"],
+    profileType: "brand",
+    analysisCount: 2,
+    trendCount: 8,
+    createdAt: "2026-08-28T08:00:00.000Z",
+    user: { id: 2, name: "小美", phone: "13900000002" },
+  }],
+};
+
+const MOCK_GENERATIONS_DATA = {
+  total: 1,
+  page: 1,
+  pageSize: 20,
+  items: [{
+    id: 65,
+    ownerUserId: 2,
+    type: "video",
+    channelLabel: "AI 视频",
+    brandId: 51,
+    brandName: "验收品牌A",
+    trendId: 9,
+    trendTitle: "高端生活美学",
+    ideaTitle: "为什么我只喝特色苏？",
+    cardTitle: "超市必买清单：特色苏有机奶的日常高端美学",
+    createdAt: "2026-08-28T09:32:21.000Z",
+    previewUrl: "https://example.com/generated.png",
+    summary: "这是完整的生成内容摘要，用于在详情弹窗中检查长内容展示。",
+    payload: { concept: "日常高端美学", scenes: 4 },
+    visibilityStatus: "active",
+    assetStatus: "available",
+    assetCount: 1,
+    assetBytes: 2048,
+    user: { id: 2, name: "小美", phone: "13900000002" },
+  }],
+};
+
 type FetchCall = { url: string; init?: RequestInit };
 const mountedWrappers: Array<{ unmount: () => void }> = [];
 
@@ -98,8 +150,8 @@ describe("AdminDashboardView", () => {
         if (url === "/api/session") return jsonResponse(200, { user: { id: 1, name: "管理员", isAdmin: true } });
         if (url.startsWith("/api/admin/analytics/overview")) return jsonResponse(200, MOCK_OVERVIEW);
         if (url.startsWith("/api/admin/data/users")) return jsonResponse(200, MOCK_USERS_DATA);
-        if (url.startsWith("/api/admin/data/brands")) return jsonResponse(200, { total: 0, page: 1, pageSize: 20, items: [] });
-        if (url.startsWith("/api/admin/data/generations")) return jsonResponse(200, { total: 0, page: 1, pageSize: 20, items: [] });
+        if (url.startsWith("/api/admin/data/brands")) return jsonResponse(200, MOCK_BRANDS_DATA);
+        if (url.startsWith("/api/admin/data/generations")) return jsonResponse(200, MOCK_GENERATIONS_DATA);
         if (url.startsWith("/api/admin/data/credit-events")) return jsonResponse(200, MOCK_CREDIT_EVENTS_DATA);
         if (url.startsWith("/api/admin/data/payment-orders")) return jsonResponse(200, { total: 0, page: 1, pageSize: 20, items: [] });
         if (url.startsWith("/api/admin/data/video-projects")) return jsonResponse(200, { total: 0, page: 1, pageSize: 20, items: [] });
@@ -121,6 +173,43 @@ describe("AdminDashboardView", () => {
     expect(calls.some((call) => call.url.includes("/api/admin/analytics/overview"))).toBe(true);
     expect(wrapper.find('[data-test="kpi-dau"]').text()).toContain("120");
     expect(wrapper.find('[data-test="kpi-revenue"]').text()).toContain("1,280");
+    expect(wrapper.text()).not.toContain("近90天");
+  });
+
+  it("shows an exact value tooltip when a line-chart point is hovered", async () => {
+    const wrapper = mount(AdminMetricChart, {
+      props: {
+        type: "line",
+        title: "营收走势",
+        data: [{ date: "2026-08-31", value: 1280 }],
+      },
+    });
+    await wrapper.find(".chart-point-group").trigger("mouseenter");
+    expect(wrapper.find(".chart-tooltip").text()).toContain("2026-08-31");
+    expect(wrapper.find(".chart-tooltip").text()).toContain("1,280");
+    wrapper.unmount();
+  });
+
+  it("uses a project-styled listbox instead of a native select", async () => {
+    const wrapper = mount(AdminSelect, {
+      props: {
+        modelValue: "",
+        options: [
+          { value: "", label: "全部账号" },
+          { value: "customer", label: "仅客户账号" },
+        ],
+        label: "账号类型",
+        testId: "test-account-select",
+      },
+    });
+
+    expect(wrapper.find("select").exists()).toBe(false);
+    await wrapper.find(".admin-select__trigger").trigger("click");
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true);
+    await wrapper.find('[data-value="customer"]').trigger("click");
+    expect(wrapper.emitted("update:modelValue")?.[0]).toEqual(["customer"]);
+    expect(wrapper.emitted("change")?.[0]).toEqual(["customer"]);
+    wrapper.unmount();
   });
 
   it("switches section via navigation and updates URL hash", async () => {
@@ -157,6 +246,34 @@ describe("AdminDashboardView", () => {
     expect(creditCall).toBeTruthy();
     expect(creditCall!.init?.method).toBe("POST");
     expect(JSON.parse(String(creditCall!.init?.body))).toEqual({ amount: 30, note: "活动补贴" });
+  });
+
+  it("keeps the credit-event type filter beside the table search", async () => {
+    window.location.hash = "#management";
+    const { wrapper } = await mountView();
+    await wrapper.find('[data-test="manage-tab-credit-events"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('.table-top-bar [data-test="usage-filters"]').exists()).toBe(true);
+    expect(wrapper.find('.table-top-bar select').exists()).toBe(false);
+  });
+
+  it("opens complete brand and generation detail dialogs from table actions", async () => {
+    window.location.hash = "#management";
+    const { wrapper } = await mountView();
+
+    await wrapper.find('[data-test="manage-tab-brands"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="view-brand-detail"]').trigger("click");
+    expect(wrapper.find('[aria-labelledby="brand-detail-title"]').text()).toContain("验收品牌A");
+    expect(wrapper.find('[aria-labelledby="brand-detail-title"]').text()).toContain("关注成分与功效的年轻消费者");
+    await wrapper.find('[aria-label="关闭品牌详情"]').trigger("click");
+
+    await wrapper.find('[data-test="manage-tab-generations"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="view-generation-detail"]').trigger("click");
+    const generationDialog = wrapper.find('[aria-labelledby="generation-detail-title"]');
+    expect(generationDialog.text()).toContain("完整的生成内容摘要");
+    expect(generationDialog.text()).toContain("日常高端美学");
   });
 
   it("refuses to delete the current admin and confirms before deleting others", async () => {
@@ -206,6 +323,12 @@ describe("AdminDashboardView", () => {
     expect(purgedWrapper.text()).toContain("媒体文件已按保留策略清理");
     expect(purgedWrapper.find("video").exists()).toBe(false);
     expect(purgedWrapper.find("img").exists()).toBe(false);
+
+    const compactTextWrapper = mount(AdminMediaPreview, {
+      props: { textSummary: "很长的脚本文案".repeat(40), compact: true },
+    });
+    expect(compactTextWrapper.classes()).toContain("compact");
+    expect(compactTextWrapper.find(".text-concept").exists()).toBe(true);
   });
 
   it("sends a custom inclusive end date as the next exclusive day", () => {

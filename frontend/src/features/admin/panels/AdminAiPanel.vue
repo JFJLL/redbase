@@ -274,6 +274,7 @@ defineExpose({
 
 .card-header {
   margin-bottom: 12px;
+  padding-inline: 12px;
 }
 .card-title {
   font-size: 14px;

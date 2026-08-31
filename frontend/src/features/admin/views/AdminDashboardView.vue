@@ -157,6 +157,7 @@ onUnmounted(() => {
 
 <style scoped>
 .admin-layout {
+  --admin-card-gap: 20px;
   display: flex;
   min-height: 100vh;
   background: #f8fafc;
@@ -178,6 +179,23 @@ onUnmounted(() => {
   width: 100%;
   margin: 0 auto;
   box-sizing: border-box;
+}
+
+.admin-content-container :deep(.panel-content) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-card-gap);
+}
+
+.admin-content-container :deep(.kpis-grid),
+.admin-content-container :deep(.charts-row),
+.admin-content-container :deep(.activity-row),
+.admin-content-container :deep(.funnels-grid),
+.admin-content-container :deep(.ai-summary-grid),
+.admin-content-container :deep(.finance-kpis-grid),
+.admin-content-container :deep(.tables-row),
+.admin-content-container :deep(.system-grid) {
+  gap: var(--admin-card-gap);
 }
 
 .session-loading-wrapper {

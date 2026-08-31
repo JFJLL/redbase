@@ -1,5 +1,5 @@
 <template>
-  <div class="media-preview-container">
+  <div class="media-preview-container" :class="{ compact }">
     <!-- Purged State Placeholder -->
     <div v-if="assetStatus === 'purged'" class="purged-placeholder">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
@@ -63,6 +63,7 @@ const props = defineProps<{
   posterUrl?: string;
   assetStatus?: "available" | "purged" | "none" | "purge_failed" | string;
   textSummary?: string;
+  compact?: boolean;
 }>();
 
 const isVideo = computed(() => {
@@ -83,6 +84,43 @@ const isVideo = computed(() => {
   border-radius: 6px;
   overflow: hidden;
   min-height: 80px;
+}
+
+.media-preview-container.compact {
+  width: 96px;
+  height: 72px;
+  min-height: 72px;
+}
+.compact .text-preview-box {
+  height: 100%;
+  padding: 8px;
+  overflow: hidden;
+}
+.compact .text-concept {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-style: normal;
+  line-height: 1.4;
+}
+.compact .preview-img,
+.compact .preview-video {
+  width: 100%;
+  height: 72px;
+  object-fit: cover;
+}
+.compact .purged-placeholder,
+.compact .no-media-box {
+  height: 100%;
+  padding: 8px;
+  overflow: hidden;
+}
+.compact .purged-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .purged-placeholder {

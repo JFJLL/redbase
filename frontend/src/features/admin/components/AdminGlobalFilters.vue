@@ -37,11 +37,13 @@
 
     <div class="filter-group account-select-group">
       <label class="filter-label">账号类型:</label>
-      <select class="filter-select" :value="filters.accountType || ''" @change="onAccountChange">
-        <option value="">全部账号</option>
-        <option value="customer">仅客户账号</option>
-        <option value="yimei">仅易美账号</option>
-      </select>
+      <AdminSelect
+        :model-value="filters.accountType || ''"
+        :options="ACCOUNT_OPTIONS"
+        label="账号类型"
+        test-id="account-type-select"
+        @change="onAccountChange"
+      />
     </div>
 
     <div class="filter-actions">
@@ -64,6 +66,13 @@
 <script setup lang="ts">
 import type { AdminFilters, AdminDatePreset, CoverageInfo } from "../types";
 import { PRESET_OPTIONS } from "../dateRange";
+import AdminSelect, { type AdminSelectOption } from "./AdminSelect.vue";
+
+const ACCOUNT_OPTIONS: AdminSelectOption[] = [
+  { value: "", label: "全部账号", description: "客户与易美账号" },
+  { value: "customer", label: "仅客户账号", description: "外部客户" },
+  { value: "yimei", label: "仅易美账号", description: "内部运营账号" },
+];
 
 const props = defineProps<{
   filters: AdminFilters;
@@ -102,11 +111,10 @@ function onCustomToInput(e: Event) {
   });
 }
 
-function onAccountChange(e: Event) {
-  const val = (e.target as HTMLSelectElement).value as "customer" | "yimei" | "";
+function onAccountChange(val: string) {
   emit("update:filters", {
     ...props.filters,
-    accountType: val,
+    accountType: val as "customer" | "yimei" | "",
   });
   emit("refresh");
 }
@@ -165,8 +173,7 @@ function onAccountChange(e: Event) {
   gap: 6px;
 }
 
-.filter-input,
-.filter-select {
+.filter-input {
   border: 1px solid #d1d5db;
   border-radius: 4px;
   padding: 5px 8px;
@@ -175,8 +182,7 @@ function onAccountChange(e: Event) {
   background: #ffffff;
 }
 
-.filter-input:focus,
-.filter-select:focus {
+.filter-input:focus {
   outline: none;
   border-color: #e11d48;
 }
@@ -203,6 +209,10 @@ function onAccountChange(e: Event) {
 .filter-label {
   font-size: 13px;
   color: #6b7280;
+}
+
+.account-select-group :deep(.admin-select) {
+  min-width: 168px;
 }
 
 .filter-actions {

@@ -4,7 +4,6 @@ export const PRESET_OPTIONS: Array<{ id: AdminDatePreset; label: string }> = [
   { id: "today", label: "今天" },
   { id: "7d", label: "近7天" },
   { id: "30d", label: "近30天" },
-  { id: "90d", label: "近90天" },
   { id: "custom", label: "自定义日期" },
 ];
 

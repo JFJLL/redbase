@@ -40,19 +40,19 @@
     </div>
 
     <!-- SVG Chart view -->
-    <div v-else class="svg-chart-wrapper">
+    <div v-else ref="chartWrapper" class="svg-chart-wrapper">
       <!-- Line Chart -->
-      <svg v-if="type === 'line'" viewBox="0 0 500 200" class="chart-svg" preserveAspectRatio="none">
+      <svg v-if="type === 'line'" :viewBox="`0 0 ${chartWidth} 200`" class="chart-svg" preserveAspectRatio="xMidYMid meet">
         <!-- Grid lines -->
-        <line x1="40" y1="20" x2="480" y2="20" stroke="#f3f4f6" stroke-width="1" />
-        <line x1="40" y1="65" x2="480" y2="65" stroke="#f3f4f6" stroke-width="1" />
-        <line x1="40" y1="110" x2="480" y2="110" stroke="#f3f4f6" stroke-width="1" />
-        <line x1="40" y1="155" x2="480" y2="155" stroke="#e5e7eb" stroke-width="1" />
+        <line :x1="plotLeft" y1="20" :x2="plotRight" y2="20" stroke="#f3f4f6" stroke-width="1" />
+        <line :x1="plotLeft" y1="65" :x2="plotRight" y2="65" stroke="#f3f4f6" stroke-width="1" />
+        <line :x1="plotLeft" y1="110" :x2="plotRight" y2="110" stroke="#f3f4f6" stroke-width="1" />
+        <line :x1="plotLeft" y1="155" :x2="plotRight" y2="155" stroke="#e5e7eb" stroke-width="1" />
 
         <!-- Y Axis Labels -->
-        <text x="35" y="24" class="axis-text" text-anchor="end">{{ formatNumber(maxVal) }}</text>
-        <text x="35" y="90" class="axis-text" text-anchor="end">{{ formatNumber(Math.round(maxVal / 2)) }}</text>
-        <text x="35" y="158" class="axis-text" text-anchor="end">0</text>
+        <text :x="plotLeft - 8" y="24" class="axis-text" text-anchor="end">{{ formatNumber(maxVal) }}</text>
+        <text :x="plotLeft - 8" y="114" class="axis-text" text-anchor="end">{{ formatNumber(Math.round(maxVal / 3)) }}</text>
+        <text :x="plotLeft - 8" y="158" class="axis-text" text-anchor="end">0</text>
 
         <!-- Line & Area Fill -->
         <defs>
@@ -65,21 +65,31 @@
         <polyline :points="polylinePoints" fill="none" stroke="#e11d48" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
 
         <!-- Data points -->
-        <circle
+        <g
           v-for="(p, i) in pointCoords"
           :key="i"
-          :cx="p.x"
-          :cy="p.y"
-          r="3.5"
-          fill="#ffffff"
-          stroke="#e11d48"
-          stroke-width="2"
-        />
+          class="chart-point-group"
+          :aria-label="`${p.date || '数据点'}：${formatNumber(p.val)}`"
+          tabindex="0"
+          @mouseenter="hoveredPoint = p"
+          @mouseleave="hoveredPoint = null"
+          @focus="hoveredPoint = p"
+          @blur="hoveredPoint = null"
+        >
+          <circle :cx="p.x" :cy="p.y" r="11" fill="transparent" class="chart-point-hit" />
+          <circle :cx="p.x" :cy="p.y" r="4" fill="#ffffff" stroke="#e11d48" stroke-width="2" class="chart-point" />
+        </g>
+
+        <g v-if="hoveredPoint" class="chart-tooltip" pointer-events="none">
+          <rect :x="tooltipPosition.x" :y="tooltipPosition.y" width="112" height="42" rx="6" fill="#111827" />
+          <text :x="tooltipPosition.x + 10" :y="tooltipPosition.y + 16" class="tooltip-date">{{ hoveredPoint.date || '当前数据点' }}</text>
+          <text :x="tooltipPosition.x + 10" :y="tooltipPosition.y + 33" class="tooltip-value">数值：{{ formatNumber(hoveredPoint.val) }}</text>
+        </g>
       </svg>
 
       <!-- Bar Chart -->
-      <svg v-else-if="type === 'bar'" viewBox="0 0 500 200" class="chart-svg" preserveAspectRatio="none">
-        <line x1="40" y1="155" x2="480" y2="155" stroke="#e5e7eb" stroke-width="1" />
+      <svg v-else-if="type === 'bar'" :viewBox="`0 0 ${chartWidth} 200`" class="chart-svg" preserveAspectRatio="xMidYMid meet">
+        <line :x1="plotLeft" y1="155" :x2="plotRight" y2="155" stroke="#e5e7eb" stroke-width="1" />
         <rect
           v-for="(bar, i) in barCoords"
           :key="i"
@@ -119,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, nextTick, onBeforeUnmount, onMounted } from "vue";
 import { formatNumber } from "../dateRange";
 
 const props = withDefaults(
@@ -137,6 +147,30 @@ const props = withDefaults(
 
 const showTable = ref(false);
 const chartId = Math.random().toString(36).slice(2, 8);
+const chartWrapper = ref<HTMLElement | null>(null);
+const chartWidth = ref(500);
+type ChartPoint = { x: number; y: number; val: number; date: string };
+const hoveredPoint = ref<ChartPoint | null>(null);
+let resizeObserver: ResizeObserver | null = null;
+
+const plotLeft = 48;
+const plotRight = computed(() => Math.max(plotLeft + 1, chartWidth.value - 16));
+
+function updateChartWidth() {
+  const width = Math.round(chartWrapper.value?.getBoundingClientRect().width || 0);
+  if (width > 0) chartWidth.value = width;
+}
+
+onMounted(async () => {
+  await nextTick();
+  updateChartWidth();
+  if (typeof ResizeObserver !== "undefined" && chartWrapper.value) {
+    resizeObserver = new ResizeObserver(updateChartWidth);
+    resizeObserver.observe(chartWrapper.value);
+  }
+});
+
+onBeforeUnmount(() => resizeObserver?.disconnect());
 
 const maxVal = computed(() => {
   if (!props.data || !props.data.length) return 10;
@@ -148,8 +182,8 @@ const maxVal = computed(() => {
 const pointCoords = computed(() => {
   if (!props.data || !props.data.length) return [];
   const n = props.data.length;
-  const startX = 50;
-  const endX = 470;
+  const startX = plotLeft + 2;
+  const endX = plotRight.value - 8;
   const startY = 20;
   const endY = 155;
   const stepX = n > 1 ? (endX - startX) / (n - 1) : 0;
@@ -175,11 +209,19 @@ const areaPoints = computed(() => {
   return `${first.x.toFixed(1)},155 ${polylinePoints.value} ${last.x.toFixed(1)},155`;
 });
 
+const tooltipPosition = computed(() => {
+  const point = hoveredPoint.value;
+  if (!point) return { x: 0, y: 0 };
+  const x = Math.min(Math.max(4, point.x - 56), chartWidth.value - 116);
+  const y = point.y < 66 ? point.y + 14 : point.y - 50;
+  return { x, y };
+});
+
 const barCoords = computed(() => {
   if (!props.data || !props.data.length) return [];
   const n = props.data.length;
-  const startX = 50;
-  const totalWidth = 420;
+  const startX = plotLeft + 2;
+  const totalWidth = Math.max(1, plotRight.value - startX - 8);
   const barW = Math.min(24, Math.max(6, Math.floor(totalWidth / (n * 1.5))));
   const stepX = totalWidth / n;
   const startY = 20;
@@ -266,9 +308,27 @@ const xLabels = computed(() => {
 
 .chart-svg {
   width: 100%;
-  height: 180px;
+  height: 200px;
   display: block;
 }
+
+.chart-point-group {
+  cursor: crosshair;
+  outline: none;
+}
+.chart-point-group:hover .chart-point,
+.chart-point-group:focus .chart-point {
+  fill: #e11d48;
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+.tooltip-date,
+.tooltip-value {
+  fill: #ffffff;
+  font-family: inherit;
+}
+.tooltip-date { font-size: 11px; opacity: 0.78; }
+.tooltip-value { font-size: 12px; font-weight: 600; }
 
 .axis-text {
   font-size: 10px;

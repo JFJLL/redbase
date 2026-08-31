@@ -125,7 +125,7 @@ defineEmits<{
   padding: 12px 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px;
   border-bottom: 1px solid #f3f4f6;
