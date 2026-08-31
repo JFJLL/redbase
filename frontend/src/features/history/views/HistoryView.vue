@@ -16,7 +16,6 @@ import {
 import ImageEditPanel from "@/features/generation/components/ImageEditPanel.vue";
 import VideoScriptResult from "@/features/generation/components/VideoScriptResult.vue";
 import type { ImageEditTarget } from "@/features/generation/composables/useImageEdit";
-import { trackAnalyticsEvent } from "@/shared/analytics/tracker";
 import {
   HISTORY_TYPE_LABELS,
   KNOWN_ASPECT_RATIOS,
@@ -1086,9 +1085,6 @@ onUnmounted(() => {
                       v-if="clip.error && ['failed', 'uncertain_submission', 'cancelled', 'result_processing_failed', 'waiting_configuration'].includes(String(clip.status))"
                       class="history-video-clip-error"
                     >失败原因：{{ clip.error }}</small>
-                    <div class="history-video-clip-actions">
-                      <a v-if="safeImageSrc(String(clip.videoUrl || ''))" :href="safeImageSrc(String(clip.videoUrl || ''))" download @click="trackAnalyticsEvent('final_asset_downloaded', { assetType: 'video_clip' })">下载本段</a>
-                    </div>
                   </div>
                 </div>
               </article>
@@ -1513,7 +1509,7 @@ onUnmounted(() => {
 
 .history-video-clip-body {
   display: grid;
-  grid-template-columns: minmax(260px, 0.95fr) minmax(0, 1.05fr);
+  grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
   align-items: stretch;
   gap: 18px;
   min-width: 0;
@@ -1632,7 +1628,8 @@ onUnmounted(() => {
 
 .history-video-prompt-editor textarea {
   width: 100%;
-  min-height: 176px;
+  height: 100%;
+  min-height: 190px;
   flex: 1;
   resize: vertical;
   border: 1px solid var(--workspace-border, var(--color-border));

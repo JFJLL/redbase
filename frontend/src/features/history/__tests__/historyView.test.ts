@@ -343,8 +343,6 @@ describe("HistoryView", () => {
     expect(detail.find(".history-video-clip-media .history-clip-player").attributes("poster")).toContain("video-projects/77/assets/poster/1");
     expect(detail.find(".history-video-clip-editor .history-video-prompt-editor").exists()).toBe(true);
     expect(detail.findAll('[data-test="history-clip-prompt"]')).toHaveLength(2);
-    // 没成功生成视频的剪辑不显示「下载本段」按钮。
-    expect(detail.findAll(".history-video-clip-actions a")).toHaveLength(1);
     // 确保没有触发单段重试请求。
     expect(calls.some((call) => call.url === "/api/video-projects/77/clips/2/retry")).toBe(false);
   });
@@ -513,8 +511,6 @@ describe("HistoryView", () => {
     expect(detail.findAll(".history-video-clip-media")).toHaveLength(1);
     expect(detail.findAll(".history-clip-placeholder")).toHaveLength(1);
     expect(detail.find(".history-clip-placeholder").text()).toContain("准备中");
-    // 没有生成视频，自然也没有下载链接。
-    expect(detail.findAll(".history-video-clip-actions a")).toHaveLength(0);
   });
 
 
