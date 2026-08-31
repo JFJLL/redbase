@@ -188,6 +188,10 @@
             :text-summary="item.summary"
           />
         </template>
+        <template #cell-duration="{ item }">
+          <span class="generation-duration" v-if="item.durationMs">{{ formatDuration(item.durationMs) }}</span>
+          <span class="text-muted" v-else>-</span>
+        </template>
         <template #cell-createdAt="{ item }">
           <span class="generation-time">{{ formatDateTime(item.createdAt) }}</span>
         </template>
@@ -403,6 +407,7 @@
             <div class="detail-summary-grid generation-meta-grid">
               <div class="detail-stat"><span>功能类型</span><strong>{{ selectedGenerationDetail.channelLabel || selectedGenerationDetail.type }}</strong></div>
               <div class="detail-stat"><span>媒体状态</span><AdminStatusBadge :status="selectedGenerationDetail.assetStatus" /></div>
+              <div class="detail-stat"><span>生成用时</span><strong class="text-emerald">{{ formatDuration(selectedGenerationDetail.durationMs) }}</strong></div>
               <div class="detail-stat"><span>关联品牌</span><strong>{{ selectedGenerationDetail.brandName || '未关联' }}</strong></div>
               <div class="detail-stat"><span>生成时间</span><strong>{{ formatDateTime(selectedGenerationDetail.createdAt) }}</strong></div>
               <div class="detail-stat"><span>媒体数量</span><strong>{{ selectedGenerationDetail.assetCount || 0 }}</strong></div>
@@ -423,6 +428,24 @@
           <div class="detail-section" v-if="selectedGenerationDetail.summary">
             <h4>完整内容</h4>
             <p class="detail-copy detail-copy--content">{{ selectedGenerationDetail.summary }}</p>
+          </div>
+          <!-- Prompts Section -->
+          <div class="detail-section prompt-section" v-if="generationPrompts.length">
+            <div class="section-title-row">
+              <h4>发给生图模型的完整提示词 (Prompt)</h4>
+              <span class="prompt-count-tag">{{ generationPrompts.length }} 条提示词</span>
+            </div>
+            <div class="prompts-list">
+              <div v-for="(item, idx) in generationPrompts" :key="idx" class="prompt-card">
+                <div class="prompt-card-header">
+                  <span class="prompt-label">{{ item.label }}</span>
+                  <button type="button" class="copy-prompt-btn" @click="copyPrompt(item.prompt)">
+                    复制提示词
+                  </button>
+                </div>
+                <pre class="prompt-text">{{ item.prompt }}</pre>
+              </div>
+            </div>
           </div>
           <div class="detail-section" v-if="hasPayload(selectedGenerationDetail.payload)">
             <h4>结构化生成数据</h4>
@@ -646,9 +669,10 @@ const selectedGenerationDetail = ref<AdminGenerationItem | null>(null);
 const generationColumns: TableColumn[] = [
   { key: "id", label: "ID", width: "60px", align: "center" },
   { key: "preview", label: "媒体预览", width: "124px", align: "center" },
-  { key: "cardTitle", label: "内容标题", width: "36%", align: "center" },
-  { key: "type", label: "功能类型", width: "120px", align: "center" },
-  { key: "assetStatus", label: "资产状态", width: "108px", align: "center" },
+  { key: "cardTitle", label: "内容标题", width: "30%", align: "center" },
+  { key: "type", label: "功能类型", width: "110px", align: "center" },
+  { key: "assetStatus", label: "资产状态", width: "100px", align: "center" },
+  { key: "duration", label: "用时", width: "90px", align: "center" },
   { key: "createdAt", label: "生成时间", width: "170px", align: "center" },
 ];
 
@@ -787,6 +811,79 @@ function formatBytes(value?: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDuration(ms?: number | null): string {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const sec = value / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = Math.round(sec % 60);
+  return `${min}分${remSec}秒`;
+}
+
+function extractPrompts(item: AdminGenerationItem | null): Array<{ label: string; prompt: string }> {
+  if (!item || !item.payload) return [];
+  const payload = item.payload;
+  const results: Array<{ label: string; prompt: string }> = [];
+
+  if (Array.isArray(payload.slides) && payload.slides.length > 0) {
+    payload.slides.forEach((slide: any, idx: number) => {
+      const p = String(slide?.prompt || "").trim();
+      if (p) {
+        results.push({
+          label: `分图 #${idx + 1}${slide.title ? ` · ${slide.title}` : ""}`,
+          prompt: p,
+        });
+      }
+    });
+  }
+
+  const mainPrompt = String(payload.prompt || "").trim();
+  if (mainPrompt && !results.some((r) => r.prompt === mainPrompt)) {
+    results.unshift({
+      label: results.length ? "主视觉 / 封面生图提示词" : "发给生图模型的完整提示词",
+      prompt: mainPrompt,
+    });
+  }
+
+  const script = (payload.videoScript || (payload.clips ? payload : null)) as any;
+  if (script && Array.isArray(script.clips) && script.clips.length > 0) {
+    script.clips.forEach((clip: any, idx: number) => {
+      const p = String(clip?.prompt || "").trim();
+      if (p && !results.some((r) => r.prompt === p)) {
+        results.push({
+          label: `镜头 #${clip.index || idx + 1}${clip.purpose ? ` · ${clip.purpose}` : ""}`,
+          prompt: p,
+        });
+      }
+    });
+  }
+
+  return results;
+}
+
+const generationPrompts = computed(() => extractPrompts(selectedGenerationDetail.value));
+
+async function copyPrompt(text: string) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      alert("提示词已复制到剪贴板");
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      alert("提示词已复制到剪贴板");
+    }
+  } catch (_) {
+    alert("复制失败，请手动选择复制");
+  }
 }
 
 function hasPayload(payload?: Record<string, unknown>): boolean {
@@ -1359,6 +1456,100 @@ defineExpose({
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.generation-duration {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #047857;
+  background: #ecfdf5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.text-emerald {
+  color: #059669 !important;
+}
+
+.prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.prompt-count-tag {
+  font-size: 11px;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-weight: 500;
+}
+
+.prompts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prompt-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.prompt-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.prompt-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.copy-prompt-btn {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.copy-prompt-btn:hover {
+  background: #fee2e2;
+  color: #e11d48;
+  border-color: #fecdd3;
+}
+
+.prompt-text {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #1e293b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  max-height: 260px;
+  overflow-y: auto;
+  background: #ffffff;
 }
 
 @media (max-width: 780px) {

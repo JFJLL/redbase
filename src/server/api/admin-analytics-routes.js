@@ -23,6 +23,44 @@ function getGeneratedAssetStorage(context = {}) {
   return context.generatedAssetStorage || createGeneratedAssetStorage(context.appConfig || {});
 }
 
+function resolveGenerationDurationMs(generation, payload, database) {
+  if (Number.isFinite(Number(payload?.durationMs)) && Number(payload.durationMs) > 0) {
+    return Number(payload.durationMs);
+  }
+  const attemptStarted = payload?.attemptStartedAt || payload?.evaluationStartedAt;
+  if (attemptStarted && generation.createdAt) {
+    const startedMs = typeof attemptStarted === "number" ? attemptStarted : Date.parse(attemptStarted);
+    const createdMs = Date.parse(generation.createdAt);
+    if (Number.isFinite(startedMs) && Number.isFinite(createdMs) && createdMs >= startedMs) {
+      const diff = createdMs - startedMs;
+      if (diff > 0 && diff < 24 * 3600 * 1000) return diff;
+    }
+  }
+  if (generation.type === "videoProject") {
+    const projectId = Number(payload?.projectId || 0);
+    if (projectId > 0) {
+      const proj = database.prepare("SELECT started_at, completed_at, created_at, updated_at FROM video_projects WHERE id = ?").get(projectId);
+      if (proj) {
+        const startMs = Date.parse(proj.started_at || proj.created_at);
+        const endMs = Date.parse(proj.completed_at || proj.updated_at);
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+          const diff = endMs - startMs;
+          if (diff > 0 && diff < 24 * 3600 * 1000) return diff;
+        }
+      }
+    }
+  }
+  if (payload?.evaluationRunId) {
+    const attempt = database.prepare("SELECT duration_ms FROM ai_task_attempts WHERE entity_id = ? AND duration_ms > 0 ORDER BY id DESC LIMIT 1").get(String(payload.evaluationRunId));
+    if (attempt?.duration_ms) return Number(attempt.duration_ms);
+  }
+  if (payload?.requestId) {
+    const attempt = database.prepare("SELECT duration_ms FROM ai_task_attempts WHERE entity_id = ? AND duration_ms > 0 ORDER BY id DESC LIMIT 1").get(String(payload.requestId));
+    if (attempt?.duration_ms) return Number(attempt.duration_ms);
+  }
+  return null;
+}
+
 // In-memory short TTL LRU cache (20 seconds, max 200 items) for analytics queries
 const queryCache = new Map();
 const CACHE_TTL_MS = 20 * 1000;
@@ -340,8 +378,27 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
         };
         const sanitized = sanitizeGeneration(generation, appConfig);
         const hydrated = await hydrateGenerationDirectAssetUrls(sanitized, generation, storage);
+        const durationMs = resolveGenerationDurationMs(generation, payload, db);
+        const adminPayload = {
+          ...(hydrated.payload || {}),
+          prompt: typeof payload.prompt === "string" ? payload.prompt : hydrated.payload?.prompt,
+          slides: Array.isArray(payload.slides)
+            ? payload.slides.map((s, idx) => ({
+                ...(hydrated.payload?.slides?.[idx] || {}),
+                prompt: s.prompt || s.visualDirection || "",
+                title: s.title || "",
+                visualDirection: s.visualDirection || "",
+              }))
+            : hydrated.payload?.slides,
+          videoScript: payload.videoScript || hydrated.payload?.videoScript,
+          visualDirection: payload.visualDirection || hydrated.payload?.visualDirection,
+          style: payload.style || hydrated.payload?.style,
+          composition: payload.composition || hydrated.payload?.composition,
+        };
         return {
           ...hydrated,
+          payload: adminPayload,
+          durationMs,
           thumbnailUrl: hydrated.thumbnailUrl || hydrated.previewUrl,
           user: r.userName ? { id: r.ownerUserId, name: r.userName, phone: r.userPhone } : null,
         };

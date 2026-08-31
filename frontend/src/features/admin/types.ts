@@ -333,6 +333,7 @@ export interface AdminGenerationItem {
   ideaTitle?: string;
   cardTitle: string;
   createdAt: string;
+  durationMs?: number | null;
   previewUrl?: string;
   thumbnailUrl?: string;
   summary?: string;

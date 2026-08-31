@@ -47,11 +47,6 @@
     </div>
 
     <div class="filter-actions">
-      <span class="coverage-badge" v-if="coverage?.isPartial" title="部分数据由历史记录回填，某些埋点仅在启用后完全统计">
-        <span class="dot-warn"></span>
-        <span>历史回填部分覆盖</span>
-      </span>
-
       <button
         type="button"
         class="refresh-btn"
@@ -229,25 +224,6 @@ function onAccountChange(val: string) {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.coverage-badge {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #92400e;
-  background: #fef3c7;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.dot-warn {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
 }
 
 .refresh-btn {

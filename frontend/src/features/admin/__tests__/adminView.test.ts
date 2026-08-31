@@ -434,18 +434,6 @@ describe("AdminDashboardView", () => {
     });
   });
 
-  it("shows the historical partial-coverage warning returned by a panel", async () => {
-    const partialOverview = {
-      ...MOCK_OVERVIEW,
-      coverage: { ...MOCK_OVERVIEW.coverage, isPartial: true, notes: ["启动回填失败"] },
-    };
-    const { wrapper } = await mountView((url) => {
-      if (url.startsWith("/api/admin/analytics/overview")) return jsonResponse(200, partialOverview);
-      return undefined;
-    });
-    expect(wrapper.text()).toContain("历史回填部分覆盖");
-  });
-
   it("renders the complete D2/G2 correctness metric set", async () => {
     window.location.hash = "#ai";
     const aiPayload = {

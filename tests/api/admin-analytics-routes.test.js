@@ -279,10 +279,12 @@ test("GET /api/admin/data/generations hydrates previewUrl and thumbnailUrl from 
     trendTitle: "秋日滋养",
     ideaTitle: "特仑苏长图",
     cardTitle: "特仑苏长图",
-    createdAt: new Date().toISOString(),
+    createdAt: "2026-08-31T05:39:03.000Z",
     previewUrl: "/api/generated-images/101/file",
     summary: "微信公众号长图",
     payload: {
+      attemptStartedAt: "2026-08-31T05:38:18.000Z",
+      prompt: "【视觉目标】产品详情页主视觉",
       localImage: {
         provider: "aliyun_oss",
         objectKey: "redbase/generated-images/users/1/2026/08/101/gi_101.png",
@@ -317,4 +319,6 @@ test("GET /api/admin/data/generations hydrates previewUrl and thumbnailUrl from 
   assert.ok(target, "generation 101 should be returned");
   assert.equal(target.previewUrl, "https://oss.example.com/redbase/generated-images/users/1/2026/08/101/gi_101.png");
   assert.ok(target.thumbnailUrl.includes("x-oss-process="));
+  assert.equal(target.durationMs, 45000);
+  assert.equal(target.payload.prompt, "【视觉目标】产品详情页主视觉");
 });
