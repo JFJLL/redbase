@@ -1,5 +1,9 @@
 const { bindRouteScope } = require("./route-scope");
 const { requireAdminFromSql } = require("./admin-auth");
+const { sanitizeGeneration } = require("../assets/image-store");
+const { hydrateGenerationDirectAssetUrls } = require("./history-routes");
+const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
+const { signAssetUrl } = require("../assets/signed-urls");
 const { getDbProxy } = require("../db/connection");
 const {
   getOverviewMetrics,
@@ -14,6 +18,10 @@ const { recordClientEvent } = require("../analytics/analytics-recorder");
 const { safeParseObject } = require("../db/snapshot-utils");
 
 const db = getDbProxy();
+
+function getGeneratedAssetStorage(context = {}) {
+  return context.generatedAssetStorage || createGeneratedAssetStorage(context.appConfig || {});
+}
 
 // In-memory short TTL LRU cache (20 seconds, max 200 items) for analytics queries
 const queryCache = new Map();
@@ -291,22 +299,52 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
       const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
       const countRow = db.prepare(`SELECT COUNT(*) AS total FROM generations g LEFT JOIN users u ON u.id = g.owner_user_id ${where}`).get(...params);
       const total = Number(countRow?.total || 0);
-      const items = db.prepare(`
+      const rawRows = db.prepare(`
         SELECT g.id, g.owner_user_id AS ownerUserId, g.type, g.channel_label AS channelLabel,
           g.brand_id AS brandId, g.brand_name AS brandName, g.trend_id AS trendId,
           g.trend_title AS trendTitle, g.idea_title AS ideaTitle, g.card_title AS cardTitle,
           g.created_at AS createdAt, g.preview_url AS previewUrl, g.summary,
           g.visibility_status AS visibilityStatus, g.asset_status AS assetStatus,
           g.asset_count AS assetCount, g.asset_bytes AS assetBytes, g.assets_deleted_at AS assetsDeletedAt,
+          g.payload_json AS payloadJson,
           u.name AS userName, u.phone AS userPhone
         FROM generations g
         LEFT JOIN users u ON u.id = g.owner_user_id
         ${where}
         ORDER BY g.created_at DESC, g.id DESC
         LIMIT ? OFFSET ?
-      `).all(...params, pageSize, offset).map((r) => ({
-        ...r,
-        user: r.userName ? { id: r.ownerUserId, name: r.userName, phone: r.userPhone } : null,
+      `).all(...params, pageSize, offset);
+      const storage = getGeneratedAssetStorage(context);
+      const items = await Promise.all(rawRows.map(async (r) => {
+        const payload = safeParseObject(r.payloadJson);
+        const generation = {
+          id: r.id,
+          ownerUserId: r.ownerUserId,
+          type: r.type,
+          channelLabel: r.channelLabel,
+          brandId: r.brandId,
+          brandName: r.brandName,
+          trendId: r.trendId,
+          trendTitle: r.trendTitle,
+          ideaTitle: r.ideaTitle,
+          cardTitle: r.cardTitle,
+          createdAt: r.createdAt,
+          previewUrl: r.previewUrl,
+          summary: r.summary,
+          visibilityStatus: r.visibilityStatus,
+          assetStatus: r.assetStatus,
+          assetCount: r.assetCount,
+          assetBytes: r.assetBytes,
+          assetsDeletedAt: r.assetsDeletedAt,
+          payload,
+        };
+        const sanitized = sanitizeGeneration(generation, appConfig);
+        const hydrated = await hydrateGenerationDirectAssetUrls(sanitized, generation, storage);
+        return {
+          ...hydrated,
+          thumbnailUrl: hydrated.thumbnailUrl || hydrated.previewUrl,
+          user: r.userName ? { id: r.ownerUserId, name: r.userName, phone: r.userPhone } : null,
+        };
       }));
       json(res, 200, { total, page, pageSize, items });
       return true;
@@ -516,43 +554,57 @@ async function handleAdminAnalyticsRoutes(context, req, res, pathname) {
         ORDER BY clip_index ASC
       `).all(projectId);
 
-      const script = safeParseObject(projectRow.script_json);
-      const finalVideo = safeParseObject(projectRow.final_video_json);
+     const script = safeParseObject(projectRow.script_json);
+     const finalVideo = safeParseObject(projectRow.final_video_json);
+      const storage = getGeneratedAssetStorage(context);
+      let finalVideoUrl = "";
+      if (finalVideo.asset && !finalVideo.asset.purged) {
+        if (finalVideo.asset.objectKey) {
+          try {
+            finalVideoUrl = String(await storage.createReadUrl(finalVideo.asset, { expiresSeconds: 3600 }) || "");
+          } catch (_) {
+            finalVideoUrl = "";
+          }
+        } else {
+          finalVideoUrl = signAssetUrl(appConfig, `/api/video-projects/${projectRow.id}/assets/final`);
+        }
+      }
 
-      json(res, 200, {
-        project: {
-          id: projectRow.id,
-          ownerUserId: projectRow.owner_user_id,
-          generationId: projectRow.generation_id,
-          requestId: projectRow.request_id,
-          model: projectRow.video_model,
-          mode: projectRow.mode,
-          resolution: projectRow.resolution,
-          aspectRatio: projectRow.aspect_ratio,
-          totalDurationSec: projectRow.total_duration_sec,
-          status: projectRow.status,
-          estimatedCredits: projectRow.estimated_credits,
-          chargedCredits: projectRow.charged_credits,
-          refundedCredits: projectRow.refunded_credits,
-          netCredits: projectRow.charged_credits - projectRow.refunded_credits,
-          error: projectRow.error,
-          startedAt: projectRow.started_at,
-          completedAt: projectRow.completed_at,
-          failedAt: projectRow.failed_at,
-          assemblyStartedAt: projectRow.assembly_started_at,
-          assemblyCompletedAt: projectRow.assembly_completed_at,
-          assetStatus: projectRow.asset_status,
-          assetCount: projectRow.asset_count,
-          assetBytes: projectRow.asset_bytes,
-          assetsDeletedAt: projectRow.assets_deleted_at,
-          createdAt: projectRow.created_at,
-          updatedAt: projectRow.updated_at,
-          scriptConcept: script.creativeConcept || "",
-          hasFinalVideo: Boolean(finalVideo.asset && !finalVideo.asset.purged),
-          user: projectRow.userName ? { id: projectRow.owner_user_id, name: projectRow.userName, phone: projectRow.userPhone } : null,
-          clips,
-        },
-      });
+     json(res, 200, {
+       project: {
+         id: projectRow.id,
+         ownerUserId: projectRow.owner_user_id,
+         generationId: projectRow.generation_id,
+         requestId: projectRow.request_id,
+         model: projectRow.video_model,
+         mode: projectRow.mode,
+         resolution: projectRow.resolution,
+         aspectRatio: projectRow.aspect_ratio,
+         totalDurationSec: projectRow.total_duration_sec,
+         status: projectRow.status,
+         estimatedCredits: projectRow.estimated_credits,
+         chargedCredits: projectRow.charged_credits,
+         refundedCredits: projectRow.refunded_credits,
+         netCredits: projectRow.charged_credits - projectRow.refunded_credits,
+         error: projectRow.error,
+         startedAt: projectRow.started_at,
+         completedAt: projectRow.completed_at,
+         failedAt: projectRow.failed_at,
+         assemblyStartedAt: projectRow.assembly_started_at,
+         assemblyCompletedAt: projectRow.assembly_completed_at,
+         assetStatus: projectRow.asset_status,
+         assetCount: projectRow.asset_count,
+         assetBytes: projectRow.asset_bytes,
+         assetsDeletedAt: projectRow.assets_deleted_at,
+         createdAt: projectRow.created_at,
+         updatedAt: projectRow.updated_at,
+         scriptConcept: script.creativeConcept || "",
+         hasFinalVideo: Boolean(finalVideo.asset && !finalVideo.asset.purged),
+          finalVideoUrl,
+         user: projectRow.userName ? { id: projectRow.owner_user_id, name: projectRow.userName, phone: projectRow.userPhone } : null,
+         clips,
+       },
+     });
       return true;
     }
   }

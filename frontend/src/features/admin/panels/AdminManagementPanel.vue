@@ -183,6 +183,7 @@
           <AdminMediaPreview
             compact
             :media-url="item.previewUrl"
+            :thumbnail-url="item.thumbnailUrl"
             :asset-status="item.assetStatus"
             :text-summary="item.summary"
           />
@@ -394,6 +395,7 @@
             <div class="generation-detail-preview">
               <AdminMediaPreview
                 :media-url="selectedGenerationDetail.previewUrl"
+                :thumbnail-url="selectedGenerationDetail.thumbnailUrl"
                 :asset-status="selectedGenerationDetail.assetStatus"
                 :text-summary="selectedGenerationDetail.summary"
               />
@@ -456,7 +458,7 @@
             <h4>最终成片预览</h4>
             <AdminMediaPreview
               media-type="video"
-              :media-url="`/api/video-projects/${selectedProjectDetail.id}/final`"
+              :media-url="selectedProjectDetail.finalVideoUrl || `/api/video-projects/${selectedProjectDetail.id}/assets/final`"
               :asset-status="selectedProjectDetail.assetStatus"
             />
           </div>

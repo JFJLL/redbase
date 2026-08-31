@@ -334,6 +334,7 @@ export interface AdminGenerationItem {
   cardTitle: string;
   createdAt: string;
   previewUrl?: string;
+  thumbnailUrl?: string;
   summary?: string;
   payload?: Record<string, unknown>;
   visibilityStatus: "active" | "expired";
@@ -435,5 +436,6 @@ export interface AdminVideoProjectDetail extends AdminVideoProjectItem {
   assetsDeletedAt?: string;
   scriptConcept?: string;
   hasFinalVideo?: boolean;
+  finalVideoUrl?: string;
   clips: AdminVideoClipItem[];
 }

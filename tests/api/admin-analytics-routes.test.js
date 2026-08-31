@@ -7,6 +7,7 @@ process.env.REDBASE_DB_FILE = ":memory:";
 const { openDatabase, getDbProxy } = require("../../src/server/db/connection");
 const { initializeDatabaseSchema, ensureDatabaseIndexes } = require("../../src/server/db/schema");
 const { insertUser, createSessionForUser } = require("../../src/server/db/repositories/auth-repository");
+const { upsertGeneration } = require("../../src/server/db/repositories/generation-repository");
 const { createApiHandler } = require("../../src/server/api");
 const { ensureAnalyticsBackfill } = require("../../src/server/analytics/analytics-backfill");
 
@@ -264,4 +265,56 @@ test("POST /api/analytics/events records client events safely", async () => {
   }), res3, "/api/analytics/events");
   assert.equal(res3.statusCode, 200);
   assert.equal(res3.json.ok, true);
+});
+
+test("GET /api/admin/data/generations hydrates previewUrl and thumbnailUrl from storage", async () => {
+  const gen = upsertGeneration({
+    id: 101,
+    ownerUserId: 1,
+    type: "wechat",
+    channelLabel: "公众号",
+    brandId: 1,
+    brandName: "特仑苏",
+    trendId: 1,
+    trendTitle: "秋日滋养",
+    ideaTitle: "特仑苏长图",
+    cardTitle: "特仑苏长图",
+    createdAt: new Date().toISOString(),
+    previewUrl: "/api/generated-images/101/file",
+    summary: "微信公众号长图",
+    payload: {
+      localImage: {
+        provider: "aliyun_oss",
+        objectKey: "redbase/generated-images/users/1/2026/08/101/gi_101.png",
+        storedPath: "",
+      },
+      imageUrl: "/api/generated-images/101/file",
+      previewUrl: "/api/generated-images/101/file",
+    },
+  });
+
+  const customStorage = {
+    createReadUrl: async (asset, opts = {}) => {
+      if (opts.process) return `https://oss.example.com/${asset.objectKey}?x-oss-process=${opts.process}`;
+      return `https://oss.example.com/${asset.objectKey}`;
+    },
+  };
+
+  const customHandleApi = createApiHandler({
+    appConfig,
+    store: {},
+    ai: { imageJobs: new Map() },
+    generatedAssetStorage: customStorage,
+  });
+
+  const res = makeRes();
+  await customHandleApi(makeReq("/api/admin/data/generations?page=1&pageSize=10", {
+    headers: { cookie: `redbase_session=${adminToken}` },
+  }), res, "/api/admin/data/generations");
+
+  assert.equal(res.statusCode, 200);
+  const target = res.json.items.find((item) => item.id === 101);
+  assert.ok(target, "generation 101 should be returned");
+  assert.equal(target.previewUrl, "https://oss.example.com/redbase/generated-images/users/1/2026/08/101/gi_101.png");
+  assert.ok(target.thumbnailUrl.includes("x-oss-process="));
 });

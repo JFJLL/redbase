@@ -420,6 +420,11 @@ describe("AdminDashboardView", () => {
     });
     expect(compactTextWrapper.classes()).toContain("compact");
     expect(compactTextWrapper.find(".text-concept").exists()).toBe(true);
+
+    const thumbnailWrapper = mount(AdminMediaPreview, {
+      props: { mediaUrl: "https://example.com/full.png", thumbnailUrl: "https://example.com/thumb.webp", compact: true },
+    });
+    expect(thumbnailWrapper.find("img").attributes("src")).toBe("https://example.com/thumb.webp");
   });
 
   it("sends a custom inclusive end date as the next exclusive day", () => {

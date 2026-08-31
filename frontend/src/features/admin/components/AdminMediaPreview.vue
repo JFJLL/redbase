@@ -37,14 +37,24 @@
     </div>
 
     <!-- Text / Script Render -->
-    <div v-else-if="mediaType === 'text' || (!mediaUrl && textSummary)" class="text-preview-box">
+    <div v-else-if="mediaType === 'text' || (!effectiveImageUrl && textSummary)" class="text-preview-box">
       <div class="text-concept" v-if="textSummary">{{ textSummary }}</div>
       <div class="text-fallback" v-else>无文本内容</div>
     </div>
 
     <!-- Image Render -->
-    <div v-else-if="mediaUrl" class="image-preview-wrapper">
-      <img :src="mediaUrl" alt="生成图片" class="preview-img" loading="lazy" />
+    <div v-else-if="effectiveImageUrl" class="image-preview-wrapper">
+      <img
+        v-if="!imageLoadError"
+        :src="effectiveImageUrl"
+        alt="生成图片"
+        class="preview-img"
+        loading="lazy"
+        @error="imageLoadError = true"
+      />
+      <div v-else class="no-media-box">
+        <span>图片加载失败</span>
+      </div>
     </div>
 
     <!-- Empty / None State -->
@@ -55,10 +65,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 
 const props = defineProps<{
   mediaUrl?: string;
+  thumbnailUrl?: string;
   mediaType?: "image" | "video" | "text" | string;
   posterUrl?: string;
   assetStatus?: "available" | "purged" | "none" | "purge_failed" | string;
@@ -66,10 +77,21 @@ const props = defineProps<{
   compact?: boolean;
 }>();
 
+const imageLoadError = ref(false);
+
+watch(() => [props.mediaUrl, props.thumbnailUrl], () => {
+  imageLoadError.value = false;
+});
+
 const isVideo = computed(() => {
   if (props.mediaType === "video") return true;
   if (props.mediaUrl && props.mediaUrl.toLowerCase().includes(".mp4")) return true;
   return false;
+});
+
+const effectiveImageUrl = computed(() => {
+  if (props.compact && props.thumbnailUrl) return props.thumbnailUrl;
+  return props.mediaUrl || props.thumbnailUrl || "";
 });
 </script>
 
