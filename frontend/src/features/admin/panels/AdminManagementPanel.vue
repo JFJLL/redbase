@@ -1003,7 +1003,7 @@ defineExpose({
 .action-buttons {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 7px;
 }
 

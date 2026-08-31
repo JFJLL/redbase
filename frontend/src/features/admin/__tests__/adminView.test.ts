@@ -275,9 +275,14 @@ describe("AdminDashboardView", () => {
     expect(videoRequestCount).toBe(2);
     expect(wrapper.find('[data-test="refresh-data-btn"]').text()).toContain("刷新中");
     expect(wrapper.find('[data-test="refresh-data-btn"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.find('[data-test="refresh-data-btn"]').classes()).toContain("is-loading");
+    expect(wrapper.find('[data-test="refresh-data-btn"]').attributes("aria-busy")).toBe("true");
 
     finishRefresh(jsonResponse(200, { total: 0, page: 1, pageSize: 20, items: [] }));
+    await flushPromises();
+    expect(wrapper.find('[data-test="refresh-data-btn"]').text()).toContain("刷新中");
     await waitForStableUi(() => wrapper.find('[data-test="refresh-data-btn"]').text().includes("已刷新"));
+    expect(wrapper.find('[data-test="refresh-data-btn"]').classes()).toContain("is-complete");
   });
 
   it("management tab allows credit adjustment form submission", async () => {

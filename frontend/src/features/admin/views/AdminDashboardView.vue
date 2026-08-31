@@ -78,6 +78,7 @@ const authError = ref("");
 const coverage = ref<CoverageInfo | undefined>(undefined);
 const activePanelRef = ref<any>(null);
 let refreshFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+const MIN_REFRESH_FEEDBACK_MS = 650;
 
 const filters = ref<AdminFilters>({
   preset: "7d",
@@ -122,15 +123,21 @@ function onFiltersUpdate(newFilters: AdminFilters) {
 }
 
 async function refreshActivePanel() {
+  if (refreshing.value) return;
   if (refreshFeedbackTimer) {
     clearTimeout(refreshFeedbackTimer);
     refreshFeedbackTimer = null;
   }
   refreshComplete.value = false;
   refreshing.value = true;
+  const startedAt = Date.now();
   try {
     if (activePanelRef.value && typeof activePanelRef.value.refresh === "function") {
       await activePanelRef.value.refresh();
+      const remainingFeedbackMs = MIN_REFRESH_FEEDBACK_MS - (Date.now() - startedAt);
+      if (remainingFeedbackMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingFeedbackMs));
+      }
       refreshComplete.value = true;
       refreshFeedbackTimer = setTimeout(() => {
         refreshComplete.value = false;

@@ -52,7 +52,15 @@
         <span>历史回填部分覆盖</span>
       </span>
 
-      <button type="button" class="refresh-btn" :disabled="loading" data-test="refresh-data-btn" @click="$emit('refresh')">
+      <button
+        type="button"
+        class="refresh-btn"
+        :class="{ 'is-loading': loading, 'is-complete': refreshed && !loading }"
+        :disabled="loading"
+        :aria-busy="loading ? 'true' : 'false'"
+        data-test="refresh-data-btn"
+        @click="$emit('refresh')"
+      >
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" :class="{ rotating: loading }">
           <path d="M23 4v6h-6M1 20v-6h6" />
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -256,7 +264,7 @@ function onAccountChange(val: string) {
   color: #374151;
   cursor: pointer;
   font-weight: 500;
-  transition: background 0.15s;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 .refresh-btn:hover:not(:disabled) {
   background: #f3f4f6;
@@ -264,6 +272,18 @@ function onAccountChange(val: string) {
 .refresh-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.refresh-btn.is-loading:disabled {
+  opacity: 1;
+  color: #e11d48;
+  border-color: #fecdd3;
+  background: #fff1f2;
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.08);
+}
+.refresh-btn.is-complete {
+  color: #047857;
+  border-color: #a7f3d0;
+  background: #ecfdf5;
 }
 .rotating {
   animation: spin 1s linear infinite;
