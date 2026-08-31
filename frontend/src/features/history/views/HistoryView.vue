@@ -425,6 +425,24 @@ function isVideoProjectGenerating(item: GenerationHistoryItem | null): boolean {
   return ACTIVE_VIDEO_STATUSES.has(status) || ["queued", "running", "submitting", "preparing", "assembling", "processing_result"].includes(status);
 }
 
+function isClipActivelyGenerating(status: unknown): boolean {
+  return ["running", "submitting", "processing_result", "preparing"].includes(String(status || ""));
+}
+
+function isClipWaiting(status: unknown): boolean {
+  return ["waiting_dependency", "waiting_configuration", "queued"].includes(String(status || ""));
+}
+
+function clipPlaceholderText(status: unknown): string {
+  const s = String(status || "");
+  if (["queued", "submitting", "running", "preparing"].includes(s)) return "正在生成…";
+  if (s === "processing_result") return "正在处理生成结果…";
+  if (s === "waiting_dependency") return "等待上一镜头";
+  if (s === "waiting_configuration") return "等待生成通道";
+  if (s === "failed") return "生成失败";
+  return "准备中…";
+}
+
 function syncVideoClipPrompts(item: GenerationHistoryItem | null): void {
   for (const key of Object.keys(videoClipPrompts)) delete videoClipPrompts[key];
   for (const clip of videoProjectClips(item)) {
@@ -1043,13 +1061,13 @@ onUnmounted(() => {
                         loading="lazy"
                       />
                       <div class="history-clip-poster-overlay" data-test="history-clip-poster-overlay">
-                        <span class="history-clip-spinner" aria-hidden="true"></span>
-                        <strong>{{ ['queued', 'submitting', 'running', 'preparing'].includes(String(clip.status)) ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
+                        <span v-if="isClipActivelyGenerating(clip.status)" class="history-clip-spinner" aria-hidden="true"></span>
+                        <strong>{{ clipPlaceholderText(clip.status) }}</strong>
                       </div>
                     </div>
-                    <div v-else class="history-clip-placeholder" data-test="history-clip-placeholder">
-                      <span class="history-clip-spinner" aria-hidden="true"></span>
-                      <strong>{{ ['queued', 'submitting', 'running', 'preparing'].includes(String(clip.status)) ? '正在生成…' : clip.status === 'processing_result' ? '正在处理生成结果…' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'failed' ? '生成失败' : '准备中…' }}</strong>
+                    <div v-else class="history-clip-placeholder" :class="{ 'is-generating': isClipActivelyGenerating(clip.status), 'is-waiting': isClipWaiting(clip.status) }" data-test="history-clip-placeholder">
+                      <span v-if="isClipActivelyGenerating(clip.status)" class="history-clip-spinner" aria-hidden="true"></span>
+                      <strong>{{ clipPlaceholderText(clip.status) }}</strong>
                       <small>视频生成完成后会自动出现在这里</small>
                     </div>
                   </div>

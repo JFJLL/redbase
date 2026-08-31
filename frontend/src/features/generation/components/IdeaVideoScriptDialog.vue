@@ -267,6 +267,37 @@ const projectStatusLabel = computed(() => ({
   cancelled: "已取消",
 }[project.value?.status || ""] || "已提交"));
 
+const isProjectGenerating = computed(() => {
+  const s = String(project.value?.status || "").toLowerCase();
+  return ["queued", "running", "processing_result", "assembling", "preparing", "submitting"].includes(s);
+});
+
+function isClipActivelyGenerating(status: unknown): boolean {
+  return ["running", "submitting", "processing_result", "preparing"].includes(String(status || ""));
+}
+
+function isClipWaiting(status: unknown): boolean {
+  return ["waiting_dependency", "waiting_configuration", "queued"].includes(String(status || ""));
+}
+
+function clipStatusLabel(status: unknown): string {
+  const s = String(status || "");
+  const map: Record<string, string> = {
+    completed: "完成",
+    running: "生成中",
+    processing_result: "正在处理生成结果",
+    result_processing_failed: "生成结果暂未保存成功",
+    submitting: "提交中",
+    failed: "失败",
+    uncertain_submission: "待确认",
+    waiting_configuration: "等待生成通道",
+    waiting_dependency: "等待上一镜头",
+    cancelled: "已取消",
+    queued: "排队",
+  };
+  return map[s] || "生成中";
+}
+
 const TERMINAL_PROJECT_POLL_STATUSES = new Set([
   "completed",
   "failed",
@@ -1035,8 +1066,14 @@ onUnmounted(() => {
           <p v-if="projectError" class="project-error" data-test="video-project-error">{{ projectError }}</p>
           <section v-if="project" class="video-project-status" data-test="video-project-status">
             <div class="status-line">
-              <strong>{{ projectStatusLabel }}</strong>
+              <div class="status-badge" :class="{ 'is-generating': isProjectGenerating }">
+                <span v-if="isProjectGenerating" class="status-spinner" aria-hidden="true"></span>
+                <strong>{{ projectStatusLabel }}</strong>
+              </div>
               <span>{{ project.model.toUpperCase() }} · {{ project.totalDurationSec }} 秒 · 已扣 {{ project.chargedCredits }} 积分</span>
+            </div>
+            <div v-if="isProjectGenerating" class="project-loading-bar" aria-hidden="true">
+              <div class="project-loading-bar-fill"></div>
             </div>
             <p v-if="project.refundedCredits" class="refund-summary">已退款 {{ project.refundedCredits }} 积分。</p>
             <div v-if="project.status === 'assembly_failed'" class="assembly-failed-panel" data-test="assembly-failed">
@@ -1054,11 +1091,31 @@ onUnmounted(() => {
             </div>
             <video v-if="project.finalVideoUrl" class="final-video-player" controls playsinline :src="project.finalVideoUrl"></video>
             <div class="clip-progress-list">
-              <article v-for="clip in project.clips" :key="clip.id" :class="['clip-progress', `clip-${clip.status}`]">
+              <article
+                v-for="clip in project.clips"
+                :key="clip.id"
+                :class="[
+                  'clip-progress',
+                  `clip-${clip.status}`,
+                  {
+                    'is-generating': isClipActivelyGenerating(clip.status),
+                    'is-waiting': isClipWaiting(clip.status),
+                    'is-completed': clip.status === 'completed'
+                  }
+                ]"
+              >
                 <div class="clip-progress-heading">
-                  <strong>镜头 {{ clip.index }}</strong>
-                  <span>{{ clip.status === 'completed' ? '完成' : clip.status === 'running' ? '生成中' : clip.status === 'processing_result' ? '正在处理生成结果' : clip.status === 'result_processing_failed' ? '生成结果暂未保存成功' : clip.status === 'submitting' ? '提交中' : clip.status === 'failed' ? '失败' : clip.status === 'uncertain_submission' ? '待确认' : clip.status === 'waiting_configuration' ? '等待生成通道' : clip.status === 'waiting_dependency' ? '等待上一镜头' : clip.status === 'cancelled' ? '已取消' : '排队' }}</span>
+                  <div class="clip-title-group">
+                    <span v-if="isClipActivelyGenerating(clip.status)" class="clip-spinner" aria-hidden="true"></span>
+                    <span v-else-if="clip.status === 'completed'" class="clip-done-icon" aria-hidden="true">✓</span>
+                    <strong>镜头 {{ clip.index }}</strong>
+                  </div>
+                  <span class="clip-status-text">
+                    <span v-if="isClipActivelyGenerating(clip.status)" class="clip-pulse-dot" aria-hidden="true"></span>
+                    {{ clipStatusLabel(clip.status) }}
+                  </span>
                 </div>
+                <div v-if="isClipActivelyGenerating(clip.status)" class="clip-active-shimmer" aria-hidden="true"></div>
                 <video v-if="clip.videoUrl" class="clip-video-player" controls playsinline :src="clip.videoUrl"></video>
                 <small
                   v-if="clip.error && ['failed', 'uncertain_submission', 'cancelled', 'result_processing_failed', 'waiting_configuration'].includes(clip.status)"
@@ -1627,7 +1684,106 @@ onUnmounted(() => {
   margin-top: 10px;
 }
 
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-badge.is-generating strong {
+  color: var(--workspace-brand, #d83b46);
+}
+
+.status-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(216, 68, 68, 0.2);
+  border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.project-loading-bar {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  margin-top: 8px;
+  background: rgba(216, 68, 68, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.project-loading-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--workspace-brand, #d83b46), transparent);
+  border-radius: 999px;
+  animation: project-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes project-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.clip-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clip-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid rgba(216, 68, 68, 0.25);
+  border-top-color: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.clip-done-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 9px;
+  font-weight: 800;
+  color: #fff;
+  background: #16a34a;
+  border-radius: 50%;
+  line-height: 1;
+}
+
+.clip-status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.clip-pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: var(--workspace-brand, #d83b46);
+  border-radius: 50%;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { transform: scale(0.8); opacity: 0.5; }
+  50% { transform: scale(1.3); opacity: 1; }
+}
+
 .clip-progress {
+  position: relative;
+  overflow: hidden;
   display: grid;
   gap: 7px;
   padding: 5px 8px;
@@ -1636,6 +1792,51 @@ onUnmounted(() => {
   background: #f5efeb;
   color: #806e70;
   font-size: 11px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.clip-progress.is-generating {
+  border-color: rgba(216, 68, 68, 0.35);
+  background: #fff8f7;
+  box-shadow: 0 1px 4px rgba(216, 68, 68, 0.08);
+}
+
+.clip-progress.is-generating .clip-progress-heading strong {
+  color: var(--workspace-brand, #d83b46);
+}
+
+.clip-progress.is-generating .clip-status-text {
+  color: var(--workspace-brand, #d83b46);
+  font-weight: 600;
+}
+
+.clip-active-shimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--workspace-brand, #d83b46), transparent);
+  animation: clip-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes clip-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.clip-progress.is-completed {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: #f6fbf7;
+}
+
+.clip-progress.is-completed .clip-status-text {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.clip-progress.is-waiting {
+  opacity: 0.85;
 }
 
 .clip-progress-heading {
