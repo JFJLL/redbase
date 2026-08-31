@@ -130,6 +130,8 @@ test("OSS save uploads a Buffer with safe key and forbid-overwrite header", asyn
   assert.strictEqual(calls[0][1], buffer);
   assert.equal(calls[0][2].headers["x-oss-forbid-overwrite"], "true");
   assert.equal(calls[0][2].headers["Content-Type"], "image/png");
+  assert.equal(calls[0][2].headers["Cache-Control"], "private, max-age=31536000, immutable");
+  assert.equal(calls[0][2].headers["Content-Disposition"], "inline");
   assert.equal(asset.provider, "aliyun_oss");
   assert.equal(asset.storedPath, "");
   assert.equal(asset.objectKey.includes(".."), false);
@@ -674,7 +676,7 @@ test("whole generation payload URL whitelist removes top-level and nested upstre
   assert.equal(JSON.stringify(payload).includes("auth-placeholder"), false);
 });
 
-test("OSS creates a 300-second signed read URL and reads object bytes for editing", async () => {
+test("OSS reuses signed read URLs and supports optimized image previews", async () => {
   const calls = [];
   const client = {
     signatureUrl(key, options) {
@@ -690,6 +692,10 @@ test("OSS creates a 300-second signed read URL and reads object bytes for editin
   const asset = { provider: "aliyun_oss", objectKey: "redbase/generated-images/users/1/2026/07/2/gi_2_main_x.png", mimeType: "image/png" };
   assert.equal(await storage.createReadUrl(asset, { expiresSeconds: 300 }), "https://signed.invalid/read");
   assert.equal(calls[0].options.expires, 300);
+  assert.equal(await storage.createReadUrl(asset, { expiresSeconds: 300 }), "https://signed.invalid/read");
+  assert.equal(calls.filter((entry) => entry.options).length, 1);
+  assert.equal(await storage.createReadUrl(asset, { expiresSeconds: 3600, process: "image/resize,w_960" }), "https://signed.invalid/read");
+  assert.equal(calls[1].options.process, "image/resize,w_960");
   assert.deepEqual(await storage.readBuffer(asset), Buffer.from("oss-image"));
 });
 
@@ -965,7 +971,7 @@ test("stored image response redirects OSS privately and streams legacy local byt
   );
   assert.equal(ossRes.statusCode, 302);
   assert.equal(ossRes.headers.Location, "https://signed.invalid/temporary");
-  assert.equal(ossRes.headers["Cache-Control"], "private, no-store");
+  assert.equal(ossRes.headers["Cache-Control"], "private, max-age=240");
 
   const localRes = createResponse();
   await serveStoredGeneratedImage(

@@ -2326,7 +2326,7 @@ function createVideoProjectService(options = {}) {
     }
     if (asset.objectKey) {
       const url = await storage.createReadUrl(asset, { expiresSeconds: 300 });
-      res.writeHead(302, { Location: url, "Cache-Control": "private, no-store" });
+      res.writeHead(302, { Location: url, "Cache-Control": "private, max-age=240" });
       res.end();
       return true;
     }

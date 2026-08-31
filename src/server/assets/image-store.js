@@ -922,7 +922,7 @@ async function serveStoredGeneratedImage(res, asset, storage = getDefaultGenerat
         const readUrl = await storage.createReadUrl(asset, { expiresSeconds: 300 });
         res.writeHead(302, {
           Location: readUrl,
-          "Cache-Control": "private, no-store",
+          "Cache-Control": "private, max-age=240",
         });
         res.end();
         return;

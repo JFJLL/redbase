@@ -55,6 +55,8 @@ const ACTIVE_VIDEO_STATUSES = new Set(["preparing", "queued", "submitting", "run
 
 // 图片加载失败：明确错误态 + 重试；签名过期只刷新一次列表拿新签名，不无限循环。
 const failedImageUrls = reactive(new Set<string>());
+const loadedImageUrls = reactive(new Set<string>());
+const optimizedPreviewUnavailable = ref(false);
 const refreshedSignatureUrls = new Set<string>();
 let signatureRefreshInFlight = false;
 let signatureRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -86,6 +88,7 @@ interface EditHistoryEntry {
   id?: unknown;
   imageUrl?: string;
   previewUrl?: string;
+  thumbnailUrl?: string;
   title?: string;
   createdAt?: string;
   completedAt?: string;
@@ -118,13 +121,37 @@ function isImageFailed(url: string): boolean {
   return Boolean(url) && failedImageUrls.has(url);
 }
 
-function retryImage(url: string) {
+function isImageLoaded(url: string): boolean {
+  return Boolean(url) && loadedImageUrls.has(url);
+}
+
+function onHistoryImageLoad(url: string) {
   if (!url) return;
+  loadedImageUrls.add(url);
   failedImageUrls.delete(url);
 }
 
-function onHistoryImageError(url: string) {
+function retryImage(url: string, fallbackUrl = "") {
   if (!url) return;
+  failedImageUrls.delete(url);
+  if (fallbackUrl) failedImageUrls.delete(fallbackUrl);
+}
+
+function isOssOptimizedImageUrl(url: string): boolean {
+  return /[?&]x-oss-process=/i.test(String(url || ""));
+}
+
+function cardImageSrc(preferredUrl: string, fullUrl = ""): string {
+  if (optimizedPreviewUnavailable.value && isOssOptimizedImageUrl(preferredUrl)) return fullUrl || preferredUrl;
+  return preferredUrl || fullUrl;
+}
+
+function onHistoryImageError(url: string, fullUrl = "") {
+  if (!url) return;
+  if (fullUrl && fullUrl !== url && isOssOptimizedImageUrl(url)) {
+    optimizedPreviewUnavailable.value = true;
+    return;
+  }
   if (hasExpiredAssetSignature(url)) {
     if (refreshedSignatureUrls.has(url)) {
       failedImageUrls.add(url);
@@ -149,18 +176,23 @@ function scheduleSignatureRefresh() {
   }, 250);
 }
 
-function slideImages(item: GenerationHistoryItem): Array<{ sourceIndex: number; src: string; title: string }> {
+function slideImages(item: GenerationHistoryItem): Array<{ sourceIndex: number; src: string; fullSrc: string; title: string }> {
   return (item.payload?.slides || [])
     .slice(0, 4)
     .map((slide, sourceIndex) => ({
       sourceIndex,
-      src: safeImageSrc(slide.imageUrl || slide.previewUrl),
+      src: safeImageSrc(slide.thumbnailUrl || slide.imageUrl || slide.previewUrl),
+      fullSrc: safeImageSrc(slide.imageUrl || slide.previewUrl),
       title: slide.title || "",
     }))
     .filter((entry) => Boolean(entry.src));
 }
 
 function previewSrc(item: GenerationHistoryItem): string {
+  return safeImageSrc(item.thumbnailUrl || item.payload?.thumbnailUrl || item.previewUrl);
+}
+
+function previewFullSrc(item: GenerationHistoryItem): string {
   return safeImageSrc(item.previewUrl);
 }
 
@@ -340,11 +372,6 @@ function videoProjectVideoUrl(item: GenerationHistoryItem | null): string {
   return safeImageSrc(item?.payload?.finalVideoUrl || item?.previewUrl);
 }
 
-function videoProjectCardVideoUrl(item: GenerationHistoryItem | null): string {
-  const firstClip = videoProjectClips(item)[0];
-  return videoProjectVideoUrl(item) || safeImageSrc(String(firstClip?.videoUrl || ""));
-}
-
 function videoProjectFinalPosterUrl(item: GenerationHistoryItem | null): string {
   const firstClip = videoProjectClips(item)[0];
   return safeImageSrc(String(item?.payload?.finalPosterUrl || firstClip?.posterUrl || ""));
@@ -352,7 +379,20 @@ function videoProjectFinalPosterUrl(item: GenerationHistoryItem | null): string 
 
 function videoProjectThumbnailUrl(item: GenerationHistoryItem | null): string {
   const firstClip = videoProjectClips(item)[0];
-  return safeImageSrc(String(firstClip?.posterUrl || firstClip?.continuityFrameUrl || ""));
+  return safeImageSrc(String(
+    item?.payload?.finalPosterThumbnailUrl ||
+    firstClip?.posterThumbnailUrl ||
+    firstClip?.continuityFrameThumbnailUrl ||
+    item?.payload?.finalPosterUrl ||
+    firstClip?.posterUrl ||
+    firstClip?.continuityFrameUrl ||
+    "",
+  ));
+}
+
+function videoProjectThumbnailFullUrl(item: GenerationHistoryItem | null): string {
+  const firstClip = videoProjectClips(item)[0];
+  return safeImageSrc(String(item?.payload?.finalPosterUrl || firstClip?.posterUrl || firstClip?.continuityFrameUrl || ""));
 }
 
 function videoProjectClips(item: GenerationHistoryItem | null): Array<Record<string, unknown>> {
@@ -588,7 +628,7 @@ onUnmounted(() => {
           <span class="panel-icon">◍</span>
           <h1 class="panel-title">历史生成</h1>
         </div>
-        <p class="panel-subtitle">查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。</p>
+        <p class="panel-subtitle">集中查看生成图片、组图与视频；完整发布文案在详情中查看。</p>
       </div>
     </header>
 
@@ -652,7 +692,13 @@ onUnmounted(() => {
     </div>
 
     <div class="history-generate-list" data-test="history-generate-list">
-      <article v-for="item in visibleHistory" :key="item.id" class="history-card" data-test="history-card">
+      <article
+        v-for="(item, itemIndex) in visibleHistory"
+        :key="item.id"
+        class="history-card"
+        :class="{ 'history-card--script': item.type === 'videoScript' }"
+        data-test="history-card"
+      >
         <div class="history-card-top">
           <div>
             <div class="history-card-meta">
@@ -684,9 +730,11 @@ onUnmounted(() => {
               </span>
             </div>
             <div v-if="(item as any).isPlaceholder && (!item.cardTitle || item.cardTitle === '生图任务')" class="skeleton-line skeleton-title" data-test="history-skeleton-title"></div>
-            <h3 v-else>{{ item.cardTitle }}</h3>
+            <h3 v-else class="history-card-title" data-test="history-card-title">
+              {{ item.cardTitle || item.ideaTitle || "未命名内容" }}
+            </h3>
             <div v-if="(item as any).isPlaceholder && !item.brandName && !item.trendTitle" class="skeleton-line skeleton-ref"></div>
-            <template v-else>
+            <template v-else-if="item.type === 'videoScript'">
               <div v-if="item.brandName || item.trendTitle" class="history-card-ref">{{ item.brandName }} · {{ item.trendTitle }}</div>
               <div v-if="item.ideaTitle" class="history-card-ref">{{ item.ideaTitle }}</div>
             </template>
@@ -733,34 +781,6 @@ onUnmounted(() => {
             <div class="skeleton-line skeleton-copy short"></div>
           </template>
         </div>
-        <div v-else-if="item.type === 'videoProject'" class="history-copy">
-          <p><strong>生成状态：</strong>{{ videoProjectStatusLabel(item) }} · {{ item.payload?.videoModel?.toString().toUpperCase() || 'D2' }}</p>
-          <p v-if="item.summary"><strong>核心创意：</strong>{{ item.summary }}</p>
-        </div>
-        <div v-else-if="item.type === 'moments'" class="history-copy">
-          <p v-if="item.payload?.caption"><strong>朋友圈文案：</strong>{{ item.payload?.caption }}</p>
-          <p v-if="item.payload?.visualDirection"><strong>视觉方向：</strong>{{ item.payload?.visualDirection }}</p>
-          <template v-if="(item as any).isPlaceholder && !item.payload?.caption && !item.payload?.visualDirection">
-            <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
-            <div class="skeleton-line skeleton-copy short"></div>
-          </template>
-        </div>
-        <div v-else-if="item.type === 'wechat'" class="history-copy">
-          <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
-          <p v-if="item.payload?.intro"><strong>文章导语：</strong>{{ item.payload?.intro }}</p>
-          <template v-if="(item as any).isPlaceholder && !item.payload?.publishTitle && !item.payload?.intro">
-            <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
-            <div class="skeleton-line skeleton-copy short"></div>
-          </template>
-        </div>
-        <div v-else class="history-copy">
-          <p v-if="item.payload?.publishTitle"><strong>发布标题：</strong>{{ item.payload?.publishTitle }}</p>
-          <p v-if="item.payload?.publishCaption"><strong>发布文案：</strong>{{ item.payload?.publishCaption }}</p>
-          <template v-if="(item as any).isPlaceholder && !item.payload?.publishTitle && !item.payload?.publishCaption">
-            <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
-            <div class="skeleton-line skeleton-copy short"></div>
-          </template>
-        </div>
 
         <!-- 脚本卡片展示概要 -->
         <div
@@ -784,29 +804,42 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-        <div v-else-if="item.type === 'videoProject'" class="history-video-box" @click="openDetail(item)">
-          <video
-            v-if="videoProjectCardVideoUrl(item)"
-            :src="videoProjectCardVideoUrl(item)"
-            muted
-            playsinline
-            preload="metadata"
-            :poster="videoProjectThumbnailUrl(item)"
-            aria-label="视频首帧预览"
-          ></video>
-          <img v-else-if="videoProjectThumbnailUrl(item)" :src="videoProjectThumbnailUrl(item)" alt="视频首帧" loading="lazy" />
+        <button v-else-if="item.type === 'videoProject'" type="button" class="history-video-box" @click="openDetail(item)">
+          <div
+            v-if="videoProjectThumbnailUrl(item) && !isImageLoaded(cardImageSrc(videoProjectThumbnailUrl(item), videoProjectThumbnailFullUrl(item)))"
+            class="history-media-loading"
+            aria-hidden="true"
+          >
+            <span class="history-spinner-sm"></span>
+            <span>首帧加载中…</span>
+          </div>
+          <img
+            v-if="videoProjectThumbnailUrl(item) && !isImageFailed(cardImageSrc(videoProjectThumbnailUrl(item), videoProjectThumbnailFullUrl(item)))"
+            :src="cardImageSrc(videoProjectThumbnailUrl(item), videoProjectThumbnailFullUrl(item))"
+            alt="视频首帧"
+            :loading="itemIndex < 4 ? 'eager' : 'lazy'"
+            decoding="async"
+            :fetchpriority="itemIndex < 2 ? 'high' : 'auto'"
+            :class="{ 'is-loaded': isImageLoaded(cardImageSrc(videoProjectThumbnailUrl(item), videoProjectThumbnailFullUrl(item))) }"
+            @load="onHistoryImageLoad(cardImageSrc(videoProjectThumbnailUrl(item), videoProjectThumbnailFullUrl(item)))"
+            @error="onHistoryImageError(cardImageSrc(videoProjectThumbnailUrl(item), videoProjectThumbnailFullUrl(item)), videoProjectThumbnailFullUrl(item))"
+          />
           <div v-else class="history-video-placeholder" :class="{ 'is-generating': isVideoProjectGenerating(item) }">
             <span v-if="isVideoProjectGenerating(item)" class="history-video-spinner" aria-hidden="true"></span>
             <span v-else class="script-icon">🎬</span>
             <strong>{{ videoProjectStatusLabel(item) }}</strong>
             <small>{{ videoProjectClips(item).length }} 个镜头 · 点击查看进度</small>
           </div>
-        </div>
+        </button>
 
-        <div v-else-if="item.type === 'xhsCarousel'" class="history-grid">
+        <div
+          v-else-if="item.type === 'xhsCarousel'"
+          class="history-grid"
+          :class="'has-' + Math.min(4, slideImages(item).length)"
+        >
           <template v-if="(item as any).isPlaceholder">
             <div v-for="slide in placeholderSlides(item)" :key="slide.index" class="history-slide-cell">
-              <img v-if="slide.imageUrl || slide.previewUrl" :src="safeImageSrc(slide.imageUrl || slide.previewUrl)" :alt="slide.title || slide.pageLabel || ''" />
+              <img v-if="slide.imageUrl || slide.previewUrl" class="is-loaded" :src="safeImageSrc(slide.imageUrl || slide.previewUrl)" :alt="slide.title || slide.pageLabel || ''" />
               <div v-else-if="slide.status === 'submitting' || slide.status === 'polling'" class="history-placeholder-cell is-generating" data-test="history-slide-loading">
                 <span class="history-spinner-sm"></span>
                 <span>{{ slide.pageLabel }} · 生成中</span>
@@ -820,26 +853,45 @@ onUnmounted(() => {
             </div>
           </template>
           <template v-else>
-          <div v-for="(slide, index) in slideImages(item)" :key="index" class="history-slide-cell">
-            <div v-if="isImageFailed(slide.src)" class="history-image-error" data-test="history-image-error">
+          <div
+            v-for="(slide, index) in slideImages(item)"
+            :key="index"
+            class="history-slide-cell"
+            role="button"
+            tabindex="0"
+            :aria-label="`查看第 ${slide.sourceIndex + 1} 张图片`"
+            @click="openDetail(item, slide.src)"
+            @keydown.enter="openDetail(item, slide.src)"
+            @keydown.space.prevent="openDetail(item, slide.src)"
+          >
+            <div
+              v-if="!isImageLoaded(cardImageSrc(slide.src, slide.fullSrc)) && !isImageFailed(cardImageSrc(slide.src, slide.fullSrc))"
+              class="history-media-loading"
+              aria-hidden="true"
+            >
+              <span class="history-spinner-sm"></span>
+            </div>
+            <div v-if="isImageFailed(cardImageSrc(slide.src, slide.fullSrc))" class="history-image-error" data-test="history-image-error">
               <span>图片加载失败</span>
               <button
                 type="button"
                 class="secondary-btn"
                 data-test="history-image-retry"
-                @click="retryImage(slide.src)"
+                @click.stop="retryImage(slide.src, slide.fullSrc)"
               >
                 重试
               </button>
             </div>
             <img
               v-else
-              :src="slide.src"
+              :src="cardImageSrc(slide.src, slide.fullSrc)"
               :alt="slide.title"
-              loading="lazy"
+              :loading="itemIndex < 4 ? 'eager' : 'lazy'"
               decoding="async"
-              @click="openDetail(item, slide.src)"
-              @error="onHistoryImageError(slide.src)"
+              :fetchpriority="itemIndex < 2 ? 'high' : 'auto'"
+              :class="{ 'is-loaded': isImageLoaded(cardImageSrc(slide.src, slide.fullSrc)) }"
+              @load="onHistoryImageLoad(cardImageSrc(slide.src, slide.fullSrc))"
+              @error="onHistoryImageError(cardImageSrc(slide.src, slide.fullSrc), slide.fullSrc)"
             />
           </div>
           </template>
@@ -857,24 +909,35 @@ onUnmounted(() => {
           class="history-preview"
           @click="openDetail(item)"
         >
-          <div v-if="isImageFailed(previewSrc(item))" class="history-image-error" data-test="history-image-error">
+          <div
+            v-if="!isImageLoaded(cardImageSrc(previewSrc(item), previewFullSrc(item))) && !isImageFailed(cardImageSrc(previewSrc(item), previewFullSrc(item)))"
+            class="history-media-loading"
+            aria-hidden="true"
+          >
+            <span class="history-spinner-sm"></span>
+            <span>图片加载中…</span>
+          </div>
+          <div v-if="isImageFailed(cardImageSrc(previewSrc(item), previewFullSrc(item)))" class="history-image-error" data-test="history-image-error">
             <span>图片加载失败</span>
             <button
               type="button"
               class="secondary-btn"
               data-test="history-image-retry"
-              @click.stop="retryImage(previewSrc(item))"
+              @click.stop="retryImage(previewSrc(item), previewFullSrc(item))"
             >
               重试
             </button>
           </div>
           <img
             v-else
-            :src="previewSrc(item)"
+            :src="cardImageSrc(previewSrc(item), previewFullSrc(item))"
             :alt="item.cardTitle || ''"
-            loading="lazy"
+            :loading="itemIndex < 4 ? 'eager' : 'lazy'"
             decoding="async"
-            @error="onHistoryImageError(previewSrc(item))"
+            :fetchpriority="itemIndex < 2 ? 'high' : 'auto'"
+            :class="{ 'is-loaded': isImageLoaded(cardImageSrc(previewSrc(item), previewFullSrc(item))) }"
+            @load="onHistoryImageLoad(cardImageSrc(previewSrc(item), previewFullSrc(item)))"
+            @error="onHistoryImageError(cardImageSrc(previewSrc(item), previewFullSrc(item)), previewFullSrc(item))"
           />
         </button>
       </article>
@@ -1099,10 +1162,11 @@ onUnmounted(() => {
               >
                 <img
                   v-if="safeImageSrc(entry.imageUrl || entry.previewUrl)"
-                  :src="safeImageSrc(entry.imageUrl || entry.previewUrl)"
+                  :src="cardImageSrc(safeImageSrc(entry.thumbnailUrl), safeImageSrc(entry.imageUrl || entry.previewUrl))"
                   :alt="entry.title || '改图结果'"
                   loading="lazy"
                   decoding="async"
+                  @error="onHistoryImageError(cardImageSrc(safeImageSrc(entry.thumbnailUrl), safeImageSrc(entry.imageUrl || entry.previewUrl)), safeImageSrc(entry.imageUrl || entry.previewUrl))"
                 />
                 <div class="history-edit-history-meta">
                   <div class="history-card-meta">
@@ -1201,6 +1265,12 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
+}
+
+.history-card-top > div:first-child {
+  flex: 1;
+  min-width: 0;
 }
 
 .history-card-top h3 {
@@ -1245,6 +1315,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .history-copy p {
@@ -1635,7 +1706,28 @@ onUnmounted(() => {
 }
 
 .history-slide-cell {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: transparent;
   min-width: 0;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.history-media-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  background: #faf7f5;
+  color: var(--workspace-text-muted, var(--color-text-secondary));
+  font-size: 12px;
+  pointer-events: none;
 }
 
 @keyframes skeleton-shimmer {
@@ -1798,6 +1890,8 @@ onUnmounted(() => {
 }
 
 .history-preview {
+  position: relative;
+  overflow: hidden;
   border: none;
   background: none;
   padding: 0;
@@ -1997,18 +2091,22 @@ onUnmounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--workspace-grid-gap);
   align-items: stretch;
-  grid-auto-rows: 560px;
+  grid-auto-rows: 520px;
 }
 
 .history-card {
-  min-height: 560px;
-  max-height: 560px;
+  min-height: 520px;
+  max-height: 520px;
 }
 
-.history-card-top h3 {
+.history-card-title {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.history-card--script .history-card-title {
   -webkit-line-clamp: 2;
 }
 
@@ -2024,6 +2122,15 @@ onUnmounted(() => {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+}
+
+.history-card--script {
+  gap: 8px;
+}
+
+.history-card--script .history-copy p {
+  line-height: 1.65;
+  -webkit-line-clamp: 2;
 }
 
 .history-view .panel-header {
@@ -2194,14 +2301,17 @@ onUnmounted(() => {
 .history-grid,
 .history-placeholder-image {
   width: 100%;
-  height: 220px;
-  min-height: 220px;
+  height: 390px;
+  min-height: 390px;
   margin-top: auto;
 }
 
 .history-script-box {
   display: flex;
   align-items: center;
+  height: 220px;
+  min-height: 220px;
+  flex-shrink: 0;
 }
 
 .history-video-box video,
@@ -2211,17 +2321,48 @@ onUnmounted(() => {
   height: 100%;
   max-height: none;
   aspect-ratio: auto;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .history-video-box {
+  position: relative;
   overflow: hidden;
+  padding: 0;
+  border: 0;
   border-radius: var(--workspace-radius-sm, var(--radius-md, 8px));
   background: #211d1d;
+  cursor: pointer;
+}
+
+.history-video-box img,
+.history-preview img,
+.history-grid img {
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.history-video-box img.is-loaded,
+.history-preview img.is-loaded,
+.history-grid img.is-loaded {
+  opacity: 1;
 }
 
 .history-grid {
   grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.history-grid.has-1 {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.history-grid.has-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.history-grid.has-3 .history-slide-cell:first-child {
+  grid-row: 1 / -1;
 }
 
 .history-grid img,
@@ -2231,8 +2372,14 @@ onUnmounted(() => {
   aspect-ratio: auto;
 }
 
+.history-grid img {
+  object-fit: contain;
+  background: #faf7f5;
+}
+
 .history-card-top {
   gap: 16px;
+  min-height: 42px;
 }
 
 .history-card-top h3 {
@@ -2338,6 +2485,14 @@ onUnmounted(() => {
   .history-card {
     min-height: 0;
     max-height: none;
+  }
+
+  .history-video-box,
+  .history-preview,
+  .history-grid,
+  .history-placeholder-image {
+    height: min(112vw, 480px);
+    min-height: 320px;
   }
 
   .history-detail-grid {

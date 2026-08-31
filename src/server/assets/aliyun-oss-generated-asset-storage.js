@@ -15,6 +15,8 @@ const {
 
 const OSS_DELETE_BATCH_LIMIT = 1000;
 const DEFAULT_READ_URL_EXPIRY_SECONDS = 300;
+const READ_URL_REFRESH_SAFETY_MS = 60 * 1000;
+const READ_URL_CACHE_MAX_ENTRIES = 5000;
 const DELETION_STAGING_GRACE_MS = 60 * 60 * 1000;
 
 function encodeStagedObjectKey(objectKey) {
@@ -59,6 +61,23 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
     videoFinalMaxBytes: dependencies.videoFinalMaxBytes,
   };
   const createReadStream = dependencies.createReadStream || fs.createReadStream;
+  const readUrlCache = new Map();
+
+  function evictReadUrls(objectKey) {
+    const prefix = `${String(objectKey || "")}:`;
+    for (const key of readUrlCache.keys()) {
+      if (key.startsWith(prefix)) readUrlCache.delete(key);
+    }
+  }
+
+  function pruneReadUrlCache(nowMs) {
+    for (const [key, entry] of readUrlCache) {
+      if (entry.expiresAtMs <= nowMs + READ_URL_REFRESH_SAFETY_MS) readUrlCache.delete(key);
+    }
+    while (readUrlCache.size > READ_URL_CACHE_MAX_ENTRIES) {
+      readUrlCache.delete(readUrlCache.keys().next().value);
+    }
+  }
 
   async function readFileHeader(filePath) {
     const handle = await fsp.open(filePath, "r");
@@ -114,6 +133,8 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
       await client.put(objectKey, assetInput.buffer, {
         headers: {
           "Content-Type": assetInput.mimeType,
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "Content-Disposition": "inline",
           "x-oss-forbid-overwrite": "true",
         },
       });
@@ -161,6 +182,8 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
         await client.putStream(objectKey, stream, {
           headers: {
             "Content-Type": metadata.mimeType,
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "Content-Disposition": "inline",
             "x-oss-forbid-overwrite": "true",
           },
         });
@@ -185,6 +208,7 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
       const objectKey = assertSafeObjectKey(asset.objectKey, prefix);
       try {
         await client.delete(objectKey);
+        evictReadUrls(objectKey);
         return { deleted: true, missing: false };
       } catch (error) {
         if (isOssObjectNotFoundError(error)) return { deleted: false, missing: true };
@@ -210,6 +234,7 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
             throw new Error("OSS delete response did not confirm every object");
           }
           results.push(...batch.map((objectKey) => ({ objectKey, deleted: true, missing: false })));
+          batch.forEach(evictReadUrls);
         } catch (error) {
           // A bare batch-level HTTP 404 can mean NoSuchBucket or a wrong endpoint.
           // Only an object-specific OSS code proves that every requested key is absent.
@@ -342,7 +367,18 @@ function createAliyunOssGeneratedAssetStorage(config, dependencies = {}) {
     async createReadUrl(asset, options = {}) {
       if (!asset?.objectKey) throw new Error("Generated asset not found");
       const expires = Math.max(1, Math.min(3600, Number(options.expiresSeconds || DEFAULT_READ_URL_EXPIRY_SECONDS)));
-      return client.signatureUrl(assertSafeObjectKey(asset.objectKey, prefix), { method: "GET", expires });
+      const objectKey = assertSafeObjectKey(asset.objectKey, prefix);
+      const process = String(options.process || "").trim();
+      const cacheKey = `${objectKey}:${expires}:${process}`;
+      const nowMs = now().getTime();
+      const cached = readUrlCache.get(cacheKey);
+      if (cached?.expiresAtMs > nowMs + READ_URL_REFRESH_SAFETY_MS) return cached.url;
+      const signatureOptions = { method: "GET", expires };
+      if (process) signatureOptions.process = process;
+      const url = client.signatureUrl(objectKey, signatureOptions);
+      readUrlCache.set(cacheKey, { url, expiresAtMs: nowMs + expires * 1000 });
+      pruneReadUrlCache(nowMs);
+      return url;
     },
     createReadStream(asset, options = {}) {
       throw new Error("OSS video assets should be served via signed read URL redirects");

@@ -16,6 +16,8 @@ const {
 } = require("../assets/generation-deletion-service");
 
 const GENERATION_HISTORY_TYPES = new Set(["moments", "wechat", "xhsCarousel", "videoScript", "videoProject", "styleImage", "imageEdit"]);
+const HISTORY_ASSET_URL_EXPIRES_SECONDS = 3600;
+const HISTORY_THUMBNAIL_PROCESS = "image/resize,m_lfit,w_960/quality,q_82/format,webp";
 const HISTORY_GENERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -117,6 +119,101 @@ function isGenerationExpired(generation, nowMs = Date.now(), retentionMs = HISTO
 
 function getGeneratedAssetStorage(context = {}) {
   return context.generatedAssetStorage || createGeneratedAssetStorage(context.appConfig || {});
+}
+
+async function createHistoryAssetReadUrl(storage, asset, options = {}) {
+  if (!asset?.objectKey || typeof storage?.createReadUrl !== "function") return "";
+  try {
+    return String(await storage.createReadUrl(asset, {
+      expiresSeconds: HISTORY_ASSET_URL_EXPIRES_SECONDS,
+      ...options,
+    }) || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+async function createHistoryImageUrls(storage, asset) {
+  if (!asset?.objectKey) return { full: "", thumbnail: "" };
+  const [full, thumbnail] = await Promise.all([
+    createHistoryAssetReadUrl(storage, asset),
+    createHistoryAssetReadUrl(storage, asset, { process: HISTORY_THUMBNAIL_PROCESS }),
+  ]);
+  return { full, thumbnail: thumbnail || full };
+}
+
+async function hydrateGenerationDirectAssetUrls(sanitized, generation, storage) {
+  const sourcePayload = generation?.payload && typeof generation.payload === "object" ? generation.payload : {};
+  const clientPayload = sanitized?.payload && typeof sanitized.payload === "object" ? { ...sanitized.payload } : {};
+  const result = { ...sanitized, payload: clientPayload };
+
+  const primary = await createHistoryImageUrls(storage, sourcePayload.localImage);
+  if (primary.full) {
+    result.previewUrl = primary.full;
+    result.thumbnailUrl = primary.thumbnail;
+    clientPayload.imageUrl = primary.full;
+    clientPayload.previewUrl = primary.full;
+    clientPayload.thumbnailUrl = primary.thumbnail;
+  }
+
+  const sourceSlides = Array.isArray(sourcePayload.slides) ? sourcePayload.slides : [];
+  if (sourceSlides.length && Array.isArray(clientPayload.slides)) {
+    clientPayload.slides = await Promise.all(clientPayload.slides.map(async (slide, index) => {
+      const urls = await createHistoryImageUrls(storage, sourceSlides[index]?.localImage);
+      return urls.full ? { ...slide, imageUrl: urls.full, previewUrl: urls.full, thumbnailUrl: urls.thumbnail } : slide;
+    }));
+    const firstSlide = clientPayload.slides.find((slide) => slide?.imageUrl || slide?.previewUrl);
+    if (!primary.full && firstSlide) {
+      result.previewUrl = firstSlide.imageUrl || firstSlide.previewUrl || result.previewUrl;
+      result.thumbnailUrl = firstSlide.thumbnailUrl || result.previewUrl;
+    }
+  }
+
+  const sourceEdits = Array.isArray(sourcePayload.editHistory) ? sourcePayload.editHistory : [];
+  if (sourceEdits.length && Array.isArray(clientPayload.editHistory)) {
+    clientPayload.editHistory = await Promise.all(clientPayload.editHistory.map(async (entry, index) => {
+      const urls = await createHistoryImageUrls(storage, sourceEdits[index]?.localImage);
+      return urls.full ? { ...entry, imageUrl: urls.full, previewUrl: urls.full, thumbnailUrl: urls.thumbnail } : entry;
+    }));
+  }
+
+  const videoAssets = sourcePayload.videoAssets && typeof sourcePayload.videoAssets === "object" ? sourcePayload.videoAssets : null;
+  if (videoAssets) {
+    const directFinalVideoUrl = await createHistoryAssetReadUrl(storage, videoAssets.final);
+    if (directFinalVideoUrl) {
+      clientPayload.finalVideoUrl = directFinalVideoUrl;
+      result.previewUrl = directFinalVideoUrl;
+    }
+    const sourceClips = Array.isArray(videoAssets.clips) ? videoAssets.clips : [];
+    if (sourceClips.length && Array.isArray(clientPayload.videoClips)) {
+      clientPayload.videoClips = await Promise.all(clientPayload.videoClips.map(async (clip, index) => {
+        const sourceClip = sourceClips[index] || {};
+        const [videoUrl, poster, continuityFrame] = await Promise.all([
+          createHistoryAssetReadUrl(storage, sourceClip.video),
+          createHistoryImageUrls(storage, sourceClip.poster),
+          createHistoryImageUrls(storage, sourceClip.continuityFrame),
+        ]);
+        return {
+          ...clip,
+          ...(videoUrl ? { videoUrl } : {}),
+          ...(poster.full ? { posterUrl: poster.full, posterThumbnailUrl: poster.thumbnail } : {}),
+          ...(continuityFrame.full ? {
+            continuityFrameUrl: continuityFrame.full,
+            continuityFrameThumbnailUrl: continuityFrame.thumbnail,
+          } : {}),
+        };
+      }));
+      const firstPosterUrl = clientPayload.videoClips.find((clip) => clip?.posterUrl)?.posterUrl;
+      const firstPosterThumbnailUrl = clientPayload.videoClips.find((clip) => clip?.posterThumbnailUrl)?.posterThumbnailUrl;
+      if (firstPosterUrl) {
+        clientPayload.finalPosterUrl = firstPosterUrl;
+        clientPayload.finalPosterThumbnailUrl = firstPosterThumbnailUrl || firstPosterUrl;
+        result.thumbnailUrl ||= firstPosterThumbnailUrl || firstPosterUrl;
+      }
+    }
+  }
+
+  return result;
 }
 
 async function expireGenerationIfNeeded(generation, options = {}) {
@@ -253,7 +350,6 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     sanitizeBrand,
     sanitizeBrandSummary,
     sanitizeGeneration,
-    cleanupEmptyGeneratedImageDirs,
     serveStoredGeneratedImage,
     verifySignedAssetRequest,
     getSessionToken,
@@ -264,7 +360,6 @@ async function handleHistoryRoutes(context, req, res, pathname) {
     unauthorized,
   } = bindRouteScope(context);
   const storage = getGeneratedAssetStorage(context);
-  const runHistoryCleanup = context.historyCleanupRunner || ((options) => cleanupExpiredGenerationHistory(options));
 
   async function expireGenerationForRead(generation) {
     if (!generation) return true;
@@ -302,12 +397,6 @@ async function handleHistoryRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/history") {
     const user = requireSqlAuth(req, res, { getSessionToken, buildApiUserLog, unauthorized });
     if (!user) return true;
-    await runHistoryCleanup({
-      nowMs: getHistoryNowMs(context),
-      storage,
-      purgeGenerationAssetsPreservingData: context.purgeGenerationAssetsPreservingData,
-      cleanupEmptyGeneratedImageDirs,
-    });
     const filters = buildHistoryFilters(req);
     const generations = Object.keys(filters).length
       ? searchGenerations(user.id, filters)
@@ -323,18 +412,20 @@ async function handleHistoryRoutes(context, req, res, pathname) {
         }
       }
     }
-    const history = generations
+    const history = await Promise.all(generations
         .filter((generation) => generation.visibilityStatus === "active" && !isGenerationExpired(generation, getHistoryNowMs(context), HISTORY_GENERATION_RETENTION_MS))
         .filter(isRenderableGeneration)
         .filter((generation) => !(generation.type === "videoScript" && supersededScriptIds.has(Number(generation.id))))
-        .map((generation) => {
-          const sanitized = sanitizeGeneration(generation, appConfig);
-          if (generation.type !== "videoScript" || Number.isSafeInteger(Number(sanitized?.payload?.ideaIndex))) return sanitized;
-          const brandId = Number(generation.brandId);
-          if (!brandCache.has(brandId)) brandCache.set(brandId, findBrandByOwner(brandId, user.id));
-          const ideaIndex = resolveLegacyVideoScriptIdeaIndex(generation, brandCache.get(brandId));
-          return ideaIndex == null ? sanitized : { ...sanitized, payload: { ...(sanitized.payload || {}), ideaIndex } };
-        });
+        .map(async (generation) => {
+          let sanitized = sanitizeGeneration(generation, appConfig);
+          if (generation.type === "videoScript" && !Number.isSafeInteger(Number(sanitized?.payload?.ideaIndex))) {
+            const brandId = Number(generation.brandId);
+            if (!brandCache.has(brandId)) brandCache.set(brandId, findBrandByOwner(brandId, user.id));
+            const ideaIndex = resolveLegacyVideoScriptIdeaIndex(generation, brandCache.get(brandId));
+            if (ideaIndex != null) sanitized = { ...sanitized, payload: { ...(sanitized.payload || {}), ideaIndex } };
+          }
+          return hydrateGenerationDirectAssetUrls(sanitized, generation, storage);
+        }));
     json(res, 200, { generations: history });
     return true;
   }
@@ -443,6 +534,7 @@ module.exports = {
   startGenerationHistoryCleanupScheduler,
   expireGenerationIfNeeded,
   isGenerationExpired,
+  hydrateGenerationDirectAssetUrls,
   parseGenerationCreatedAtMs,
   handleHistoryRoutes,
   buildHistoryFilters,

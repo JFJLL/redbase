@@ -489,3 +489,44 @@ test("history list never returns expired rows even when a shared cleanup is alre
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.generations.some((generation) => generation.id === 8), false);
 });
+
+test("history reads skip synchronous cleanup and return direct OSS full and thumbnail URLs", async () => {
+  const objectKey = "redbase/generated-images/users/1/2026/05/9/main.png";
+  seedGeneration({
+    id: 9,
+    type: "styleImage",
+    channelLabel: "一键风格化",
+    cardTitle: "OSS 图片",
+    createdAt: "2026-05-03T12:00:00.000Z",
+    previewUrl: "/api/generated-images/9/file",
+    payload: {
+      imageUrl: "/api/generated-images/9/file",
+      previewUrl: "/api/generated-images/9/file",
+      localImage: { provider: "aliyun_oss", objectKey, mimeType: "image/png" },
+    },
+  });
+  let cleanupCalls = 0;
+  const readUrlCalls = [];
+  const res = createRes();
+  await handleHistoryRoutes({
+    ...context,
+    historyCleanupRunner: async () => { cleanupCalls += 1; },
+    generatedAssetStorage: {
+      provider: "aliyun_oss",
+      async createReadUrl(asset, options) {
+        readUrlCalls.push({ asset, options });
+        return options.process
+          ? "https://bucket.oss.invalid/main.png?Expires=1800003600&x-oss-process=thumb"
+          : "https://bucket.oss.invalid/main.png?Expires=1800003600";
+      },
+    },
+  }, createReq("/api/history?type=styleImage", "redbase_session=route-token"), res, "/api/history");
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(cleanupCalls, 0);
+  assert.equal(res.body.generations.length, 1);
+  assert.equal(res.body.generations[0].previewUrl, "https://bucket.oss.invalid/main.png?Expires=1800003600");
+  assert.match(res.body.generations[0].thumbnailUrl, /x-oss-process=thumb/);
+  assert.equal(readUrlCalls.length, 2);
+  assert.equal(readUrlCalls.some((call) => call.options.process?.includes("resize")), true);
+});

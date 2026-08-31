@@ -153,10 +153,16 @@ describe("HistoryView", () => {
     expect(wrapper.text()).toContain("朋友圈图文");
     expect(wrapper.text()).toContain("小红书组图");
     expect(wrapper.text()).toContain("视频脚本");
-    expect(wrapper.text()).toContain("查看所有生成过的图片、标题和文案，统一回看并复用已产出的内容资产。");
+    expect(wrapper.text()).toContain("集中查看生成图片、组图与视频；完整发布文案在详情中查看。");
     expect(wrapper.text()).toContain("历史生成图片会保存 30 天，请及时下载。");
     expect(wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
     expect(wrapper.find('img[src="/api/generated-images/2/slides/0/file?sig=bbb"]').exists()).toBe(true);
+    expect(cards[0].find('[data-test="history-card-title"]').text()).toBe("露营朋友圈图");
+    expect(cards[1].find('[data-test="history-card-title"]').text()).toBe("护肤小红书组图");
+    expect(cards[1].text()).not.toContain("晨间护肤这样做");
+    expect(cards[1].text()).not.toContain("收藏这套流程");
+    expect(cards[0].text()).not.toContain("露营去咯");
+    expect(cards[0].text()).not.toContain("清新自然");
   });
 
   it("renders videoScript history cards without images and exposes start-video inside the script modal", async () => {
@@ -306,10 +312,10 @@ describe("HistoryView", () => {
     const card = wrapper.find('[data-test="history-card"]');
     expect(card.text()).toContain("AI 视频");
     expect(card.text()).toContain("部分失败");
-    const cardPreview = card.find('video[src*="video-projects/77/assets/clip/1"]');
+    const cardPreview = card.find('img[src*="video-projects/77/assets/poster/1"]');
     expect(cardPreview.exists()).toBe(true);
-    expect(cardPreview.attributes("preload")).toBe("metadata");
-    expect(cardPreview.attributes("poster")).toContain("video-projects/77/assets/poster/1");
+    expect(card.find("video").exists()).toBe(false);
+    expect(card.find(".history-media-loading").exists()).toBe(true);
     await card.find('[data-test="history-detail"]').trigger("click");
     await flushPromises();
 
@@ -564,11 +570,8 @@ describe("HistoryView", () => {
     // id 1 (moments), id 2 (xhsCarousel), id 300 (videoProject) -> total 3 cards (id 3 videoScript is omitted)
     expect(cards).toHaveLength(3);
     const cardTexts = cards.map((c) => c.text());
-    expect(cardTexts.some((t) => t.includes("由脚本生成的视频项目"))).toBe(true);
     expect(cardTexts.some((t) => t.includes("AI 视频"))).toBe(true);
-    // Only one card should mention the video script title
-    const scriptMentionCards = cardTexts.filter((t) => t.includes("用手冲咖啡开启自然之旅") || t.includes("由脚本生成的视频项目"));
-    expect(scriptMentionCards).toHaveLength(1);
+    expect(cardTexts.some((t) => t.includes("用手冲咖啡开启自然之旅"))).toBe(false);
   });
 
   it("renders '生成中' label with loading spinner animation for queued/running video project", async () => {
@@ -617,7 +620,8 @@ describe("HistoryView", () => {
 
     const visible = wrapper.findAll('[data-test="history-card"]');
     expect(visible).toHaveLength(1);
-    expect(visible[0].text()).toContain("露营朋友圈图");
+    expect(visible[0].text()).toContain("朋友圈图文");
+    expect(visible[0].find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
 
     const historyCallsAfter = calls.filter((c) => c.url.startsWith("/api/history")).length;
     expect(historyCallsAfter).toBe(historyCallsBefore);

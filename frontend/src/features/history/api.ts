@@ -49,6 +49,7 @@ export interface HistorySlide {
   title?: string;
   imageUrl?: string;
   previewUrl?: string;
+  thumbnailUrl?: string;
   [key: string]: unknown;
 }
 
@@ -61,6 +62,8 @@ export interface HistoryPayload {
   videoDuration?: number;
   videoStatus?: string;
   finalVideoUrl?: string;
+  finalPosterUrl?: string;
+  finalPosterThumbnailUrl?: string;
   videoClips?: Array<Record<string, unknown>>;
   script?: VideoScript;
   caption?: string;
@@ -69,6 +72,7 @@ export interface HistoryPayload {
   publishCaption?: string;
   intro?: string;
   title?: string;
+  thumbnailUrl?: string;
   aspectRatio?: string;
   slides?: HistorySlide[];
   editHistory?: unknown[];
@@ -87,6 +91,7 @@ export interface GenerationHistoryItem {
   channelLabel?: string;
   createdAt?: string;
   previewUrl?: string;
+  thumbnailUrl?: string;
   payload?: HistoryPayload;
   [key: string]: unknown;
 }
@@ -172,7 +177,9 @@ export function parseAssetExpiryMs(url: unknown): number {
   try {
     const parsed = new URL(String(url || ""), "http://redbase.local");
     const raw = Number(parsed.searchParams.get("assetExpires") || 0);
-    return Number.isFinite(raw) ? raw : 0;
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    const ossExpiresSeconds = Number(parsed.searchParams.get("Expires") || parsed.searchParams.get("expires") || 0);
+    return Number.isFinite(ossExpiresSeconds) && ossExpiresSeconds > 0 ? ossExpiresSeconds * 1000 : 0;
   } catch {
     return 0;
   }
