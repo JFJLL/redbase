@@ -15,6 +15,7 @@
         :filters="filters"
         :coverage="coverage"
         :loading="refreshing"
+        :refreshed="refreshComplete"
         @update:filters="onFiltersUpdate"
         @refresh="refreshActivePanel"
       />
@@ -71,10 +72,12 @@ const VALID_SECTIONS: Set<AdminSection> = new Set([
 const activeSection = ref<AdminSection>("overview");
 const sidebarCollapsed = ref(false);
 const refreshing = ref(false);
+const refreshComplete = ref(false);
 const sessionLoading = ref(true);
 const authError = ref("");
 const coverage = ref<CoverageInfo | undefined>(undefined);
 const activePanelRef = ref<any>(null);
+let refreshFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 const filters = ref<AdminFilters>({
   preset: "7d",
@@ -119,10 +122,20 @@ function onFiltersUpdate(newFilters: AdminFilters) {
 }
 
 async function refreshActivePanel() {
+  if (refreshFeedbackTimer) {
+    clearTimeout(refreshFeedbackTimer);
+    refreshFeedbackTimer = null;
+  }
+  refreshComplete.value = false;
   refreshing.value = true;
   try {
     if (activePanelRef.value && typeof activePanelRef.value.refresh === "function") {
       await activePanelRef.value.refresh();
+      refreshComplete.value = true;
+      refreshFeedbackTimer = setTimeout(() => {
+        refreshComplete.value = false;
+        refreshFeedbackTimer = null;
+      }, 1600);
     }
   } finally {
     refreshing.value = false;
@@ -152,6 +165,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("hashchange", syncFromHash);
+  if (refreshFeedbackTimer) clearTimeout(refreshFeedbackTimer);
 });
 </script>
 

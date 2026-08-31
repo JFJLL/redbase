@@ -19,31 +19,31 @@
             <thead>
               <tr>
                 <th>功能模块</th>
-                <th class="text-right">使用用户</th>
-                <th class="text-right">总请求数</th>
-                <th class="text-right">成功数</th>
-                <th class="text-right">失败数</th>
-                <th class="text-right">成功率</th>
-                <th class="text-right">Gross 积分</th>
-                <th class="text-right">退款积分</th>
-                <th class="text-right">Net 积分</th>
-                <th class="text-right">人均请求</th>
+                <th class="text-right" data-align="numeric">使用用户</th>
+                <th class="text-right" data-align="numeric">总请求数</th>
+                <th class="text-right" data-align="numeric">成功数</th>
+                <th class="text-right" data-align="numeric">失败数</th>
+                <th class="text-right" data-align="numeric">成功率</th>
+                <th class="text-right" data-align="numeric">Gross 积分</th>
+                <th class="text-right" data-align="numeric">退款积分</th>
+                <th class="text-right" data-align="numeric">Net 积分</th>
+                <th class="text-right" data-align="numeric">人均请求</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="feat in data.features" :key="feat.feature">
                 <td class="font-medium text-main">{{ feat.label }}</td>
-                <td class="text-right">{{ formatNumber(feat.usersCount) }}</td>
-                <td class="text-right">{{ formatNumber(feat.requestsCount) }}</td>
-                <td class="text-right text-success">{{ formatNumber(feat.successCount) }}</td>
-                <td class="text-right text-danger">{{ formatNumber(feat.failureCount) }}</td>
-                <td class="text-right font-semibold">
+                <td class="text-right" data-align="numeric">{{ formatNumber(feat.usersCount) }}</td>
+                <td class="text-right" data-align="numeric">{{ formatNumber(feat.requestsCount) }}</td>
+                <td class="text-right text-success" data-align="numeric">{{ formatNumber(feat.successCount) }}</td>
+                <td class="text-right text-danger" data-align="numeric">{{ formatNumber(feat.failureCount) }}</td>
+                <td class="text-right font-semibold" data-align="numeric">
                   {{ feat.successRate !== null ? `${feat.successRate}%` : '-' }}
                 </td>
-                <td class="text-right">{{ formatNumber(feat.grossCredits) }}</td>
-                <td class="text-right text-refund">{{ formatNumber(feat.refundCredits) }}</td>
-                <td class="text-right font-bold text-main">{{ formatNumber(feat.netCredits) }}</td>
-                <td class="text-right">{{ feat.avgRequestsPerUser }}</td>
+                <td class="text-right" data-align="numeric">{{ formatNumber(feat.grossCredits) }}</td>
+                <td class="text-right text-refund" data-align="numeric">{{ formatNumber(feat.refundCredits) }}</td>
+                <td class="text-right font-bold text-main" data-align="numeric">{{ formatNumber(feat.netCredits) }}</td>
+                <td class="text-right" data-align="numeric">{{ feat.avgRequestsPerUser }}</td>
               </tr>
             </tbody>
           </table>
@@ -187,6 +187,10 @@ defineExpose({
   padding: 10px 12px;
   border-bottom: 1px solid #f3f4f6;
   color: #374151;
+}
+.features-table [data-align="numeric"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .features-table tr:hover td {
   background: #fcfcfc;

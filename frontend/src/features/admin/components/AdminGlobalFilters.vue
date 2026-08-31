@@ -57,7 +57,7 @@
           <path d="M23 4v6h-6M1 20v-6h6" />
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
         </svg>
-        <span>{{ loading ? '刷新中...' : '刷新数据' }}</span>
+        <span>{{ loading ? '刷新中...' : refreshed ? '已刷新' : '刷新数据' }}</span>
       </button>
     </div>
   </header>
@@ -78,6 +78,7 @@ const props = defineProps<{
   filters: AdminFilters;
   coverage?: CoverageInfo;
   loading?: boolean;
+  refreshed?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -244,7 +245,9 @@ function onAccountChange(val: string) {
 .refresh-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  min-width: 94px;
   background: #f9fafb;
   border: 1px solid #d1d5db;
   border-radius: 4px;
@@ -262,7 +265,6 @@ function onAccountChange(val: string) {
   opacity: 0.6;
   cursor: not-allowed;
 }
-
 .rotating {
   animation: spin 1s linear infinite;
 }

@@ -56,6 +56,27 @@ const MOCK_OVERVIEW = {
   ],
 };
 
+const MOCK_FEATURES = {
+  generatedAt: "2026-08-28T10:00:00.000Z",
+  range: MOCK_OVERVIEW.range,
+  coverage: MOCK_OVERVIEW.coverage,
+  features: [{
+    feature: "trend_analysis",
+    label: "趋势分析",
+    usersCount: 3,
+    requestsCount: 12,
+    successCount: 10,
+    failureCount: 2,
+    successRate: 83.3,
+    grossCredits: 24,
+    refundCredits: 4,
+    netCredits: 20,
+    avgRequestsPerUser: 4,
+    trend: [],
+  }],
+  failureReasons: [],
+};
+
 const MOCK_USERS_DATA = {
   total: 2,
   page: 1,
@@ -138,7 +159,7 @@ describe("AdminDashboardView", () => {
     window.location.hash = "";
   });
 
-  async function mountView(overrides?: (url: string, init?: RequestInit) => Response | undefined) {
+  async function mountView(overrides?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined) {
     const calls: FetchCall[] = [];
     vi.stubGlobal(
       "fetch",
@@ -149,6 +170,7 @@ describe("AdminDashboardView", () => {
         if (custom) return custom;
         if (url === "/api/session") return jsonResponse(200, { user: { id: 1, name: "管理员", isAdmin: true } });
         if (url.startsWith("/api/admin/analytics/overview")) return jsonResponse(200, MOCK_OVERVIEW);
+        if (url.startsWith("/api/admin/analytics/features")) return jsonResponse(200, MOCK_FEATURES);
         if (url.startsWith("/api/admin/data/users")) return jsonResponse(200, MOCK_USERS_DATA);
         if (url.startsWith("/api/admin/data/brands")) return jsonResponse(200, MOCK_BRANDS_DATA);
         if (url.startsWith("/api/admin/data/generations")) return jsonResponse(200, MOCK_GENERATIONS_DATA);
@@ -222,6 +244,42 @@ describe("AdminDashboardView", () => {
     expect(wrapper.find('[data-test="credit-form"]').exists()).toBe(true);
   });
 
+  it("keeps every numeric feature header aligned with its data column", async () => {
+    window.location.hash = "#features";
+    const { wrapper } = await mountView();
+
+    const numericHeaders = wrapper.findAll('th[data-align="numeric"]');
+    const numericCells = wrapper.findAll('tbody tr:first-child td[data-align="numeric"]');
+    expect(numericHeaders).toHaveLength(9);
+    expect(numericCells).toHaveLength(9);
+  });
+
+  it("refreshes the active management tab and shows visible progress", async () => {
+    window.location.hash = "#management";
+    let videoRequestCount = 0;
+    let finishRefresh!: (response: Response) => void;
+    const pendingRefresh = new Promise<Response>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const { wrapper } = await mountView((url) => {
+      if (!url.startsWith("/api/admin/data/video-projects")) return undefined;
+      videoRequestCount += 1;
+      return videoRequestCount === 2 ? pendingRefresh : undefined;
+    });
+
+    await waitForStableUi(() => videoRequestCount === 1);
+    await wrapper.find('[data-test="manage-tab-video-projects"]').trigger("click");
+    await wrapper.find('[data-test="refresh-data-btn"]').trigger("click");
+    await flushPromises();
+
+    expect(videoRequestCount).toBe(2);
+    expect(wrapper.find('[data-test="refresh-data-btn"]').text()).toContain("刷新中");
+    expect(wrapper.find('[data-test="refresh-data-btn"]').attributes("disabled")).toBeDefined();
+
+    finishRefresh(jsonResponse(200, { total: 0, page: 1, pageSize: 20, items: [] }));
+    await waitForStableUi(() => wrapper.find('[data-test="refresh-data-btn"]').text().includes("已刷新"));
+  });
+
   it("management tab allows credit adjustment form submission", async () => {
     window.location.hash = "#management";
     vi.stubGlobal("alert", vi.fn());
@@ -246,6 +304,34 @@ describe("AdminDashboardView", () => {
     expect(creditCall).toBeTruthy();
     expect(creditCall!.init?.method).toBe("POST");
     expect(JSON.parse(String(creditCall!.init?.body))).toEqual({ amount: 30, note: "活动补贴" });
+  });
+
+  it("centers every management table header and cell", async () => {
+    window.location.hash = "#management";
+    const { wrapper } = await mountView();
+
+    const creditsHeader = wrapper.find('th[data-column="credits"]');
+    const creditsCell = wrapper.find('tbody tr:first-child td[data-column="credits"]');
+    const createdAtHeader = wrapper.find('th[data-column="createdAt"]');
+    const createdAtCell = wrapper.find('tbody tr:first-child td[data-column="createdAt"]');
+    const actionsHeader = wrapper.find('th[data-column="actions"]');
+    const actionsCell = wrapper.find('tbody tr:first-child td[data-column="actions"]');
+
+    expect(creditsHeader.attributes("data-align")).toBe("center");
+    expect(creditsCell.attributes("data-align")).toBe("center");
+    expect(createdAtHeader.attributes("data-align")).toBe("center");
+    expect(createdAtCell.attributes("data-align")).toBe("center");
+    expect(actionsHeader.attributes("data-align")).toBe("center");
+    expect(actionsCell.attributes("data-align")).toBe("center");
+    expect(wrapper.find('th[data-column="name"]').attributes("data-align")).toBe("center");
+    expect(wrapper.find('tbody tr:first-child td[data-column="name"]').attributes("data-align")).toBe("center");
+
+    await wrapper.find('[data-test="manage-tab-credit-events"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".admin-data-table th").every((cell) => cell.attributes("data-align") === "center")).toBe(true);
+    expect(wrapper.findAll(".admin-data-table tbody td").every((cell) => cell.attributes("data-align") === "center")).toBe(true);
+    expect(wrapper.find('th[data-column="summary"]').attributes("style")).toContain("width: 50%");
+    expect(wrapper.find('th[data-column="creditDelta"]').attributes("style")).toContain("width: 112px");
   });
 
   it("keeps the credit-event type filter beside the table search", async () => {

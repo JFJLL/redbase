@@ -532,14 +532,14 @@ const usersSearch = ref("");
 const usersData = ref<PaginatedResult<AdminUserItem>>({ total: 0, page: 1, pageSize: 20, items: [] });
 
 const userColumns: TableColumn[] = [
-  { key: "id", label: "ID", width: "60px" },
-  { key: "name", label: "用户" },
-  { key: "accountType", label: "类型", width: "90px" },
-  { key: "credits", label: "剩余积分", align: "right" },
-  { key: "brandCount", label: "品牌数", align: "right" },
-  { key: "generationCount", label: "生成数", align: "right" },
-  { key: "consumedTokens", label: "累计消耗", align: "right" },
-  { key: "createdAt", label: "注册时间" },
+  { key: "id", label: "ID", width: "60px", align: "center" },
+  { key: "name", label: "用户", align: "center" },
+  { key: "accountType", label: "类型", width: "90px", align: "center" },
+  { key: "credits", label: "剩余积分", align: "center" },
+  { key: "brandCount", label: "品牌数", align: "center" },
+  { key: "generationCount", label: "生成数", align: "center" },
+  { key: "consumedTokens", label: "累计消耗", align: "center" },
+  { key: "createdAt", label: "注册时间", align: "center" },
 ];
 
 // Credit form state
@@ -619,12 +619,12 @@ const brandsData = ref<PaginatedResult<AdminBrandItem>>({ total: 0, page: 1, pag
 const selectedBrandDetail = ref<AdminBrandItem | null>(null);
 
 const brandColumns: TableColumn[] = [
-  { key: "id", label: "ID", width: "60px" },
-  { key: "name", label: "品牌名称" },
-  { key: "industry", label: "所属行业" },
-  { key: "analysisCount", label: "分析次数", align: "right" },
-  { key: "trendCount", label: "热点词数", align: "right" },
-  { key: "createdAt", label: "创建时间" },
+  { key: "id", label: "ID", width: "60px", align: "center" },
+  { key: "name", label: "品牌名称", align: "center" },
+  { key: "industry", label: "所属行业", align: "center" },
+  { key: "analysisCount", label: "分析次数", align: "center" },
+  { key: "trendCount", label: "热点词数", align: "center" },
+  { key: "createdAt", label: "创建时间", align: "center" },
 ];
 
 async function loadBrands(page = 1) {
@@ -642,12 +642,12 @@ const generationsData = ref<PaginatedResult<AdminGenerationItem>>({ total: 0, pa
 const selectedGenerationDetail = ref<AdminGenerationItem | null>(null);
 
 const generationColumns: TableColumn[] = [
-  { key: "id", label: "ID", width: "60px" },
-  { key: "preview", label: "媒体预览", width: "124px" },
-  { key: "cardTitle", label: "内容标题", width: "36%" },
-  { key: "type", label: "功能类型", width: "120px" },
-  { key: "assetStatus", label: "资产状态", width: "108px" },
-  { key: "createdAt", label: "生成时间", width: "170px" },
+  { key: "id", label: "ID", width: "60px", align: "center" },
+  { key: "preview", label: "媒体预览", width: "124px", align: "center" },
+  { key: "cardTitle", label: "内容标题", width: "36%", align: "center" },
+  { key: "type", label: "功能类型", width: "120px", align: "center" },
+  { key: "assetStatus", label: "资产状态", width: "108px", align: "center" },
+  { key: "createdAt", label: "生成时间", width: "170px", align: "center" },
 ];
 
 async function handleDeleteGeneration(gen: AdminGenerationItem) {
@@ -691,11 +691,11 @@ const filteredCreditItems = computed(() => {
 });
 
 const creditColumns: TableColumn[] = [
-  { key: "id", label: "ID", width: "60px" },
-  { key: "summary", label: "流水变动" },
-  { key: "creditDelta", label: "积分变动", align: "right" },
-  { key: "user", label: "所属用户" },
-  { key: "createdAt", label: "发生时间" },
+  { key: "id", label: "ID", width: "60px", align: "center" },
+  { key: "summary", label: "流水变动", width: "50%", align: "center" },
+  { key: "creditDelta", label: "积分变动", width: "112px", align: "center" },
+  { key: "user", label: "所属用户", width: "190px", align: "center" },
+  { key: "createdAt", label: "发生时间", width: "170px", align: "center" },
 ];
 
 async function loadCreditEvents(page = 1) {
@@ -712,12 +712,12 @@ const paymentOrdersSearch = ref("");
 const paymentOrdersData = ref<PaginatedResult<AdminPaymentOrderItem>>({ total: 0, page: 1, pageSize: 20, items: [] });
 
 const paymentColumns: TableColumn[] = [
-  { key: "outTradeNo", label: "订单号" },
-  { key: "planName", label: "套餐" },
-  { key: "amountYuan", label: "金额", align: "right" },
-  { key: "provider", label: "支付渠道" },
-  { key: "status", label: "状态" },
-  { key: "createdAt", label: "下单时间" },
+  { key: "outTradeNo", label: "订单号", align: "center" },
+  { key: "planName", label: "套餐", align: "center" },
+  { key: "amountYuan", label: "金额", align: "center" },
+  { key: "provider", label: "支付渠道", align: "center" },
+  { key: "status", label: "状态", align: "center" },
+  { key: "createdAt", label: "下单时间", align: "center" },
 ];
 
 async function loadPaymentOrders(page = 1) {
@@ -735,13 +735,13 @@ const videoProjectsData = ref<PaginatedResult<AdminVideoProjectItem>>({ total: 0
 const selectedProjectDetail = ref<AdminVideoProjectDetail | null>(null);
 
 const videoColumns: TableColumn[] = [
-  { key: "id", label: "ID", width: "60px" },
-  { key: "requestId", label: "请求标识" },
-  { key: "model", label: "视频模型" },
-  { key: "totalDurationSec", label: "时长", align: "right" },
-  { key: "netCredits", label: "Net 积分", align: "right" },
-  { key: "status", label: "状态" },
-  { key: "createdAt", label: "发起时间" },
+  { key: "id", label: "ID", width: "60px", align: "center" },
+  { key: "requestId", label: "请求标识", align: "center" },
+  { key: "model", label: "视频模型", align: "center" },
+  { key: "totalDurationSec", label: "时长", align: "center" },
+  { key: "netCredits", label: "Net 积分", align: "center" },
+  { key: "status", label: "状态", align: "center" },
+  { key: "createdAt", label: "发起时间", align: "center" },
 ];
 
 async function loadVideoProjects(page = 1) {
@@ -750,6 +750,24 @@ async function loadVideoProjects(page = 1) {
     videoProjectsData.value = await fetchDataVideoProjects({ page, pageSize: 20, q: videoProjectsSearch.value });
   } catch (_) {}
   finally { videoProjectsLoading.value = false; }
+}
+
+async function refreshCurrentTab() {
+  switch (currentTab.value) {
+    case "brands":
+      return loadBrands(brandsData.value.page);
+    case "generations":
+      return loadGenerations(generationsData.value.page);
+    case "credit-events":
+      return loadCreditEvents(creditEventsData.value.page);
+    case "payment-orders":
+      return loadPaymentOrders(paymentOrdersData.value.page);
+    case "video-projects":
+      return loadVideoProjects(videoProjectsData.value.page);
+    case "users":
+    default:
+      return loadUsers(usersData.value.page);
+  }
 }
 
 async function viewProjectDetail(projectId: number) {
@@ -786,6 +804,10 @@ onMounted(() => {
   loadCreditEvents();
   loadPaymentOrders();
   loadVideoProjects();
+});
+
+defineExpose({
+  refresh: refreshCurrentTab,
 });
 </script>
 

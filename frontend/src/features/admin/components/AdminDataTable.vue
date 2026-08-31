@@ -29,20 +29,33 @@
       <table v-else class="admin-data-table">
         <thead>
           <tr>
-            <th v-for="col in columns" :key="col.key" :class="col.align ? `text-${col.align}` : ''" :style="col.width ? { width: col.width } : {}">
+            <th
+              v-for="col in columns"
+              :key="col.key"
+              :class="`text-${col.align || 'left'}`"
+              :data-column="col.key"
+              :data-align="col.align || 'left'"
+              :style="col.width ? { width: col.width } : {}"
+            >
               {{ col.label }}
             </th>
-            <th v-if="$slots.actions" class="text-right">操作</th>
+            <th v-if="$slots.actions" class="text-center" data-column="actions" data-align="center">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="(item, idx) in items" :key="item.id || idx">
-            <td v-for="col in columns" :key="col.key" :class="col.align ? `text-${col.align}` : ''">
+            <td
+              v-for="col in columns"
+              :key="col.key"
+              :class="`text-${col.align || 'left'}`"
+              :data-column="col.key"
+              :data-align="col.align || 'left'"
+            >
               <slot :name="`cell-${col.key}`" :item="item" :value="item[col.key]">
                 {{ item[col.key] ?? '-' }}
               </slot>
             </td>
-            <td v-if="$slots.actions" class="text-right">
+            <td v-if="$slots.actions" class="text-center" data-column="actions" data-align="center">
               <slot name="actions" :item="item"></slot>
             </td>
           </tr>
@@ -210,6 +223,7 @@ defineEmits<{
   padding: 10px 14px;
   border-bottom: 1px solid #e5e7eb;
   text-align: left;
+  white-space: nowrap;
 }
 
 .admin-data-table td {
@@ -222,9 +236,9 @@ defineEmits<{
   background: #fcfcfc;
 }
 
-.text-left { text-align: left; }
-.text-center { text-align: center; }
-.text-right { text-align: right; }
+.admin-data-table .text-left { text-align: left; }
+.admin-data-table .text-center { text-align: center; }
+.admin-data-table .text-right { text-align: right; }
 
 .table-pagination-bar {
   padding: 10px 16px;
