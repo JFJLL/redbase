@@ -19,6 +19,7 @@ const {
   markFailed,
 } = require("../db/repositories/image-job-runtime-repository");
 const { recordImageTaskAttempt } = require("../analytics/ai-attempt-recorder");
+const { normalizeImageModel } = require("../api/credits");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
@@ -146,9 +147,22 @@ function normalizeImageCount(value) {
   return Math.max(1, Math.min(10, Math.floor(count)));
 }
 
-function buildKeystoneImageRequest(provider, { prompt, aspectRatio }) {
+function resolveUpstreamImageModel(provider, model) {
+  const normalized = normalizeImageModel(model);
+  if (normalized === "image2.5") {
+    if (provider?.model2_5) return String(provider.model2_5).trim();
+    const configuredModel = String(provider?.model || "").trim();
+    if (configuredModel && configuredModel.includes("image-2")) {
+      return configuredModel.replace("image-2", "image-2.5");
+    }
+    return "gpt-image-2.5";
+  }
+  return String(provider?.model || KEYSTONE_DEFAULT_MODEL).trim() || KEYSTONE_DEFAULT_MODEL;
+}
+
+function buildKeystoneImageRequest(provider, { prompt, aspectRatio, model }) {
   const body = {
-    model: String(provider?.model || KEYSTONE_DEFAULT_MODEL).trim() || KEYSTONE_DEFAULT_MODEL,
+    model: resolveUpstreamImageModel(provider, model),
     prompt: String(prompt || ""),
     size: normalizeKeystoneSize(aspectRatio, provider?.resolution),
     n: normalizeImageCount(provider?.imageCount),
@@ -257,9 +271,9 @@ async function fetchImageProviderJson(url, options = {}) {
   }
 }
 
-function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = [] }) {
+function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = [], model }) {
   if (getImageProviderName(provider) === "keystone") {
-    return buildKeystoneImageRequest(provider, { prompt, aspectRatio });
+    return buildKeystoneImageRequest(provider, { prompt, aspectRatio, model });
   }
 
   return {
@@ -497,9 +511,11 @@ async function createImageJob(
     sourceImageUrls,
     sourceImages,
     aspectRatio,
+    model,
   },
 ) {
   ensureImageJobRecovery();
+  const requestedModel = normalizeImageModel(model);
   const provider = appConfig.imageProvider;
   assertConfigured(provider.apiKey, "图片模型 API Key");
   const referenceImages = normalizeImageInputs(productImages || productImage);
@@ -558,6 +574,7 @@ async function createImageJob(
     prompt: metadata.prompt,
     aspectRatio: outputAspectRatio,
     imageUrls: useEditModel ? editImageUrls : [],
+    model: requestedModel,
   });
 
   console.log("[image-job] creating upstream task", {
@@ -725,9 +742,11 @@ async function createImageJob(
     providerMode: useEditModel ? "edit" : "text-to-image",
     providerResultUrl: submission.resultUrl,
     providerHeaders: headers,
-    model: provider.model || KEYSTONE_DEFAULT_MODEL,
+    model: requestedModel,
     metadata: {
       ...metadata,
+      model: requestedModel,
+      upstreamModel: resolveUpstreamImageModel(provider, requestedModel),
       brandId: brand?.id ?? metadata.brandId ?? null,
       brandName: brand?.name || metadata.brandName || "",
       industry: brand?.industry || metadata.industry || "",

@@ -192,6 +192,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   );
 
   const aspectRatioSelection = ref("smart");
+  const imageModel = ref("image2");
   const wechatTemplate = ref("auto");
   const xhsStylePreset = ref("auto");
   const useBrandLogo = ref(false);
@@ -206,6 +207,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   function restoreIdeaSettings(): void {
     const settings = getIdeaCreativeSettings(context.settingsKey.value);
     aspectRatioSelection.value = settings.aspectRatioSelection;
+    imageModel.value = settings.imageModel || "image2";
     xhsStylePreset.value = settings.visualStylePreset;
     wechatTemplate.value = settings.wechatTemplate;
     useBrandLogo.value = settings.useBrandLogo;
@@ -224,6 +226,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
   watch(
     [
       aspectRatioSelection,
+      imageModel,
       xhsStylePreset,
       wechatTemplate,
       useBrandLogo,
@@ -234,6 +237,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     () => {
       saveIdeaCreativeSettings(context.settingsKey.value, {
         aspectRatioSelection: aspectRatioSelection.value,
+        imageModel: imageModel.value,
         visualStylePreset: xhsStylePreset.value,
         wechatTemplate: wechatTemplate.value,
         useBrandLogo: useBrandLogo.value,
@@ -489,6 +493,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
         aspectRatio,
         productImages: selectedProductImageInputs.value,
         useBrandLogo: resolvedUseBrandLogo.value,
+        model: imageModel.value,
       });
       localMomentsResult.value = {
         imageUrl: task.imageUrl || task.previewUrl,
@@ -559,6 +564,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
         productImages: selectedProductImageInputs.value,
         useBrandLogo: resolvedUseBrandLogo.value,
         wechatTemplate: wechatTemplate.value,
+        model: imageModel.value,
       });
       localWechatResult.value = {
         imageUrl: task.imageUrl || task.previewUrl,
@@ -629,6 +635,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
         productImages: selectedProductImageInputs.value,
         useBrandLogo: resolvedUseBrandLogo.value,
         visualStylePreset: xhsStylePreset.value,
+        model: imageModel.value,
       });
     } catch (error) {
       if (isAbortError(error)) return;
@@ -645,6 +652,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
       productImages: selectedProductImageInputs.value,
       useBrandLogo: resolvedUseBrandLogo.value,
       visualStylePreset: xhsStylePreset.value,
+      model: imageModel.value,
     });
   }
 
@@ -769,6 +777,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
         styleReferenceImages: styleReference.value
           ? [{ name: styleReference.value.fileName, dataUrl: styleReference.value.dataUrl }]
           : [],
+        model: imageModel.value,
       });
       localStyleResult.value = {
         imageUrl: task.imageUrl || task.previewUrl,
@@ -808,6 +817,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     deepLinkError,
     validateDeepLinkForAction,
     aspectRatioSelection,
+    imageModel,
     wechatTemplate,
     xhsStylePreset,
     useBrandLogo,

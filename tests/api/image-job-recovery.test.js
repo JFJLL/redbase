@@ -448,7 +448,7 @@ test("active signs local generated-image URLs of terminal group members; externa
       trendTitle: "恢复测试趋势",
       ideaTitle: "恢复选题",
       cardTitle: "签名组图",
-      createdAt: "2026-08-05T00:00:00.000Z",
+      createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
       previewUrl: "/api/generated-images/8801/slides/0/file",
       summary: "签名组图",
       payload: {

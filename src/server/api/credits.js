@@ -13,6 +13,25 @@ const CREDIT_COSTS = {
   excellentFusionPlan: 1,
 };
 
+const IMAGE_MODELS = Object.freeze(["image2", "image2.5"]);
+const DEFAULT_IMAGE_MODEL = "image2";
+
+function normalizeImageModel(rawModel) {
+  const model = String(rawModel || "").trim().toLowerCase();
+  if (model === "image2.5" || model === "image-2.5" || model === "gpt-image-2.5") return "image2.5";
+  return "image2";
+}
+
+function getImageCreditCost(actionType, rawModel = DEFAULT_IMAGE_MODEL) {
+  const model = normalizeImageModel(rawModel);
+  const extraCost = model === "image2.5" ? 1 : 0;
+  if (actionType === "xhsCarousel") {
+    const base = Number(CREDIT_COSTS.xhsCarousel || 4);
+    return base + (extraCost * 4);
+  }
+  const base = Number(CREDIT_COSTS[actionType] || 1);
+  return base + extraCost;
+}
 
 function hasEnoughCredits(user, cost, res) {
   const current = Number(user.credits || 0);
@@ -39,6 +58,10 @@ function getGenerationTokenCost(generation, event) {
 }
 module.exports = {
   CREDIT_COSTS,
+  IMAGE_MODELS,
+  DEFAULT_IMAGE_MODEL,
+  normalizeImageModel,
+  getImageCreditCost,
   hasEnoughCredits,
   getCreditEventCost,
   getGenerationTokenCost,

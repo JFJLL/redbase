@@ -30,7 +30,7 @@ function createAiServices(appConfig) {
     generateAiTrendSet: (brand, baseId, options) => generateAiTrendSet(appConfig, brand, baseId, options),
     regenerateTrendIdeas: (brand, trend, customPrompt, options) => regenerateTrendIdeas(appConfig, brand, trend, customPrompt, options),
     ensureTrendIdeaContentAssets: (brand, trend, ideaIndex, options) => ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex, options),
-    createImageJob: ({ ownerUserId, brand, trend, idea, metadata, productImage, productImages, logoImage, styleReferenceImages, sourceImageUrls, sourceImages, aspectRatio }) =>
+    createImageJob: ({ ownerUserId, brand, trend, idea, metadata, productImage, productImages, logoImage, styleReferenceImages, sourceImageUrls, sourceImages, aspectRatio, model }) =>
       createImageJob(appConfig, {
         ownerUserId,
         brand,
@@ -44,6 +44,7 @@ function createAiServices(appConfig) {
         sourceImageUrls,
         sourceImages,
         aspectRatio,
+        model,
       }),
     resolveImageJob: (job) => resolveImageJob(appConfig, job),
     buildImageJobResponse,

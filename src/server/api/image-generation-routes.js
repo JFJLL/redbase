@@ -46,6 +46,7 @@ const { withExcellentRemixGroupLock } = require("../services/excellent-remix-gen
 const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
 const { collectGenerationAssets } = require("../assets/generation-deletion-service");
 const { recordOutputCompleted } = require("../analytics/analytics-recorder");
+const { normalizeImageModel, getImageCreditCost } = require("./credits");
 
 const EXCELLENT_REMIX_CREDIT_ACTION_TYPES = ["xhsCarousel"];
 const CAROUSEL_GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
@@ -964,9 +965,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
         return true;
       }
     }
+    const requestedModel = normalizeImageModel(payload.model);
     const charged = await runChargedAiWork({
       user,
-      cost: CREDIT_COSTS.momentsImage,
+      cost: getImageCreditCost("momentsImage", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "momentsImage",
         actionLabel: "朋友圈图生成",
@@ -982,9 +984,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImageCount: styleReferenceImages.length,
           logoUsed: Boolean(logoImage),
           aspectRatio,
+          model: requestedModel,
         },
       }),
-      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, styleReferenceImages, logoImage, aspectRatio, metadata: { ...metadata, aspectRatio } }),
+      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, styleReferenceImages, logoImage, aspectRatio, model: requestedModel, metadata: { ...metadata, aspectRatio, model: requestedModel } }),
     });
     if (!charged) return true;
     const job = charged.value;
@@ -1009,6 +1012,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
      ideaIndex: Number(imageMatch[3]),
      creditEventId: charged.creditEvent.id,
      aspectRatio,
+     model: requestedModel,
       title: metadata.title || idea.title || "",
       caption: metadata.caption || "",
       visualDirection: metadata.visualDirection || "",
@@ -1294,9 +1298,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       badRequest(res, "请先选择一张已生成的图片再改图。");
       return true;
     }
+    const requestedModel = normalizeImageModel(payload.model);
     const charged = await runChargedAiWork({
       user,
-      cost: CREDIT_COSTS.imageEdit,
+      cost: getImageCreditCost("imageEdit", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "imageEdit",
         actionLabel: "追加提示词改图",
@@ -1308,6 +1313,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           sourceGenerationId: sourceGeneration?.id ?? null,
           parentEditId: payload.parentEditId || "",
           sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
+          model: requestedModel,
         },
       }),
       run: () =>
@@ -1316,6 +1322,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           sourceImageUrls: sourceIsRemoteUrl && !localSourceImage ? [sourceImageUrl] : [],
           sourceImages: localSourceImage ? [localSourceImage] : [],
           aspectRatio: editAspectRatio,
+          model: requestedModel,
           metadata: {
             title: String(payload.title || "改图结果").slice(0, 120),
             visualDirection: "基于已生成图片继续改图",
@@ -1326,6 +1333,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             originalImageUrl: sourceImageUrl,
             aspectRatio: editAspectRatio,
             sourceStoredPath: localSourceImage?.storedPath || "",
+            model: requestedModel,
           },
         }),
     });
@@ -1340,6 +1348,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       parentEditId: String(payload.parentEditId || ""),
       sourceImageUrl,
       editPrompt,
+      model: requestedModel,
       title: String(payload.title || "改图结果").slice(0, 120),
       aspectRatio: editAspectRatio,
       sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
@@ -1422,9 +1431,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       productImageCount: productImages.length,
       title: wechatPack.publishTitle || idea.title,
     });
+    const requestedModel = normalizeImageModel(payload.model);
     const charged = await runChargedAiWork({
       user,
-      cost: CREDIT_COSTS.wechatImage,
+      cost: getImageCreditCost("wechatImage", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "wechatImage",
         actionLabel: "公众号长图生成",
@@ -1439,6 +1449,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoUsed: Boolean(logoImage),
           wechatTemplate: wechatPack.template,
           aspectRatio,
+          model: requestedModel,
         },
       }),
       run: () =>
@@ -1451,6 +1462,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImages,
           logoImage,
           aspectRatio,
+          model: requestedModel,
           metadata: {
             ...wechatPack,
             platform: "wechat",
@@ -1458,6 +1470,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             visualDirection: wechatPack.visualDirection,
             style: wechatPack.style,
             composition: wechatPack.composition,
+            model: requestedModel,
           },
         }),
     });
@@ -1472,6 +1485,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
      ideaIndex: Number(wechatLongImageMatch[3]),
      creditEventId: charged.creditEvent.id,
      aspectRatio,
+     model: requestedModel,
       title: wechatPack.title || wechatPack.publishTitle || idea.title || "",
       publishTitle: wechatPack.publishTitle || "",
       intro: wechatPack.intro || "",
@@ -1612,10 +1626,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       badRequest(res, error.message || "历史归因无效");
       return true;
     }
+    const requestedModel = normalizeImageModel(payload.model);
     const sourceSlide = buildSourceSlideSnapshot(slide);
     const charged = await runChargedAiWork({
       user,
-      cost: CREDIT_COSTS.xhsCarouselSlide,
+      cost: getImageCreditCost("xhsCarouselSlide", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "优秀内容仿图文单张生成",
@@ -1634,6 +1649,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           contentMode: historyRefs.contentMode,
           excellentRemix: true,
           carouselGroupId,
+          model: requestedModel,
         },
       }),
       run: () =>
@@ -1645,6 +1661,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           productImages,
           logoImage,
           aspectRatio,
+          model: requestedModel,
           metadata: {
             title: `${normalizedPack.title} ${slide.pageLabel}`,
             visualDirection: slide.visualDirection,
@@ -1656,6 +1673,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             pageRole: slide.pageRole || sourceSlide.pageRole,
             copy: slide.copy,
             aspectRatio,
+            model: requestedModel,
             ...(slide.remixBrief && typeof slide.remixBrief === "object" ? { remixBrief: slide.remixBrief } : {}),
           },
         }),
@@ -1674,6 +1692,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       existingIdeaRef: historyRefs.existingIdeaRef,
       slideIndex,
       carouselGroupId,
+      model: requestedModel,
       carouselTitle: normalizedPack.title || "",
       publishTitle: normalizedPack.publishTitle || "",
       publishCaption: normalizedPack.publishCaption || "",
@@ -2069,9 +2088,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       ...carouselPack,
       carouselGroupId,
     };
+   const requestedModel = normalizeImageModel(payload.model);
    const charged = await runChargedAiWork({
      user,
-     cost: CREDIT_COSTS.xhsCarousel,
+     cost: getImageCreditCost("xhsCarousel", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "小红书组图生成",
@@ -2086,6 +2106,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoUsed: Boolean(logoImage),
           visualStylePreset: carouselPack.creativeStyle,
           aspectRatio,
+          model: requestedModel,
         },
       }),
       run: () =>
@@ -2111,6 +2132,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               styleReferenceImages,
               logoImage,
               aspectRatio,
+              model: requestedModel,
               metadata: {
                 title: `${carouselPack.title} ${slide.pageLabel}`,
                 visualDirection: slide.visualDirection || slide.title,
@@ -2124,6 +2146,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
                 slideIndex,
                 pageLabel: slide.pageLabel,
                 copy: slide.copy,
+                model: requestedModel,
               },
             });
            job.generationContext = {
@@ -2134,6 +2157,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
              ideaIndex: Number(xhsCarouselMatch[3]),
              slideIndex,
               carouselGroupId,
+              model: requestedModel,
               carouselTitle: carouselPack.title || "",
               publishTitle: carouselPack.publishTitle || "",
               publishCaption: carouselPack.publishCaption || "",
@@ -2270,9 +2294,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       hasProductImage: productImages.length > 0,
       productImageCount: productImages.length,
     });
+    const requestedModel = normalizeImageModel(payload.model);
     const charged = await runChargedAiWork({
       user,
-      cost: CREDIT_COSTS.xhsCarouselSlide,
+      cost: getImageCreditCost("xhsCarouselSlide", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "小红书组图单张生成",
@@ -2290,6 +2315,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImageCount: styleReferenceImages.length,
           logoUsed: Boolean(logoImage),
           aspectRatio,
+          model: requestedModel,
         },
       }),
       run: () =>
@@ -2302,6 +2328,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImages,
           logoImage,
           aspectRatio,
+          model: requestedModel,
           metadata: {
             title: `${incomingPack.title || defaultPack.title} ${slide.pageLabel}`,
             visualDirection: slide.visualDirection,
@@ -2313,6 +2340,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             pageLabel: slide.pageLabel,
             copy: slide.copy,
             aspectRatio,
+            model: requestedModel,
             ...(slide.remixBrief && typeof slide.remixBrief === "object" ? { remixBrief: slide.remixBrief } : {}),
           },
         }),
@@ -2332,10 +2360,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
      publishTitle: incomingPack.publishTitle || defaultPack.publishTitle || "",
      publishCaption: incomingPack.publishCaption || defaultPack.publishCaption || "",
      caption: incomingPack.caption || defaultPack.caption || "",
-      carouselGroupId,
-      sourceSlide: buildSourceSlideSnapshot(slide),
+     carouselGroupId,
+     sourceSlide: buildSourceSlideSnapshot(slide),
      creditEventId: charged.creditEvent.id,
      aspectRatio,
+     model: requestedModel,
    };
    upsertImageJob(user.id, job);
    json(res, 202, {
@@ -2461,6 +2490,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       label: "风格参考图",
     });
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
+    const requestedModel = normalizeImageModel(payload.model);
     const metadata = {
       title: String(payload.title || "风格化图片").slice(0, 120),
       visualDirection: "按独立提示词生成风格化图片",
@@ -2469,10 +2499,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       prompt: `${stylePrompt}\n\n生成一张完整的风格化运营图片，可用于公众号封面、节日祝福海报或品牌日常内容视觉。画面需要完整、干净、有设计感，避免杂乱文字。`,
       stylePrompt,
       aspectRatio,
+      model: requestedModel,
     };
     const charged = await runChargedAiWork({
       user,
-      cost: CREDIT_COSTS.styleImage,
+      cost: getImageCreditCost("styleImage", requestedModel),
       event: buildSqlCreditEventInput({
         actionType: "styleImage",
         actionLabel: "风格化图生成",
@@ -2486,6 +2517,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImageCount: styleReferenceImages.length,
           logoUsed: Boolean(logoImage),
           aspectRatio,
+          model: requestedModel,
         },
       }),
       run: () =>
@@ -2498,6 +2530,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoImage,
           styleReferenceImages,
           aspectRatio,
+          model: requestedModel,
         }),
     });
     if (!charged) return true;
@@ -2511,6 +2544,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       ideaIndex: Number(styleImageMatch[3]),
       creditEventId: charged.creditEvent.id,
       aspectRatio,
+      model: requestedModel,
     };
     upsertImageJob(user.id, job);
     json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });

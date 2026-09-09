@@ -9,6 +9,10 @@ const { insertUser, findUserById } = require("../../src/server/db/repositories/a
 const { insertCreditEvent, trySpendCreditsWithEvent, refundCreditEventIfNeeded } = require("../../src/server/db/repositories/admin-repository");
 const {
   CREDIT_COSTS,
+  IMAGE_MODELS,
+  DEFAULT_IMAGE_MODEL,
+  normalizeImageModel,
+  getImageCreditCost,
   hasEnoughCredits,
   getCreditEventCost,
   getGenerationTokenCost,
@@ -142,4 +146,59 @@ test("trySpendCreditsWithEvent atomically spends and records only affordable act
 
   const spendCount = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE user_id = 2 AND credit_delta < 0").get().count;
   assert.equal(spendCount, 1);
+});
+
+test("image model normalization and tiered pricing", () => {
+  assert.deepEqual(IMAGE_MODELS, ["image2", "image2.5"]);
+  assert.equal(DEFAULT_IMAGE_MODEL, "image2");
+
+  assert.equal(normalizeImageModel("image2"), "image2");
+  assert.equal(normalizeImageModel("image2.5"), "image2.5");
+  assert.equal(normalizeImageModel("image-2.5"), "image2.5");
+  assert.equal(normalizeImageModel("gpt-image-2.5"), "image2.5");
+  assert.equal(normalizeImageModel("unknown-model"), "image2");
+  assert.equal(normalizeImageModel(null), "image2");
+  assert.equal(normalizeImageModel(undefined), "image2");
+
+  // image2 costs (base price)
+  assert.equal(getImageCreditCost("momentsImage", "image2"), 1);
+  assert.equal(getImageCreditCost("wechatImage", "image2"), 1);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2"), 4);
+  assert.equal(getImageCreditCost("xhsCarouselSlide", "image2"), 1);
+  assert.equal(getImageCreditCost("imageEdit", "image2"), 1);
+  assert.equal(getImageCreditCost("styleImage", "image2"), 1);
+
+  // image2.5 costs (+1 credit per image)
+  assert.equal(getImageCreditCost("momentsImage", "image2.5"), 2);
+  assert.equal(getImageCreditCost("wechatImage", "image2.5"), 2);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2.5"), 8);
+  assert.equal(getImageCreditCost("xhsCarouselSlide", "image2.5"), 2);
+  assert.equal(getImageCreditCost("imageEdit", "image2.5"), 2);
+  assert.equal(getImageCreditCost("styleImage", "image2.5"), 2);
+});
+
+test("dynamic image2.5 credit deduction and exact refund", () => {
+  // User 1 has 4 credits
+  const debit = trySpendCreditsWithEvent({
+    userId: 1,
+    amount: getImageCreditCost("momentsImage", "image2.5"),
+    event: {
+      actionType: "momentsImage",
+      actionLabel: "朋友圈图生成 (image2.5)",
+      payload: { model: "image2.5" },
+    },
+  });
+  assert.equal(debit.spent, true);
+  assert.equal(debit.creditEvent.creditCost, 2);
+  assert.equal(debit.creditEvent.creditDelta, -2);
+  assert.equal(findUserById(1).credits, 2);
+
+  const refund = refundCreditEventIfNeeded({
+    creditEventId: debit.creditEvent.id,
+    userId: 1,
+    reason: "upstream timeout",
+  });
+  assert.equal(refund.refunded, true);
+  assert.equal(refund.refundEvent.creditDelta, 2);
+  assert.equal(findUserById(1).credits, 4);
 });

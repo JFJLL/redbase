@@ -21,6 +21,7 @@ import {
   MAX_SELECTED_PRODUCT_IMAGES,
   MAX_SELECTED_PRODUCT_IMAGE_BYTES,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
+  IMAGE_MODEL_OPTIONS,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
   deleteProductImage,
@@ -322,6 +323,18 @@ function updateCreativeChannel(index: number, channel: CreativeChannel, value: s
 function selectRatio(index: number, ratio: string): void {
 
   patchSettings(index, { aspectRatioSelection: ratio });
+}
+
+function momentsCost(index: number): number {
+  return settingsFor(index).imageModel === "image2.5" ? 2 : 1;
+}
+
+function wechatCost(index: number): number {
+  return settingsFor(index).imageModel === "image2.5" ? 2 : 1;
+}
+
+function xhsCarouselCost(index: number): number {
+  return settingsFor(index).imageModel === "image2.5" ? 8 : 4;
 }
 
 /** 旧版 app.js getAspectRatioShapeStyle：按比例绘制图形按钮的形状。 */
@@ -1040,6 +1053,15 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                     <strong>图片通用设置</strong>
                     <small>统一影响朋友圈、公众号长图和小红书组图</small>
                   </div>
+                  <div class="idea-creative-general-grid">
+                    <IdeaCreativeSelect
+                      label="生图模型"
+                      :model-value="settingsFor(index).imageModel || 'image2'"
+                      :options="IMAGE_MODEL_OPTIONS"
+                      :test-id="`idea-creative-model-${index}`"
+                      @update:model-value="patchSettings(index, { imageModel: $event })"
+                    />
+                  </div>
                   <div class="idea-aspect-ratio-grid">
                       <button
                         v-for="ratio in ['smart', ...IMAGE_ASPECT_RATIOS]"
@@ -1077,7 +1099,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 @click="openGeneration(index, 'moments')"
               >
                 <span>一键朋友圈图</span>
-                <small>1 积分</small>
+                <small>{{ momentsCost(index) }} 积分</small>
               </button>
               <button
                 class="secondary-btn small-btn cost-button"
@@ -1086,7 +1108,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 @click="openGeneration(index, 'wechat')"
               >
                 <span>一键公众号长图</span>
-                <small>1 积分</small>
+                <small>{{ wechatCost(index) }} 积分</small>
               </button>
               <button
                 class="secondary-btn small-btn cost-button"
@@ -1095,7 +1117,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 @click="openGeneration(index, 'xhsCarousel')"
               >
                 <span>一键小红书组图</span>
-                <small>4 积分</small>
+                <small>{{ xhsCarouselCost(index) }} 积分</small>
               </button>
               <button
                 class="secondary-btn small-btn cost-button"
@@ -1776,6 +1798,11 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 
 .text-btn {
   color: var(--workspace-brand-ink);
+}
+
+.idea-creative-general-grid {
+  margin-bottom: 12px;
+  max-width: 260px;
 }
 
 /* 旧版 styles.css:3055-3175 比例图形按钮网格：智能＋具体比例。 */

@@ -29,6 +29,14 @@ export interface CreativeOption {
   description: string;
 }
 
+export const IMAGE_MODELS = Object.freeze(["image2", "image2.5"] as const);
+export type ImageModelType = (typeof IMAGE_MODELS)[number];
+
+export const IMAGE_MODEL_OPTIONS: readonly CreativeOption[] = Object.freeze([
+  { value: "image2", label: "image2", description: "image2 生图模型" },
+  { value: "image2.5", label: "image2.5", description: "image2.5 生图模型" },
+]);
+
 export const XHS_CREATIVE_STYLE_OPTIONS: readonly CreativeOption[] = Object.freeze([
   { value: "auto", label: "智能匹配", description: "根据选题内容自动选择更合适的视觉路线" },
   { value: "lifestyle", label: "真实生活方式", description: "自然光、真实使用场景与轻松抓拍感" },
@@ -177,6 +185,7 @@ export interface MomentsImageRequest {
   productImages: ProductImageInput[];
   useBrandLogo: boolean;
   aspectRatio: string;
+  model?: string;
 }
 
 /** POST /api/brands/:brandId/trends/:trendId/ideas/:ideaIndex/image (app.js 4004). */
@@ -279,6 +288,7 @@ export interface XhsCarouselSlideRequest {
   useBrandLogo: boolean;
   visualStylePreset: string;
   aspectRatio: string;
+  model?: string;
 }
 
 export interface XhsCarouselSlideSubmitResult {
@@ -357,6 +367,7 @@ export interface StyleImageRequest {
   useBrandLogo: boolean;
   aspectRatio: string;
   styleReferenceImages: Array<{ name?: string; dataUrl?: string }>;
+  model?: string;
 }
 
 export function submitStyleImage(
@@ -421,6 +432,7 @@ export interface ImageEditRequest {
   generationId?: number | null;
   parentEditId?: string | number | null;
   slideIndex?: number | null;
+  model?: string;
 }
 
 export interface ImageEditSubmitResult {

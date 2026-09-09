@@ -788,11 +788,11 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="item.type === 'videoScript'" class="history-copy">
+        <div v-if="(item as any).isPlaceholder || item.type === 'videoScript'" class="history-copy">
           <p v-if="asVideoScript(item)?.creativeConcept">
             <strong>核心创意：</strong>{{ asVideoScript(item)?.creativeConcept }}
           </p>
-          <p v-else-if="item.summary"><strong>内容摘要：</strong>{{ item.summary }}</p>
+          <p v-else-if="item.summary"><strong>{{ (item as any).isPlaceholder ? '发布文案：' : '内容摘要：' }}</strong>{{ item.summary }}</p>
           <template v-else-if="(item as any).isPlaceholder">
             <div class="skeleton-line skeleton-copy" data-test="history-skeleton-copy"></div>
             <div class="skeleton-line skeleton-copy short"></div>
