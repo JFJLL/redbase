@@ -22,6 +22,7 @@ import {
   MAX_SELECTED_PRODUCT_IMAGE_BYTES,
   MAX_SINGLE_UPLOAD_IMAGE_BYTES,
   IMAGE_MODEL_OPTIONS,
+  IMAGE_RESOLUTION_OPTIONS,
   WECHAT_TEMPLATE_OPTIONS,
   XHS_CREATIVE_STYLE_OPTIONS,
   deleteProductImage,
@@ -325,16 +326,24 @@ function selectRatio(index: number, ratio: string): void {
   patchSettings(index, { aspectRatioSelection: ratio });
 }
 
+function extraImageCost(index: number): number {
+  const settings = settingsFor(index);
+  const modelExtra = settings.imageModel === "image2.5" ? 1 : 0;
+  const res = settings.imageResolution;
+  const resExtra = res === "4k" ? 2 : (res === "2k" ? 1 : 0);
+  return modelExtra + resExtra;
+}
+
 function momentsCost(index: number): number {
-  return settingsFor(index).imageModel === "image2.5" ? 2 : 1;
+  return 1 + extraImageCost(index);
 }
 
 function wechatCost(index: number): number {
-  return settingsFor(index).imageModel === "image2.5" ? 2 : 1;
+  return 1 + extraImageCost(index);
 }
 
 function xhsCarouselCost(index: number): number {
-  return settingsFor(index).imageModel === "image2.5" ? 8 : 4;
+  return 4 + (extraImageCost(index) * 4);
 }
 
 /** 旧版 app.js getAspectRatioShapeStyle：按比例绘制图形按钮的形状。 */
@@ -1060,6 +1069,13 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                       :options="IMAGE_MODEL_OPTIONS"
                       :test-id="`idea-creative-model-${index}`"
                       @update:model-value="patchSettings(index, { imageModel: $event })"
+                    />
+                    <IdeaCreativeSelect
+                      label="分辨率"
+                      :model-value="settingsFor(index).imageResolution || '1k'"
+                      :options="IMAGE_RESOLUTION_OPTIONS"
+                      :test-id="`idea-creative-resolution-${index}`"
+                      @update:model-value="patchSettings(index, { imageResolution: $event })"
                     />
                   </div>
                   <div class="idea-aspect-ratio-grid">
@@ -1801,8 +1817,11 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 }
 
 .idea-creative-general-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
   margin-bottom: 12px;
-  max-width: 260px;
 }
 
 /* 旧版 styles.css:3055-3175 比例图形按钮网格：智能＋具体比例。 */
@@ -1979,7 +1998,8 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .idea-creative-grid {
+  .idea-creative-grid,
+  .idea-creative-general-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

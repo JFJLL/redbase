@@ -11,7 +11,10 @@ const {
   CREDIT_COSTS,
   IMAGE_MODELS,
   DEFAULT_IMAGE_MODEL,
+  IMAGE_RESOLUTIONS,
+  DEFAULT_IMAGE_RESOLUTION,
   normalizeImageModel,
+  normalizeImageResolution,
   getImageCreditCost,
   hasEnoughCredits,
   getCreditEventCost,
@@ -175,6 +178,37 @@ test("image model normalization and tiered pricing", () => {
   assert.equal(getImageCreditCost("xhsCarouselSlide", "image2.5"), 2);
   assert.equal(getImageCreditCost("imageEdit", "image2.5"), 2);
   assert.equal(getImageCreditCost("styleImage", "image2.5"), 2);
+
+  // Resolution options and normalization
+  assert.deepEqual(IMAGE_RESOLUTIONS, ["1k", "2k", "4k"]);
+  assert.equal(DEFAULT_IMAGE_RESOLUTION, "1k");
+  assert.equal(normalizeImageResolution("1k"), "1k");
+  assert.equal(normalizeImageResolution("2k"), "2k");
+  assert.equal(normalizeImageResolution("4k"), "4k");
+  assert.equal(normalizeImageResolution("unknown"), "1k");
+  assert.equal(normalizeImageResolution(null), "1k");
+
+  // Resolution tiered pricing on top of image2 (base 1):
+  // 1k: +0 (1 credit)
+  // 2k: +1 (2 credits)
+  // 4k: +2 (3 credits)
+  assert.equal(getImageCreditCost("momentsImage", "image2", "1k"), 1);
+  assert.equal(getImageCreditCost("momentsImage", "image2", "2k"), 2);
+  assert.equal(getImageCreditCost("momentsImage", "image2", "4k"), 3);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2", "1k"), 4);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2", "2k"), 8);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2", "4k"), 12);
+
+  // Resolution tiered pricing on top of image2.5 (base 1 + 1 = 2):
+  // 1k: +0 (2 credits)
+  // 2k: +1 (3 credits)
+  // 4k: +2 (4 credits)
+  assert.equal(getImageCreditCost("momentsImage", "image2.5", "1k"), 2);
+  assert.equal(getImageCreditCost("momentsImage", "image2.5", "2k"), 3);
+  assert.equal(getImageCreditCost("momentsImage", "image2.5", "4k"), 4);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2.5", "1k"), 8);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2.5", "2k"), 12);
+  assert.equal(getImageCreditCost("xhsCarousel", "image2.5", "4k"), 16);
 });
 
 test("dynamic image2.5 credit deduction and exact refund", () => {

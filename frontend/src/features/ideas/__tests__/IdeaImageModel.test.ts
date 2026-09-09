@@ -43,22 +43,27 @@ describe("Idea Image Model Settings and Cost Display", () => {
   it("defaults to image2 and persists image2.5 correctly", () => {
     const defaultSettings = getIdeaCreativeSettings("test:key:0");
     expect(defaultSettings.imageModel).toBe("image2");
+    expect(defaultSettings.imageResolution).toBe("1k");
 
     saveIdeaCreativeSettings("test:key:0", {
       ...defaultSettings,
       imageModel: "image2.5",
+      imageResolution: "2k",
     });
 
     const saved = getIdeaCreativeSettings("test:key:0");
     expect(saved.imageModel).toBe("image2.5");
+    expect(saved.imageResolution).toBe("2k");
 
     // Invalid value falls back to image2
     saveIdeaCreativeSettings("test:key:0", {
       ...defaultSettings,
       imageModel: "unknown-model",
+      imageResolution: "8k",
     });
     const sanitized = getIdeaCreativeSettings("test:key:0");
     expect(sanitized.imageModel).toBe("image2");
+    expect(sanitized.imageResolution).toBe("1k");
   });
 
   it("dynamically updates action button cost badges when image model changes", async () => {
@@ -130,6 +135,66 @@ describe("Idea Image Model Settings and Cost Display", () => {
     expect(wrapper.find('[data-test="idea-generate-script-0"]').text()).toContain("1 积分");
   });
 
+  it("dynamically updates action button cost badges when resolution changes", async () => {
+    installFetchMock(baseHandler());
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", phone: "13800000000", credits: 50 };
+    auth.sessionLoaded = true;
+
+    const router = makeTestRouter();
+    await router.push("/ideas?brandId=7&trendId=501");
+    await router.isReady();
+
+    const wrapper = mount(IdeasView, {
+      global: {
+        plugins: [pinia, router],
+      },
+    });
+    await flushPromises();
+
+    // Open settings panel
+    await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
+    await flushPromises();
+
+    const resSelect = wrapper.find('[data-test="idea-creative-resolution-0"]');
+    expect(resSelect.exists()).toBe(true);
+    expect(resSelect.text()).toBe("1k");
+
+    // Switch to 2k (+1 credit)
+    await resSelect.trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="idea-creative-resolution-0-option-2k"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="idea-generate-moments-0"]').text()).toContain("2 积分");
+    expect(wrapper.find('[data-test="idea-generate-wechat-0"]').text()).toContain("2 积分");
+    expect(wrapper.find('[data-test="idea-generate-xhs-0"]').text()).toContain("8 积分");
+
+    // Switch to 4k (+2 credits)
+    await resSelect.trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="idea-creative-resolution-0-option-4k"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="idea-generate-moments-0"]').text()).toContain("3 积分");
+    expect(wrapper.find('[data-test="idea-generate-wechat-0"]').text()).toContain("3 积分");
+    expect(wrapper.find('[data-test="idea-generate-xhs-0"]').text()).toContain("12 积分");
+
+    // Combine with image2.5 (+1 model + 2 resolution = +3 extra per image)
+    const modelSelect = wrapper.find('[data-test="idea-creative-model-0"]');
+    await modelSelect.trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="idea-creative-model-0-option-image2.5"]').trigger("click");
+    await flushPromises();
+
+    // moments: 1 + 3 = 4, wechat: 1 + 3 = 4, xhs: 4 + 4*3 = 16
+    expect(wrapper.find('[data-test="idea-generate-moments-0"]').text()).toContain("4 积分");
+    expect(wrapper.find('[data-test="idea-generate-wechat-0"]').text()).toContain("4 积分");
+    expect(wrapper.find('[data-test="idea-generate-xhs-0"]').text()).toContain("16 积分");
+  });
+
   it("passes model 'image2.5' in request body when image2.5 is selected", async () => {
     let postedBody: Record<string, any> | null = null;
     const handler: FetchHandler = (url, init) => {
@@ -172,5 +237,49 @@ describe("Idea Image Model Settings and Cost Display", () => {
     await flushPromises();
 
     expect((postedBody as any)?.model).toBe("image2.5");
+  });
+
+  it("passes resolution in request body when 2k is selected", async () => {
+    let postedBody: Record<string, any> | null = null;
+    const handler: FetchHandler = (url, init) => {
+      const method = String(init?.method || "GET");
+      if (method === "POST" && url.includes("/image")) {
+        postedBody = JSON.parse(String(init?.body || "{}"));
+        return jsonResponse(200, { jobId: "job-2k", user: { credits: 18 } });
+      }
+      return baseHandler()(url, init);
+    };
+
+    installFetchMock(handler);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const auth = useAuthStore();
+    auth.user = { id: "1", name: "测试用户", phone: "13800000000", credits: 20 };
+    auth.sessionLoaded = true;
+
+    const router = makeTestRouter();
+    await router.push("/ideas?brandId=7&trendId=501");
+    await router.isReady();
+
+    const wrapper = mount(IdeasView, {
+      global: {
+        plugins: [pinia, router],
+      },
+    });
+    await flushPromises();
+
+    // Open settings and pick 2k
+    await wrapper.find('[data-test="idea-creative-toggle-0"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="idea-creative-resolution-0"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-test="idea-creative-resolution-0-option-2k"]').trigger("click");
+    await flushPromises();
+
+    // Click generate moments image
+    await wrapper.find('[data-test="idea-generate-moments-0"]').trigger("click");
+    await flushPromises();
+
+    expect((postedBody as any)?.resolution).toBe("2k");
   });
 });

@@ -37,6 +37,15 @@ export const IMAGE_MODEL_OPTIONS: readonly CreativeOption[] = Object.freeze([
   { value: "image2.5", label: "image2.5", description: "image2.5 生图模型" },
 ]);
 
+export const IMAGE_RESOLUTIONS = Object.freeze(["1k", "2k", "4k"] as const);
+export type ImageResolutionType = (typeof IMAGE_RESOLUTIONS)[number];
+
+export const IMAGE_RESOLUTION_OPTIONS: readonly CreativeOption[] = Object.freeze([
+  { value: "1k", label: "1k", description: "1k 分辨率" },
+  { value: "2k", label: "2k", description: "2k 分辨率（+1积分/张）" },
+  { value: "4k", label: "4k", description: "4k 分辨率（+2积分/张）" },
+]);
+
 export const XHS_CREATIVE_STYLE_OPTIONS: readonly CreativeOption[] = Object.freeze([
   { value: "auto", label: "智能匹配", description: "根据选题内容自动选择更合适的视觉路线" },
   { value: "lifestyle", label: "真实生活方式", description: "自然光、真实使用场景与轻松抓拍感" },
@@ -186,6 +195,7 @@ export interface MomentsImageRequest {
   useBrandLogo: boolean;
   aspectRatio: string;
   model?: string;
+  resolution?: string;
 }
 
 /** POST /api/brands/:brandId/trends/:trendId/ideas/:ideaIndex/image (app.js 4004). */
@@ -289,6 +299,7 @@ export interface XhsCarouselSlideRequest {
   visualStylePreset: string;
   aspectRatio: string;
   model?: string;
+  resolution?: string;
 }
 
 export interface XhsCarouselSlideSubmitResult {
@@ -368,6 +379,7 @@ export interface StyleImageRequest {
   aspectRatio: string;
   styleReferenceImages: Array<{ name?: string; dataUrl?: string }>;
   model?: string;
+  resolution?: string;
 }
 
 export function submitStyleImage(
@@ -433,6 +445,7 @@ export interface ImageEditRequest {
   parentEditId?: string | number | null;
   slideIndex?: number | null;
   model?: string;
+  resolution?: string;
 }
 
 export interface ImageEditSubmitResult {

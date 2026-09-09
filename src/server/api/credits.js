@@ -16,21 +16,34 @@ const CREDIT_COSTS = {
 const IMAGE_MODELS = Object.freeze(["image2", "image2.5"]);
 const DEFAULT_IMAGE_MODEL = "image2";
 
+const IMAGE_RESOLUTIONS = Object.freeze(["1k", "2k", "4k"]);
+const DEFAULT_IMAGE_RESOLUTION = "1k";
+
 function normalizeImageModel(rawModel) {
   const model = String(rawModel || "").trim().toLowerCase();
   if (model === "image2.5" || model === "image-2.5" || model === "gpt-image-2.5") return "image2.5";
   return "image2";
 }
 
-function getImageCreditCost(actionType, rawModel = DEFAULT_IMAGE_MODEL) {
+function normalizeImageResolution(rawResolution) {
+  const res = String(rawResolution || "").trim().toLowerCase();
+  if (res === "2k") return "2k";
+  if (res === "4k") return "4k";
+  return "1k";
+}
+
+function getImageCreditCost(actionType, rawModel = DEFAULT_IMAGE_MODEL, rawResolution = DEFAULT_IMAGE_RESOLUTION) {
   const model = normalizeImageModel(rawModel);
-  const extraCost = model === "image2.5" ? 1 : 0;
+  const resolution = normalizeImageResolution(rawResolution);
+  const extraModelCost = model === "image2.5" ? 1 : 0;
+  const extraResCost = resolution === "4k" ? 2 : (resolution === "2k" ? 1 : 0);
+  const totalExtraPerImage = extraModelCost + extraResCost;
   if (actionType === "xhsCarousel") {
     const base = Number(CREDIT_COSTS.xhsCarousel || 4);
-    return base + (extraCost * 4);
+    return base + (totalExtraPerImage * 4);
   }
   const base = Number(CREDIT_COSTS[actionType] || 1);
-  return base + extraCost;
+  return base + totalExtraPerImage;
 }
 
 function hasEnoughCredits(user, cost, res) {
@@ -60,7 +73,10 @@ module.exports = {
   CREDIT_COSTS,
   IMAGE_MODELS,
   DEFAULT_IMAGE_MODEL,
+  IMAGE_RESOLUTIONS,
+  DEFAULT_IMAGE_RESOLUTION,
   normalizeImageModel,
+  normalizeImageResolution,
   getImageCreditCost,
   hasEnoughCredits,
   getCreditEventCost,

@@ -29,6 +29,7 @@ export interface IdeaCreativeSettings {
   visualStylePreset: string;
   wechatTemplate: string;
   imageModel?: "image2" | "image2.5" | string;
+  imageResolution?: "1k" | "2k" | "4k" | string;
   videoDuration?: string;
   videoModel?: "d2" | "g2" | string;
   videoMode?: "text" | "image" | string;
@@ -66,6 +67,7 @@ function defaultSettings(): IdeaCreativeSettings {
     visualStylePreset: "auto",
     wechatTemplate: "auto",
     imageModel: "image2",
+    imageResolution: "1k",
     videoDuration: "auto",
     videoModel: "g2",
     videoMode: "text",
@@ -96,6 +98,7 @@ function sanitize(settings: IdeaCreativeSettings): IdeaCreativeSettings {
     visualStylePreset: validStyle ? settings.visualStylePreset : "auto",
     wechatTemplate: validTemplate ? settings.wechatTemplate : "auto",
     imageModel: settings.imageModel === "image2.5" ? "image2.5" : "image2",
+    imageResolution: ["1k", "2k", "4k"].includes(String(settings.imageResolution)) ? settings.imageResolution : "1k",
     videoDuration: validDuration ? (settings.videoDuration || "auto") : "auto",
     videoModel: settings.videoModel === "d2" ? "d2" : "g2",
     videoMode: settings.videoMode === "image" ? "image" : "text",

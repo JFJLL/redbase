@@ -312,6 +312,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       productImages: ProductImageInput[];
       useBrandLogo: boolean;
       model?: string;
+      resolution?: string;
     }): Promise<GenerationTaskItem> {
       const auth = useAuthStore();
       const historyStore = useHistoryStore();
@@ -367,6 +368,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
             useBrandLogo: params.useBrandLogo,
             aspectRatio: params.aspectRatio,
             ...(params.model && params.model !== "image2" ? { model: params.model } : {}),
+            ...(params.resolution && params.resolution !== "1k" ? { resolution: params.resolution } : {}),
           },
           controller.signal,
         );
@@ -421,6 +423,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       useBrandLogo: boolean;
       wechatTemplate: string;
       model?: string;
+      resolution?: string;
     }): Promise<GenerationTaskItem> {
       const auth = useAuthStore();
       const historyStore = useHistoryStore();
@@ -479,6 +482,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
             wechatTemplate: params.wechatTemplate,
             aspectRatio: params.aspectRatio,
             ...(params.model && params.model !== "image2" ? { model: params.model } : {}),
+            ...(params.resolution && params.resolution !== "1k" ? { resolution: params.resolution } : {}),
           },
           controller.signal,
         );
@@ -534,6 +538,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       useBrandLogo: boolean;
       styleReferenceImages: Array<{ name?: string; dataUrl?: string }>;
       model?: string;
+      resolution?: string;
     }): Promise<GenerationTaskItem> {
       const auth = useAuthStore();
       const historyStore = useHistoryStore();
@@ -587,6 +592,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
             aspectRatio: params.aspectRatio,
             styleReferenceImages: params.styleReferenceImages,
             ...(params.model && params.model !== "image2" ? { model: params.model } : {}),
+            ...(params.resolution && params.resolution !== "1k" ? { resolution: params.resolution } : {}),
           },
           controller.signal,
         );
@@ -818,6 +824,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         useBrandLogo: boolean;
         visualStylePreset: string;
         model?: string;
+        resolution?: string;
       },
     ): Promise<void> {
       const auth = useAuthStore();
@@ -854,6 +861,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
             visualStylePreset: options.visualStylePreset,
             aspectRatio: task.aspectRatio || "3:4",
             ...(options.model && options.model !== "image2" ? { model: options.model } : {}),
+            ...(options.resolution && options.resolution !== "1k" ? { resolution: options.resolution } : {}),
           },
           controller.signal,
         );
@@ -925,6 +933,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         useBrandLogo: boolean;
         visualStylePreset: string;
         model?: string;
+        resolution?: string;
       },
     ): Promise<void> {
       const task = this.findTaskById(taskId);

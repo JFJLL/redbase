@@ -19,7 +19,7 @@ const {
   markFailed,
 } = require("../db/repositories/image-job-runtime-repository");
 const { recordImageTaskAttempt } = require("../analytics/ai-attempt-recorder");
-const { normalizeImageModel } = require("../api/credits");
+const { normalizeImageModel, normalizeImageResolution } = require("../api/credits");
 
 const IMAGE_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const IMAGE_JOB_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
@@ -123,8 +123,23 @@ function normalizeKeystoneError(payload) {
 
 function normalizeKeystoneSize(aspectRatio, resolution) {
   const configured = String(resolution || "").trim().toLowerCase();
-  if (["1024x1024", "1024x1536", "1536x1024", "auto"].includes(configured) && configured !== "auto") {
+  if (["1024x1024", "1024x1536", "1536x1024"].includes(configured)) {
     return configured;
+  }
+
+  if (configured === "4k") {
+    const match = String(aspectRatio || "").trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    const width = match ? Number(match[1]) : 3;
+    const height = match ? Number(match[2]) : 4;
+    if (Math.abs(width - height) / Math.max(width, height) < 0.05) return "4096x4096";
+    return width > height ? "4096x3072" : "3072x4096";
+  }
+  if (configured === "2k") {
+    const match = String(aspectRatio || "").trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+    const width = match ? Number(match[1]) : 3;
+    const height = match ? Number(match[2]) : 4;
+    if (Math.abs(width - height) / Math.max(width, height) < 0.05) return "2048x2048";
+    return width > height ? "2048x1536" : "1536x2048";
   }
 
   const match = String(aspectRatio || "").trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
@@ -160,11 +175,11 @@ function resolveUpstreamImageModel(provider, model) {
   return String(provider?.model || KEYSTONE_DEFAULT_MODEL).trim() || KEYSTONE_DEFAULT_MODEL;
 }
 
-function buildKeystoneImageRequest(provider, { prompt, aspectRatio, model }) {
+function buildKeystoneImageRequest(provider, { prompt, aspectRatio, model, resolution }) {
   const body = {
     model: resolveUpstreamImageModel(provider, model),
     prompt: String(prompt || ""),
-    size: normalizeKeystoneSize(aspectRatio, provider?.resolution),
+    size: normalizeKeystoneSize(aspectRatio, resolution || provider?.resolution),
     n: normalizeImageCount(provider?.imageCount),
   };
   if (provider?.sendQuality !== false) {
@@ -271,15 +286,15 @@ async function fetchImageProviderJson(url, options = {}) {
   }
 }
 
-function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = [], model }) {
+function buildImageProviderRequest(provider, { prompt, aspectRatio, imageUrls = [], model, resolution }) {
   if (getImageProviderName(provider) === "keystone") {
-    return buildKeystoneImageRequest(provider, { prompt, aspectRatio, model });
+    return buildKeystoneImageRequest(provider, { prompt, aspectRatio, model, resolution });
   }
 
   return {
     prompt,
     aspect_ratio: aspectRatio,
-    resolution: provider.resolution,
+    resolution: resolution || provider.resolution,
     quality: provider.quality,
     enable_sync_mode: false,
     enable_base64_output: false,
@@ -512,10 +527,12 @@ async function createImageJob(
     sourceImages,
     aspectRatio,
     model,
+    resolution,
   },
 ) {
   ensureImageJobRecovery();
   const requestedModel = normalizeImageModel(model);
+  const requestedResolution = normalizeImageResolution(resolution);
   const provider = appConfig.imageProvider;
   assertConfigured(provider.apiKey, "图片模型 API Key");
   const referenceImages = normalizeImageInputs(productImages || productImage);
@@ -575,6 +592,7 @@ async function createImageJob(
     aspectRatio: outputAspectRatio,
     imageUrls: useEditModel ? editImageUrls : [],
     model: requestedModel,
+    resolution: requestedResolution,
   });
 
   console.log("[image-job] creating upstream task", {
@@ -746,6 +764,7 @@ async function createImageJob(
     metadata: {
       ...metadata,
       model: requestedModel,
+      resolution: requestedResolution,
       upstreamModel: resolveUpstreamImageModel(provider, requestedModel),
       brandId: brand?.id ?? metadata.brandId ?? null,
       brandName: brand?.name || metadata.brandName || "",

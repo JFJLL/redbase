@@ -46,7 +46,7 @@ const { withExcellentRemixGroupLock } = require("../services/excellent-remix-gen
 const { createGeneratedAssetStorage } = require("../assets/generated-asset-storage");
 const { collectGenerationAssets } = require("../assets/generation-deletion-service");
 const { recordOutputCompleted } = require("../analytics/analytics-recorder");
-const { normalizeImageModel, getImageCreditCost } = require("./credits");
+const { normalizeImageModel, normalizeImageResolution, getImageCreditCost } = require("./credits");
 
 const EXCELLENT_REMIX_CREDIT_ACTION_TYPES = ["xhsCarousel"];
 const CAROUSEL_GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
@@ -966,9 +966,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       }
     }
     const requestedModel = normalizeImageModel(payload.model);
+    const requestedResolution = normalizeImageResolution(payload.resolution);
     const charged = await runChargedAiWork({
       user,
-      cost: getImageCreditCost("momentsImage", requestedModel),
+      cost: getImageCreditCost("momentsImage", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "momentsImage",
         actionLabel: "朋友圈图生成",
@@ -985,9 +986,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoUsed: Boolean(logoImage),
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
-      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, styleReferenceImages, logoImage, aspectRatio, model: requestedModel, metadata: { ...metadata, aspectRatio, model: requestedModel } }),
+      run: () => createImageJob({ ownerUserId: user.id, brand, trend, idea, productImages, styleReferenceImages, logoImage, aspectRatio, model: requestedModel, resolution: requestedResolution, metadata: { ...metadata, aspectRatio, model: requestedModel, resolution: requestedResolution } }),
     });
     if (!charged) return true;
     const job = charged.value;
@@ -1013,6 +1015,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
      creditEventId: charged.creditEvent.id,
      aspectRatio,
      model: requestedModel,
+     resolution: requestedResolution,
       title: metadata.title || idea.title || "",
       caption: metadata.caption || "",
       visualDirection: metadata.visualDirection || "",
@@ -1299,9 +1302,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
     const requestedModel = normalizeImageModel(payload.model);
+    const requestedResolution = normalizeImageResolution(payload.resolution);
     const charged = await runChargedAiWork({
       user,
-      cost: getImageCreditCost("imageEdit", requestedModel),
+      cost: getImageCreditCost("imageEdit", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "imageEdit",
         actionLabel: "追加提示词改图",
@@ -1314,6 +1318,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           parentEditId: payload.parentEditId || "",
           sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
       run: () =>
@@ -1323,6 +1328,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           sourceImages: localSourceImage ? [localSourceImage] : [],
           aspectRatio: editAspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
           metadata: {
             title: String(payload.title || "改图结果").slice(0, 120),
             visualDirection: "基于已生成图片继续改图",
@@ -1334,6 +1340,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             aspectRatio: editAspectRatio,
             sourceStoredPath: localSourceImage?.storedPath || "",
             model: requestedModel,
+            resolution: requestedResolution,
           },
         }),
     });
@@ -1349,6 +1356,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       sourceImageUrl,
       editPrompt,
       model: requestedModel,
+      resolution: requestedResolution,
       title: String(payload.title || "改图结果").slice(0, 120),
       aspectRatio: editAspectRatio,
       sourceSlideIndex: Number.isInteger(sourceSlideIndex) ? sourceSlideIndex : null,
@@ -1432,9 +1440,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       title: wechatPack.publishTitle || idea.title,
     });
     const requestedModel = normalizeImageModel(payload.model);
+    const requestedResolution = normalizeImageResolution(payload.resolution);
     const charged = await runChargedAiWork({
       user,
-      cost: getImageCreditCost("wechatImage", requestedModel),
+      cost: getImageCreditCost("wechatImage", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "wechatImage",
         actionLabel: "公众号长图生成",
@@ -1450,6 +1459,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           wechatTemplate: wechatPack.template,
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
       run: () =>
@@ -1463,6 +1473,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoImage,
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
           metadata: {
             ...wechatPack,
             platform: "wechat",
@@ -1471,6 +1482,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             style: wechatPack.style,
             composition: wechatPack.composition,
             model: requestedModel,
+            resolution: requestedResolution,
           },
         }),
     });
@@ -1486,6 +1498,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
      creditEventId: charged.creditEvent.id,
      aspectRatio,
      model: requestedModel,
+     resolution: requestedResolution,
       title: wechatPack.title || wechatPack.publishTitle || idea.title || "",
       publishTitle: wechatPack.publishTitle || "",
       intro: wechatPack.intro || "",
@@ -1627,10 +1640,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       return true;
     }
     const requestedModel = normalizeImageModel(payload.model);
+    const requestedResolution = normalizeImageResolution(payload.resolution);
     const sourceSlide = buildSourceSlideSnapshot(slide);
     const charged = await runChargedAiWork({
       user,
-      cost: getImageCreditCost("xhsCarouselSlide", requestedModel),
+      cost: getImageCreditCost("xhsCarouselSlide", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "优秀内容仿图文单张生成",
@@ -1650,6 +1664,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           excellentRemix: true,
           carouselGroupId,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
       run: () =>
@@ -1662,6 +1677,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoImage,
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
           metadata: {
             title: `${normalizedPack.title} ${slide.pageLabel}`,
             visualDirection: slide.visualDirection,
@@ -1674,6 +1690,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             copy: slide.copy,
             aspectRatio,
             model: requestedModel,
+            resolution: requestedResolution,
             ...(slide.remixBrief && typeof slide.remixBrief === "object" ? { remixBrief: slide.remixBrief } : {}),
           },
         }),
@@ -1693,6 +1710,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       slideIndex,
       carouselGroupId,
       model: requestedModel,
+      resolution: requestedResolution,
       carouselTitle: normalizedPack.title || "",
       publishTitle: normalizedPack.publishTitle || "",
       publishCaption: normalizedPack.publishCaption || "",
@@ -2089,9 +2107,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       carouselGroupId,
     };
    const requestedModel = normalizeImageModel(payload.model);
-   const charged = await runChargedAiWork({
-     user,
-     cost: getImageCreditCost("xhsCarousel", requestedModel),
+   const requestedResolution = normalizeImageResolution(payload.resolution);
+    const charged = await runChargedAiWork({
+      user,
+     cost: getImageCreditCost("xhsCarousel", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "小红书组图生成",
@@ -2107,6 +2126,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           visualStylePreset: carouselPack.creativeStyle,
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
       run: () =>
@@ -2133,6 +2153,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
               logoImage,
               aspectRatio,
               model: requestedModel,
+              resolution: requestedResolution,
               metadata: {
                 title: `${carouselPack.title} ${slide.pageLabel}`,
                 visualDirection: slide.visualDirection || slide.title,
@@ -2147,6 +2168,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
                 pageLabel: slide.pageLabel,
                 copy: slide.copy,
                 model: requestedModel,
+                resolution: requestedResolution,
               },
             });
            job.generationContext = {
@@ -2158,6 +2180,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
              slideIndex,
               carouselGroupId,
               model: requestedModel,
+              resolution: requestedResolution,
               carouselTitle: carouselPack.title || "",
               publishTitle: carouselPack.publishTitle || "",
               publishCaption: carouselPack.publishCaption || "",
@@ -2295,9 +2318,10 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       productImageCount: productImages.length,
     });
     const requestedModel = normalizeImageModel(payload.model);
+    const requestedResolution = normalizeImageResolution(payload.resolution);
     const charged = await runChargedAiWork({
       user,
-      cost: getImageCreditCost("xhsCarouselSlide", requestedModel),
+      cost: getImageCreditCost("xhsCarouselSlide", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "xhsCarousel",
         actionLabel: "小红书组图单张生成",
@@ -2316,6 +2340,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoUsed: Boolean(logoImage),
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
       run: () =>
@@ -2329,6 +2354,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoImage,
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
           metadata: {
             title: `${incomingPack.title || defaultPack.title} ${slide.pageLabel}`,
             visualDirection: slide.visualDirection,
@@ -2341,6 +2367,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
             copy: slide.copy,
             aspectRatio,
             model: requestedModel,
+            resolution: requestedResolution,
             ...(slide.remixBrief && typeof slide.remixBrief === "object" ? { remixBrief: slide.remixBrief } : {}),
           },
         }),
@@ -2365,6 +2392,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
      creditEventId: charged.creditEvent.id,
      aspectRatio,
      model: requestedModel,
+     resolution: requestedResolution,
    };
    upsertImageJob(user.id, job);
    json(res, 202, {
@@ -2491,6 +2519,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
     });
     const logoImage = payload.useBrandLogo ? await resolveBrandLogoImage(brand) : null;
     const requestedModel = normalizeImageModel(payload.model);
+    const requestedResolution = normalizeImageResolution(payload.resolution);
     const metadata = {
       title: String(payload.title || "风格化图片").slice(0, 120),
       visualDirection: "按独立提示词生成风格化图片",
@@ -2500,10 +2529,11 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       stylePrompt,
       aspectRatio,
       model: requestedModel,
+      resolution: requestedResolution,
     };
     const charged = await runChargedAiWork({
       user,
-      cost: getImageCreditCost("styleImage", requestedModel),
+      cost: getImageCreditCost("styleImage", requestedModel, requestedResolution),
       event: buildSqlCreditEventInput({
         actionType: "styleImage",
         actionLabel: "风格化图生成",
@@ -2518,6 +2548,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           logoUsed: Boolean(logoImage),
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
         },
       }),
       run: () =>
@@ -2531,6 +2562,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
           styleReferenceImages,
           aspectRatio,
           model: requestedModel,
+          resolution: requestedResolution,
         }),
     });
     if (!charged) return true;
@@ -2545,6 +2577,7 @@ async function handleImageGenerationRoutes(context, req, res, pathname) {
       creditEventId: charged.creditEvent.id,
       aspectRatio,
       model: requestedModel,
+      resolution: requestedResolution,
     };
     upsertImageJob(user.id, job);
     json(res, 202, { ...buildSignedImageJobResponse(appConfig, buildImageJobResponse, job), user: sanitizeUser(charged.user) });
