@@ -3639,10 +3639,19 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
     // Pgy top-up; other buckets get one main generation plus at most one
     // model repair before the local degrade path takes over.
     const isPgyXhsFlow = Boolean(pgyEvidence) && !anySearchEvidence;
-    const modelDeadlineAt = Date.now() + Math.max(
-      1000,
-      Number(options.trendModelBudgetMs || TREND_ANALYSIS_MODEL_BUDGET_MS),
+    const configuredTextTimeoutMs = Number(options.textTimeoutMs || appConfig?.textProvider?.timeoutMs || 0);
+    const effectiveFullTimeoutMs = Math.max(TREND_FULL_MODEL_REQUEST_TIMEOUT_MS, configuredTextTimeoutMs || 0);
+    const effectiveRepairTimeoutMs = Math.max(
+      TREND_MODEL_REQUEST_TIMEOUT_MS,
+      configuredTextTimeoutMs ? Math.round(configuredTextTimeoutMs * 0.6) : 0,
     );
+    const effectiveBudgetMs = Math.max(
+      1000,
+      Number(options.trendModelBudgetMs || 0),
+      configuredTextTimeoutMs ? configuredTextTimeoutMs + 60000 : 0,
+      TREND_ANALYSIS_MODEL_BUDGET_MS,
+    );
+    const modelDeadlineAt = Date.now() + effectiveBudgetMs;
     // Injected model adapters must exercise the same default scheduling as
     // production; tests can still opt into a different batch size explicitly.
     const dynamicMaxTargetedRepairItems = options.maxTargetedRepairItems
@@ -3739,8 +3748,8 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       const remainingModelBudgetMs = modelDeadlineAt - Date.now();
       if (remainingModelBudgetMs < 1000) break;
       const requestTimeoutLimitMs = repairPlan
-        ? TREND_MODEL_REQUEST_TIMEOUT_MS
-        : TREND_FULL_MODEL_REQUEST_TIMEOUT_MS;
+        ? effectiveRepairTimeoutMs
+        : effectiveFullTimeoutMs;
       const configuredRequestTimeoutMs = Number(options.textTimeoutMs || requestTimeoutLimitMs);
       let result;
       try {
@@ -4273,8 +4282,8 @@ async function regenerateTrendIdeas(appConfig, brand, trend, customPrompt, optio
         useSearch: false,
         temperature: attempt === 0 ? 0.3 : 0.15,
         timeoutMs: Math.max(1000, Math.min(
-          TREND_MODEL_REQUEST_TIMEOUT_MS,
-          Number(options.textTimeoutMs || TREND_MODEL_REQUEST_TIMEOUT_MS),
+          Math.max(TREND_MODEL_REQUEST_TIMEOUT_MS, Math.round(Number(appConfig?.textProvider?.timeoutMs || 0) * 0.6)),
+          Number(options.textTimeoutMs || appConfig?.textProvider?.timeoutMs || TREND_MODEL_REQUEST_TIMEOUT_MS),
         )),
          maxAttempts: 1,
          maxOutputTokens: Number(options.maxOutputTokens || 16384),
@@ -4379,8 +4388,8 @@ async function ensureTrendIdeaContentAssets(appConfig, brand, trend, ideaIndex, 
         useSearch: false,
         temperature: attempt === 0 ? 0.25 : 0.15,
         timeoutMs: Math.max(1000, Math.min(
-          TREND_MODEL_REQUEST_TIMEOUT_MS,
-          Number(options.textTimeoutMs || TREND_MODEL_REQUEST_TIMEOUT_MS),
+          Math.max(TREND_MODEL_REQUEST_TIMEOUT_MS, Math.round(Number(appConfig?.textProvider?.timeoutMs || 0) * 0.6)),
+          Number(options.textTimeoutMs || appConfig?.textProvider?.timeoutMs || TREND_MODEL_REQUEST_TIMEOUT_MS),
         )),
          maxAttempts: 1,
          maxOutputTokens: Number(options.maxOutputTokens || 16384),

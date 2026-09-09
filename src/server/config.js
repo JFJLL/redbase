@@ -51,6 +51,8 @@ const DEFAULT_APP_CONFIG = {
     useImageProviderApiKey: false,
     searchEnabled: false,
     maxOutputTokens: 65536,
+    timeoutMs: 300000,
+    reasoningEffort: "",
   },
   searchProvider: {
     enabled: false,
@@ -618,6 +620,8 @@ function loadAppConfig() {
         parseBooleanConfig(merged.textProvider.searchEnabled, false),
       ),
       maxOutputTokens: Number(process.env.TEXT_MAX_OUTPUT_TOKENS || merged.textProvider.maxOutputTokens || 65536),
+      timeoutMs: Number(process.env.TEXT_TIMEOUT_MS || merged.textProvider?.timeoutMs || 300000),
+      reasoningEffort: String(process.env.TEXT_REASONING_EFFORT || merged.textProvider?.reasoningEffort || "").trim(),
     },
     searchProvider: {
       enabled: parseBooleanConfig(process.env.ANYSEARCH_ENABLED, parseBooleanConfig(merged.searchProvider?.enabled, false)),

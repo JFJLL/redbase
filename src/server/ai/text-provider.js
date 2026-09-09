@@ -5,7 +5,7 @@ const net = require("net");
 const { joinUrl, assertConfigured, parseJsonFromModelText, withRetries } = require("../utils");
 const { recordTextTaskAttempt } = require("../analytics/ai-attempt-recorder");
 
-const DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES = 32 * 1024 * 1024;
 let runningHubAddressCursor = 0;
 
 function isRunningHubHostname(hostname) {
@@ -118,10 +118,7 @@ async function resolveRunningHubAddresses(target, lookupImpl = dns.promises.look
 
 function getTextProviderResponseLimit(options = {}) {
   const configured = Number(options.maxResponseBytes || DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES);
-  return Math.max(1, Math.min(
-    DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES,
-    Number.isFinite(configured) ? configured : DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES,
-  ));
+  return Math.max(1, Number.isFinite(configured) ? configured : DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES);
 }
 
 function createTextProviderResponseTooLargeError(url) {
@@ -563,12 +560,17 @@ async function callTextModelJson(appConfig, {
   const provider = appConfig.textProvider;
   assertConfigured(provider.apiKey, "文本模型 API Key");
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.7;
+  const reasoningEffort = String(provider.reasoningEffort || "").trim();
   const outputTokenLimit = Number.isFinite(Number(maxOutputTokens))
     ? Number(maxOutputTokens)
     : Number.isFinite(Number(provider.maxOutputTokens))
       ? Number(provider.maxOutputTokens)
       : null;
-  const totalTimeoutMs = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Number(timeoutMs)) : null;
+  const totalTimeoutMs = Number.isFinite(Number(timeoutMs))
+    ? Math.max(1, Number(timeoutMs))
+    : Number.isFinite(Number(provider.timeoutMs))
+      ? Math.max(1, Number(provider.timeoutMs))
+      : null;
   const requestDeadlineAt = totalTimeoutMs ? Date.now() + totalTimeoutMs : null;
   const getAttemptRequestOptions = () => {
     const remainingMs = requestDeadlineAt ? requestDeadlineAt - Date.now() : null;
@@ -732,6 +734,7 @@ async function callTextModelJson(appConfig, {
     model: provider.model,
     temperature: modelTemperature,
     response_format: { type: "json_object" },
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
     ...(stream ? { stream: true } : {}),
     messages: [
@@ -910,6 +913,7 @@ async function callVisionModelJson(appConfig, {
   }
 
   const modelTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2;
+  const reasoningEffort = String(provider.reasoningEffort || "").trim();
   const outputTokenLimit = Number.isFinite(Number(maxOutputTokens))
     ? Number(maxOutputTokens)
     : Number.isFinite(Number(provider.maxOutputTokens))
@@ -1057,6 +1061,7 @@ async function callVisionModelJson(appConfig, {
     model: provider.model,
     temperature: modelTemperature,
     response_format: { type: "json_object" },
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
     messages: [
       { role: "system", content: systemPrompt },
