@@ -62,4 +62,13 @@ describe("trends analysis summary layout contract", () => {
     expect(historyRules.some((rule) => rule.body.includes("overflow-y: auto"))).toBe(true);
     expect(TrendsViewSource).toContain(".trend-left-panel");
   });
+
+  it("prevents .xhs-category-control and action button from shrinking when history pane has many records", () => {
+    const rules = styleRules(TrendsViewSource);
+    const categoryRules = rules.filter((rule) => rule.selector.includes(".xhs-category-control"));
+    expect(categoryRules.some((rule) => rule.body.includes("flex-shrink: 0"))).toBe(true);
+
+    const buttonRules = rules.filter((rule) => rule.selector.includes(".primary-btn"));
+    expect(buttonRules.some((rule) => rule.body.includes("flex-shrink: 0"))).toBe(true);
+  });
 });

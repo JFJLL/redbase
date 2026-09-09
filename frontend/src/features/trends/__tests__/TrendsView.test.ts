@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { useAuthStore } from "@/shared/stores/auth";
 import TrendsView from "../views/TrendsView.vue";
 import { useInsightsStore } from "../stores/insights";
+import { getAnalysisBucketKey } from "../model/trendBuckets";
 import {
   XHS_CATEGORY_TREE,
   callsTo,
@@ -330,5 +331,14 @@ describe("TrendsView", () => {
     await flushPromises();
 
     expect(useInsightsStore().selectedBrandId).toBe(7);
+  });
+
+  it("resolves analysis bucket key correctly for both standard titles and legacy names", () => {
+    expect(getAnalysisBucketKey({ name: "小快克 - 小红书热点话题" })).toBe("xhs");
+    expect(getAnalysisBucketKey({ name: "小快克 - 流量热点趋势" })).toBe("traffic");
+    expect(getAnalysisBucketKey({ name: "小快克 - 新闻热点趋势" })).toBe("news");
+    expect(getAnalysisBucketKey({ name: "小快克 - 赛道热点趋势" })).toBe("track");
+    expect(getAnalysisBucketKey({ name: "PaperCircuit Studio - 热门趋势分析" })).toBe("xhs");
+    expect(getAnalysisBucketKey({ name: "未知分析" })).toBe("");
   });
 });

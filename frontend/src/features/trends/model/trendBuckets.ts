@@ -106,6 +106,7 @@ export function sortTrendAnalysesNewestFirst(analyses: BrandAnalysis[] | undefin
 /** 历史分析记录名称形如「品牌名 - 小红书热点话题」，据此反推维度 key。 */
 export function getAnalysisBucketKey(analysis: { name?: string } | null | undefined): string {
   const name = String(analysis?.name || "");
+  if (name.includes("热门趋势") || name.includes("小红书")) return "xhs";
   return DEFAULT_TREND_BUCKETS.find((bucket) => name.includes(bucket.title))?.key || "";
 }
 

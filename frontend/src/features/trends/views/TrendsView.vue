@@ -61,7 +61,7 @@ function updateTrendScrollHeight(): void {
   }
   const viewportTop = panel.getBoundingClientRect().top;
   const availableHeight = Math.floor(window.innerHeight - viewportTop - 24);
-  trendRightPanelMaxHeight.value = `${Math.max(180, availableHeight)}px`;
+  trendRightPanelMaxHeight.value = `${Math.max(480, availableHeight)}px`;
 }
 
 function observeTrendLayout(): void {
@@ -685,6 +685,7 @@ function goToIdeas(trend: TrendItem): void {
 .xhs-category-control {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 6px;
   font-size: 13px;
   background: var(--color-surface);
@@ -712,6 +713,7 @@ function goToIdeas(trend: TrendItem): void {
   cursor: pointer;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   align-items: center;
   gap: 2px;
 }
@@ -1037,15 +1039,27 @@ function goToIdeas(trend: TrendItem): void {
   min-height: 0;
 }
 
+.trend-left-panel {
+  min-height: 420px;
+}
+
 .xhs-category-control,
 .history-block,
 .trend-card {
   position: relative;
-  overflow: hidden;
   border: 1px solid var(--workspace-border);
   border-radius: var(--workspace-radius);
   background: var(--workspace-surface);
   box-shadow: none;
+}
+
+.history-block,
+.trend-card {
+  overflow: hidden;
+}
+
+.xhs-category-control {
+  flex-shrink: 0;
 }
 
 .xhs-category-control,
@@ -1092,7 +1106,7 @@ function goToIdeas(trend: TrendItem): void {
 
 .history-block {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 120px;
   overflow-x: hidden;
   overflow-y: auto;
 }
