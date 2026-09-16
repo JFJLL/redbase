@@ -201,10 +201,6 @@ const pointCoords = computed(() => {
   });
 });
 
-const polylinePoints = computed(() => {
-  return pointCoords.value.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-});
-
 const smoothLinePath = computed(() => {
   const pts = pointCoords.value;
   if (!pts.length) return "";
