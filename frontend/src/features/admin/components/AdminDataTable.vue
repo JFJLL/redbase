@@ -3,6 +3,7 @@
     <div class="table-top-bar" v-if="$slots.filters || searchable">
       <div class="table-search-box" v-if="searchable">
         <input
+          aria-label="搜索表格内容"
           type="text"
           class="search-input"
           :placeholder="searchPlaceholder || '搜索...'"

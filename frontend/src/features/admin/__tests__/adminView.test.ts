@@ -212,6 +212,25 @@ describe("AdminDashboardView", () => {
     wrapper.unmount();
   });
 
+  it("renders smooth bezier curve and accessible labels for line charts", () => {
+    const wrapper = mount(AdminMetricChart, {
+      props: {
+        type: "line",
+        title: "产出走势",
+        data: [
+          { date: "2026-08-29", value: 10 },
+          { date: "2026-08-30", value: 50 },
+          { date: "2026-08-31", value: 30 },
+        ],
+      },
+    });
+    const paths = wrapper.findAll("svg.chart-svg path");
+    expect(paths.length).toBeGreaterThanOrEqual(2);
+    expect(paths[1].attributes("d")).toContain("C");
+    expect(wrapper.find("svg.chart-svg").attributes("role")).toBe("img");
+    wrapper.unmount();
+  });
+
   it("uses a project-styled listbox instead of a native select", async () => {
     const wrapper = mount(AdminSelect, {
       props: {

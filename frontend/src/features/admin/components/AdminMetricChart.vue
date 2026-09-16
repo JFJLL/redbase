@@ -9,6 +9,7 @@
         <button
           type="button"
           class="view-mode-toggle"
+          :aria-expanded="showTable"
           v-if="data && data.length > 0"
           @click="showTable = !showTable"
         >
@@ -42,7 +43,8 @@
     <!-- SVG Chart view -->
     <div v-else ref="chartWrapper" class="svg-chart-wrapper">
       <!-- Line Chart -->
-      <svg v-if="type === 'line'" :viewBox="`0 0 ${chartWidth} 200`" class="chart-svg" preserveAspectRatio="xMidYMid meet">
+      <svg v-if="type === 'line'" role="img" :aria-label="title ? `${title}折线图` : '指标走势折线图'" :viewBox="`0 0 ${chartWidth} 200`" class="chart-svg" preserveAspectRatio="xMidYMid meet">
+        <title v-if="title">{{ title }}</title>
         <!-- Grid lines -->
         <line :x1="plotLeft" y1="20" :x2="plotRight" y2="20" stroke="#f3f4f6" stroke-width="1" />
         <line :x1="plotLeft" y1="65" :x2="plotRight" y2="65" stroke="#f3f4f6" stroke-width="1" />
@@ -61,8 +63,8 @@
             <stop offset="100%" stop-color="#e11d48" stop-opacity="0.0" />
           </linearGradient>
         </defs>
-        <polygon :points="areaPoints" :fill="`url(#grad-${chartId})`" />
-        <polyline :points="polylinePoints" fill="none" stroke="#e11d48" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+        <path :d="smoothAreaPath" :fill="`url(#grad-${chartId})`" />
+        <path :d="smoothLinePath" fill="none" stroke="#e11d48" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
 
         <!-- Data points -->
         <g
@@ -81,7 +83,7 @@
         </g>
 
         <g v-if="hoveredPoint" class="chart-tooltip" pointer-events="none">
-          <rect :x="tooltipPosition.x" :y="tooltipPosition.y" width="112" height="42" rx="6" fill="#111827" />
+          <rect :x="tooltipPosition.x" :y="tooltipPosition.y" :width="tooltipWidth" height="42" rx="6" fill="#111827" />
           <text :x="tooltipPosition.x + 10" :y="tooltipPosition.y + 16" class="tooltip-date">{{ hoveredPoint.date || '当前数据点' }}</text>
           <text :x="tooltipPosition.x + 10" :y="tooltipPosition.y + 33" class="tooltip-value">数值：{{ formatNumber(hoveredPoint.val) }}</text>
         </g>
@@ -138,10 +140,12 @@ const props = withDefaults(
     title?: string;
     subtitle?: string;
     data?: Array<any>;
+    smooth?: boolean;
   }>(),
   {
     type: "line",
     data: () => [],
+    smooth: true,
   }
 );
 
@@ -191,7 +195,7 @@ const pointCoords = computed(() => {
 
   return props.data.map((d, i) => {
     const val = Number(d.value ?? d.count ?? 0);
-    const x = n === 1 ? 260 : startX + i * stepX;
+    const x = n === 1 ? (startX + endX) / 2 : startX + i * stepX;
     const y = endY - (val / max) * (endY - startY);
     return { x, y, val, date: d.date || d.label || "" };
   });
@@ -201,18 +205,55 @@ const polylinePoints = computed(() => {
   return pointCoords.value.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 });
 
-const areaPoints = computed(() => {
+const smoothLinePath = computed(() => {
+  const pts = pointCoords.value;
+  if (!pts.length) return "";
+  if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  if (pts.length === 2 || props.smooth === false) {
+    return pts.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  }
+
+  let path = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  const tension = 0.2;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i === 0 ? 0 : i - 1];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2 < pts.length ? i + 2 : i + 1];
+
+    let cp1x = p1.x + (p2.x - p0.x) * tension;
+    let cp1y = p1.y + (p2.y - p0.y) * tension;
+    let cp2x = p2.x - (p3.x - p1.x) * tension;
+    let cp2y = p2.y - (p3.y - p1.y) * tension;
+
+    cp1y = Math.max(20, Math.min(155, cp1y));
+    cp2y = Math.max(20, Math.min(155, cp2y));
+
+    path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return path;
+});
+
+const smoothAreaPath = computed(() => {
   if (!pointCoords.value.length) return "";
   const pts = pointCoords.value;
   const first = pts[0];
   const last = pts[pts.length - 1];
-  return `${first.x.toFixed(1)},155 ${polylinePoints.value} ${last.x.toFixed(1)},155`;
+  return `${smoothLinePath.value} L ${last.x.toFixed(1)} 155 L ${first.x.toFixed(1)} 155 Z`;
+});
+
+const tooltipWidth = computed(() => {
+  const point = hoveredPoint.value;
+  if (!point) return 112;
+  const dateLen = (point.date || "当前数据点").length;
+  const valLen = `数值：${formatNumber(point.val)}`.length;
+  return Math.max(116, Math.max(dateLen, valLen) * 8.5 + 24);
 });
 
 const tooltipPosition = computed(() => {
   const point = hoveredPoint.value;
   if (!point) return { x: 0, y: 0 };
-  const x = Math.min(Math.max(4, point.x - 56), chartWidth.value - 116);
+  const x = Math.min(Math.max(4, point.x - tooltipWidth.value / 2), chartWidth.value - tooltipWidth.value - 4);
   const y = point.y < 66 ? point.y + 14 : point.y - 50;
   return { x, y };
 });
@@ -331,19 +372,19 @@ const xLabels = computed(() => {
 .tooltip-value { font-size: 12px; font-weight: 600; }
 
 .axis-text {
-  font-size: 10px;
-  fill: #9ca3af;
+  font-size: 11px;
+  fill: #4b5563;
   font-family: inherit;
 }
 
 .chart-x-labels {
   display: flex;
   justify-content: space-between;
-  padding: 4px 40px 0 45px;
+  padding: 4px 16px 0 48px;
 }
 .x-label {
-  font-size: 10px;
-  color: #9ca3af;
+  font-size: 11px;
+  color: #4b5563;
 }
 
 .chart-table-fallback {

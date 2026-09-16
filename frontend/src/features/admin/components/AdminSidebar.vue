@@ -8,6 +8,8 @@
       <button
         type="button"
         class="collapse-btn"
+        :aria-label="collapsed ? '展开侧边栏' : '折叠侧边栏'"
+        :aria-expanded="!collapsed"
         :title="collapsed ? '展开侧边栏' : '折叠侧边栏'"
         @click="$emit('toggleCollapse')"
       >
