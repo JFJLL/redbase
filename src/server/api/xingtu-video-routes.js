@@ -3,6 +3,8 @@ const { bindRouteScope } = require("./route-scope");
 const { findUserBySessionToken } = require("../db/repositories/auth-repository");
 const {
   getXingtuPublicVideoCatalog,
+  getXingtuVideoCatalog,
+  xingtuLiveVideoCache,
   getXingtuVideoMediaSource,
   normalizeItemId,
   requestOfficialCover,
@@ -15,7 +17,7 @@ const {
 
 function findCatalogVideo(itemId) {
   const target = String(itemId || "");
-  return getXingtuPublicVideoCatalog().find((item) => String(item.itemId || item.id) === target) || null;
+  return xingtuLiveVideoCache.get(target) || getXingtuPublicVideoCatalog().find((item) => String(item.itemId || item.id) === target) || null;
 }
 
 function findVideoMediaSource(itemId) {
@@ -132,12 +134,15 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
 
   if (req.method === "GET" && pathname === "/api/xingtu/videos") {
     if (!requireUser()) return true;
+    const filters = parseXingtuFilters(req);
+    const requestOptions = await getXingtuRequestOptions();
+    const items = await getXingtuVideoCatalog(filters, requestOptions);
     json(res, 200, {
       board: "xingtu",
       boardLabel: "巨量星图",
       noteType: "video",
-      items: filterXingtuCatalog(getXingtuPublicVideoCatalog(), parseXingtuFilters(req)),
-      filters: parseXingtuFilters(req),
+      items,
+      filters,
       updatedAt: new Date().toISOString(),
       persisted: false,
     });

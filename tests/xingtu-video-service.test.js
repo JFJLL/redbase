@@ -6,6 +6,8 @@ const path = require("node:path");
 const {
   getXingtuPublicVideoCatalog,
   getXingtuVideoMediaSource,
+  fetchLiveXingtuCatalog,
+  getXingtuVideoCatalog,
   requestOfficialCover,
   requestOfficialResource,
   requestOfficialTranscript,
@@ -260,4 +262,78 @@ test("星图视频和自然视频筛选均能正确返回对应类型的视频�
   assert.ok(naturalItems.every((it) => it.videoType === "自然视频"));
 
   assert.equal(xingtuItems.length + naturalItems.length, allItems.length);
+});
+
+test("fetchLiveXingtuCatalog 能够从星图接口解析动态列表和元数据", async () => {
+  const mockSearchList = [
+    {
+      id: "7665216902802156971",
+      attribute_datas: {
+        is_star_item: "1",
+        item_title: "动态星图视频",
+        vv_all: "1000",
+        like_cnt_all: "200",
+        comment_cnt_all: "30",
+        share_cnt_all: "40",
+        interact_cnt: "270",
+        finish_rate: "0.15",
+        interact_rate: "0.27",
+        v2_first_tag_id: "[628]", // 美食
+      },
+      user_info: { name: "美食博主", follower: "5000" },
+    },
+  ];
+
+  const fetchImpl = async (url) => {
+    if (url.includes("/search_for_content_square")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ base_resp: { status_code: 0 }, content_list: mockSearchList }),
+      };
+    }
+    if (url.includes("/external_multi_get_item")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          base_resp: { status_code: 0 },
+          items: [{
+            id: "7665216902802156971",
+            video_id: "v0300mockvideo12345",
+            cover_uri: "tos-cn-p-0015/mock-cover",
+            duration: 90,
+          }],
+        }),
+      };
+    }
+    throw new Error("Unexpected url: " + url);
+  };
+
+  const items = await fetchLiveXingtuCatalog(
+    { videoType: "星图视频", contentType: "美食" },
+    { fetchImpl, cookie: "mock_session=1" }
+  );
+
+  assert.ok(items);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, "7665216902802156971");
+  assert.equal(items[0].videoType, "星图视频");
+  assert.equal(items[0].category, "美食");
+  assert.equal(items[0].author.nickname, "美食博主");
+  assert.equal(items[0].videoId, "v0300mockvideo12345");
+  assert.equal(items[0].duration, 90);
+
+  // verify getXingtuVideoMediaSource finds it from live cache
+  const mediaSource = getXingtuVideoMediaSource("7665216902802156971");
+  assert.ok(mediaSource);
+  assert.equal(mediaSource.videoId, "v0300mockvideo12345");
+});
+
+test("getXingtuVideoCatalog 在接口网络失败时降级回退到本地目录", async () => {
+  const items = await getXingtuVideoCatalog(
+    { videoType: "all", contentType: "all" },
+    { fetchImpl: async () => ({ ok: false, status: 500 }), cookie: "mock_session=1" }
+  );
+  assert.ok(items.length >= 8);
 });

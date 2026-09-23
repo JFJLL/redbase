@@ -7,6 +7,23 @@ const path = require("path");
 
 const XINGTU_TRANSCRIPT_ENDPOINT = "https://www.xingtu.cn/gw/api/aggregator/get_item_high_quality_text";
 const XINGTU_ITEM_METADATA_ENDPOINT = "https://www.xingtu.cn/gw/api/data_sp/external_multi_get_item";
+const XINGTU_SEARCH_CONTENT_SQUARE_ENDPOINT = "https://www.xingtu.cn/gw/api/gsearch/search_for_content_square";
+
+const xingtuLiveVideoCache = new Map();
+
+const XINGTU_TAG_NAME_TO_ID = {
+  "时尚": 631, "科技": 615, "科普": 622, "摄影摄像": 627, "美食": 628,
+  "母婴": 617, "亲子": 618, "剧情": 601, "游戏": 608, "汽车": 635,
+  "动物": 619, "旅行": 620, "舞蹈": 624, "传统文化": 602, "艺术": 625,
+  "体育": 623, "音乐": 629, "生活记录": 611, "生活家居": 616, "休闲娱乐": 634,
+  "职场": 614, "三农": 632, "随拍": 610, "二次元": 607, "电影": 605,
+  "电视剧": 606, "综艺": 604, "明星": 603, "人文社科": 621, "教育校园": 613,
+  "情感": 612, "财经": 636, "公益": 637,
+};
+
+const XINGTU_TAG_ID_TO_NAME = Object.fromEntries(
+  Object.entries(XINGTU_TAG_NAME_TO_ID).map(([k, v]) => [v, k])
+);
 const DOUYIN_MEDIA_REFERER = "https://www.douyin.com/";
 const XINGTU_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -602,7 +619,163 @@ function getXingtuPublicVideoCatalog() {
 
 function getXingtuVideoMediaSource(itemId) {
   const normalizedId = normalizeItemId(itemId);
-  return XINGTU_PUBLIC_VIDEO_CATALOG.find((item) => String(item.id) === normalizedId) || null;
+  return xingtuLiveVideoCache.get(normalizedId) || XINGTU_PUBLIC_VIDEO_CATALOG.find((item) => String(item.id) === normalizedId) || null;
+}
+
+async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, cookie = "", cookieFile = "" } = {}) {
+  const resolvedCookie = xingtuCookie(cookie, cookieFile);
+  if (!resolvedCookie) return null;
+
+  const attribute_filter = [];
+  if (filters.videoType === "星图视频") {
+    attribute_filter.push({ field: { field_name: "is_star_item" }, field_value: "1" });
+  } else if (filters.videoType === "自然视频") {
+    attribute_filter.push({ field: { field_name: "is_star_item" }, field_value: "0" });
+  }
+
+  if (filters.contentType && filters.contentType !== "all" && XINGTU_TAG_NAME_TO_ID[filters.contentType]) {
+    attribute_filter.push({
+      field: { field_name: "v2_first_tag_id" },
+      field_value: "[" + XINGTU_TAG_NAME_TO_ID[filters.contentType] + "]",
+    });
+  }
+
+  const payload = {
+    page_param: { limit: "20", page: "1" },
+    scene_param: { display_scene: 13, search_scene: 46, platform_source: 1 },
+    search_param: {},
+    sort_param: { sort_type: 2 },
+    attribute_filter,
+  };
+
+  const headers = {
+    "Content-Type": "application/json",
+    "Agw-Js-Conv": "str",
+    "x-login-source": "1",
+    "User-Agent": XINGTU_BROWSER_USER_AGENT,
+    Referer: XINGTU_CONTENT_MARKET_URL,
+    Origin: "https://www.xingtu.cn",
+    Cookie: resolvedCookie,
+  };
+
+  let response;
+  try {
+    response = await fetchImpl(XINGTU_SEARCH_CONTENT_SQUARE_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (_netErr) {
+    return null;
+  }
+
+  if (!response || !response.ok) return null;
+  let data;
+  try {
+    data = await response.json();
+  } catch (_jsonErr) {
+    return null;
+  }
+  const rawList = Array.isArray(data?.content_list) ? data.content_list : [];
+  if (!rawList.length) return [];
+
+  const itemIds = rawList.map((it) => it.id).filter(Boolean);
+  const metaMap = new Map();
+  if (itemIds.length) {
+    try {
+      const metaUrl = XINGTU_ITEM_METADATA_ENDPOINT + "?item_ids=" + encodeURIComponent(itemIds.join(",")) + "&platform_source=1&need_cover_url=true";
+      const metaRes = await fetchImpl(metaUrl, {
+        headers: xingtuRequestHeaders(metaUrl, { cookie, cookieFile }),
+      });
+      if (metaRes.ok) {
+        const metaJson = await metaRes.json();
+        for (const m of metaJson.items || []) {
+          if (m?.id) metaMap.set(String(m.id), m);
+        }
+      }
+    } catch (_e) {}
+  }
+
+  const items = rawList.map((item, idx) => {
+    const id = normalizeItemId(item.id);
+    const meta = metaMap.get(String(item.id)) || {};
+    let category = "精选视频";
+    try {
+      const tagIds = JSON.parse(item.attribute_datas?.v2_first_tag_id || "[]");
+      if (tagIds.length && XINGTU_TAG_ID_TO_NAME[tagIds[0]]) {
+        category = XINGTU_TAG_ID_TO_NAME[tagIds[0]];
+      }
+    } catch (_e) {}
+
+    const note = {
+      id,
+      itemId: id,
+      rank: idx + 1,
+      platform: "xingtu",
+      noteType: "video",
+      title: meta.title || item.attribute_datas?.item_title || "未命名视频",
+      category,
+      duration: Number(meta.duration || 0),
+      author: {
+        nickname: item.user_info?.name || "星图创作者",
+        followerCount: Number(item.user_info?.follower || 0),
+      },
+      metrics: {
+        viewCount: Number(item.attribute_datas?.vv_all || 0),
+        likeCount: Number(item.attribute_datas?.like_cnt_all || 0),
+        commentCount: Number(item.attribute_datas?.comment_cnt_all || 0),
+        shareCount: Number(item.attribute_datas?.share_cnt_all || 0),
+        interactCount: Number(item.attribute_datas?.interact_cnt || 0),
+        finishRate: Number(item.attribute_datas?.finish_rate || 0),
+        interactRate: Number(item.attribute_datas?.interact_rate || 0),
+      },
+      coverUrl: "/api/xingtu/videos/" + encodeURIComponent(id) + "/cover",
+      coverUri: meta.cover_uri || item.attribute_datas?.cover_image_uri,
+      videoId: meta.video_id,
+      videoType: item.attribute_datas?.is_star_item === "1" ? "星图视频" : "自然视频",
+      playerUrl: "/api/xingtu/videos/" + encodeURIComponent(id) + "/media",
+      videoUrl: officialVideoPageUrl(id),
+      officialContentMarketUrl: XINGTU_CONTENT_MARKET_URL,
+      transcriptUrl: officialTranscriptUrl(id),
+    };
+
+    xingtuLiveVideoCache.set(id, note);
+    return note;
+  });
+
+  if (filters.dataSort && filters.dataSort !== "all") {
+    items.sort((left, right) => {
+      const leftVal = filters.dataSort === "followerCount" ? Number(left.author?.followerCount || 0) : Number(left.metrics?.[filters.dataSort] || 0);
+      const rightVal = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
+      return rightVal - leftVal;
+    });
+  }
+
+  return items;
+}
+
+function filterXingtuCatalog(items, filters = {}) {
+  const filtered = (items || []).filter((item) => {
+    if (filters.videoType && filters.videoType !== "all" && String(item.videoType || "") !== filters.videoType) return false;
+    if (filters.contentType && filters.contentType !== "all" && String(item.category || "") !== filters.contentType) return false;
+    return true;
+  });
+  if (!filters.dataSort || filters.dataSort === "all") return filtered;
+  return [...filtered].sort((left, right) => {
+    const leftValue = filters.dataSort === "followerCount" ? Number(left.author?.followerCount || 0) : Number(left.metrics?.[filters.dataSort] || 0);
+    const rightValue = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
+    return rightValue - leftValue;
+  });
+}
+
+async function getXingtuVideoCatalog(filters = {}, requestOptions = {}) {
+  try {
+    const liveItems = await fetchLiveXingtuCatalog(filters, requestOptions);
+    if (liveItems && liveItems.length > 0) {
+      return liveItems;
+    }
+  } catch (_e) {}
+  return filterXingtuCatalog(getXingtuPublicVideoCatalog(), filters);
 }
 
 function normalizeTranscriptSegments(rawTexts) {
@@ -752,6 +925,12 @@ function buildTranscriptLearningAnalysis({ item, transcript }) {
 
 module.exports = {
   XINGTU_CONTENT_MARKET_URL,
+  XINGTU_TAG_NAME_TO_ID,
+  XINGTU_TAG_ID_TO_NAME,
+  xingtuLiveVideoCache,
+  fetchLiveXingtuCatalog,
+  getXingtuVideoCatalog,
+  filterXingtuCatalog,
   getXingtuPublicVideoCatalog,
   getXingtuVideoMediaSource,
   normalizeItemId,
