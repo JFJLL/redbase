@@ -74,6 +74,10 @@ async function start() {
       json(res, 500, { error: "Internal server error" });
     }
   });
+  server.requestTimeout = 600000;
+  server.timeout = 600000;
+  server.headersTimeout = 610000;
+  server.keepAliveTimeout = 600000;
 
   await ensureStore();
   try {

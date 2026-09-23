@@ -766,12 +766,15 @@ async function callTextModelJson(appConfig, {
     return parseJsonFromModelText(extractTextFromAnthropicResponse(data));
   }
 
+  const effectiveMaxTokens = reasoningEffort && outputTokenLimit
+    ? Math.max(outputTokenLimit, 32768)
+    : outputTokenLimit;
   const requestBody = JSON.stringify({
     model: provider.model,
     temperature: modelTemperature,
     response_format: { type: "json_object" },
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-    ...(outputTokenLimit ? { max_tokens: outputTokenLimit } : {}),
+    ...(effectiveMaxTokens ? { max_tokens: effectiveMaxTokens } : {}),
     ...(stream ? { stream: true } : {}),
     messages: [
       { role: "system", content: systemPrompt },

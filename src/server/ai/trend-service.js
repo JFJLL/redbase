@@ -71,9 +71,9 @@ const MAX_TARGETED_TREND_REPAIRS_PER_REQUEST = TREND_ITEMS_PER_BUCKET;
 // invalid cards; only a small, field-scoped residue from that rewrite may use
 // one final model patch. All calls still share the total model budget below.
 const TREND_GENERATION_ATTEMPTS = 3;
-const TREND_MODEL_REQUEST_TIMEOUT_MS = 120000;
-const TREND_FULL_MODEL_REQUEST_TIMEOUT_MS = 140000;
-const TREND_ANALYSIS_MODEL_BUDGET_MS = 300000;
+const TREND_MODEL_REQUEST_TIMEOUT_MS = 240000;
+const TREND_FULL_MODEL_REQUEST_TIMEOUT_MS = 360000;
+const TREND_ANALYSIS_MODEL_BUDGET_MS = 480000;
 const TREND_MODEL_TRANSPORT_ATTEMPTS = 3;
 const TREND_FULL_MODEL_MAX_OUTPUT_TOKENS = 16384;
 // 创意模式只生成趋势与外显选题字段，不在趋势阶段生成完整发布资产。
@@ -576,9 +576,10 @@ function buildLeanIdeaRequirementsPrompt(options = {}) {
     "idea.summary：36-64 个中文字符，说明内容价值和用户关注点。",
     "idea.angle：20-40 个中文字符，写清楚具体切入方式。",
     "idea.brandFit：28-50 个中文字符，只能使用品牌档案明确提供的事实；档案未提供卖点时用真实使用场景自然带入。",
-    "idea.audience：12-28 个中文字符，描述具体人群和场景。",
+    "idea.audience：15-45 个中文字符，描述具体目标人群和痛点场景，表述必须完整通顺，切忌半截断句。",
     "idea.hook：18-34 个中文字符，输出可直接使用的开头或封面钩子。",
     "两条选题的标题与开头钩子要有不同收束方式，不要所有文案都以提问或评论区 CTA 收尾。",
+    "所有 idea 字段内容必须表意完整闭合，标点规范，不能话写一半戛然而止。",
     "idea.tags：必须输出 3-5 个与当前选题直接相关、以 # 开头的标签，不能省略。",
     ...(includeContentAssets
       ? [
@@ -1329,9 +1330,16 @@ function normalizeTrendBuckets(rawBuckets, rawTrends, brand, baseId, bucketMeta 
     const fallbackKey = bucketMeta[index]?.key || `bucket-${index + 1}`;
     const rawKey = bucket?.key || bucket?.type || bucket?.name || bucket?.title || bucket?.dimension || bucket?.category || fallbackKey;
     const key = normalizeTrendBucketKey(rawKey, bucketMeta);
-    bucketsByKey.set(key, bucket);
+    if (bucketsByKey.has(key)) {
+      const existing = bucketsByKey.get(key);
+      const existingItems = getBucketItems(existing) || [];
+      const newItems = getBucketItems(bucket) || (bucket?.title ? [bucket] : []);
+      existing.items = [...existingItems, ...newItems];
+    } else {
+      bucketsByKey.set(key, { ...bucket });
+    }
     if (bucketMeta[index] && !bucketsByKey.has(bucketMeta[index].key)) {
-      bucketsByKey.set(bucketMeta[index].key, bucket);
+      bucketsByKey.set(bucketMeta[index].key, bucketsByKey.get(key));
     }
   });
 
@@ -3781,9 +3789,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
           maxAttempts: transportAttemptsAllowed,
           delayMs: 5000,
           maxOutputTokens: requestMaxOutputTokens,
-          // The browser still receives one atomic JSON result. Streaming only keeps
-          // the server-to-RunningHub connection active during the long 10-card decode.
-           stream: true,
+           stream: appConfig?.textProvider?.apiStyle === "google",
            budget: usesProviderBudget ? aiBudget : undefined,
            analyticsContext: {
              feature: "trend_analysis",
