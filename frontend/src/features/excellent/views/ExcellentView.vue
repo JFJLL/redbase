@@ -125,6 +125,7 @@ const xingtuFilters = reactive<XingtuVideoFilters>({
   contentType: "all",
   dataSort: "all",
 });
+const xingtuPage = ref(1);
 
 const taxonomyOptions = reactive<Record<ExcellentBoard, Array<{ label: string; value: string }>>>({
   xhs_hot: [],
@@ -239,7 +240,7 @@ async function loadBoard(board: ExcellentBoard) {
   if (!hadItems) boardSlice.status = "loading";
     try {
     const result = board === "xingtu"
-      ? await fetchXingtuVideos({ ...xingtuFilters }, scope.signalFor(`list-${board}`))
+      ? await fetchXingtuVideos({ ...xingtuFilters, page: xingtuPage.value }, scope.signalFor(`list-${board}`))
       : await fetchExcellentContents(formalFilters(board), scope.signalFor(`list-${board}`));
     applyExcellentListResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
     if (board === "xingtu") {
@@ -299,7 +300,8 @@ async function refreshBoard(board: ExcellentBoard) {
   boardSlice.refreshError = "";
   try {
     if (board === "xingtu") {
-      const result = await fetchXingtuVideos({ ...xingtuFilters }, scope.signalFor(`refresh-${board}`));
+      xingtuPage.value = (xingtuPage.value % 10) + 1;
+      const result = await fetchXingtuVideos({ ...xingtuFilters, page: xingtuPage.value }, scope.signalFor(`refresh-${board}`));
       applyExcellentRefreshResult({ slice: boardSlice, requestId, result, activeBoard: activeBoard.value, requestBoard: board });
       boardSlice.hasCache = false;
       boardSlice.needsUpdate = false;
@@ -354,6 +356,7 @@ function resetXingtuFilters() {
   xingtuFilters.videoType = "all";
   xingtuFilters.contentType = "all";
   xingtuFilters.dataSort = "all";
+  xingtuPage.value = 1;
   if (activeBoard.value === "xingtu") void loadBoard("xingtu");
 }
 

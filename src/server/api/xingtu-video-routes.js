@@ -60,10 +60,13 @@ function parseXingtuFilters(req) {
   const videoType = String(query.get("videoType") || "all").trim();
   const contentType = String(query.get("contentType") || "all").trim();
   const dataSort = String(query.get("dataSort") || "all").trim();
+  const rawPage = parseInt(query.get("page") || "1", 10);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
   return {
     videoType: ["all", "星图视频", "自然视频"].includes(videoType) ? videoType : "all",
     contentType: contentType || "all",
     dataSort: ["all", "likeCount", "commentCount", "shareCount", "interactCount", "followerCount"].includes(dataSort) ? dataSort : "all",
+    page,
   };
 }
 

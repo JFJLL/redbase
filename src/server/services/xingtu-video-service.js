@@ -640,8 +640,9 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     });
   }
 
+  const pageNum = Math.max(1, Number(filters.page || 1));
   const payload = {
-    page_param: { limit: "20", page: "1" },
+    page_param: { limit: "20", page: String(pageNum) },
     scene_param: { display_scene: 13, search_scene: 46, platform_source: 1 },
     search_param: {},
     sort_param: { sort_type: 2 },
@@ -743,15 +744,23 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     return note;
   });
 
+  let filtered = items;
+  if (filters.videoType && filters.videoType !== "all") {
+    filtered = filtered.filter((item) => item.videoType === filters.videoType);
+  }
+  if (filters.contentType && filters.contentType !== "all") {
+    filtered = filtered.filter((item) => item.category === filters.contentType);
+  }
+
   if (filters.dataSort && filters.dataSort !== "all") {
-    items.sort((left, right) => {
+    filtered.sort((left, right) => {
       const leftVal = filters.dataSort === "followerCount" ? Number(left.author?.followerCount || 0) : Number(left.metrics?.[filters.dataSort] || 0);
       const rightVal = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
       return rightVal - leftVal;
     });
   }
 
-  return items;
+  return filtered;
 }
 
 function filterXingtuCatalog(items, filters = {}) {
