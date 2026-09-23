@@ -151,22 +151,20 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
 
   const coverMatch = pathname.match(/^\/api\/xingtu\/videos\/([^/]+)\/cover$/);
   if (req.method === "GET" && coverMatch) {
-    const item = findVideoMediaSource(decodeURIComponent(coverMatch[1] || "")) || findCatalogVideo(decodeURIComponent(coverMatch[1] || ""));
+    const itemId = decodeURIComponent(coverMatch[1] || "");
+    const item = findVideoMediaSource(itemId) || findCatalogVideo(itemId);
     if (!item) {
       json(res, 404, { error: "未找到该视频封面。", code: "XINGTU_VIDEO_NOT_FOUND" });
       return true;
     }
-    console.log("[Cover Route] itemId:", itemId, "has signedCoverUrl:", Boolean(item.signedCoverUrl));
     if (item.signedCoverUrl) {
       try {
         const coverRes = await requestOfficialResource(item.signedCoverUrl, await getXingtuRequestOptions());
-        console.log("[Cover Route] requestOfficialResource status:", coverRes?.status);
         if (coverRes && (coverRes.ok || coverRes.status === 200 || coverRes.status === 206)) {
           sendOfficialResource(res, coverRes);
           return true;
         }
-      } catch (signedErr) {
-        console.error("[Cover Route] signedErr:", signedErr.message, signedErr.code);
+      } catch (_signedErr) {
       }
     }
     try {
