@@ -66,7 +66,6 @@ export interface XingtuVideoFilters {
   videoType?: "all" | "星图视频" | "自然视频";
   contentType?: string;
   dataSort?: "all" | "likeCount" | "commentCount" | "shareCount" | "interactCount" | "followerCount";
-  page?: number;
 }
 
 export interface XingtuTranscriptSegment {

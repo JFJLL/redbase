@@ -627,12 +627,6 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
   if (!resolvedCookie) return null;
 
   const attribute_filter = [];
-  if (filters.videoType === "星图视频") {
-    attribute_filter.push({ field: { field_name: "is_star_item" }, field_value: "1" });
-  } else if (filters.videoType === "自然视频") {
-    attribute_filter.push({ field: { field_name: "is_star_item" }, field_value: "0" });
-  }
-
   if (filters.contentType && filters.contentType !== "all" && XINGTU_TAG_NAME_TO_ID[filters.contentType]) {
     attribute_filter.push({
       field: { field_name: "v2_first_tag_id" },
@@ -640,14 +634,8 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     });
   }
 
-  const pageNum = Math.max(1, Number(filters.page || 1));
-  const payload = {
-    page_param: { limit: "20", page: String(pageNum) },
-    scene_param: { display_scene: 13, search_scene: 46, platform_source: 1 },
-    search_param: {},
-    sort_param: { sort_type: 2 },
-    attribute_filter,
-  };
+  const isStarRequest = filters.videoType === "星图视频";
+  const isNaturalRequest = filters.videoType === "自然视频";
 
   const headers = {
     "Content-Type": "application/json",
@@ -659,45 +647,77 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     Cookie: resolvedCookie,
   };
 
-  let response;
-  try {
-    response = await fetchImpl(XINGTU_SEARCH_CONTENT_SQUARE_ENDPOINT, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-    });
-  } catch (_netErr) {
-    return null;
+  const pagesToFetch = isStarRequest ? [1, 2, 3] : [1];
+  let rawList = [];
+
+  for (const p of pagesToFetch) {
+    const payload = {
+      page_param: { limit: "20", page: String(p) },
+      scene_param: { display_scene: 13, search_scene: 46, platform_source: 1 },
+      search_param: {},
+      sort_param: { sort_type: 2 },
+      attribute_filter,
+    };
+    try {
+      const response = await fetchImpl(XINGTU_SEARCH_CONTENT_SQUARE_ENDPOINT, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      });
+      if (response && response.ok) {
+        const data = await response.json();
+        const list = Array.isArray(data?.content_list) ? data.content_list : [];
+        rawList.push(...list);
+        if (isStarRequest) {
+          const starsCount = rawList.filter((it) => it.attribute_datas?.is_star_item === "1").length;
+          if (starsCount >= 8) break;
+        }
+      }
+    } catch (_err) {
+      break;
+    }
   }
 
-  if (!response || !response.ok) return null;
-  let data;
-  try {
-    data = await response.json();
-  } catch (_jsonErr) {
-    return null;
-  }
-  const rawList = Array.isArray(data?.content_list) ? data.content_list : [];
   if (!rawList.length) return [];
 
-  const itemIds = rawList.map((it) => it.id).filter(Boolean);
+  // Filter by videoType if specified
+  if (isStarRequest) {
+    rawList = rawList.filter((it) => it.attribute_datas?.is_star_item === "1");
+  } else if (isNaturalRequest) {
+    rawList = rawList.filter((it) => it.attribute_datas?.is_star_item !== "1");
+  }
+
+  // De-duplicate by ID
+  const seenIds = new Set();
+  rawList = rawList.filter((it) => {
+    const sid = String(it.id || "");
+    if (!sid || seenIds.has(sid)) return false;
+    seenIds.add(sid);
+    return true;
+  });
+
+  const targetItems = rawList.slice(0, 8);
+  const itemIds = targetItems.map((it) => it.id).filter(Boolean);
+
   const metaMap = new Map();
   if (itemIds.length) {
     try {
       const metaUrl = XINGTU_ITEM_METADATA_ENDPOINT + "?item_ids=" + encodeURIComponent(itemIds.join(",")) + "&platform_source=1&need_cover_url=true";
-      const metaRes = await fetchImpl(metaUrl, {
-        headers: xingtuRequestHeaders(metaUrl, { cookie, cookieFile }),
-      });
+      const metaHeaders = {
+        ...xingtuRequestHeaders(metaUrl, { cookie, cookieFile }),
+        "Agw-Js-Conv": "str",
+      };
+      const metaRes = await fetchImpl(metaUrl, { headers: metaHeaders });
       if (metaRes.ok) {
         const metaJson = await metaRes.json();
         for (const m of metaJson.items || []) {
-          if (m?.id) metaMap.set(String(m.id), m);
+          if (m?.id != null) metaMap.set(String(m.id), m);
         }
       }
     } catch (_e) {}
   }
 
-  const items = rawList.map((item, idx) => {
+  const items = targetItems.map((item, idx) => {
     const id = normalizeItemId(item.id);
     const meta = metaMap.get(String(item.id)) || {};
     let category = "精选视频";
@@ -708,17 +728,21 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
       }
     } catch (_e) {}
 
+    const authorNickname = item.user_info?.name || "星图创作者";
+    const rawTitle = (item.attribute_datas?.item_title || meta.title || "").trim();
+    const title = rawTitle || authorNickname + "的" + category + "视频";
+
     const note = {
       id,
       itemId: id,
       rank: idx + 1,
       platform: "xingtu",
       noteType: "video",
-      title: meta.title || item.attribute_datas?.item_title || "未命名视频",
+      title,
       category,
-      duration: Number(meta.duration || 0),
+      duration: Number(meta.duration || item.attribute_datas?.duration || 0),
       author: {
-        nickname: item.user_info?.name || "星图创作者",
+        nickname: authorNickname,
         followerCount: Number(item.user_info?.follower || 0),
       },
       metrics: {
@@ -732,6 +756,7 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
       },
       coverUrl: "/api/xingtu/videos/" + encodeURIComponent(id) + "/cover",
       coverUri: meta.cover_uri || item.attribute_datas?.cover_image_uri,
+      signedCoverUrl: meta.cover_url || "",
       videoId: meta.video_id,
       videoType: item.attribute_datas?.is_star_item === "1" ? "星图视频" : "自然视频",
       playerUrl: "/api/xingtu/videos/" + encodeURIComponent(id) + "/media",
@@ -744,23 +769,29 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     return note;
   });
 
-  let filtered = items;
-  if (filters.videoType && filters.videoType !== "all") {
-    filtered = filtered.filter((item) => item.videoType === filters.videoType);
-  }
-  if (filters.contentType && filters.contentType !== "all") {
-    filtered = filtered.filter((item) => item.category === filters.contentType);
+  // If star video request yielded less than 8, complement with known high-quality star samples
+  if (isStarRequest && items.length < 8) {
+    const existingIds = new Set(items.map((it) => it.id));
+    const starFallbacks = XINGTU_PUBLIC_VIDEO_CATALOG
+      .filter((it) => it.videoType === "星图视频" && !existingIds.has(String(it.id)))
+      .map(normalizeCatalogItem);
+    for (const fb of starFallbacks) {
+      if (items.length >= 8) break;
+      items.push({ ...fb, rank: items.length + 1 });
+      xingtuLiveVideoCache.set(fb.id, fb);
+    }
   }
 
   if (filters.dataSort && filters.dataSort !== "all") {
-    filtered.sort((left, right) => {
+    items.sort((left, right) => {
       const leftVal = filters.dataSort === "followerCount" ? Number(left.author?.followerCount || 0) : Number(left.metrics?.[filters.dataSort] || 0);
       const rightVal = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
       return rightVal - leftVal;
     });
+    items.forEach((it, idx) => { it.rank = idx + 1; });
   }
 
-  return filtered;
+  return items.slice(0, 8);
 }
 
 function filterXingtuCatalog(items, filters = {}) {
@@ -781,10 +812,10 @@ async function getXingtuVideoCatalog(filters = {}, requestOptions = {}) {
   try {
     const liveItems = await fetchLiveXingtuCatalog(filters, requestOptions);
     if (liveItems && liveItems.length > 0) {
-      return liveItems;
+      return liveItems.slice(0, 8);
     }
   } catch (_e) {}
-  return filterXingtuCatalog(getXingtuPublicVideoCatalog(), filters);
+  return filterXingtuCatalog(getXingtuPublicVideoCatalog(), filters).slice(0, 8);
 }
 
 function normalizeTranscriptSegments(rawTexts) {

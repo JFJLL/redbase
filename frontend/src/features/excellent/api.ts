@@ -63,7 +63,6 @@ export function fetchXingtuVideos(filters: XingtuVideoFilters = {}, signal?: Abo
       videoType: filters.videoType || "all",
       contentType: filters.contentType || "all",
       dataSort: filters.dataSort || "all",
-      page: filters.page ? String(filters.page) : undefined,
     },
     signal,
   });

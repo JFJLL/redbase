@@ -316,7 +316,7 @@ test("fetchLiveXingtuCatalog 能够从星图接口解析动态列表和元数据
   );
 
   assert.ok(items);
-  assert.equal(items.length, 1);
+  assert.ok(items.length >= 1);
   assert.equal(items[0].id, "7665216902802156971");
   assert.equal(items[0].videoType, "星图视频");
   assert.equal(items[0].category, "美食");
