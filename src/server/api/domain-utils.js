@@ -33,11 +33,25 @@ function getConfiguredAdminPhones(appConfig) {
 }
 
 function findTrendItem(brand, trendId) {
-  if (!brand || !Array.isArray(brand.trends)) return null;
-  for (const bucket of brand.trends) {
-    if (Array.isArray(bucket.items)) {
-      const found = bucket.items.find((item) => item.id === trendId);
-      if (found) return found;
+  if (!brand) return null;
+  const targetId = String(trendId);
+  if (Array.isArray(brand.trends)) {
+    for (const bucket of brand.trends) {
+      if (Array.isArray(bucket.items)) {
+        const found = bucket.items.find((item) => String(item.id) === targetId);
+        if (found) return found;
+      }
+    }
+  }
+  if (Array.isArray(brand.analyses)) {
+    for (const analysis of brand.analyses) {
+      const snapshot = Array.isArray(analysis.trendSnapshot) ? analysis.trendSnapshot : [];
+      for (const bucket of snapshot) {
+        if (Array.isArray(bucket.items)) {
+          const found = bucket.items.find((item) => String(item.id) === targetId);
+          if (found) return found;
+        }
+      }
     }
   }
   return null;
