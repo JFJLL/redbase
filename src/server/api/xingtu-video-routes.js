@@ -156,14 +156,18 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
       json(res, 404, { error: "未找到该视频封面。", code: "XINGTU_VIDEO_NOT_FOUND" });
       return true;
     }
+    console.log("[Cover Route] itemId:", itemId, "has signedCoverUrl:", Boolean(item.signedCoverUrl));
     if (item.signedCoverUrl) {
       try {
         const coverRes = await requestOfficialResource(item.signedCoverUrl, await getXingtuRequestOptions());
+        console.log("[Cover Route] requestOfficialResource status:", coverRes?.status);
         if (coverRes && (coverRes.ok || coverRes.status === 200 || coverRes.status === 206)) {
           sendOfficialResource(res, coverRes);
           return true;
         }
-      } catch (_signedErr) {}
+      } catch (signedErr) {
+        console.error("[Cover Route] signedErr:", signedErr.message, signedErr.code);
+      }
     }
     try {
       sendOfficialResource(res, await requestOfficialCover(item, await getXingtuRequestOptions()));
