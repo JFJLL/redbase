@@ -21,6 +21,18 @@ function createZhihuError(code, message, details = {}) {
   return error;
 }
 
+function cleanSearchTitle(title) {
+  let text = String(title || "").trim();
+  if (!text) return "";
+  text = text.replace(
+    /\s*[-_—|]\s*(知乎|知乎专栏|什么值得买|网易订阅|网易新闻|新浪网|新浪财经|新浪新闻|澎湃新闻|腾讯新闻|腾讯网|百度贴吧|百度知道|微信公众平台|手机搜狐网|搜狐网|搜狐|今日头条|快懂百科|CSDN博客|小红书|豆瓣|微博).*$/i,
+    "",
+  );
+  text = text.replace(/(?:\|[^|]{2,10}){2,}\s*$/g, "");
+  text = text.replace(/[\s\-_—|:：]+$/g, "").trim();
+  return text;
+}
+
 function buildZhihuQueries(brand, bucketMeta, options = {}) {
   const brandName = String(brand?.name || "").trim();
   const industry = String(brand?.industry || "").trim();
@@ -165,7 +177,7 @@ function mapZhihuItemToEvidence(item, queryIndex = 0) {
   const isZhihuUrl = url.includes("zhihu.com");
 
   return {
-    title: String(item.Title || item.title || "").trim(),
+    title: cleanSearchTitle(item.Title || item.title || ""),
     url,
     snippet: String(item.ContentText || item.contentText || item.Snippet || "").trim(),
     source: String(item.AuthorName || item.authorName || (isZhihuUrl ? "知乎" : "全网来源")).trim(),

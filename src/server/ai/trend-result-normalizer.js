@@ -87,12 +87,31 @@ function stripClaimFromText(text, claim) {
   return sentences.filter((sentence) => !findUnsupportedHardClaimTexts(sentence).length).join("").trim();
 }
 
+function cleanSearchTitle(title) {
+  let text = String(title || "").trim();
+  if (!text) return "";
+  text = text.replace(
+    /\s*[-_—|]\s*(知乎|知乎专栏|什么值得买|网易订阅|网易新闻|新浪网|新浪财经|新浪新闻|澎湃新闻|腾讯新闻|腾讯网|百度贴吧|百度知道|微信公众平台|手机搜狐网|搜狐网|搜狐|今日头条|快懂百科|CSDN博客|小红书|豆瓣|微博).*$/i,
+    "",
+  );
+  text = text.replace(/(?:\|[^|]{2,10}){2,}\s*$/g, "");
+  text = text.replace(/[\s\-_—|:：]+$/g, "").trim();
+  return text;
+}
+
+function extractCleanAudience(brand) {
+  const raw = String(brand?.audience || "目标用户").trim();
+  const firstClause = raw.split(/[，,。；;\n]/)[0].trim();
+  return firstClause.length > 5 ? firstClause : raw.slice(0, 40);
+}
+
 function buildNeutralFieldText(field, topic, brand) {
-  const anchor = String(topic || "近期用户讨论").slice(0, 40);
+  const cleanTopic = cleanSearchTitle(topic);
+  const anchor = cleanTopic || "近期用户讨论";
   const brandName = String(brand?.name || "品牌");
   const byField = {
-    title: `${anchor}的内容机会（待验证）`,
-    category: "待验证方向",
+    title: `${anchor}的内容机会`,
+    category: "热点趋势",
     summary: `围绕「${anchor}」的近期讨论样本，${brandName}可以先以观察和轻内容形式进入，验证用户反馈后再加码。`,
     reason: `该方向来自「${anchor}」这一具体来源话题，先以小规模内容验证用户是否关心，再决定是否投入更多创作资源，属于低风险的待验证内容机会。`,
     market_change: `「${anchor}」相关讨论在来源样本中出现，内容形式值得观察。`,
@@ -105,22 +124,23 @@ function buildNeutralFieldText(field, topic, brand) {
 }
 
 function buildFallbackIdea(topic, brand, variant = 0) {
-  const anchor = String(topic || "近期用户讨论").slice(0, 24);
+  const cleanTopic = cleanSearchTitle(topic);
+  const anchor = cleanTopic || "近期用户讨论";
   const brandName = String(brand?.name || "品牌");
-  const audience = String(brand?.audience || "目标用户").slice(0, 20);
+  const audience = extractCleanAudience(brand);
   const primary = variant === 0;
   return {
-    title: primary ? `${anchor}观察清单` : `${anchor}场景问答整理`,
+    title: primary ? `${anchor}｜选题指南` : `${anchor}｜用户场景答疑`,
     summary: primary
-      ? `整理来源中围绕「${anchor}」出现的真实说法和场景，做成可保存的观察清单。`
-      : `把「${anchor}」相关的用户提问按场景归类，逐条给出可核验的信息边界。`,
-    angle: primary ? "从来源话题的原始表达切入，逐条整理。" : "从具体使用场景的疑问切入，问答式展开。",
+      ? `围绕「${anchor}」出现的真实诉求与热议场景，提炼实用经验与选题方向。`
+      : `把「${anchor}」相关的用户提问按场景归类，逐条给出清晰边界与参考建议。`,
+    angle: primary ? "从来源话题的真实诉求切入，提炼实用干货清单。" : "从具体使用场景的疑问切入，问答式展开。",
     brandFit: primary
-      ? `${brandName}以内容整理者身份出现，只呈现观察不做功效或强度承诺。`
-      : `${brandName}以问题整理者身份出现，引导讨论而不替用户下结论。`,
-    audience: `关注「${anchor}」的${audience}`,
-    hook: primary ? `关于${anchor}，大家最常提到的是这几件事` : `${anchor}里被问得最多的问题，先说清楚边界`,
-    tags: [`#${anchor.slice(0, 10) || "话题观察"}`, "#内容观察", primary ? "#清单整理" : "#场景问答"],
+      ? `${brandName}以内容整理者与专业分享者身份出现，自然融入品牌视角。`
+      : `${brandName}以问题解答者身份出现，引导理性讨论建立信任。`,
+    audience: audience.startsWith("核心") || audience.startsWith("面向") ? audience : `关注「${anchor.slice(0, 16)}」的${audience}`,
+    hook: primary ? `关于${anchor.slice(0, 20)}，大家最常提到的是这几件事` : `${anchor.slice(0, 20)}里被问得最多的问题，先说清楚边界`,
+    tags: [`#${anchor.slice(0, 10) || "话题观察"}`, "#内容观察", primary ? "#经验整理" : "#场景问答"],
     contentAssets: {},
     customPrompt: "",
     systemPrompt: "",
@@ -128,7 +148,8 @@ function buildFallbackIdea(topic, brand, variant = 0) {
 }
 
 function buildFallbackTrendCard({ slot, evidence, brand, index = 0, baseId = 0 }) {
-  const topic = String(slot?.topic || evidence?.title || "近期用户讨论").slice(0, 40);
+  const rawTopic = slot?.topic || evidence?.title || "近期用户讨论";
+  const topic = cleanSearchTitle(rawTopic);
   const brandName = String(brand?.name || "品牌");
   const evidenceIds = Array.isArray(slot?.evidenceIds) && slot.evidenceIds.length
     ? slot.evidenceIds
@@ -138,8 +159,8 @@ function buildFallbackTrendCard({ slot, evidence, brand, index = 0, baseId = 0 }
     id: baseId + index + 1,
     stableKey: `fallback-slot-${String(index + 1).padStart(2, "0")}`,
     rank: index + 1,
-    title: `${topic}（待验证方向 ${index + 1}）`,
-    category: "待验证方向",
+    title: topic || `热点趋势方向 ${index + 1}`,
+    category: "热点趋势",
     market_change: buildNeutralFieldText("market_change", topic, brand),
     consumer_shift: buildNeutralFieldText("consumer_shift", topic, brand),
     why_now: buildNeutralFieldText("why_now", topic, brand),
@@ -151,7 +172,7 @@ function buildFallbackTrendCard({ slot, evidence, brand, index = 0, baseId = 0 }
     novelty_score: null,
     brand_fit_score: null,
     actionability_score: null,
-    tags: normalizeTags([`#${topic.slice(0, 10) || "话题观察"}`, "#待验证", "#内容机会"]),
+    tags: normalizeTags([`#${topic.slice(0, 10) || "话题观察"}`, "#内容机会", "#热点观察"]),
     reason: buildNeutralFieldText("reason", topic, brand),
     evidenceIds,
     ideas: [buildFallbackIdea(topic, brand, 0), buildFallbackIdea(topic, brand, 1)],
