@@ -442,7 +442,7 @@ function getXingtuCoverSrc(item: ExcellentNote): string {
   if (id && capturedVideoPosters[id]) {
     return capturedVideoPosters[id]!;
   }
-  return String(item.coverUrl || "");
+  return String(item.signedCoverUrl || item.coverUrl || "");
 }
 
 async function onXingtuCoverError(item: ExcellentNote) {
@@ -462,9 +462,8 @@ async function preloadXingtuPosters(items: readonly ExcellentNote[]) {
   for (const item of items) {
     const id = xingtuItemId(item);
     if (!id || capturedVideoPosters[id]) continue;
-    const cover = String(item.coverUrl || "");
-    // If cover is placeholder SVG or missing, extract real frame
-    if (!cover || cover.includes("cover") || cover.endsWith(".svg")) {
+    const cover = String(item.signedCoverUrl || item.coverUrl || "");
+    if (!cover || cover.endsWith(".svg")) {
       void onXingtuCoverError(item);
     }
   }
