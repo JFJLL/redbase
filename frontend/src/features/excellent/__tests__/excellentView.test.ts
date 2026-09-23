@@ -805,6 +805,7 @@ describe("ExcellentView", () => {
     expect(wrapper.text()).not.toContain("媒体策略");
 
     await wrapper.find('[data-test="xingtu-content-type"]').setValue("剧情");
+    await wrapper.find('[data-test="refresh-button"]').trigger("click");
     await flushPromises();
     expect(calls.some((call) => call.url.includes("/api/xingtu/videos?") && call.url.includes("contentType=%E5%89%A7%E6%83%85"))).toBe(true);
 

@@ -626,16 +626,26 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
   const resolvedCookie = xingtuCookie(cookie, cookieFile);
   if (!resolvedCookie) return null;
 
-  const attribute_filter = [];
-  if (filters.contentType && filters.contentType !== "all" && XINGTU_TAG_NAME_TO_ID[filters.contentType]) {
+  const now = Math.floor(Date.now() / 1000);
+  const t30 = now - 30 * 86400;
+
+  const attribute_filter = [
+    { field: { field_name: "item_create_time__ge" }, field_value: String(t30) },
+    { field: { field_name: "item_create_time__le" }, field_value: String(now) },
+  ];
+
+  if (filters.videoType === "星图视频") {
+    attribute_filter.push({ field: { field_name: "is_star_item" }, field_value: "1" });
+  } else if (filters.videoType === "自然视频") {
+    attribute_filter.push({ field: { field_name: "is_star_item" }, field_value: "0" });
+  }
+
+  if (filters.contentType && filters.contentType !== "all" && XINGTU_TAG_NAME_TO_ID[filters.contentType] != null) {
     attribute_filter.push({
       field: { field_name: "v2_first_tag_id" },
       field_value: "[" + XINGTU_TAG_NAME_TO_ID[filters.contentType] + "]",
     });
   }
-
-  const isStarRequest = filters.videoType === "星图视频";
-  const isNaturalRequest = filters.videoType === "自然视频";
 
   const headers = {
     "Content-Type": "application/json",
@@ -647,43 +657,35 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     Cookie: resolvedCookie,
   };
 
-  const pagesToFetch = isStarRequest ? [1, 2, 3] : [1];
-  let rawList = [];
+  const payload = {
+    page_param: { limit: "30", page: "1" },
+    scene_param: { display_scene: 46, search_scene: 13, platform_source: 1 },
+    search_param: {},
+    sort_param: { sort_field: { field_name: "score" }, sort_type: 2 },
+    attribute_filter,
+  };
 
-  for (const p of pagesToFetch) {
-    const payload = {
-      page_param: { limit: "20", page: String(p) },
-      scene_param: { display_scene: 13, search_scene: 46, platform_source: 1 },
-      search_param: {},
-      sort_param: { sort_type: 2 },
-      attribute_filter,
-    };
-    try {
-      const response = await fetchImpl(XINGTU_SEARCH_CONTENT_SQUARE_ENDPOINT, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
-      if (response && response.ok) {
-        const data = await response.json();
-        const list = Array.isArray(data?.content_list) ? data.content_list : [];
-        rawList.push(...list);
-        if (isStarRequest) {
-          const starsCount = rawList.filter((it) => it.attribute_datas?.is_star_item === "1").length;
-          if (starsCount >= 8) break;
-        }
-      }
-    } catch (_err) {
-      break;
+  let rawList = [];
+  try {
+    const response = await fetchImpl(XINGTU_SEARCH_CONTENT_SQUARE_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (response && response.ok) {
+      const data = await response.json();
+      rawList = Array.isArray(data?.content_list) ? data.content_list : [];
     }
+  } catch (_err) {
+    return [];
   }
 
   if (!rawList.length) return [];
 
-  // Filter by videoType if specified
-  if (isStarRequest) {
+  // Filter by videoType if specified (safety check)
+  if (filters.videoType === "星图视频") {
     rawList = rawList.filter((it) => it.attribute_datas?.is_star_item === "1");
-  } else if (isNaturalRequest) {
+  } else if (filters.videoType === "自然视频") {
     rawList = rawList.filter((it) => it.attribute_datas?.is_star_item !== "1");
   }
 
@@ -695,6 +697,15 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     seenIds.add(sid);
     return true;
   });
+
+  // Sort by metric if dataSort specified
+  if (filters.dataSort && filters.dataSort !== "all") {
+    rawList.sort((left, right) => {
+      const leftVal = filters.dataSort === "followerCount" ? Number(left.user_info?.follower || 0) : Number(left.attribute_datas?.[filters.dataSort === "likeCount" ? "like_cnt_all" : filters.dataSort === "commentCount" ? "comment_cnt_all" : filters.dataSort === "shareCount" ? "share_cnt_all" : "interact_cnt"] || 0);
+      const rightVal = filters.dataSort === "followerCount" ? Number(right.user_info?.follower || 0) : Number(right.attribute_datas?.[filters.dataSort === "likeCount" ? "like_cnt_all" : filters.dataSort === "commentCount" ? "comment_cnt_all" : filters.dataSort === "shareCount" ? "share_cnt_all" : "interact_cnt"] || 0);
+      return rightVal - leftVal;
+    });
+  }
 
   const targetItems = rawList.slice(0, 8);
   const itemIds = targetItems.map((it) => it.id).filter(Boolean);
@@ -769,29 +780,7 @@ async function fetchLiveXingtuCatalog(filters = {}, { fetchImpl = global.fetch, 
     return note;
   });
 
-  // If star video request yielded less than 8, complement with known high-quality star samples
-  if (isStarRequest && items.length < 8) {
-    const existingIds = new Set(items.map((it) => it.id));
-    const starFallbacks = XINGTU_PUBLIC_VIDEO_CATALOG
-      .filter((it) => it.videoType === "星图视频" && !existingIds.has(String(it.id)))
-      .map(normalizeCatalogItem);
-    for (const fb of starFallbacks) {
-      if (items.length >= 8) break;
-      items.push({ ...fb, rank: items.length + 1 });
-      xingtuLiveVideoCache.set(fb.id, fb);
-    }
-  }
-
-  if (filters.dataSort && filters.dataSort !== "all") {
-    items.sort((left, right) => {
-      const leftVal = filters.dataSort === "followerCount" ? Number(left.author?.followerCount || 0) : Number(left.metrics?.[filters.dataSort] || 0);
-      const rightVal = filters.dataSort === "followerCount" ? Number(right.author?.followerCount || 0) : Number(right.metrics?.[filters.dataSort] || 0);
-      return rightVal - leftVal;
-    });
-    items.forEach((it, idx) => { it.rank = idx + 1; });
-  }
-
-  return items.slice(0, 8);
+  return items;
 }
 
 function filterXingtuCatalog(items, filters = {}) {

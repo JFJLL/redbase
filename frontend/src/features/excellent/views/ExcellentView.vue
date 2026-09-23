@@ -346,15 +346,11 @@ async function refreshBoard(board: ExcellentBoard) {
   }
 }
 
-function applyXingtuFilters() {
-  if (activeBoard.value === "xingtu") void loadBoard("xingtu");
-}
-
 function resetXingtuFilters() {
   xingtuFilters.videoType = "all";
   xingtuFilters.contentType = "all";
   xingtuFilters.dataSort = "all";
-    if (activeBoard.value === "xingtu") void loadBoard("xingtu");
+  if (activeBoard.value === "xingtu") void refreshBoard("xingtu");
 }
 
 function switchBoard(board: ExcellentBoard) {
@@ -1406,21 +1402,18 @@ onUnmounted(() => {
             label="视频类型"
             :options="XINGTU_VIDEO_TYPES"
             test-id="xingtu-video-type"
-            @change="applyXingtuFilters()"
           />
           <CustomSelect
             v-model="xingtuFilters.contentType"
             label="内容类型"
             :options="XINGTU_CONTENT_TYPES"
             test-id="xingtu-content-type"
-            @change="applyXingtuFilters()"
           />
           <CustomSelect
             v-model="xingtuFilters.dataSort"
             label="数据筛选"
             :options="XINGTU_DATA_SORTS"
             test-id="xingtu-data-sort"
-            @change="applyXingtuFilters()"
           />
         </div>
         <button

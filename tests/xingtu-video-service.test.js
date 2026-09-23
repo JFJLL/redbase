@@ -284,8 +284,10 @@ test("fetchLiveXingtuCatalog 能够从星图接口解析动态列表和元数据
     },
   ];
 
-  const fetchImpl = async (url) => {
+  let squarePayload = null;
+  const fetchImpl = async (url, init) => {
     if (url.includes("/search_for_content_square")) {
+      squarePayload = init?.body ? JSON.parse(init.body) : null;
       return {
         ok: true,
         status: 200,
