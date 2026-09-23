@@ -614,6 +614,11 @@ function loadAppConfig() {
           (useImageProviderApiKey ? imageProviderApiKey : merged.textProvider.apiKey) ||
           "",
       ).trim(),
+      apiKeys: parseListConfig(
+        process.env.TEXT_API_KEYS,
+        merged.textProvider?.apiKeys,
+        (useImageProviderApiKey ? imageProviderApiKey : merged.textProvider?.apiKey) || "",
+      ),
       useImageProviderApiKey,
       searchEnabled: parseBooleanConfig(
         process.env.TEXT_SEARCH_ENABLED,
@@ -624,8 +629,18 @@ function loadAppConfig() {
       reasoningEffort: String(process.env.TEXT_REASONING_EFFORT || merged.textProvider?.reasoningEffort || "").trim(),
     },
     searchProvider: {
-      enabled: parseBooleanConfig(process.env.ANYSEARCH_ENABLED, parseBooleanConfig(merged.searchProvider?.enabled, false)),
-      type: "anysearch",
+      enabled: parseBooleanConfig(
+        process.env.SEARCH_PROVIDER_ENABLED || process.env.ANYSEARCH_ENABLED,
+        parseBooleanConfig(merged.searchProvider?.enabled, false),
+      ),
+      type: String(process.env.SEARCH_PROVIDER_TYPE || merged.searchProvider?.type || "zhihu").trim(),
+      zhihu: {
+        baseUrl: String(process.env.ZHIHU_SEARCH_BASE_URL || merged.searchProvider?.zhihu?.baseUrl || "https://developer.zhihu.com/api/v1/content/global_search").trim(),
+        apiKey: String(process.env.ZHIHU_API_KEY || merged.searchProvider?.zhihu?.apiKey || "").trim(),
+        timeoutMs: Number(process.env.ZHIHU_SEARCH_TIMEOUT_MS || merged.searchProvider?.zhihu?.timeoutMs || 15000),
+        count: Number(process.env.ZHIHU_SEARCH_COUNT || merged.searchProvider?.zhihu?.count || 5),
+        searchDb: String(process.env.ZHIHU_SEARCH_DB || merged.searchProvider?.zhihu?.searchDb || "all").trim(),
+      },
       baseUrl: String(process.env.ANYSEARCH_BASE_URL || merged.searchProvider?.baseUrl || "https://api.anysearch.com/mcp").trim(),
       apiKey: anySearchApiKey,
       apiKeys: anySearchApiKeys,

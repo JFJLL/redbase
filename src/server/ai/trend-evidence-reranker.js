@@ -6,7 +6,7 @@ const { sanitizeEvidenceText } = require("../integrations/anysearch");
 // main trend generation flow — every failure path degrades to a deterministic
 // ranking with a warning attached.
 const RERANK_SLOT_LIMIT = 10;
-const RERANK_REQUEST_TIMEOUT_MS = 30000;
+const RERANK_REQUEST_TIMEOUT_MS = 60000;
 const RERANK_MAX_OUTPUT_TOKENS = 4096;
 
 function resolveRerankAppConfig(appConfig) {

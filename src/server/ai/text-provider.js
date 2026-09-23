@@ -7,6 +7,42 @@ const { recordTextTaskAttempt } = require("../analytics/ai-attempt-recorder");
 
 const DEFAULT_MAX_TEXT_PROVIDER_RESPONSE_BYTES = 32 * 1024 * 1024;
 let runningHubAddressCursor = 0;
+let textApiKeyCursor = 0;
+const textApiKeyCooldowns = new Map();
+
+function getTextApiKeys(provider = {}) {
+  const keys = [
+    ...(Array.isArray(provider.apiKeys) ? provider.apiKeys : []),
+    provider.apiKey,
+  ]
+    .map((k) => String(k || "").trim())
+    .filter(Boolean)
+    .filter((k, idx, all) => all.indexOf(k) === idx);
+  return keys;
+}
+
+function acquireTextApiKey(provider = {}) {
+  const keys = getTextApiKeys(provider);
+  if (!keys.length) return "";
+  const now = Date.now();
+  for (let i = 0; i < keys.length; i += 1) {
+    const idx = (textApiKeyCursor + i) % keys.length;
+    const candidate = keys[idx];
+    const cd = textApiKeyCooldowns.get(candidate) || 0;
+    if (cd <= now) {
+      textApiKeyCursor = (idx + 1) % keys.length;
+      return candidate;
+    }
+  }
+  const fallbackKey = keys[textApiKeyCursor++ % keys.length];
+  return fallbackKey;
+}
+
+function markTextApiKeyFailure(key, statusCode) {
+  if (!key) return;
+  const cooldownMs = statusCode === 429 ? 60000 : 10000;
+  textApiKeyCooldowns.set(key, Date.now() + cooldownMs);
+}
 
 function isRunningHubHostname(hostname) {
   const normalized = String(hostname || "").toLowerCase();
@@ -763,35 +799,45 @@ async function callTextModelJson(appConfig, {
   };
   if (stream) {
     const text = await runWithRetries(
-      (attempt, telemetry) =>
-        fetchOpenAIText(openAIUrl, {
+      (attempt, telemetry) => {
+        const currentKey = acquireTextApiKey(provider) || provider.apiKey;
+        return fetchOpenAIText(openAIUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${provider.apiKey}`,
+            Authorization: `Bearer ${currentKey}`,
           },
           body: requestBody,
           onTelemetry: telemetry || onTelemetry,
           ...getAttemptNetworkOptions(attempt),
           ...getAttemptRequestOptions(),
-        }),
+        }).catch((err) => {
+          markTextApiKeyFailure(currentKey, err.statusCode);
+          throw err;
+        });
+      },
     );
     return parseJsonFromModelText(text);
   }
 
   const data = await runWithRetries(
-    (attempt, telemetry) =>
-      fetchJson(openAIUrl, {
+    (attempt, telemetry) => {
+      const currentKey = acquireTextApiKey(provider) || provider.apiKey;
+      return fetchJson(openAIUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${provider.apiKey}`,
+          Authorization: `Bearer ${currentKey}`,
         },
         body: requestBody,
         onTelemetry: telemetry || onTelemetry,
         ...getAttemptNetworkOptions(attempt),
         ...getAttemptRequestOptions(),
-      }),
+      }).catch((err) => {
+        markTextApiKeyFailure(currentKey, err.statusCode);
+        throw err;
+      });
+    },
   );
   assertModelOutputNotTruncated(data?.choices?.[0]?.finish_reason, onTelemetry);
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));
@@ -1071,17 +1117,22 @@ async function callVisionModelJson(appConfig, {
 
   const openAIUrl = joinUrl(provider.openaiBaseUrl, "/chat/completions");
   const data = await runWithRetries(
-    () =>
-      fetchJson(openAIUrl, {
+    () => {
+      const currentKey = acquireTextApiKey(provider) || provider.apiKey;
+      return fetchJson(openAIUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${provider.apiKey}`,
+          Authorization: `Bearer ${currentKey}`,
         },
         body: requestBody,
         onTelemetry,
         ...getAttemptRequestOptions(),
-      }),
+      }).catch((err) => {
+        markTextApiKeyFailure(currentKey, err.statusCode);
+        throw err;
+      });
+    },
   );
   assertModelOutputNotTruncated(data?.choices?.[0]?.finish_reason, onTelemetry);
   return parseJsonFromModelText(extractTextFromOpenAIResponse(data));

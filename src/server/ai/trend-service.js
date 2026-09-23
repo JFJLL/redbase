@@ -19,6 +19,7 @@ const {
   getPgyPublicErrorMessage,
   normalizePgyCategoryPath,
 } = require("../integrations/pgy-content-square");
+const { fetchZhihuSearchEvidence } = require("../integrations/zhihu-search");
 const {
   fetchAnySearchEvidence,
   isChildFamilySearchProfile,
@@ -70,9 +71,9 @@ const MAX_TARGETED_TREND_REPAIRS_PER_REQUEST = TREND_ITEMS_PER_BUCKET;
 // invalid cards; only a small, field-scoped residue from that rewrite may use
 // one final model patch. All calls still share the total model budget below.
 const TREND_GENERATION_ATTEMPTS = 3;
-const TREND_MODEL_REQUEST_TIMEOUT_MS = 80000;
+const TREND_MODEL_REQUEST_TIMEOUT_MS = 120000;
 const TREND_FULL_MODEL_REQUEST_TIMEOUT_MS = 140000;
-const TREND_ANALYSIS_MODEL_BUDGET_MS = 180000;
+const TREND_ANALYSIS_MODEL_BUDGET_MS = 300000;
 const TREND_MODEL_TRANSPORT_ATTEMPTS = 3;
 const TREND_FULL_MODEL_MAX_OUTPUT_TOKENS = 16384;
 // 创意模式只生成趋势与外显选题字段，不在趋势阶段生成完整发布资产。
@@ -3529,15 +3530,21 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
 
   try {
     const isXhsBucket = selectedBucketMeta.some((bucket) => bucket.key === "xhs");
-    const requiresAnySearch = !isXhsBucket || !pgyEvidence;
-    if (requiresAnySearch && !appConfig?.searchProvider?.enabled && !freeForm) {
-      const disabledError = new Error("AnySearch 搜索服务尚未启用，已停止生成以避免无来源内容。");
-      disabledError.code = "ANYSEARCH_DISABLED";
+    const requiresSearch = !isXhsBucket || !pgyEvidence;
+    if (requiresSearch && !appConfig?.searchProvider?.enabled && !freeForm) {
+      const disabledError = new Error("全网搜索服务尚未启用，已停止生成以避免无来源内容。");
+      disabledError.code = "SEARCH_DISABLED";
       throw disabledError;
     }
     const searchStartedAt = Date.now();
-    const anySearchEvidence = requiresAnySearch && !freeForm
-      ? options.anySearchEvidence || await fetchAnySearchEvidence(appConfig, brand, selectedBucketMeta, {
+    const hasMockRequest = Boolean(options.anySearchOptions?.requestImpl);
+    const providerType = String(appConfig?.searchProvider?.type || "").toLowerCase();
+    const usesZhihu = !hasMockRequest && (providerType === "zhihu" || Boolean(appConfig?.searchProvider?.zhihu?.apiKey));
+    const fetchSearchImpl = usesZhihu
+      ? fetchZhihuSearchEvidence
+      : fetchAnySearchEvidence;
+    const anySearchEvidence = requiresSearch && !freeForm
+      ? options.anySearchEvidence || await fetchSearchImpl(appConfig, brand, selectedBucketMeta, {
           ...(options.anySearchOptions || {}),
           allowSparseEvidence: true,
         })
