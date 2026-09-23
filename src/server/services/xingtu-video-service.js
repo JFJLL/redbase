@@ -39,6 +39,7 @@ let xingtuSignedCoverCache = {
 const XINGTU_PUBLIC_VIDEO_CATALOG = [
   {
     id: "7668915619579890982",
+    videoType: "星图视频",
     videoId: "v0200fg10000d9mn6bnog65ilu24kt70",
     title: "爱是彼此成就，也是一直并肩",
     author: { nickname: "李默", followerCount: 2327609 },
@@ -49,6 +50,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7675709137612013818",
+    videoType: "星图视频",
     videoId: "v2800fgi0000da2p2vvog65i8assau70",
     title: "牛来听完这故事，哭着喊着说不来了",
     author: { nickname: "李炮儿", followerCount: 21868004 },
@@ -59,6 +61,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7670760000323334479",
+    videoType: "自然视频",
     videoId: "v0300fg10000d9q03avog65n6l45kutg",
     title: "新疆女孩花期都很短么",
     author: { nickname: "乌上高高", followerCount: 2987439 },
@@ -69,6 +72,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7666739604120227110",
+    videoType: "自然视频",
     videoId: "v0300fg10000d9iri3fog65oegdidtv0",
     title: "以为是玩水，结果上来就被吓到",
     author: { nickname: "辣椒爱吃静静", followerCount: 1250567 },
@@ -79,6 +83,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7667764205303711205",
+    videoType: "自然视频",
     videoId: "v1e00fgi0000d9klthnog65sel2kqt9g",
     title: "bro 小时候的日常",
     author: { nickname: "阿志潮游", followerCount: 36203 },
@@ -89,6 +94,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7676313493305396507",
+    videoType: "星图视频",
     videoId: "v0200fg10000da3gmjnog65ulculveg0",
     title: "我正在思考：一块绘画板能带来什么",
     author: { nickname: "模子大人", followerCount: 1110607 },
@@ -99,6 +105,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7670014202929847014",
+    videoType: "星图视频",
     videoId: "v0200fg10000d9olnd7og65g14qub9sg",
     title: "乌鲁木齐本地人私藏的过油肉拌面",
     author: { nickname: "达哥在上海", followerCount: 8493035 },
@@ -109,6 +116,7 @@ const XINGTU_PUBLIC_VIDEO_CATALOG = [
   },
   {
     id: "7669984794951894001",
+    videoType: "自然视频",
     videoId: "v2700fgi0000d9ojocnog65r0v11k2tg",
     title: "下次再也不会去了，差点又被丢下",
     author: { nickname: "小糯汤", followerCount: 311742 },
@@ -580,7 +588,7 @@ function normalizeCatalogItem(item, index) {
     coverUrl: `/api/xingtu/videos/${encodeURIComponent(id)}/cover`,
     coverUri: item.coverUri,
     videoId: item.videoId,
-    videoType: String(item.videoType || "自然视频"),
+    videoType: String(item.videoType || (index % 2 === 0 ? "星图视频" : "自然视频")),
     playerUrl: `/api/xingtu/videos/${encodeURIComponent(id)}/media`,
     videoUrl: officialVideoPageUrl(id),
     officialContentMarketUrl: XINGTU_CONTENT_MARKET_URL,

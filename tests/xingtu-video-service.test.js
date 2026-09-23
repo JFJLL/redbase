@@ -241,3 +241,23 @@ test("无文稿视频仍返回正常的可解释状态", () => {
   assert.equal(analysis.available, false);
   assert.match(analysis.title, /暂无视频文稿/);
 });
+
+const { filterXingtuCatalog, parseXingtuFilters } = require("../src/server/api/xingtu-video-routes");
+
+test("星图视频和自然视频筛选均能正确返回对应类型的视频，且默认返回全部", () => {
+  const catalog = getXingtuPublicVideoCatalog();
+  assert.ok(catalog.length >= 8);
+
+  const allItems = filterXingtuCatalog(catalog, { videoType: "all", contentType: "all", dataSort: "all" });
+  assert.equal(allItems.length, catalog.length);
+
+  const xingtuItems = filterXingtuCatalog(catalog, { videoType: "星图视频", contentType: "all", dataSort: "all" });
+  assert.ok(xingtuItems.length >= 4);
+  assert.ok(xingtuItems.every((it) => it.videoType === "星图视频"));
+
+  const naturalItems = filterXingtuCatalog(catalog, { videoType: "自然视频", contentType: "all", dataSort: "all" });
+  assert.ok(naturalItems.length >= 4);
+  assert.ok(naturalItems.every((it) => it.videoType === "自然视频"));
+
+  assert.equal(xingtuItems.length + naturalItems.length, allItems.length);
+});

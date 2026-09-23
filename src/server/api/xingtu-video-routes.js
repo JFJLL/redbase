@@ -232,4 +232,6 @@ async function handleXingtuVideoRoutes(context, req, res, pathname) {
 
 module.exports = {
   handleXingtuVideoRoutes,
+  parseXingtuFilters,
+  filterXingtuCatalog,
 };

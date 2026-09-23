@@ -350,6 +350,13 @@ function applyXingtuFilters() {
   if (activeBoard.value === "xingtu") void loadBoard("xingtu");
 }
 
+function resetXingtuFilters() {
+  xingtuFilters.videoType = "all";
+  xingtuFilters.contentType = "all";
+  xingtuFilters.dataSort = "all";
+  if (activeBoard.value === "xingtu") void loadBoard("xingtu");
+}
+
 function switchBoard(board: ExcellentBoard) {
 
   if (activeBoard.value === board) return;
@@ -1481,28 +1488,57 @@ onUnmounted(() => {
     </div>
 
     <div v-else-if="!slice.items.length" class="excellent-empty" data-test="excellent-empty">
-      <strong>{{ slice.status === "error" ? "暂时无法加载优秀内容" : "该筛选条件暂无已保存内容" }}</strong>
-      <p>
-        {{
-          slice.status === "error"
-            ? slice.error || "优秀内容加载失败"
-            : "该筛选条件暂无已保存内容，请点击“更新内容”获取最新数据。"
-        }}
-      </p>
-      <button
-        type="button"
-        class="primary-btn"
-        :disabled="slice.refreshing || (activeBoard !== 'xingtu' && refreshCooldownSeconds > 0)"
-        @click="refreshBoard(activeBoard)"
-      >
-        {{
-          slice.refreshing
-            ? "正在更新…"
-            : refreshCooldownSeconds > 0
-              ? `更新中（${refreshCooldownSeconds}s）`
-              : "更新内容"
-        }}
-      </button>
+      <template v-if="activeBoard === 'xingtu'">
+        <strong>{{ slice.status === "error" ? "暂时无法加载视频内容" : "该筛选条件暂无匹配视频" }}</strong>
+        <p>
+          {{
+            slice.status === "error"
+              ? slice.error || "视频内容加载失败，请稍后重试。"
+              : "当前筛选条件下暂无公开视频，请尝试切换筛选条件或重置筛选。"
+          }}
+        </p>
+        <button
+          v-if="slice.status === 'error'"
+          type="button"
+          class="primary-btn"
+          :disabled="slice.refreshing"
+          @click="refreshBoard('xingtu')"
+        >
+          {{ slice.refreshing ? "正在重试…" : "重试" }}
+        </button>
+        <button
+          v-else
+          type="button"
+          class="primary-btn"
+          @click="resetXingtuFilters()"
+        >
+          重置筛选条件
+        </button>
+      </template>
+      <template v-else>
+        <strong>{{ slice.status === "error" ? "暂时无法加载优秀内容" : "该筛选条件暂无已保存内容" }}</strong>
+        <p>
+          {{
+            slice.status === "error"
+              ? slice.error || "优秀内容加载失败"
+              : "该筛选条件暂无已保存内容，请点击“更新内容”获取最新数据。"
+          }}
+        </p>
+        <button
+          type="button"
+          class="primary-btn"
+          :disabled="slice.refreshing || refreshCooldownSeconds > 0"
+          @click="refreshBoard(activeBoard)"
+        >
+          {{
+            slice.refreshing
+              ? "正在更新…"
+              : refreshCooldownSeconds > 0
+                ? `更新中（${refreshCooldownSeconds}s）`
+                : "更新内容"
+          }}
+        </button>
+      </template>
     </div>
 
     <div v-else class="excellent-grid">
