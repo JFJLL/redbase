@@ -112,6 +112,8 @@ const XINGTU_DATA_SORTS: Array<{ value: XingtuVideoFilters["dataSort"]; label: s
   { value: "followerCount", label: "达人粉丝量" },
 ];
 
+const XINGTU_VIEW_VERSION = "20260924.1-xingtu-refresh-only";
+void XINGTU_VIEW_VERSION;
 const activeBoard = ref<ExcellentBoard>("xhs_hot");
 const slices = reactive({
   xhs_hot: createExcellentBoardSlice(),
