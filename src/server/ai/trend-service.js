@@ -71,9 +71,9 @@ const MAX_TARGETED_TREND_REPAIRS_PER_REQUEST = TREND_ITEMS_PER_BUCKET;
 // invalid cards; only a small, field-scoped residue from that rewrite may use
 // one final model patch. All calls still share the total model budget below.
 const TREND_GENERATION_ATTEMPTS = 3;
-const TREND_MODEL_REQUEST_TIMEOUT_MS = 240000;
-const TREND_FULL_MODEL_REQUEST_TIMEOUT_MS = 360000;
-const TREND_ANALYSIS_MODEL_BUDGET_MS = 480000;
+const TREND_MODEL_REQUEST_TIMEOUT_MS = 480000;
+const TREND_FULL_MODEL_REQUEST_TIMEOUT_MS = 600000;
+const TREND_ANALYSIS_MODEL_BUDGET_MS = 720000;
 const TREND_MODEL_TRANSPORT_ATTEMPTS = 3;
 const TREND_FULL_MODEL_MAX_OUTPUT_TOKENS = 16384;
 // 创意模式只生成趋势与外显选题字段，不在趋势阶段生成完整发布资产。
@@ -86,6 +86,10 @@ const FREEFORM_SOFT_ISSUE_REASONS = new Set([
   "near-duplicate-reason",
   "near-duplicate-summary",
   "near-duplicate-ideas",
+  "empty-opportunity-platitude",
+  "volatile-price-copy",
+  "malformed-punctuation",
+  "past-year-copy",
 ]);
 
 const IDEA_ROUTE_PAIRS = {
@@ -1769,6 +1773,53 @@ function hasMalformedTrendPunctuation(value) {
     else if (TREND_PUNCTUATION_CLOSERS.has(character) && stack.pop() !== character) return true;
   }
   return stack.length > 0;
+}
+
+function fixMalformedTrendPunctuation(value) {
+  let text = String(value || "");
+  text = text.replace(/[（(]\s*[:：]/gu, "：");
+  const stack = [];
+  for (const character of text) {
+    if (TREND_PUNCTUATION_PAIRS[character]) stack.push(TREND_PUNCTUATION_PAIRS[character]);
+    else if (TREND_PUNCTUATION_CLOSERS.has(character)) {
+      if (stack.length && stack[stack.length - 1] === character) stack.pop();
+    }
+  }
+  while (stack.length) {
+    text += stack.pop();
+  }
+  return text;
+}
+
+function sanitizeTrendCardPunctuationAndYears(trend, { freeForm = false } = {}) {
+  const fields = ["title", "summary", "reason", "market_change", "consumer_shift", "why_now", "brand_opportunity", "content_direction"];
+  const sanitized = { ...trend };
+  for (const field of fields) {
+    if (typeof sanitized[field] === "string" && sanitized[field]) {
+      let text = fixMalformedTrendPunctuation(sanitized[field]);
+      if (freeForm) {
+        text = text.replace(/202[0-5]年?/g, "近期");
+      }
+      sanitized[field] = text;
+    }
+  }
+  if (Array.isArray(sanitized.ideas)) {
+    sanitized.ideas = sanitized.ideas.map((idea) => {
+      const ideaFields = ["title", "summary", "angle", "brandFit", "audience", "hook"];
+      const sIdea = { ...idea };
+      for (const field of ideaFields) {
+        if (typeof sIdea[field] === "string" && sIdea[field]) {
+          let text = fixMalformedTrendPunctuation(sIdea[field]);
+          if (freeForm) {
+            text = text.replace(/202[0-5]年?/g, "近期");
+          }
+          sIdea[field] = text;
+        }
+      }
+      return sIdea;
+    });
+  }
+  return sanitized;
 }
 
 function getTrendCopyQualityIssues(trendBuckets, validationNow = new Date()) {
@@ -3913,10 +3964,10 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
       // ensureTrendIdeaContentAssets when the user starts an image workflow.
       candidateBuckets = (candidateBuckets || []).map((bucket) => ({
         ...bucket,
-        items: (bucket.items || []).map((trend) => ({
+        items: (bucket.items || []).map((trend) => sanitizeTrendCardPunctuationAndYears({
           ...trend,
           ideas: (trend.ideas || []).map((idea) => ({ ...idea, contentAssets: {} })),
-        })),
+        }, { freeForm })),
       }));
       if (anySearchEvidence) {
         const resolvedReferences = resolveInlineEvidenceReferences(candidateBuckets, effectiveAnySearchEvidence);
@@ -3978,7 +4029,7 @@ async function generateTrendBucketGroup(appConfig, brand, baseId, bucketMeta, op
               freeForm,
             );
         if (!postAliasIssues.length) {
-          const qualityFiltered = filterTrendsByQuality(userVisibleBuckets);
+          const qualityFiltered = freeForm ? userVisibleBuckets : filterTrendsByQuality(userVisibleBuckets);
           const qualityCountIssues = filterFreeFormSoftIssues(
             getTrendStructureIssues(qualityFiltered, selectedBucketMeta, {
               requireContentAssets: false,
