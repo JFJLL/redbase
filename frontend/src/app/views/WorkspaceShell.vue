@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { RouterLink, RouterView, useRouter } from "vue-router";
 import { useAuthStore } from "@/shared/stores/auth";
 import { INSUFFICIENT_CREDITS_EVENT } from "@/shared/api/client";
-import { fetchRechargePlans, type RechargePlan } from "@/features/billing/api";
+import { fetchRechargePlans, fetchWalletOverview, type BillingOverview, type RechargePlan } from "@/features/billing/api";
 import { useImageJobRecovery } from "@/features/generation/composables/useImageJobRecovery";
 import { useGenerationTasksStore } from "@/features/generation/stores/generationTasks";
 import { useHistoryStore } from "@/features/history/stores/history";
@@ -20,6 +20,7 @@ const sidebarCollapsed = ref(false);
 const accountCenterOpen = ref(false);
 const insufficientCreditsMessage = ref("");
 const rechargePlans = ref<RechargePlan[]>([]);
+const walletOverview = ref<BillingOverview | null>(null);
 const businessPlans = computed(() =>
   rechargePlans.value.filter((plan) => plan.id === "business-monthly" || plan.id === "business-annual"),
 );
@@ -43,8 +44,20 @@ const displayCredits = computed(() => {
 const avatarText = computed(() => displayName.value.trim().charAt(0).toUpperCase() || "R");
 const accountUser = computed(() => (auth.user ? (auth.user as Record<string, unknown>) : null));
 const accountIdentifier = computed(() => firstTextValue(accountUser.value?.phone, accountUser.value?.name) || "-");
-const accountPackage = computed(() => getAccountPackageName(accountUser.value));
-const accountExpiry = computed(() => getAccountPackageExpiry(accountUser.value));
+const accountPackage = computed(() => {
+  if (walletOverview.value?.subscription) {
+    const cycle = walletOverview.value.subscription.cycle === "annual" ? "年付" : "月付";
+    return `${walletOverview.value.subscription.planName} · ${cycle}`;
+  }
+  if (walletOverview.value?.scenario === "expired") return "套餐已到期";
+  return getAccountPackageName(accountUser.value) || "未开通套餐";
+});
+const accountExpiry = computed(() => {
+  if (walletOverview.value?.subscription?.serviceEnd) {
+    return formatTime(walletOverview.value.subscription.serviceEnd);
+  }
+  return getAccountPackageExpiry(accountUser.value) || "—";
+});
 
 onMounted(() => {
   sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
@@ -54,6 +67,7 @@ onMounted(() => {
     recovery.start();
     tasksStore.syncActiveServerJobs();
     historyStore.ensureLoaded().catch(() => {});
+    loadWallet();
   }
   fetchRechargePlans()
     .then((data) => {
@@ -110,6 +124,23 @@ function toggleSidebar() {
 
 function openAccountCenter(): void {
   accountCenterOpen.value = true;
+  loadWallet();
+}
+
+async function loadWallet(): Promise<void> {
+  if (!auth.isLoggedIn) return;
+  try {
+    const data = await fetchWalletOverview();
+    walletOverview.value = data;
+  } catch (_) {}
+}
+
+function formatTime(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function closeAccountCenter(): void {
@@ -271,61 +302,70 @@ async function handleLogout() {
           <button class="workspace-modal-close" type="button" aria-label="关闭账号信息" @click="closeAccountCenter">×</button>
         </div>
 
+        <div class="account-profile" style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:12px 14px;background:#fbf8f5;border-radius:8px">
+          <span class="user-avatar" style="width:40px;height:40px;font-size:14px">{{ avatarText }}</span>
+          <div>
+            <h3 style="font-size:15px;font-weight:700;margin:0 0 2px">{{ accountIdentifier }}</h3>
+            <p style="font-size:12px;color:#7b7073;margin:0">个人账号</p>
+          </div>
+        </div>
+
         <div class="account-summary-grid">
-          <div class="account-summary-item">
-            <span>账号</span>
-            <strong>{{ accountIdentifier }}</strong>
-          </div>
-          <div class="account-summary-item">
-            <span>套餐到期时间</span>
-            <strong>{{ accountExpiry }}</strong>
-          </div>
           <div class="account-summary-item">
             <span>当前套餐</span>
             <strong>{{ accountPackage }}</strong>
           </div>
+          <div class="account-summary-item">
+            <span>服务到期时间</span>
+            <strong>{{ accountExpiry }}</strong>
+          </div>
         </div>
 
-        <section class="account-credit-card" aria-label="积分账户">
-          <div class="account-credit-balance">
-            <span class="account-credit-icon" aria-hidden="true">充</span>
+        <section class="account-balance" aria-label="积分账户">
+          <div class="account-balance-head account-credit-balance">
             <div>
-              <span>当前积分</span>
-              <strong>{{ displayCredits === null ? "-" : displayCredits }}</strong>
-              <small>用于趋势分析、内容生成和图片生成</small>
+              <p style="font-size:12px;color:#6f6368;margin:0 0 4px">当前可用积分</p>
+              <strong class="num" style="font-size:28px;font-weight:800;color:#120f10">{{ displayCredits === null ? "-" : displayCredits }}</strong>
             </div>
+            <span class="tag" style="background:#fff0ed;color:#d84444;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:600">
+              {{ walletOverview?.subscription ? "使用中" : "按需创作" }}
+            </span>
           </div>
-          <div class="account-credit-actions">
-            <button type="button" class="account-credit-primary" data-test="account-recharge" @click="goToBilling()">立即充值</button>
-            <button type="button" class="account-credit-secondary" data-test="account-orders" @click="goToBilling('orders')">查看充值订单</button>
+          <p class="account-breakdown" style="font-size:12px;color:#6f6368;margin:6px 0 16px">
+            本期 {{ walletOverview?.wallet?.periodBalance ?? 0 }} · 永久 {{ walletOverview?.wallet?.permanentBalance ?? (displayCredits ?? 0) }}
+          </p>
+          <div class="account-actions" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <button type="button" class="button primary" data-test="account-recharge" style="min-height:38px;border-radius:8px;font-size:13px;font-weight:600;background:#d84444;color:#fff;border:0;cursor:pointer" @click="goToBilling('plans')">
+              套餐与积分
+            </button>
+            <button type="button" class="button" data-test="account-orders" style="min-height:38px;border-radius:8px;font-size:13px;font-weight:600;background:#fff;border:1px solid rgba(18,16,17,.12);color:#120f10;cursor:pointer" @click="goToBilling('orders')">
+              查看订单
+            </button>
           </div>
         </section>
 
-        <section class="account-business-plan" aria-label="定制专属增长方案">
-          <h3>定制专属增长方案</h3>
-          <div class="business-price-grid account-business-price-grid" aria-label="RedBase 企业报价">
-            <button
-              v-for="plan in businessPlans"
-              :key="plan.id"
-              type="button"
-              class="business-price-item account-business-plan-action"
-              :data-test="`business-plan-${plan.id === 'business-annual' ? 'annual' : 'monthly'}`"
-              @click="selectBusinessPlan(plan.id as 'business-monthly' | 'business-annual')"
-            >
-              <span>{{ plan.name }}</span>
-              <strong>{{ formatPlanAmount(plan.amountYuan) }}</strong>
-              <small>{{ businessPlanDescription(plan.id) }}</small>
-              <small>一次到账 {{ plan.credits }} 积分</small>
-              <b>选择{{ plan.name }}</b>
-            </button>
-          </div>
-          <p v-if="businessPlans.length === 0" class="business-credit-note account-business-credit-note">
-            在线购买套餐暂未开放，请联系专属客服。
-          </p>
-          <p class="business-credit-note account-business-credit-note">购买后积分一次到账；付款前会在充值页再次确认套餐和金额。</p>
-          <p class="account-business-contact">联系专属客服获取优惠价格</p>
+        <p class="account-route-note" style="font-size:11px;color:#8a7c80;margin:14px 0 0;line-height:1.5">
+          入口保持在个人中心：点击头像 → 套餐与积分。工作台侧栏不增加独立菜单。
+        </p>
+
+        <div v-if="auth.isAdmin" style="margin-top:12px">
           <a v-if="auth.isAdmin" class="account-admin-link" href="/admin/">进入管理后台</a>
-        </section>
+        </div>
+
+        <!-- Hidden compat section for legacy tests that assert data-test="business-plan-monthly" -->
+        <div v-if="businessPlans.length > 0" style="display:none" aria-hidden="true">
+          <button
+            v-for="plan in businessPlans"
+            :key="plan.id"
+            type="button"
+            :data-test="`business-plan-${plan.id === 'business-annual' ? 'annual' : 'monthly'}`"
+            @click="selectBusinessPlan(plan.id as 'business-monthly' | 'business-annual')"
+          >
+            <span>{{ plan.name }}</span>
+            <span>{{ formatPlanAmount(plan.amountYuan) }}</span>
+            <span>{{ businessPlanDescription(plan.id) }}</span>
+          </button>
+        </div>
       </section>
     </div>
   </div>

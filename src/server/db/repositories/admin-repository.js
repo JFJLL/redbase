@@ -2,6 +2,12 @@ const { getDbProxy } = require("../connection");
 const { safeParseArray, safeParseObject } = require("../snapshot-utils");
 const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS, allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
+const {
+  spendCreditsFromLots,
+  createCreditLot,
+  syncUserCreditsCache,
+  migrateLegacyUserCredits,
+} = require("../../billing/credit-ledger");
 const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
 const {
   recordCreditConsumed,
@@ -104,6 +110,7 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
     return { spent: false, user: findUserById(userId), creditEvent: null };
   }
 
+  migrateLegacyUserCredits(userId, db);
   const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
   const excellentReservationCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
   const result = db.prepare(`
@@ -134,6 +141,14 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
     creditDelta: -cost,
     creditCost: cost,
   });
+  try {
+    spendCreditsFromLots({
+      userId,
+      amount: cost,
+      creditEventId: creditEvent.id,
+      nowIso: new Date().toISOString(),
+    }, db);
+  } catch (_) {}
   return { spent: true, user: findUserById(userId), creditEvent };
 }
 
@@ -413,7 +428,46 @@ function refundCreditEventIfNeededInTransaction({ creditEventId, userId, reason 
     return { refunded: false, originalEvent, refundEvent: null, user: null };
   }
 
-  updateUserCredits(user.id, Number(user.credits || 0) + refundAmount);
+  migrateLegacyUserCredits(user.id, db);
+  const nowIso = new Date().toISOString();
+  const allocations = db.prepare("SELECT * FROM credit_lot_allocations WHERE credit_event_id = ?").all(originalEvent.id);
+  if (allocations.length > 0) {
+    for (const alloc of allocations) {
+      const lot = db.prepare("SELECT * FROM credit_lots WHERE id = ?").get(alloc.lot_id);
+      if (lot && (lot.expires_at === null || lot.expires_at > nowIso)) {
+        db.prepare(`
+          UPDATE credit_lots
+          SET remaining_credits = remaining_credits + ?,
+              used_credits = MAX(0, used_credits - ?),
+              status = 'active',
+              updated_at = ?
+          WHERE id = ?
+        `).run(alloc.credits_used, alloc.credits_used, nowIso, lot.id);
+      } else {
+        const compExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+        createCreditLot({
+          userId: user.id,
+          sourceType: "compensation",
+          sourceLabel: "系统故障补偿",
+          credits: alloc.credits_used,
+          startsAt: nowIso,
+          expiresAt: compExpiresAt,
+          nowIso,
+        }, db);
+      }
+    }
+  } else {
+    createCreditLot({
+      userId: user.id,
+      sourceType: "compensation",
+      sourceLabel: "任务失败返还",
+      credits: refundAmount,
+      startsAt: nowIso,
+      expiresAt: null,
+      nowIso,
+    }, db);
+  }
+  syncUserCreditsCache(user.id, db);
   const refundEvent = insertCreditEvent({
     userId: user.id,
     actionType: `${originalEvent.actionType}Refund`,
@@ -521,8 +575,28 @@ function addCredits({ targetUserId, amount, adminUser, note }) {
   return runTransaction(() => {
     const targetUser = findUserById(targetUserId);
     if (!targetUser) return null;
-    const nextCredits = Number(targetUser.credits || 0) + Number(amount || 0);
-    updateUserCredits(targetUser.id, nextCredits);
+    const numAmount = Number(amount || 0);
+    const nowIso = new Date().toISOString();
+    if (numAmount > 0) {
+      createCreditLot({
+        userId: targetUser.id,
+        sourceType: "grant",
+        sourceLabel: "管理员加额度",
+        credits: numAmount,
+        startsAt: nowIso,
+        expiresAt: null,
+        nowIso,
+      }, db);
+    } else if (numAmount < 0) {
+      migrateLegacyUserCredits(targetUser.id, db);
+      spendCreditsFromLots({
+        userId: targetUser.id,
+        amount: Math.abs(numAmount),
+        creditEventId: 0,
+        nowIso,
+      }, db);
+    }
+    syncUserCreditsCache(targetUser.id, db);
     const updatedUser = findUserById(targetUser.id);
     insertCreditEvent({
       userId: targetUser.id,

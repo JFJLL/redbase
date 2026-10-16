@@ -2,6 +2,9 @@
 
 const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
+const { fulfillPaymentOrder } = require("../../billing/subscription-service");
+const { createCreditLot, syncUserCreditsCache, migrateLegacyUserCredits } = require("../../billing/credit-ledger");
+const { isV2Plan, isV2Topup } = require("../../billing/catalog");
 const {
   recordPaymentOrderCreated,
   recordPaymentPaid,
@@ -14,7 +17,9 @@ const db = getDbProxy();
 const PAYMENT_COLUMNS = `
   id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits,
   amount_fen, status, provider, trade_no, credit_event_id, created_at, updated_at,
-  paid_at, expires_at, last_notified_at, notify_count, audit_reason, audit_at, payload_json
+  paid_at, expires_at, last_notified_at, notify_count, audit_reason, audit_at, payload_json,
+  quote_id, fulfillment_status, fulfilled_at, cycle, order_kind, order_action,
+  issued_now, service_start, service_end, period_end
 `;
 
 function mapPaymentOrderRow(row) {
@@ -41,6 +46,16 @@ function mapPaymentOrderRow(row) {
     auditReason: row.audit_reason || "",
     auditAt: row.audit_at || "",
     payload: safeParseObject(row.payload_json),
+    quoteId: row.quote_id || "",
+    fulfillmentStatus: row.fulfillment_status || "unfulfilled",
+    fulfilledAt: row.fulfilled_at || "",
+    cycle: row.cycle || "",
+    orderKind: row.order_kind || "plan",
+    orderAction: row.order_action || "activate",
+    issuedNow: Number(row.issued_now || 0),
+    serviceStart: row.service_start || "",
+    serviceEnd: row.service_end || "",
+    periodEnd: row.period_end || "",
   };
 }
 
@@ -53,12 +68,34 @@ function safeParseObject(text) {
   }
 }
 
-function insertPaymentOrder({ outTradeNo, userId, idempotencyKey, plan, status = "created", provider = "alipay", nowIso, expiresAtIso }) {
+function insertPaymentOrder({
+  outTradeNo,
+  userId,
+  idempotencyKey,
+  plan,
+  status = "created",
+  provider = "alipay",
+  nowIso,
+  expiresAtIso,
+  quote = null,
+}) {
+  const quoteId = quote?.quoteId || quote?.id || "";
+  const isV2 = Boolean(quoteId || isV2Plan(plan.id) || isV2Topup(plan.id));
+  const cycle = quote?.cycle || (isV2 ? "monthly" : "");
+  const orderKind = quote?.kind || (isV2Topup(plan.id) ? "topup" : isV2Plan(plan.id) ? "plan" : "legacy");
+  const orderAction = quote?.action || (isV2Topup(plan.id) ? "topup" : isV2Plan(plan.id) ? "activate" : "legacy");
+  const issuedNow = Number(quote?.issuedNow || (isV2Plan(plan.id) ? plan.credits : 0));
+  const serviceStart = quote?.startAt || quote?.start_at || "";
+  const serviceEnd = quote?.endAt || quote?.end_at || "";
+  const periodEnd = quote?.periodEndAt || quote?.period_end_at || "";
+
   db.prepare(`
     INSERT INTO payment_orders (
       out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits,
-      amount_fen, status, provider, created_at, updated_at, expires_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      amount_fen, status, provider, created_at, updated_at, expires_at,
+      quote_id, fulfillment_status, cycle, order_kind, order_action,
+      issued_now, service_start, service_end, period_end
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unfulfilled', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     String(outTradeNo || ""),
     Number(userId),
@@ -72,6 +109,14 @@ function insertPaymentOrder({ outTradeNo, userId, idempotencyKey, plan, status =
     String(nowIso),
     String(nowIso),
     String(expiresAtIso),
+    String(quoteId),
+    String(cycle),
+    String(orderKind),
+    String(orderAction),
+    issuedNow,
+    String(serviceStart),
+    String(serviceEnd),
+    String(periodEnd),
   );
   const order = findPaymentOrderByOutTradeNo(outTradeNo);
   try {
@@ -201,9 +246,26 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
     const isWx = String(order.provider || "").toLowerCase() === "wxpay";
     const actionType = isWx ? "wxpay_recharge" : "alipay_recharge";
     const actionLabel = isWx ? "微信支付充值" : "支付宝充值";
-    const summary = isWx
+    const isV2 = Boolean(order.quoteId || isV2Plan(order.planId) || isV2Topup(order.planId));
+    let creditDelta = order.planCredits;
+    let summary = isWx
       ? `微信支付充值 ${order.planCredits} 积分`
       : `支付宝充值 ${order.planCredits} 积分`;
+    if (isV2) {
+      if (order.orderKind === "topup") {
+        creditDelta = order.planCredits;
+        summary = `${order.planName}到账`;
+      } else if (order.orderAction === "upgrade") {
+        creditDelta = order.issuedNow;
+        summary = `升级${order.planName}补发`;
+      } else if (order.orderAction === "activate") {
+        creditDelta = order.planCredits;
+        summary = `${order.planName}首期积分发放`;
+      } else {
+        creditDelta = 0;
+        summary = `${order.planName}预约已购`;
+      }
+    }
     db.prepare(`
       INSERT INTO credit_events (
         id, user_id, action_type, action_label, credit_delta, credit_cost,
@@ -214,20 +276,36 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
       Number(order.userId),
       actionType,
       actionLabel,
-      Number(order.planCredits),
+      Number(creditDelta),
       String(nowIso),
       summary,
       JSON.stringify({
         outTradeNo: order.outTradeNo,
         planId: order.planId,
         provider: order.provider,
+        orderKind: order.orderKind,
+        orderAction: order.orderAction,
+        issuedNow: order.issuedNow,
       }),
     );
-    const creditUpdate = db.prepare("UPDATE users SET credits = credits + ? WHERE id = ?")
-      .run(Number(order.planCredits), Number(order.userId));
-    if (creditUpdate.changes === 0) {
-      throw Object.assign(new Error("用户不存在"), { code: "PAYMENT_USER_NOT_FOUND" });
+    if (isV2) {
+      fulfillPaymentOrder(order, new Date(nowIso).getTime(), db);
+    } else {
+      migrateLegacyUserCredits(order.userId, db);
+      createCreditLot({
+        userId: Number(order.userId),
+        sourceType: "legacy",
+        sourceLabel: "历史保留积分",
+        orderId: order.id,
+        credits: Number(order.planCredits),
+        startsAt: nowIso,
+        expiresAt: null,
+        nowIso,
+      }, db);
+      db.prepare("UPDATE payment_orders SET fulfillment_status = 'fulfilled', fulfilled_at = ? WHERE id = ?")
+        .run(nowIso, order.id);
     }
+    syncUserCreditsCache(order.userId, db);
     db.prepare(`
       UPDATE payment_orders SET credit_event_id = ?
       WHERE out_trade_no = ? AND credit_event_id IS NULL

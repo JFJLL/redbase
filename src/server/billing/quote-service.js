@@ -1,0 +1,344 @@
+"use strict";
+
+const crypto = require("crypto");
+const { getDbProxy } = require("../db/connection");
+const { CATALOG_VERSION, PLANS, TOPUPS, getPlan, getTopup, getPriceFen } = require("./catalog");
+const {
+  getNowTimestamp,
+  getNowIso,
+  addCalendarMonths,
+  toShanghaiDate,
+  formatShanghaiDate,
+} = require("./period-utils");
+
+const DEFAULT_QUOTE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+function generateQuoteId() {
+  return "quot_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
+}
+
+function findActiveSubscription(userId, nowMs = getNowTimestamp()) {
+  const db = getDbProxy();
+  const nowIso = new Date(nowMs).toISOString();
+  const row = db.prepare(`
+    SELECT * FROM subscriptions
+    WHERE user_id = ? AND status = 'active' AND service_end > ?
+    ORDER BY id DESC LIMIT 1
+  `).get(Number(userId), nowIso);
+  return row || null;
+}
+
+function findPendingSchedule(userId) {
+  const db = getDbProxy();
+  const row = db.prepare(`
+    SELECT * FROM subscription_schedules
+    WHERE user_id = ? AND status = 'scheduled'
+    ORDER BY id DESC LIMIT 1
+  `).get(Number(userId));
+  return row || null;
+}
+
+function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTimestamp() }) {
+  const db = getDbProxy();
+  const uid = Number(userId);
+  if (!Number.isSafeInteger(uid) || uid <= 0) {
+    throw new Error("用户未登录或用户 ID 无效");
+  }
+
+  const nowIso = new Date(nowMs).toISOString();
+
+  if (kind === "topup") {
+    const topup = getTopup(itemId);
+    if (!topup) {
+      throw new Error(`无效的加油包商品：${itemId}`);
+    }
+    const quoteId = generateQuoteId();
+    const expiresAt = new Date(nowMs + DEFAULT_QUOTE_TTL_MS).toISOString();
+    const meta = {
+      catalogVersion: CATALOG_VERSION,
+      topupId: topup.id,
+      topupName: topup.name,
+      credits: topup.credits,
+      amountFen: topup.amountFen,
+    };
+
+    db.prepare(`
+      INSERT INTO billing_quotes (
+        id, user_id, kind, item_id, action, cycle, catalog_version,
+        amount_fen, issued_now, start_at, end_at, period_end_at,
+        scheduled, meta_json, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      quoteId,
+      uid,
+      "topup",
+      topup.id,
+      "topup",
+      null,
+      CATALOG_VERSION,
+      topup.amountFen,
+      topup.credits,
+      nowIso,
+      null,
+      null,
+      0,
+      JSON.stringify(meta),
+      expiresAt,
+      nowIso
+    );
+
+    return {
+      quoteId,
+      kind: "topup",
+      itemId: topup.id,
+      itemName: topup.name,
+      action: "topup",
+      cycle: null,
+      amountFen: topup.amountFen,
+      issuedNow: topup.credits,
+      startAt: nowIso,
+      endAt: null,
+      periodEndAt: null,
+      scheduled: false,
+      meta,
+      expiresAt,
+    };
+  }
+
+  if (kind === "plan") {
+    const plan = getPlan(itemId);
+    if (!plan) {
+      throw new Error(`无效的套餐商品：${itemId}`);
+    }
+    if (cycle !== "monthly" && cycle !== "annual") {
+      throw new Error(`无效的付款周期：${cycle}`);
+    }
+
+    const pendingSchedule = findPendingSchedule(uid);
+    if (pendingSchedule) {
+      throw new Error("当前已有待生效套餐安排，请先查看已购安排，不能重复购买或变更套餐");
+    }
+
+    const activeSub = findActiveSubscription(uid, nowMs);
+    let action = "activate";
+    let scheduled = false;
+    let startAtMs = nowMs;
+    let endAtMs = 0;
+    let periodEndAtMs = 0;
+    let amountFen = 0;
+    let issuedNow = 0;
+    let anchorDay = toShanghaiDate(nowMs).getUTCDate();
+    let meta = {
+      catalogVersion: CATALOG_VERSION,
+      planId: plan.id,
+      planName: plan.name,
+      cycle,
+      planCredits: plan.credits,
+    };
+
+    if (!activeSub) {
+      action = "activate";
+      scheduled = false;
+      startAtMs = nowMs;
+      amountFen = getPriceFen(plan, cycle);
+      issuedNow = plan.credits;
+      endAtMs = addCalendarMonths(startAtMs, cycle === "annual" ? 12 : 1, anchorDay);
+      periodEndAtMs = addCalendarMonths(startAtMs, 1, anchorDay);
+    } else {
+      const oldPlan = getPlan(activeSub.plan_id);
+      const oldCycle = activeSub.cycle;
+      anchorDay = activeSub.anchor_day || toShanghaiDate(new Date(activeSub.service_start).getTime()).getUTCDate();
+      const subEndMs = new Date(activeSub.service_end).getTime();
+      const subStartMs = new Date(activeSub.service_start).getTime();
+      const periodEndMs = new Date(activeSub.current_period_end).getTime();
+      const periodStartMs = new Date(activeSub.current_period_start).getTime();
+
+      if (cycle !== oldCycle) {
+        action = "interval";
+        scheduled = true;
+        startAtMs = subEndMs;
+        amountFen = getPriceFen(plan, cycle);
+        issuedNow = 0;
+        endAtMs = addCalendarMonths(startAtMs, cycle === "annual" ? 12 : 1, anchorDay);
+        periodEndAtMs = addCalendarMonths(startAtMs, 1, anchorDay);
+        meta.previous = {
+          planId: oldPlan.id,
+          planName: oldPlan.name,
+          cycle: oldCycle,
+          serviceEnd: activeSub.service_end,
+        };
+      } else if (plan.rank > oldPlan.rank) {
+        action = "upgrade";
+        scheduled = false;
+        startAtMs = nowMs;
+        endAtMs = subEndMs;
+        periodEndAtMs = periodEndMs;
+
+        const serviceTotalMs = subEndMs - subStartMs;
+        const serviceRemainingMs = Math.max(0, subEndMs - nowMs);
+        const periodTotalMs = periodEndMs - periodStartMs;
+        const periodRemainingMs = Math.max(0, periodEndMs - nowMs);
+
+        if (serviceRemainingMs <= 0 || serviceTotalMs <= 0) {
+          throw new Error("当前服务即将结束或已到期，请到期后重新开通");
+        }
+
+        const remainingServiceRatio = serviceRemainingMs / serviceTotalMs;
+        const remainingPeriodRatio = periodTotalMs > 0 ? (periodRemainingMs / periodTotalMs) : 0;
+
+        const oldFullTermPrice = activeSub.pricing_basis_fen || getPriceFen(oldPlan, cycle);
+        const targetFullTermPrice = getPriceFen(plan, cycle);
+        const priceDiff = targetFullTermPrice - oldFullTermPrice;
+
+        if (priceDiff <= 0) {
+          throw new Error("目标套餐价格不高于当前套餐，无法升级");
+        }
+
+        amountFen = Math.round(priceDiff * remainingServiceRatio);
+        if (amountFen <= 0) {
+          throw new Error("剩余时间不足以生成有效升级补款，请等待到期后重新开通");
+        }
+
+        const quotaDiff = plan.credits - oldPlan.credits;
+        issuedNow = Math.ceil(quotaDiff * remainingPeriodRatio);
+
+        meta.upgradeDetails = {
+          oldPlanId: oldPlan.id,
+          oldPlanName: oldPlan.name,
+          targetPlanId: plan.id,
+          targetPlanName: plan.name,
+          oldFullTermPrice,
+          targetFullTermPrice,
+          serviceRemainingMs,
+          serviceTotalMs,
+          periodRemainingMs,
+          periodTotalMs,
+          serviceDaysLeft: serviceRemainingMs / 86400000,
+          serviceDaysTotal: serviceTotalMs / 86400000,
+          periodDaysLeft: periodRemainingMs / 86400000,
+          periodDaysTotal: periodTotalMs / 86400000,
+          issuedNow,
+        };
+      } else if (plan.rank < oldPlan.rank) {
+        action = "downgrade";
+        scheduled = true;
+        startAtMs = subEndMs;
+        amountFen = getPriceFen(plan, cycle);
+        issuedNow = 0;
+        endAtMs = addCalendarMonths(startAtMs, cycle === "annual" ? 12 : 1, anchorDay);
+        periodEndAtMs = addCalendarMonths(startAtMs, 1, anchorDay);
+        meta.previous = {
+          planId: oldPlan.id,
+          planName: oldPlan.name,
+          cycle: oldCycle,
+          serviceEnd: activeSub.service_end,
+        };
+      } else {
+        action = "renew";
+        scheduled = true;
+        startAtMs = subEndMs;
+        amountFen = getPriceFen(plan, cycle);
+        issuedNow = 0;
+        endAtMs = addCalendarMonths(startAtMs, cycle === "annual" ? 12 : 1, anchorDay);
+        periodEndAtMs = addCalendarMonths(startAtMs, 1, anchorDay);
+        meta.previous = {
+          planId: oldPlan.id,
+          planName: oldPlan.name,
+          cycle: oldCycle,
+          serviceEnd: activeSub.service_end,
+        };
+      }
+    }
+
+    let maxExpiresAtMs = nowMs + DEFAULT_QUOTE_TTL_MS;
+    if (action === "upgrade") {
+      maxExpiresAtMs = Math.min(maxExpiresAtMs, periodEndAtMs, endAtMs);
+    }
+    const expiresAt = new Date(maxExpiresAtMs).toISOString();
+    const quoteId = generateQuoteId();
+
+    db.prepare(`
+      INSERT INTO billing_quotes (
+        id, user_id, kind, item_id, action, cycle, catalog_version,
+        amount_fen, issued_now, start_at, end_at, period_end_at,
+        scheduled, meta_json, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      quoteId,
+      uid,
+      "plan",
+      plan.id,
+      action,
+      cycle,
+      CATALOG_VERSION,
+      amountFen,
+      issuedNow,
+      new Date(startAtMs).toISOString(),
+      new Date(endAtMs).toISOString(),
+      new Date(periodEndAtMs).toISOString(),
+      scheduled ? 1 : 0,
+      JSON.stringify(meta),
+      expiresAt,
+      nowIso
+    );
+
+    return {
+      quoteId,
+      kind: "plan",
+      itemId: plan.id,
+      itemName: plan.name,
+      action,
+      cycle,
+      amountFen,
+      issuedNow,
+      startAt: new Date(startAtMs).toISOString(),
+      endAt: new Date(endAtMs).toISOString(),
+      periodEndAt: new Date(periodEndAtMs).toISOString(),
+      scheduled,
+      meta,
+      expiresAt,
+    };
+  }
+
+  throw new Error(`不支持的报价类型：${kind}`);
+}
+
+function findQuoteById(quoteId) {
+  const db = getDbProxy();
+  const row = db.prepare(`SELECT * FROM billing_quotes WHERE id = ?`).get(String(quoteId));
+  if (!row) return null;
+  return {
+    ...row,
+    meta: JSON.parse(row.meta_json || "{}"),
+  };
+}
+
+function verifyAndConsumeQuote(quoteId, userId, nowMs = getNowTimestamp()) {
+  const db = getDbProxy();
+  const quote = findQuoteById(quoteId);
+  if (!quote) {
+    throw new Error("报价不存在或已失效，请重新确认");
+  }
+  if (Number(quote.user_id) !== Number(userId)) {
+    throw new Error("报价不属于当前登录账号");
+  }
+  if (quote.used_at) {
+    throw new Error("该报价已创建订单，请勿重复使用");
+  }
+  const nowIso = new Date(nowMs).toISOString();
+  if (quote.expires_at <= nowIso) {
+    throw new Error("报价已过期，请重新确认套餐与价格");
+  }
+
+  db.prepare(`UPDATE billing_quotes SET used_at = ? WHERE id = ?`).run(nowIso, quote.id);
+  return quote;
+}
+
+module.exports = {
+  generateQuoteId,
+  findActiveSubscription,
+  findPendingSchedule,
+  createQuote,
+  findQuoteById,
+  verifyAndConsumeQuote,
+};

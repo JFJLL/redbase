@@ -1,917 +1,2729 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import QRCode from "qrcode";
-import { trackAnalyticsEvent } from "@/shared/analytics/tracker";
 import {
   checkPaymentStatus,
-  closeOrder,
-  createPaymentOrder,
+  createOrderWithQuote,
   fakeSettleUrl,
-  fetchOrder,
+  fetchLedger,
   fetchOrders,
-  fetchPayLink,
   fetchRechargePlans,
+  fetchWalletOverview,
+  getLedgerExportUrl,
+  requestBillingQuote,
+  type ActiveSubscription,
+  type BillingOverview,
+  type BillingQuote,
   type CreateOrderResponse,
+  type LedgerRow,
   type PaymentOrder,
+  type PlanAction,
   type RechargePlan,
+  type ScheduledSubscription,
+  type TopupPack,
 } from "../api";
 
 const route = useRoute();
-const router = useRouter();
-const plans = ref<RechargePlan[]>([]);
-const orders = ref<PaymentOrder[]>([]);
-const activeOrder = ref<PaymentOrder | null>(null);
-const supportedProviders = ref<{ alipay: boolean; wxpay: boolean }>({ alipay: true, wxpay: false });
-const selectedProvider = ref<"alipay" | "wxpay">("alipay");
-const payUrl = ref("");
-const qrCodeContent = ref("");
-const qrCodeError = ref("");
-const payQrCode = ref("");
-const fakeSettle = ref(false);
-const loadingPlans = ref(true);
+
+// State
+const activeTab = ref<"plans" | "topups" | "ledger" | "orders">("plans");
+const activeCycle = ref<"monthly" | "annual">("monthly");
+
+const loadingOverview = ref(true);
+const loadingCatalog = ref(true);
+const loadingLedger = ref(false);
 const loadingOrders = ref(false);
-const loadingDetail = ref(false);
-const creatingPlanId = ref("");
-const checkingStatus = ref(false);
-const closingOrderNos = ref<string[]>([]);
-const closeMessages = ref<Record<string, { tone: "success" | "error"; text: string }>>({});
-const copied = ref(false);
-const errorMessage = ref("");
-const statusMessage = ref("");
 
-// Intercept modal state
-const showPendingOrderModal = ref(false);
-const pendingTargetPlan = ref<RechargePlan | null>(null);
-const cancellingPending = ref(false);
+const overview = ref<BillingOverview | null>(null);
+const plans = ref<RechargePlan[]>([]);
+const topups = ref<TopupPack[]>([]);
+const ledgerRows = ref<LedgerRow[]>([]);
+const orders = ref<PaymentOrder[]>([]);
+const fakeSettle = ref(false);
+const providers = ref<{ alipay?: boolean; wxpay?: boolean }>({ alipay: true, wxpay: false });
 
+// Ledger Filter & Search
+const ledgerFilter = ref<"all" | "spend" | "grant" | "expire">("all");
+const ledgerQuery = ref("");
+
+// Checkout state
+const checkoutOpen = ref(false);
+const quoteLoading = ref(false);
+const currentQuote = ref<BillingQuote | null>(null);
+const selectedProvider = ref<"alipay" | "wxpay">("alipay");
+const acknowledgeChecked = ref(false);
+const submittingOrder = ref(false);
+const activeOrderResponse = ref<CreateOrderResponse | null>(null);
+const payQrCodeDataUrl = ref("");
+const paymentSuccess = ref(false);
+const checkoutErrorMessage = ref("");
+
+// Info Modals
+const rulesModalOpen = ref(false);
+const balanceModalOpen = ref(false);
+const changesModalOpen = ref(false);
+const scheduledModalOpen = ref(false);
+const orderDetailModalOpen = ref(false);
+const selectedOrder = ref<PaymentOrder | null>(null);
+
+// Toast
+const toastMessage = ref("");
+const toastVisible = ref(false);
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Order Polling
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-let routeLoadVersion = 0;
-let checkRequestVersion = 0;
-let qrRenderVersion = 0;
-let pendingPaymentAccess: CreateOrderResponse | null = null;
 
-const selectedPlanId = computed(() => (typeof route.query.plan === "string" ? route.query.plan : ""));
-const activeView = computed(() => (typeof route.query.view === "string" ? route.query.view : "list"));
-const routeOrderNo = computed(() => (typeof route.query.outTradeNo === "string" ? route.query.outTradeNo : ""));
-const isCheckoutView = computed(() => activeView.value === "checkout" && Boolean(checkoutPlan.value));
-const isPayView = computed(() => activeView.value === "pay" && Boolean(routeOrderNo.value));
-const isDetailView = computed(() => activeView.value === "detail" && Boolean(routeOrderNo.value));
-const isPaidDetail = computed(() => activeOrder.value?.status === "paid");
+// Computed
+const totalBalance = computed(() => overview.value?.wallet?.totalAvailable ?? 0);
+const periodBalance = computed(() => overview.value?.wallet?.periodBalance ?? 0);
+const permanentBalance = computed(() => overview.value?.wallet?.permanentBalance ?? 0);
+const legacyBalance = computed(() => overview.value?.wallet?.legacyBalance ?? 0);
 
-const activePendingOrder = computed(() => orders.value.find((item) => isOpenOrder(item)));
+const currentSub = computed<ActiveSubscription | null>(() => overview.value?.subscription ?? null);
+const scheduledSub = computed<ScheduledSubscription | null>(() => overview.value?.scheduled ?? null);
 
-const checkoutPlan = computed<RechargePlan | null>(() => {
-  if (selectedPlanId.value) {
-    const found = plans.value.find((p) => p.id === selectedPlanId.value);
-    if (found) return found;
+const currentPlanTag = computed(() => {
+  if (currentSub.value) {
+    const cycleName = currentSub.value.cycle === "annual" ? "年付" : "月付";
+    return `${currentSub.value.planName} · ${cycleName}`;
   }
-  return pendingTargetPlan.value || plans.value[0] || null;
+  if (overview.value?.scenario === "expired") return "套餐已到期";
+  return "未开通套餐";
 });
 
-onMounted(async () => {
-  trackAnalyticsEvent("recharge_page_viewed", { page: "recharge" });
-  const returnStatus = typeof route.query.status === "string" ? route.query.status : "";
-  if (returnStatus && routeOrderNo.value) {
-    await router.replace({
-      name: "billing",
-      query: { view: "detail", outTradeNo: routeOrderNo.value },
-    });
+const periodDenominator = computed(() => {
+  if (!currentSub.value) return "暂无当期额度";
+  return `/ ${formatNumber(currentSub.value.currentPeriodGrant)} 积分`;
+});
+
+const periodGrant = computed(() => currentSub.value?.currentPeriodGrant ?? 1);
+
+const periodProgressPercent = computed(() => {
+  if (!currentSub.value || currentSub.value.currentPeriodGrant <= 0) return 0;
+  const pct = (periodBalance.value / currentSub.value.currentPeriodGrant) * 100;
+  return Math.min(100, Math.max(0, pct));
+});
+
+const periodExpiryText = computed(() => {
+  if (!currentSub.value) return "开通套餐后按期发放";
+  return `${formatTime(currentSub.value.currentPeriodEnd)} 到期`;
+});
+
+const periodExpiryHint = computed(() => {
+  if (!currentSub.value) return "";
+  const diffMs = new Date(currentSub.value.currentPeriodEnd).getTime() - Date.now();
+  const days = Math.ceil(diffMs / 86400000);
+  return days > 0 ? `${days} 天后` : "已到期";
+});
+
+const subscriptionDescription = computed(() => {
+  if (currentSub.value) {
+    const cycleName = currentSub.value.cycle === "annual" ? "年付" : "月付";
+    const detail = currentSub.value.cycle === "annual" ? "积分每月发放，服务期尚未结束。" : "手动续费，不自动扣款。";
+    return `当前服务：${currentSub.value.planName} · ${cycleName}，至 ${formatTime(currentSub.value.serviceEnd)}。${detail}`;
   }
-  await Promise.all([loadPlans(), loadOrders()]);
-  await loadRouteOrder();
+  if (overview.value?.scenario === "expired") {
+    return "当前套餐已结束，永久积分仍可继续使用。";
+  }
+  return "尚未开通周期套餐，也可直接购买加油包。";
 });
 
-watch(() => `${activeView.value}:${routeOrderNo.value}`, loadRouteOrder);
-watch(qrCodeContent, async (value) => {
-  const renderVersion = ++qrRenderVersion;
-  const rendered = value
-    ? await QRCode.toDataURL(value, { width: 248, margin: 1, errorCorrectionLevel: "M", color: { dark: "#111827", light: "#ffffff" } })
-    : "";
-  if (renderVersion === qrRenderVersion) payQrCode.value = rendered;
+const planStateTip = computed(() => {
+  if (!currentSub.value) {
+    return "开通后从付款时间开始计算服务期；永久积分始终独立保留。";
+  }
+  const cycleName = currentSub.value.cycle === "annual" ? "年付" : "月付";
+  return `当前为${currentSub.value.planName} · ${cycleName}。同周期升级立即生效；续费、降档或付款周期切换在已购服务结束后生效。`;
 });
 
-onBeforeUnmount(stopPolling);
+const ledgerExpiringSoon = computed(() => {
+  if (!currentSub.value) return 0;
+  const diffMs = new Date(currentSub.value.currentPeriodEnd).getTime() - Date.now();
+  return diffMs <= 7 * 86400000 && diffMs > 0 ? periodBalance.value : 0;
+});
 
-async function loadPlans(): Promise<void> {
-  loadingPlans.value = true;
+const ledgerUsed = computed(() => currentSub.value?.usedCredits ?? 0);
+
+// Number / Money Formatters
+function formatNumber(val: number | string | undefined | null): string {
+  const n = Number(val || 0);
+  return n.toLocaleString("zh-CN");
+}
+
+function formatYuan(fen: number | undefined | null, decimals: number | null = null): string {
+  const f = Number(fen || 0);
+  const d = decimals !== null ? decimals : f % 100 !== 0 ? 2 : 0;
+  return (f / 100).toLocaleString("zh-CN", { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+function formatTime(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function getActionForPlan(planId: string): PlanAction {
+  const key = `${planId}_${activeCycle.value}`;
+  if (overview.value?.planActions && overview.value.planActions[key]) {
+    return overview.value.planActions[key];
+  }
+  return {
+    type: "activate",
+    label: overview.value?.scenario === "expired" ? "重新开通" : "立即开通",
+    note: "支付成功后生效，开启新的服务期",
+  };
+}
+
+function isCurrentPlan(planId: string): boolean {
+  return Boolean(currentSub.value && currentSub.value.planId === planId && currentSub.value.cycle === activeCycle.value);
+}
+
+function isScheduledPlan(planId: string): boolean {
+  return Boolean(scheduledSub.value && scheduledSub.value.planId === planId && scheduledSub.value.cycle === activeCycle.value);
+}
+
+function toast(msg: string): void {
+  toastMessage.value = msg;
+  toastVisible.value = true;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastVisible.value = false;
+  }, 3200);
+}
+
+// Actions & Navigation
+function selectTab(tab: "plans" | "topups" | "ledger" | "orders"): void {
+  activeTab.value = tab;
+  if (tab === "ledger") loadLedger();
+  if (tab === "orders") loadOrders();
+}
+
+function setCycle(cycle: "monthly" | "annual"): void {
+  activeCycle.value = cycle;
+}
+
+async function openPlanCheckout(planId: string): Promise<void> {
+  if (scheduledSub.value && !isScheduledPlan(planId)) {
+    scheduledModalOpen.value = true;
+    return;
+  }
+  if (isScheduledPlan(planId)) {
+    scheduledModalOpen.value = true;
+    return;
+  }
+  await startCheckout("plan", planId, activeCycle.value);
+}
+
+async function openTopupCheckout(topupId: string): Promise<void> {
+  await startCheckout("topup", topupId);
+}
+
+async function startCheckout(kind: "plan" | "topup", itemId: string, cycle?: "monthly" | "annual"): Promise<void> {
+  quoteLoading.value = true;
+  checkoutErrorMessage.value = "";
+  acknowledgeChecked.value = false;
+  paymentSuccess.value = false;
+  activeOrderResponse.value = null;
+  payQrCodeDataUrl.value = "";
+  currentQuote.value = null;
+  checkoutOpen.value = true;
+
   try {
-    const data = await fetchRechargePlans();
-    plans.value = data.plans;
-    fakeSettle.value = Boolean(data.fakeSettle);
-    if (data.providers) {
-      supportedProviders.value = {
-        alipay: data.providers.alipay !== false,
-        wxpay: Boolean(data.providers.wxpay),
-      };
-      if (data.providers.wxpay && !data.providers.alipay) {
-        selectedProvider.value = "wxpay";
-      } else if (data.providers.alipay) {
-        selectedProvider.value = "alipay";
+    const res = await requestBillingQuote(kind, itemId, cycle);
+    currentQuote.value = res.quote;
+  } catch (err: any) {
+    checkoutErrorMessage.value = err?.message || "获取套餐报价失败，请重试";
+  } finally {
+    quoteLoading.value = false;
+  }
+}
+
+async function submitPayment(): Promise<void> {
+  if (!currentQuote.value || submittingOrder.value || !acknowledgeChecked.value) return;
+  submittingOrder.value = true;
+  checkoutErrorMessage.value = "";
+  try {
+    const idem = `rb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const res = await createOrderWithQuote(selectedProvider.value, currentQuote.value.quoteId, idem);
+    activeOrderResponse.value = res;
+
+    // Generate QR code
+    const qrPayload = res.qrCode || res.payUrl;
+    if (qrPayload) {
+      try {
+        payQrCodeDataUrl.value = await QRCode.toDataURL(qrPayload, {
+          width: 200,
+          margin: 1,
+          color: { dark: "#120f10", light: "#ffffff" },
+        });
+      } catch {
+        payQrCodeDataUrl.value = "";
       }
     }
-  } catch (error) {
-    setError(error);
+
+    // Start polling status
+    startOrderPolling(res.order.outTradeNo);
+  } catch (err: any) {
+    checkoutErrorMessage.value = err?.message || "创建支付订单失败，请重试";
   } finally {
-    loadingPlans.value = false;
+    submittingOrder.value = false;
+  }
+}
+
+function startOrderPolling(outTradeNo: string): void {
+  stopOrderPolling();
+  let pollCount = 0;
+  pollTimer = setInterval(async () => {
+    pollCount++;
+    try {
+      const res = await checkPaymentStatus(outTradeNo, selectedProvider.value);
+      if (res.order.status === "paid") {
+        stopOrderPolling();
+        paymentSuccess.value = true;
+        await refreshAllData();
+        toast("支付成功，权益已自动入账！");
+      } else if (res.order.status === "closed" || res.order.status === "expired" || res.order.status === "failed") {
+        stopOrderPolling();
+        checkoutErrorMessage.value = `订单状态：${res.order.status}`;
+      }
+    } catch {
+      // silent poll catch
+    }
+    if (pollCount > 100) stopOrderPolling();
+  }, 2500);
+}
+
+function stopOrderPolling(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function closeCheckoutDialog(): void {
+  stopOrderPolling();
+  checkoutOpen.value = false;
+  currentQuote.value = null;
+  activeOrderResponse.value = null;
+  paymentSuccess.value = false;
+}
+
+function viewOrderDetail(order: PaymentOrder): void {
+  selectedOrder.value = order;
+  orderDetailModalOpen.value = true;
+}
+
+function exportLedgerCsv(): void {
+  const url = getLedgerExportUrl(ledgerFilter.value, ledgerQuery.value);
+  window.open(url, "_blank");
+  toast("已生成积分明细导出下载。");
+}
+
+async function loadLedger(): Promise<void> {
+  loadingLedger.value = true;
+  try {
+    const res = await fetchLedger({ filter: ledgerFilter.value, query: ledgerQuery.value });
+    ledgerRows.value = res.rows;
+  } catch (err) {
+    console.error("Failed to load ledger:", err);
+  } finally {
+    loadingLedger.value = false;
   }
 }
 
 async function loadOrders(): Promise<void> {
   loadingOrders.value = true;
   try {
-    const data = await fetchOrders();
-    orders.value = data.orders;
-  } catch (error) {
-    setError(error);
+    const res = await fetchOrders();
+    orders.value = res.orders;
+  } catch (err) {
+    console.error("Failed to load orders:", err);
   } finally {
     loadingOrders.value = false;
   }
 }
 
-async function loadRouteOrder(): Promise<void> {
-  const requestedOrderNo = routeOrderNo.value;
-  const requestedView = activeView.value;
-  const loadVersion = ++routeLoadVersion;
-  checkRequestVersion += 1;
-  stopPolling();
-  activeOrder.value = null;
-  payUrl.value = "";
-  qrCodeContent.value = "";
-  qrCodeError.value = "";
-  payQrCode.value = "";
-  statusMessage.value = "";
-  errorMessage.value = "";
-  checkingStatus.value = false;
-  closingOrderNos.value = [];
-  if (!requestedOrderNo || (requestedView !== "pay" && requestedView !== "detail")) return;
-  loadingDetail.value = true;
-  errorMessage.value = "";
+async function refreshAllData(): Promise<void> {
   try {
-    const data = await fetchOrder(requestedOrderNo);
-    if (!isCurrentRouteLoad(loadVersion, requestedView, requestedOrderNo)) return;
-    activeOrder.value = data.order;
-    if (requestedView === "pay" && isOpenOrder(data.order)) {
-      const cachedPaymentAccess = pendingPaymentAccess?.order.outTradeNo === data.order.outTradeNo
-        ? pendingPaymentAccess
-        : null;
-      pendingPaymentAccess = null;
-      const payData = cachedPaymentAccess || await fetchPayLink(data.order.outTradeNo, data.order.provider);
-      if (!isCurrentRouteLoad(loadVersion, requestedView, requestedOrderNo)) return;
-      payUrl.value = payData.payUrl;
-      qrCodeContent.value = payData.qrCode;
-      qrCodeError.value = payData.qrCodeError || "";
-      startPolling(data.order.outTradeNo);
-    }
-  } catch (error) {
-    if (isCurrentRouteLoad(loadVersion, requestedView, requestedOrderNo)) setError(error);
-  } finally {
-    if (loadVersion === routeLoadVersion) loadingDetail.value = false;
+    const [ov, cat] = await Promise.all([fetchWalletOverview(), fetchRechargePlans()]);
+    overview.value = ov;
+    plans.value = cat.plans;
+    topups.value = cat.topups || [];
+    fakeSettle.value = cat.fakeSettle;
+    providers.value = cat.providers || { alipay: true, wxpay: false };
+    if (cat.providers?.alipay) selectedProvider.value = "alipay";
+    else if (cat.providers?.wxpay) selectedProvider.value = "wxpay";
+  } catch (err) {
+    console.error("Failed to refresh data:", err);
   }
+  if (activeTab.value === "ledger") loadLedger();
+  if (activeTab.value === "orders") loadOrders();
 }
 
-function isCurrentRouteLoad(version: number, view: string, outTradeNo: string): boolean {
-  return version === routeLoadVersion && activeView.value === view && routeOrderNo.value === outTradeNo;
-}
+onMounted(async () => {
+  await refreshAllData();
+  loadingOverview.value = false;
+  loadingCatalog.value = false;
 
-function onPlanCardClick(plan: RechargePlan): void {
-  const existingPending = activePendingOrder.value;
-  if (existingPending) {
-    pendingTargetPlan.value = plan;
-    showPendingOrderModal.value = true;
-    return;
+  // Check route hash or query to activate tab
+  if (route.hash === "#billing-orders" || route.hash === "#orders" || route.query.tab === "orders") {
+    selectTab("orders");
+  } else if (route.hash === "#topups" || route.query.tab === "topups") {
+    selectTab("topups");
+  } else if (route.hash === "#ledger" || route.query.tab === "ledger") {
+    selectTab("ledger");
   }
-  goToCheckout(plan);
-}
 
-function goToCheckout(plan: RechargePlan): void {
-  pendingTargetPlan.value = plan;
-  router.push({ name: "billing", query: { view: "checkout", plan: plan.id } });
-}
-
-async function handleConfirmCancelPending(): Promise<void> {
-  const pending = activePendingOrder.value;
-  const target = pendingTargetPlan.value;
-  showPendingOrderModal.value = false;
-  if (!pending) {
-    if (target) goToCheckout(target);
-    return;
+  // If direct plan query was passed, e.g. ?plan=pro
+  const requestedPlan = String(route.query.plan || "");
+  if (requestedPlan && plans.value.some((p) => p.id === requestedPlan)) {
+    openPlanCheckout(requestedPlan);
   }
-  cancellingPending.value = true;
-  errorMessage.value = "";
-  try {
-    await closeOrder(pending.outTradeNo, pending.provider);
-    await loadOrders();
-    if (target) goToCheckout(target);
-  } catch (error) {
-    setError(error);
-    await loadOrders();
-    if (target && (!activePendingOrder.value || activePendingOrder.value.status === "closed")) {
-      goToCheckout(target);
-    }
-  } finally {
-    cancellingPending.value = false;
-    pendingTargetPlan.value = null;
-  }
-}
+});
 
-function handleDismissPendingModal(): void {
-  showPendingOrderModal.value = false;
-  const pending = activePendingOrder.value;
-  if (pending) {
-    openOrderDetail(pending);
-  }
-}
+onBeforeUnmount(() => {
+  stopOrderPolling();
+  if (toastTimer) clearTimeout(toastTimer);
+});
 
-async function handleCreateOrder(plan: RechargePlan | null): Promise<void> {
-  if (!plan || creatingPlanId.value) return;
-  creatingPlanId.value = plan.id;
-  errorMessage.value = "";
-  statusMessage.value = "";
-  try {
-    const idempotencyKey = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `order-${Date.now()}`;
-    const data = await createPaymentOrder(selectedProvider.value, plan.id, idempotencyKey);
-    activeOrder.value = data.order;
-    pendingPaymentAccess = data;
-    await loadOrders();
-    await router.push({ name: "billing", query: { view: "pay", outTradeNo: data.order.outTradeNo } });
-  } catch (error) {
-    setError(error);
-  } finally {
-    creatingPlanId.value = "";
-  }
-}
+watch(ledgerFilter, () => {
+  loadLedger();
+});
 
-async function handleCheckPayment(): Promise<void> {
-  if (!activeOrder.value) return;
-  const requestedOrderNo = activeOrder.value.outTradeNo;
-  const requestedLoadVersion = routeLoadVersion;
-  const requestVersion = ++checkRequestVersion;
-  checkingStatus.value = true;
-  errorMessage.value = "";
-  statusMessage.value = "";
-  try {
-    const data = await checkPaymentStatus(requestedOrderNo, activeOrder.value?.provider);
-    if (requestVersion !== checkRequestVersion || !isCurrentRouteLoad(requestedLoadVersion, "pay", requestedOrderNo)) return;
-    activeOrder.value = data.order;
-    replaceOrder(data.order);
-    if (data.order.status === "paid") {
-      stopPolling();
-      statusMessage.value = "支付成功，积分已经到账。";
-      await router.replace({ name: "billing", query: { view: "detail", outTradeNo: data.order.outTradeNo } });
-    } else {
-      statusMessage.value = `当前状态：${statusLabel(data.order.status)}。完成支付后可再次检测。`;
-    }
-  } catch (error) {
-    if (requestVersion === checkRequestVersion && isCurrentRouteLoad(requestedLoadVersion, "pay", requestedOrderNo)) setError(error);
-  } finally {
-    if (requestVersion === checkRequestVersion) checkingStatus.value = false;
-  }
-}
-
-function startPolling(outTradeNo: string): void {
-  stopPolling();
-  let ticks = 0;
-  pollTimer = setInterval(async () => {
-    ticks += 1;
-    try {
-      const data = await checkPaymentStatus(outTradeNo, activeOrder.value?.provider);
-      if (routeOrderNo.value !== outTradeNo || activeView.value !== "pay") return;
-      activeOrder.value = data.order;
-      replaceOrder(data.order);
-      if (!isOpenOrder(data.order)) {
-        stopPolling();
-        if (data.order.status === "paid") {
-          if (routeOrderNo.value === outTradeNo) {
-            await router.replace({ name: "billing", query: { view: "detail", outTradeNo } });
-          }
-        }
-      }
-    } catch {
-      // Polling errors are silent until active check
-    }
-    if (ticks >= 60) stopPolling();
-  }, 3000);
-}
-
-function stopPolling(): void {
-  if (pollTimer !== null) clearInterval(pollTimer);
-  pollTimer = null;
-}
-
-async function handleCloseOrder(order: PaymentOrder): Promise<void> {
-  if (isClosingOrder(order.outTradeNo)) return;
-  const requestedOrderNo = order.outTradeNo;
-  const requestedView = activeView.value;
-  const requestedLoadVersion = routeLoadVersion;
-  setClosingOrder(order.outTradeNo, true);
-  setCloseMessage(order.outTradeNo, null);
-  if (requestedView !== "list") errorMessage.value = "";
-  try {
-    const data = await closeOrder(order.outTradeNo, order.provider);
-    const routeStillMatches = closeRouteStillMatches(requestedLoadVersion, requestedView, requestedOrderNo);
-    if (!routeStillMatches) return;
-    if (requestedView !== "list") activeOrder.value = data.order;
-    replaceOrder(data.order);
-    setCloseMessage(order.outTradeNo, { tone: "success", text: "已取消" });
-  } catch (error) {
-    const routeStillMatches = closeRouteStillMatches(requestedLoadVersion, requestedView, requestedOrderNo);
-    if (routeStillMatches) {
-      if (requestedView === "list") {
-        setCloseMessage(order.outTradeNo, {
-          tone: "error",
-          text: error instanceof Error ? error.message : String(error),
-        });
-      } else {
-        setError(error);
-      }
-    }
-  } finally {
-    setClosingOrder(order.outTradeNo, false);
-  }
-}
-
-function closeRouteStillMatches(loadVersion: number, view: string, outTradeNo: string): boolean {
-  return view === "list"
-    ? loadVersion === routeLoadVersion && activeView.value === "list"
-    : isCurrentRouteLoad(loadVersion, view, outTradeNo);
-}
-
-function isClosingOrder(outTradeNo: string): boolean {
-  return closingOrderNos.value.includes(outTradeNo);
-}
-
-function setClosingOrder(outTradeNo: string, closing: boolean): void {
-  closingOrderNos.value = closing
-    ? Array.from(new Set([...closingOrderNos.value, outTradeNo]))
-    : closingOrderNos.value.filter((item) => item !== outTradeNo);
-}
-
-function setCloseMessage(
-  outTradeNo: string,
-  message: { tone: "success" | "error"; text: string } | null,
-): void {
-  const next = { ...closeMessages.value };
-  if (message) next[outTradeNo] = message;
-  else delete next[outTradeNo];
-  closeMessages.value = next;
-}
-
-async function openOrderDetail(order: PaymentOrder): Promise<void> {
-  activeOrder.value = order;
-  await router.push({ name: "billing", query: { view: "detail", outTradeNo: order.outTradeNo } });
-}
-
-async function continuePayment(order: PaymentOrder): Promise<void> {
-  activeOrder.value = order;
-  await router.push({ name: "billing", query: { view: "pay", outTradeNo: order.outTradeNo } });
-}
-
-async function backToBilling(): Promise<void> {
-  stopPolling();
-  activeOrder.value = null;
-  payUrl.value = "";
-  qrCodeContent.value = "";
-  qrCodeError.value = "";
-  payQrCode.value = "";
-  statusMessage.value = "";
-  errorMessage.value = "";
-  showPendingOrderModal.value = false;
-  await router.push({ name: "billing" });
-}
-
-async function copyPayUrl(): Promise<void> {
-  if (!payUrl.value) return;
-  await navigator.clipboard.writeText(payUrl.value);
-  copied.value = true;
-  window.setTimeout(() => { copied.value = false; }, 1600);
-}
-
-function replaceOrder(order: PaymentOrder): void {
-  const index = orders.value.findIndex((item) => item.outTradeNo === order.outTradeNo);
-  if (index >= 0) orders.value.splice(index, 1, order);
-  else orders.value.unshift(order);
-}
-
-function setError(error: unknown): void {
-  if (error instanceof Error && error.name === "ApiError" && (error as { status?: number }).status === 401) return;
-  errorMessage.value = error instanceof Error ? error.message : String(error);
-}
-
-function statusLabel(status: string): string {
-  return ({ created: "待支付", pending: "待支付", paid: "已支付", closed: "已关闭", expired: "已过期", failed: "失败" } as Record<string, string>)[status] || status;
-}
-
-function statusTone(status: string): string {
-  if (status === "paid") return "success";
-  if (status === "created" || status === "pending") return "pending";
-  return "muted";
-}
-
-function isOpenOrder(order: PaymentOrder): boolean {
-  return order.status === "created" || order.status === "pending";
-}
-
-function isWxpay(order: PaymentOrder | null): boolean {
-  return order?.provider === "wxpay";
-}
-
-function formatDate(value: string): string {
-  return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "-";
+let ledgerSearchTimer: ReturnType<typeof setTimeout> | null = null;
+function onLedgerSearchInput(e: Event): void {
+  ledgerQuery.value = (e.target as HTMLInputElement).value;
+  if (ledgerSearchTimer) clearTimeout(ledgerSearchTimer);
+  ledgerSearchTimer = setTimeout(() => {
+    loadLedger();
+  }, 300);
 }
 </script>
 
 <template>
-  <section class="billing-panel">
-    <button v-if="isCheckoutView || isPayView || isDetailView" type="button" class="billing-back" @click="backToBilling">← 返回充值中心</button>
+  <div class="billing-view-root">
+    <!-- SVG Sprite Definitions from V2 Prototype -->
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 3v4m8-4v4M4 10h16m-12 5h3m3 0h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-13h-7l1-7Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-infinity" viewBox="0 0 24 24"><path d="M12 12c-2-3-4-5-6-5a5 5 0 0 0 0 10c2 0 4-2 6-5s4-5 6-5a5 5 0 0 1 0 10c-2 0-4-2-6-5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M19 7V4H6a3 3 0 0 0-3 3v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H6a3 3 0 0 1-3-3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 12h-6v5h6m-3-2.5h.01" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6m0-10h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Zm8-1v4m-2-2h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 3C9 3 3 5 4 12c1 7 13 11 16-9ZM4 21 15 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 8h6m-6 4h6m-6 4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M5 3h14v19l-4-2-3 2-3-2-4 2V3Zm4 5h6m-6 4h6m-6 4h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="m3 17 6-6 4 4 3-3 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-trend" viewBox="0 0 24 24"><path d="m3 16 6-6 4 4 8-10m-6 0h6v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L21 7l-4-4L5 15l-1 5Zm8 0h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 1 8M3 4v6h6m3-3v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m15 15 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5 8a8 8 0 0 1 14-2l1 6M4 12l1 6a8 8 0 0 0 14-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    </svg>
 
-    <p v-if="errorMessage" class="billing-alert billing-alert--error" role="alert">{{ errorMessage }}</p>
-    <p v-if="statusMessage" class="billing-alert" role="status">{{ statusMessage }}</p>
-
-    <!-- 拦截弹窗：已有待支付订单 (Image #3) -->
-    <div v-if="showPendingOrderModal" class="modal-backdrop" role="dialog" aria-modal="true" data-test="pending-order-modal">
-      <div class="notice-dialog">
-        <header class="notice-dialog-head">
-          <div class="notice-dialog-title">
-            <span class="info-icon">ℹ</span>
-            <strong>注意</strong>
-          </div>
-          <button type="button" class="notice-dialog-close" aria-label="关闭" @click="showPendingOrderModal = false">✕</button>
-        </header>
-        <div class="notice-dialog-body">
-          <p>您还有未完成的订单，购买前需要先取消，确定要取消之前的订单吗？</p>
+    <div class="page-content">
+      <!-- Topline & Breadcrumbs -->
+      <div class="topline">
+        <div class="breadcrumbs">
+          <span>工作台</span>
+          <span>/</span>
+          <span>个人中心</span>
+          <span>/</span>
+          <b>套餐与积分</b>
         </div>
-        <footer class="notice-dialog-foot">
-          <button type="button" class="btn-cancel-return" @click="handleDismissPendingModal" data-test="modal-return-orders">返回我的订单</button>
-          <button type="button" class="btn-cancel-confirm" :disabled="cancellingPending" @click="handleConfirmCancelPending" data-test="modal-confirm-cancel">
-            {{ cancellingPending ? "取消中..." : "确认取消" }}
-          </button>
-        </footer>
       </div>
-    </div>
 
-    <!-- 订单加载中 -->
-    <div v-if="loadingDetail && (isPayView || isDetailView)" class="billing-loading" role="status">正在加载订单...</div>
-
-    <!-- 步骤 1：选择支付方式确认页 (Image #1) -->
-    <template v-else-if="isCheckoutView && checkoutPlan">
-      <section class="checkout-screen" data-test="checkout-screen">
-        <div class="checkout-grid">
-          <!-- 左侧：订单信息 -->
-          <div class="checkout-card checkout-info-card">
-            <header class="checkout-card-head">
-              <span class="head-icon">📄</span>
-              <h2>订单信息</h2>
-            </header>
-            <div class="checkout-form-group">
-              <label>订单号</label>
-              <div class="checkout-field-readonly">
-                <span class="field-icon">🧾</span>
-                <span>待支付生成</span>
-              </div>
-            </div>
-            <div class="checkout-form-group">
-              <label>商品名称</label>
-              <div class="checkout-field-readonly">
-                <span class="field-icon">📦</span>
-                <span>{{ checkoutPlan.name }} ({{ checkoutPlan.credits }} 积分)</span>
-              </div>
-            </div>
-            <div class="checkout-form-group">
-              <label>支付金额</label>
-              <div class="checkout-amount-box">
-                <strong>¥ {{ checkoutPlan.amountYuan }}</strong>
-              </div>
-            </div>
-            <div class="checkout-form-group">
-              <label>订单有效期</label>
-              <div class="checkout-field-readonly">
-                <span class="field-icon">🕒</span>
-                <span>30 分钟</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 右侧：选择支付方式 -->
-          <div class="checkout-card checkout-methods-card">
-            <header class="checkout-card-head">
-              <span class="head-icon">💳</span>
-              <h2>选择支付方式</h2>
-            </header>
-            <div class="payment-method-list" data-test="payment-method-selector">
-              <!-- 支付宝 -->
-              <div
-                class="method-card"
-                :class="{ 'method-card--active': selectedProvider === 'alipay' }"
-                data-provider="alipay"
-                @click="selectedProvider = 'alipay'"
-              >
-                <div class="method-brand">
-                  <span class="alipay-icon-box">支</span>
-                  <div class="method-labels">
-                    <strong>支付宝</strong>
-                    <small>alipay</small>
-                  </div>
-                </div>
-                <div class="method-radio">
-                  <span v-if="selectedProvider === 'alipay'" class="radio-checked">✓</span>
-                  <span v-else class="radio-unchecked"></span>
-                </div>
-              </div>
-
-              <!-- 微信支付 -->
-              <div
-                class="method-card"
-                :class="{ 'method-card--active': selectedProvider === 'wxpay' }"
-                data-provider="wxpay"
-                @click="selectedProvider = 'wxpay'"
-              >
-                <div class="method-brand">
-                  <span class="wxpay-icon-box">微</span>
-                  <div class="method-labels">
-                    <strong>微信支付</strong>
-                    <small>wxpay</small>
-                  </div>
-                </div>
-                <div class="method-radio">
-                  <span v-if="selectedProvider === 'wxpay'" class="radio-checked">✓</span>
-                  <span v-else class="radio-unchecked"></span>
-                </div>
-              </div>
-            </div>
-          </div>
+      <!-- Page Header -->
+      <header class="page-header">
+        <div>
+          <h1 class="page-title">套餐与积分</h1>
+          <p class="page-subtitle">周期套餐更划算，加油包更灵活。选择适合你的创作节奏。</p>
         </div>
+        <button type="button" class="button button-rules" @click="rulesModalOpen = true">
+          <svg class="ico sm"><use href="#i-info"/></svg>积分消耗规则
+        </button>
+      </header>
 
-        <!-- 底部大按钮：立即支付 -->
-        <div class="checkout-submit-bar">
-          <button
-            type="button"
-            class="checkout-submit-btn"
-            :disabled="Boolean(creatingPlanId)"
-            data-test="checkout-submit-btn"
-            @click="handleCreateOrder(checkoutPlan)"
-          >
-            <span class="submit-check-icon">✓</span>
-            <span>{{ creatingPlanId ? "正在创建订单..." : "立即支付" }}</span>
-          </button>
-        </div>
-      </section>
-    </template>
-
-    <!-- 步骤 2：支付页面 (Image #2) -->
-    <template v-else-if="isPayView && activeOrder">
-      <section class="payment-screen" data-test="payment-screen">
-        <!-- Brandbar：微信经典绿 vs 支付宝经典蓝 -->
-        <header class="payment-brandbar" :class="{ 'payment-brandbar--wxpay': isWxpay(activeOrder) }">
-          <span v-if="isWxpay(activeOrder)" class="wxpay-mark">微</span>
-          <span v-else class="alipay-mark">支</span>
-          <div v-if="isWxpay(activeOrder)">
-            <strong>微信支付</strong>
-            <small>WECHATPAY</small>
+      <!-- Wallet Section -->
+      <section class="wallet" aria-label="我的积分账户">
+        <div class="wallet-cell wallet-total">
+          <div class="wallet-cell-head">
+            <span class="eyebrow"><svg class="ico sm"><use href="#i-wallet"/></svg>当前可用积分</span>
+            <span class="tag" id="wallet-plan-tag">{{ currentPlanTag }}</span>
           </div>
-          <div v-else>
-            <strong>支付宝</strong>
-            <small>ALIPAY</small>
+          <div class="balance">
+            <strong class="num" id="total-balance">{{ formatNumber(totalBalance) }}</strong>
+            <small>积分</small>
           </div>
-        </header>
-
-        <div class="payment-grid">
-          <!-- 左侧：应付金额与操作 -->
-          <div class="payment-summary">
-            <span class="payment-eyebrow">应付金额</span>
-            <strong class="payment-amount">¥{{ activeOrder.amountYuan }} <small>CNY</small></strong>
-
-            <!-- 支付宝专有按钮 -->
-            <div v-if="!isWxpay(activeOrder)" class="payment-actions">
-              <a class="payment-primary" :href="payUrl" target="_blank" rel="noopener" data-test="alipay-pay-link">打开支付宝付款</a>
-              <button type="button" class="payment-secondary" :disabled="!payUrl" @click="copyPayUrl">{{ copied ? "已复制" : "复制支付链接" }}</button>
-            </div>
-            <!-- 微信支付专有测试链接（测试模式） -->
-            <div v-else-if="fakeSettle && payUrl" class="payment-actions">
-              <a class="payment-primary payment-primary--wxpay" :href="payUrl" target="_blank" rel="noopener" data-test="wxpay-pay-link">测试快捷付款</a>
-            </div>
-
-            <p v-if="isWxpay(activeOrder)">请使用手机微信“扫一扫”扫描右侧二维码完成支付。支付完成后，系统将自动入账。</p>
-            <p v-else>将在新窗口打开支付宝电脑网站。完成支付后，请返回本页检测支付状态。</p>
-          </div>
-
-          <!-- 右侧：二维码扫码与状态检测 -->
-          <div class="payment-check-panel">
-            <img v-if="payQrCode" class="payment-qrcode" :src="payQrCode" :alt="isWxpay(activeOrder) ? '微信付款二维码' : '支付宝付款二维码'" data-test="payment-qrcode" />
-            <div v-else class="payment-qr-loading" :class="{ 'payment-qr-error': qrCodeError }" role="status">{{ qrCodeError || "正在生成付款二维码..." }}</div>
-            <strong>{{ qrCodeError ? (isWxpay(activeOrder) ? "二维码生成异常，请稍后重试" : "请使用支付宝网页付款") : (isWxpay(activeOrder) ? "请使用微信扫码付款" : "请使用支付宝扫码付款") }}</strong>
-            <small>{{ isWxpay(activeOrder) ? "系统同时接收微信支付异步通知；你也可以主动检测。" : "系统同时接收支付宝异步通知；你也可以主动检测。" }}</small>
-            <button type="button" class="payment-check" :disabled="checkingStatus" data-test="check-payment-status" @click="handleCheckPayment">
-              {{ checkingStatus ? "检测中..." : "↻ 检测支付状态" }}
+          <div class="wallet-foot">
+            <span>本期积分 + 永久积分</span>
+            <button type="button" class="text-button" @click="balanceModalOpen = true">
+              账户详情<svg class="ico sm"><use href="#i-arrow"/></svg>
             </button>
           </div>
         </div>
 
-        <footer class="payment-meta">
-          <span><small>状态</small><b>{{ statusLabel(activeOrder.status) }}</b></span>
-          <span><small>商品</small><b>{{ activeOrder.planName }}</b></span>
-          <span><small>积分</small><b>{{ activeOrder.planCredits }}</b></span>
-          <span><small>订单号</small><b>{{ activeOrder.outTradeNo }}</b></span>
-        </footer>
-      </section>
-    </template>
-
-    <!-- 订单详情页 -->
-    <template v-else-if="isDetailView && activeOrder">
-      <section v-if="isPaidDetail" class="paid-success" data-test="paid-order-detail">
-        <div class="paid-check">✓</div>
-        <h1>支付完成</h1>
-        <p>订单已支付并完成积分入账</p>
-        <button type="button" class="success-return-btn" @click="backToBilling">返回充值中心</button>
-      </section>
-
-      <div class="order-detail-layout" :class="{ 'order-detail-layout--paid': isPaidDetail }">
-        <div class="order-detail-main">
-          <section class="detail-card">
-            <h2>商品信息</h2>
-            <dl><dt>套餐名称</dt><dd>{{ activeOrder.planName }}</dd><dt>类型</dt><dd>一次性</dd><dt>到账积分</dt><dd>{{ activeOrder.planCredits }} 积分</dd></dl>
-          </section>
-          <section class="detail-card">
-            <div class="detail-card-head">
-              <h2>订单信息</h2>
-              <button v-if="isOpenOrder(activeOrder)" type="button" class="danger-btn" :disabled="isClosingOrder(activeOrder.outTradeNo)" @click="handleCloseOrder(activeOrder)">{{ isClosingOrder(activeOrder.outTradeNo) ? "关闭中..." : "关闭订单" }}</button>
-            </div>
-            <dl><dt>订单号</dt><dd>{{ activeOrder.outTradeNo }}</dd><dt>创建时间</dt><dd>{{ formatDate(activeOrder.createdAt) }}</dd><template v-if="activeOrder.paidAt"><dt>支付时间</dt><dd>{{ formatDate(activeOrder.paidAt) }}</dd></template></dl>
-          </section>
-          <section v-if="isOpenOrder(activeOrder)" class="detail-card detail-payment-method">
-            <h2>支付方式</h2>
-            <span v-if="isWxpay(activeOrder)" class="wxpay-inline"><b>微</b> 微信支付</span>
-            <span v-else class="alipay-inline"><b>支</b> 支付宝支付</span>
-          </section>
+        <div class="wallet-cell">
+          <div class="wallet-cell-head">
+            <span class="eyebrow"><svg class="ico sm"><use href="#i-calendar"/></svg>本期积分</span>
+            <span class="small muted" style="font-size:10px">优先使用</span>
+          </div>
+          <div class="balance">
+            <strong class="num" id="period-balance">{{ formatNumber(periodBalance) }}</strong>
+            <span class="balance-denominator" id="period-denominator">{{ periodDenominator }}</span>
+          </div>
+          <div class="quota-track" role="progressbar" aria-label="本期剩余积分" :aria-valuenow="periodBalance" :aria-valuemax="periodGrant">
+            <span id="period-track" :style="{ width: periodProgressPercent + '%' }"></span>
+          </div>
+          <div class="wallet-foot" style="margin-top:0">
+            <span id="period-expiry">{{ periodExpiryText }}</span>
+            <span id="period-expiry-hint" style="color:#a47745">{{ periodExpiryHint }}</span>
+          </div>
         </div>
-        <aside v-if="isOpenOrder(activeOrder)" class="detail-checkout">
-          <h2>订单总额</h2>
-          <div><span>{{ activeOrder.planName }}</span><b>¥{{ activeOrder.amountYuan }}</b></div>
-          <small>总计</small><strong class="detail-total"><span>¥{{ activeOrder.amountYuan }}</span><small>CNY</small></strong>
-          <button type="button" class="checkout-btn" @click="continuePayment(activeOrder)">继续支付</button>
-        </aside>
-      </div>
-    </template>
 
-    <!-- 套餐列表主页 -->
-    <template v-else>
-      <div class="billing-head">
-        <div>
-          <span class="billing-kicker">Credits</span>
-          <h1 class="billing-title">积分充值</h1>
-          <p class="billing-subtitle">选择适合你的积分套餐，通过支付宝或微信安全支付，到账后立即可用。</p>
+        <div class="wallet-cell wallet-permanent">
+          <div class="wallet-cell-head">
+            <span class="eyebrow"><svg class="ico sm"><use href="#i-infinity"/></svg>永久积分</span>
+            <span class="tag neutral" style="padding:2px 7px;font-size:10px">不过期</span>
+          </div>
+          <div class="balance">
+            <strong class="num" id="permanent-balance">{{ formatNumber(permanentBalance) }}</strong>
+            <small>积分</small>
+          </div>
+          <div class="permanent-note">不设到期日，套餐到期后仍可使用</div>
+          <div class="wallet-foot">
+            <span>含加油包与历史保留积分</span>
+            <button type="button" class="text-button" @click="selectTab('topups')">
+              购买加油包<svg class="ico sm"><use href="#i-arrow"/></svg>
+            </button>
+          </div>
         </div>
+      </section>
+
+      <!-- Wallet Rule Banner -->
+      <div class="wallet-rule">
+        <span class="wallet-rule-left">
+          <svg class="ico sm"><use href="#i-shield"/></svg>优先使用即将到期的积分，最后使用永久积分。
+        </span>
+        <button type="button" class="text-button" @click="selectTab('ledger')">
+          查看积分明细<svg class="ico sm"><use href="#i-arrow"/></svg>
+        </button>
       </div>
 
-      <div v-if="loadingPlans" class="billing-loading" role="status">正在加载套餐...</div>
-      <div v-else-if="plans.length === 0" class="billing-empty" data-test="recharge-empty">
-        <h2>充值暂未开放</h2>
-        <p>当前未配置充值套餐，请稍后再试。</p>
+      <!-- Subscription Status Strip -->
+      <div class="subscription-status">
+        <span id="subscription-description">{{ subscriptionDescription }}</span>
+        <button type="button" class="text-button" @click="changesModalOpen = true">
+          套餐变更说明<svg class="ico sm"><use href="#i-arrow"/></svg>
+        </button>
       </div>
-      <div v-else class="billing-plans-grid">
-        <article
-          v-for="plan in plans"
-          :key="plan.id"
-          class="billing-plan-card"
-          :class="{ 'billing-plan-card--selected': plan.id === selectedPlanId }"
-          :data-plan-id="plan.id"
-          data-test="recharge-plan"
+
+      <!-- Pending Banner -->
+      <div v-if="scheduledSub" class="pending-banner" id="pending-banner">
+        <span>
+          <svg class="ico sm"><use href="#i-check"/></svg> 已购买待生效：<b>{{ scheduledSub.planName }}</b>，{{ formatTime(scheduledSub.startAt) }} 生效。现有权益不变。
+        </span>
+        <button type="button" class="text-button" @click="scheduledModalOpen = true">查看安排</button>
+      </div>
+
+      <!-- Tabs Navigation -->
+      <div class="tabs" role="tablist" aria-label="套餐与积分页面">
+        <button
+          type="button"
+          class="tab"
+          role="tab"
+          :aria-selected="activeTab === 'plans'"
+          :tabindex="activeTab === 'plans' ? 0 : -1"
+          @click="selectTab('plans')"
         >
-          <span v-if="plan.id === selectedPlanId" class="billing-plan-selected" data-test="selected-plan-label">推荐选择</span>
-          <div class="billing-plan-icon">{{ plan.id.includes("annual") ? "年" : "月" }}</div>
-          <h2>{{ plan.name }}</h2>
-          <p class="billing-plan-credits"><strong>{{ plan.credits }}</strong> 积分</p>
-          <p class="billing-plan-price"><span>¥</span>{{ plan.amountYuan }}</p>
-          <button
-            type="button"
-            class="primary-btn billing-plan-action"
-            :disabled="Boolean(creatingPlanId)"
-            @click="onPlanCardClick(plan)"
-          >
-            立即充值
-          </button>
-        </article>
+          <svg class="ico"><use href="#i-calendar"/></svg>周期套餐
+        </button>
+        <button
+          type="button"
+          class="tab"
+          role="tab"
+          :aria-selected="activeTab === 'topups'"
+          :tabindex="activeTab === 'topups' ? 0 : -1"
+          @click="selectTab('topups')"
+        >
+          <svg class="ico"><use href="#i-bolt"/></svg>积分加油包<span class="tab-note">不过期</span>
+        </button>
+        <button
+          type="button"
+          class="tab"
+          role="tab"
+          :aria-selected="activeTab === 'ledger'"
+          :tabindex="activeTab === 'ledger' ? 0 : -1"
+          @click="selectTab('ledger')"
+        >
+          <svg class="ico"><use href="#i-list"/></svg>积分明细
+        </button>
+        <button
+          type="button"
+          class="tab"
+          role="tab"
+          id="billing-orders"
+          :aria-selected="activeTab === 'orders'"
+          :tabindex="activeTab === 'orders' ? 0 : -1"
+          @click="selectTab('orders')"
+        >
+          <svg class="ico"><use href="#i-receipt"/></svg>订单记录
+        </button>
       </div>
 
-      <section id="billing-orders" class="billing-orders" aria-label="我的充值订单">
-        <div class="billing-orders-head">
-          <div><span class="billing-kicker">Orders</span><h2>充值订单</h2></div>
-          <button type="button" class="billing-refresh" :disabled="loadingOrders" @click="loadOrders">{{ loadingOrders ? "刷新中..." : "↻ 刷新" }}</button>
+      <!-- Panel: Plans -->
+      <section v-if="activeTab === 'plans'" class="tab-panel" role="tabpanel">
+        <div class="section-head">
+          <div>
+            <h2>把每一次灵感，变成持续的创作</h2>
+            <p>按购买日计算周期，不是自然月月底清零。</p>
+          </div>
+          <div class="billing-toggle-wrap">
+            <div class="billing-toggle" role="group" aria-label="付款周期">
+              <button
+                type="button"
+                class="cycle-button"
+                :class="{ active: activeCycle === 'monthly' }"
+                :aria-pressed="activeCycle === 'monthly'"
+                @click="setCycle('monthly')"
+              >
+                月付
+              </button>
+              <button
+                type="button"
+                class="cycle-button"
+                :class="{ active: activeCycle === 'annual' }"
+                :aria-pressed="activeCycle === 'annual'"
+                @click="setCycle('annual')"
+              >
+                年付
+              </button>
+            </div>
+            <span class="save-badge">年付享优惠</span>
+          </div>
         </div>
-        <p v-if="orders.length === 0" class="billing-orders-empty">暂无充值订单。</p>
-        <div v-else class="billing-table-wrap">
-          <table class="billing-table">
-            <thead>
-              <tr>
-                <th>订单号</th>
-                <th>套餐</th>
-                <th>订单金额</th>
-                <th>支付方式</th>
-                <th>订单状态</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="order in orders" :key="order.outTradeNo" data-test="payment-order">
-                <td>
-                  <button type="button" class="order-link" @click="openOrderDetail(order)">{{ order.outTradeNo }}</button>
-                </td>
-                <td>
-                  <strong>{{ order.planName }}</strong>
-                  <small>{{ order.planCredits }} 积分</small>
-                </td>
-                <td>¥{{ order.amountYuan }}</td>
-                <td>
-                  <span v-if="order.provider === 'wxpay'" class="table-provider-badge table-provider-badge--wx">微信支付</span>
-                  <span v-else class="table-provider-badge table-provider-badge--alipay">支付宝</span>
-                </td>
-                <td><span class="status-dot" :data-tone="statusTone(order.status)">{{ statusLabel(order.status) }}</span></td>
-                <td>{{ formatDate(order.createdAt) }}</td>
-                <td>
-                  <div class="table-actions">
-                    <button type="button" class="text-action" @click="openOrderDetail(order)">查看详情</button>
-                    <button v-if="isOpenOrder(order)" type="button" class="text-action text-action--muted" :disabled="isClosingOrder(order.outTradeNo)" @click="handleCloseOrder(order)">{{ isClosingOrder(order.outTradeNo) ? "取消中..." : "取消" }}</button>
-                    <a v-if="fakeSettle && isOpenOrder(order)" :href="fakeSettleUrl(order.outTradeNo, order.provider)" target="_blank" rel="noopener" data-test="fake-settle-link">测试结算</a>
-                    <small v-if="closeMessages[order.outTradeNo]" class="close-result" :data-tone="closeMessages[order.outTradeNo].tone" :role="closeMessages[order.outTradeNo].tone === 'error' ? 'alert' : 'status'">{{ closeMessages[order.outTradeNo].text }}</small>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+
+        <!-- Plans Grid -->
+        <div class="plans-grid">
+          <article
+            v-for="plan in plans"
+            :key="plan.id"
+            class="plan-card"
+            :class="{ featured: plan.featured }"
+            :aria-label="plan.name"
+          >
+            <span v-if="plan.featured" class="recommend">推荐选择</span>
+            <div class="plan-name-row">
+              <div class="plan-name">
+                <span class="plan-mark"><svg class="ico"><use :href="`#i-${plan.icon || 'spark'}`"/></svg></span>
+                <h3>{{ plan.name }}</h3>
+              </div>
+              <span class="plan-tag" :class="{ current: isCurrentPlan(plan.id) }">
+                {{ isCurrentPlan(plan.id) ? "当前套餐" : plan.label || "创作版" }}
+              </span>
+            </div>
+            <p class="plan-desc">{{ plan.desc || "创作运营方案" }}</p>
+
+            <div class="price-row">
+              <span class="price-currency">¥</span>
+              <strong class="price-number num">
+                {{ formatYuan(activeCycle === 'annual' ? plan.annualFen : plan.monthlyFen) }}
+              </strong>
+              <span class="price-unit">/ {{ activeCycle === "annual" ? "年" : "月" }}</span>
+            </div>
+            <div class="price-caption">
+              {{ activeCycle === "annual" ? "一次支付全年费用 · 积分按月发放" : "单次购买一个月 · 不自动续费" }}
+            </div>
+
+            <div class="quota-block">
+              <div class="quota-big num">{{ formatNumber(plan.credits) }}<span>积分 / 月</span></div>
+              <div class="quota-desc">
+                <svg class="ico"><use href="#i-calendar"/></svg>
+                {{ activeCycle === "annual" ? "每月发放，共 12 期 · 当期有效" : "当期有效，到期不结转" }}
+              </div>
+            </div>
+
+            <p class="plan-use-label">积分全部用于单一用途时</p>
+            <div class="plan-feature"><svg class="ico"><use href="#i-check"/></svg>标准单图约 <b>{{ formatNumber(plan.credits) }} 张</b></div>
+            <div class="plan-feature"><svg class="ico"><use href="#i-check"/></svg>或四张标准组图约 <b>{{ formatNumber(Math.floor(plan.credits / 4)) }} 组</b></div>
+            <div class="plan-feature"><svg class="ico"><use href="#i-check"/></svg>趋势、选题与图片共享额度</div>
+
+            <div class="plan-bottom">
+              <button
+                type="button"
+                class="button plan-cta"
+                :class="plan.featured ? 'primary' : 'subtle'"
+                :disabled="Boolean(scheduledSub && !isScheduledPlan(plan.id))"
+                @click="openPlanCheckout(plan.id)"
+              >
+                {{ isScheduledPlan(plan.id) ? "查看已购安排" : getActionForPlan(plan.id).label }}
+                <svg class="ico sm"><use href="#i-arrow"/></svg>
+              </button>
+              <p class="plan-bottom-note">
+                {{ scheduledSub && !isScheduledPlan(plan.id) ? "已有待生效订单，请先查看已购安排" : getActionForPlan(plan.id).note }}
+              </p>
+            </div>
+          </article>
+        </div>
+
+        <p class="usage-caption">
+          <svg class="ico"><use href="#i-info"/></svg>
+          <span>图片数量为积分全部用于该用途的估算，非叠加额度。进阶模型和高分辨率按实际规则扣分。</span>
+        </p>
+
+        <div class="common-benefits">
+          <strong>所有套餐均享完整创作能力</strong>
+          <div class="benefit-items">
+            <span><svg class="ico"><use href="#i-trend"/></svg>趋势分析</span>
+            <span><svg class="ico"><use href="#i-pen"/></svg>内容选题</span>
+            <span><svg class="ico"><use href="#i-image"/></svg>图片生成</span>
+            <span><svg class="ico"><use href="#i-spark"/></svg>智能改图</span>
+            <span><svg class="ico"><use href="#i-history"/></svg>历史复用</span>
+          </div>
+        </div>
+
+        <div class="next-period-tip">
+          <svg class="ico"><use href="#i-info"/></svg>
+          <span>{{ planStateTip }} <button type="button" class="text-button" @click="changesModalOpen = true">了解变更规则 →</button></span>
         </div>
       </section>
-    </template>
-  </section>
+
+      <!-- Panel: Topups -->
+      <section v-if="activeTab === 'topups'" class="tab-panel" role="tabpanel">
+        <div class="section-head">
+          <div>
+            <h2>灵感不等下个月，随时为创作加油</h2>
+            <p>偶尔创作，或临时超量。一次购买，按需使用。</p>
+          </div>
+          <span class="tag neutral"><svg class="ico sm"><use href="#i-infinity"/></svg>永久有效 · 无需会员</span>
+        </div>
+
+        <div class="topup-intro">
+          <svg class="ico sm"><use href="#i-shield"/></svg>加油包立即到账，不改变套餐周期；周期积分用完后，自动使用永久积分。
+        </div>
+
+        <div class="plans-grid">
+          <article
+            v-for="pack in topups"
+            :key="pack.id"
+            class="plan-card topup-card"
+            :class="{ featured: pack.featured }"
+            :aria-label="pack.name"
+          >
+            <span v-if="pack.featured" class="recommend">灵活之选</span>
+            <div class="plan-name-row">
+              <div class="plan-name">
+                <span class="plan-mark"><svg class="ico"><use :href="`#i-${pack.icon || 'bolt'}`"/></svg></span>
+                <h3>{{ pack.name }}</h3>
+              </div>
+              <span class="plan-tag">不过期</span>
+            </div>
+            <p class="plan-desc">{{ pack.desc }}</p>
+
+            <div class="topup-credit-hero">
+              <strong class="num">{{ formatNumber(pack.credits) }}</strong>
+              <span>永久积分</span>
+            </div>
+            <div class="price-row">
+              <span class="price-currency">¥</span>
+              <strong class="price-number num">{{ formatYuan(pack.amountFen) }}</strong>
+              <span class="price-unit">/ 一次性</span>
+            </div>
+            <div class="price-caption">按需补充，一次购买即可使用</div>
+
+            <div class="quota-block">
+              <div class="quota-desc" style="margin:0;color:#795e47">
+                <svg class="ico"><use href="#i-infinity"/></svg>不设到期日，用完为止
+              </div>
+            </div>
+
+            <div class="plan-feature"><svg class="ico"><use href="#i-check"/></svg>购买后立即到账</div>
+            <div class="plan-feature"><svg class="ico"><use href="#i-check"/></svg>套餐到期后仍可使用</div>
+            <div class="plan-feature"><svg class="ico"><use href="#i-check"/></svg>优先使用当期积分，再用加油包</div>
+
+            <div class="plan-bottom">
+              <button
+                type="button"
+                class="button plan-cta"
+                :class="pack.featured ? 'primary' : 'subtle'"
+                @click="openTopupCheckout(pack.id)"
+              >
+                购买加油包<svg class="ico sm"><use href="#i-plus"/></svg>
+              </button>
+              <p class="plan-bottom-note">无需会员 · 不改变套餐周期</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="compare-box">
+          <div class="compare-top">
+            <div>
+              <h3>按创作节奏选择，不必为了积分续费</h3>
+              <p>持续创作，选择周期套餐；临时补充，选择加油包。</p>
+            </div>
+            <div class="compare-options">
+              <div class="compare-option"><span>周期套餐</span><strong>按期发放 · 当期有效</strong></div>
+              <div class="compare-option active"><span>积分加油包</span><strong>一次到账 · 不设到期日</strong></div>
+            </div>
+          </div>
+          <div class="compare-bottom">
+            <svg class="ico sm"><use href="#i-shield"/></svg>加油包不改变已购套餐；套餐到期后，永久积分仍可独立使用。
+          </div>
+        </div>
+      </section>
+
+      <!-- Panel: Ledger -->
+      <section v-if="activeTab === 'ledger'" class="tab-panel" role="tabpanel">
+        <div class="section-head">
+          <div>
+            <h2>每一笔积分，都清清楚楚</h2>
+            <p>分别记录发放、使用与到期，保留完整来源。</p>
+          </div>
+          <button type="button" class="button" @click="exportLedgerCsv">
+            <svg class="ico sm"><use href="#i-download"/></svg>导出明细
+          </button>
+        </div>
+
+        <div class="ledger-summary">
+          <div class="ledger-stat">
+            <span>当前可用积分</span>
+            <strong class="num">{{ formatNumber(totalBalance) }}</strong>
+          </div>
+          <div class="ledger-stat">
+            <span>本期已使用</span>
+            <strong class="num">{{ formatNumber(ledgerUsed) }}</strong>
+          </div>
+          <div class="ledger-stat">
+            <span>7 天内到期</span>
+            <strong class="num" style="color:#ab7452">{{ formatNumber(ledgerExpiringSoon) }}</strong>
+          </div>
+        </div>
+
+        <div class="table-surface">
+          <div class="table-toolbar">
+            <div class="filter-group" role="group" aria-label="流水类型">
+              <button
+                type="button"
+                class="filter"
+                :class="{ active: ledgerFilter === 'all' }"
+                :aria-pressed="ledgerFilter === 'all'"
+                @click="ledgerFilter = 'all'"
+              >
+                全部
+              </button>
+              <button
+                type="button"
+                class="filter"
+                :class="{ active: ledgerFilter === 'spend' }"
+                :aria-pressed="ledgerFilter === 'spend'"
+                @click="ledgerFilter = 'spend'"
+              >
+                使用
+              </button>
+              <button
+                type="button"
+                class="filter"
+                :class="{ active: ledgerFilter === 'grant' }"
+                :aria-pressed="ledgerFilter === 'grant'"
+                @click="ledgerFilter = 'grant'"
+              >
+                入账
+              </button>
+              <button
+                type="button"
+                class="filter"
+                :class="{ active: ledgerFilter === 'expire' }"
+                :aria-pressed="ledgerFilter === 'expire'"
+                @click="ledgerFilter = 'expire'"
+              >
+                到期
+              </button>
+            </div>
+            <label class="search-wrap">
+              <svg class="ico sm"><use href="#i-search"/></svg>
+              <input
+                :value="ledgerQuery"
+                placeholder="搜索任务或积分来源"
+                aria-label="搜索积分明细"
+                @input="onLedgerSearchInput"
+              />
+            </label>
+          </div>
+
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>操作</th>
+                  <th>积分变化</th>
+                  <th>积分来源</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in ledgerRows" :key="r.id">
+                  <td>{{ r.time }}</td>
+                  <td class="primary-cell">{{ r.label }}</td>
+                  <td class="delta num" :class="r.delta > 0 ? 'positive' : 'negative'">
+                    {{ r.delta > 0 ? '+' : '−' }}{{ formatNumber(Math.abs(r.delta)) }}
+                  </td>
+                  <td>
+                    <span class="tag" :class="{ neutral: r.source === '永久积分' }" style="padding:3px 7px;font-size:10px">
+                      {{ r.source }}
+                    </span>
+                  </td>
+                  <td>{{ r.note }}</td>
+                </tr>
+                <tr v-if="ledgerRows.length === 0">
+                  <td colspan="5" class="table-empty">
+                    {{ loadingLedger ? "正在加载流水记录…" : "暂无匹配的积分流水。开通套餐或购买加油包后，可在这里查看。" }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-foot">
+            <span>共 {{ ledgerRows.length }} 笔积分流水</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Panel: Orders -->
+      <section v-if="activeTab === 'orders'" class="tab-panel" role="tabpanel">
+        <div class="section-head">
+          <div>
+            <h2>订单记录</h2>
+            <p>套餐、到账积分与付款状态，一处查看。</p>
+          </div>
+          <button type="button" class="button" @click="loadOrders">
+            <svg class="ico sm"><use href="#i-refresh"/></svg>刷新记录
+          </button>
+        </div>
+
+        <div class="table-surface">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>商品 / 订单号</th>
+                  <th>金额</th>
+                  <th>积分发放</th>
+                  <th>支付方式</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="o in orders" :key="o.outTradeNo">
+                  <td class="primary-cell">
+                    <strong>{{ o.planName }}</strong>
+                    <small>{{ o.outTradeNo }}</small>
+                  </td>
+                  <td class="num" style="font-weight:600;color:#49352b">
+                    ¥{{ o.amountYuan || formatYuan(o.amountFen) }}
+                  </td>
+                  <td>
+                    <span>
+                      {{ o.orderKind === 'topup' ? `${formatNumber(o.planCredits)} 永久积分` : o.orderAction === 'upgrade' ? `本期补发 ${formatNumber(o.issuedNow)} 积分` : `${formatNumber(o.planCredits)} 积分 / 月` }}
+                    </span>
+                    <small>
+                      {{ o.status === 'closed' ? '未发放' : o.orderKind === 'topup' ? '一次到账 · 不过期' : o.fulfillmentStatus === 'scheduled' ? '服务衔接 · 到期后发放' : o.orderAction === 'upgrade' ? '已补发 · 原到期日不变' : o.cycle === 'annual' ? '按月发放 · 共 12 期' : '首期已发放' }}
+                    </small>
+                  </td>
+                  <td>{{ o.provider === 'wxpay' ? '微信支付' : '支付宝' }}</td>
+                  <td>
+                    <span class="status" :class="{ closed: o.status === 'closed' || o.status === 'expired' }">
+                      {{ o.status === 'paid' ? '已支付' : o.status === 'closed' ? '已取消' : o.status === 'expired' ? '已过期' : '待支付' }}
+                    </span>
+                  </td>
+                  <td>
+                    <button type="button" class="text-button" @click="viewOrderDetail(o)">查看详情</button>
+                  </td>
+                </tr>
+                <tr v-if="orders.length === 0">
+                  <td colspan="6" class="table-empty">
+                    {{ loadingOrders ? "正在加载订单记录…" : "暂无订单。购买套餐或加油包后，订单会出现在这里。" }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-foot">
+            <span>共 {{ orders.length }} 笔订单</span>
+            <span>点击详情查看发放与到期规则</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- FAQ Section -->
+      <section v-if="activeTab === 'plans' || activeTab === 'topups'" class="faq">
+        <div class="faq-heading">
+          <h3>关于积分，你可能还想知道</h3>
+          <button type="button" class="text-button" @click="rulesModalOpen = true">
+            查看扣分规则<svg class="ico sm"><use href="#i-arrow"/></svg>
+          </button>
+        </div>
+        <div class="faq-grid">
+          <details>
+            <summary>周期套餐和加油包有什么区别？</summary>
+            <p>周期套餐适合持续创作，当期未用完的积分到期失效，不结转。加油包一次到账，不设到期日；即使没有有效套餐，也可继续使用。</p>
+          </details>
+          <details>
+            <summary>年付积分是一次发完吗？</summary>
+            <p>不是。年付一次支付 12 个月的服务费，按月发放积分，共 12 期。每期积分独立到期，不累积到下个月，也不能提前支取未来额度。</p>
+          </details>
+          <details>
+            <summary>原来已经购买的积分会过期吗？</summary>
+            <p>不会。此前按永久规则获得的剩余积分，保留原有有效性，在账户中显示为“历史保留积分”。仅新购买的周期套餐适用到期规则。</p>
+          </details>
+          <details>
+            <summary>怎样扣分？生成失败会扣积分吗？</summary>
+            <p>先使用最早到期的可用积分，再使用永久积分。任务成功后结算，系统原因失败释放预占积分。</p>
+          </details>
+          <details>
+            <summary>续费会让本期没用完的积分延期吗？</summary>
+            <p>不会。续费只衔接已购服务期，本期剩余积分仍按原时间到期。年付服务期结束与每月积分到期是两个日期，续费不会把下一次月度发放当作年付服务到期。</p>
+          </details>
+          <details>
+            <summary>套餐没到期，可以升级或更换吗？</summary>
+            <p>同一付款周期内升级：补差价后立即生效，本期按剩余时长补发增量积分，保留现有余额和到期日。降档或月付、年付切换：当前已购服务期结束后生效，不覆盖已付费权益。详情会在结算前再次展示。</p>
+          </details>
+          <details>
+            <summary>会自动续费或自动扣款吗？</summary>
+            <p>本方案第一版采用手动购买，不自动续费，也不自动扣款。付款前会展示明确的生效和到期时间。</p>
+          </details>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer class="page-footer">
+        <span>REDBASE / 为品牌持续创造好内容</span>
+        <span><svg class="ico"><use href="#i-shield"/></svg>周期套餐与积分账户 · 安全可信</span>
+      </footer>
+    </div>
+
+    <!-- Checkout Dialog -->
+    <div v-if="checkoutOpen" class="dialog-backdrop" @click.self="closeCheckoutDialog">
+      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
+        <div class="dialog-head">
+          <div>
+            <h2 id="checkout-title">
+              {{ currentQuote?.kind === 'topup' ? '确认购买加油包' : currentQuote?.action === 'upgrade' ? '确认升级套餐' : currentQuote?.action === 'renew' ? '确认续费套餐' : currentQuote?.action === 'downgrade' ? '确认到期更换' : currentQuote?.action === 'interval' ? '确认套餐与付款周期变更' : overview?.scenario === 'expired' ? '确认重新开通' : '确认开通套餐' }}
+            </h2>
+            <p>{{ currentQuote?.action === 'upgrade' ? '确认升级补款、增量积分与原到期日。' : '核对生效时间、发放方式与有效期，再完成付款。' }}</p>
+          </div>
+          <button type="button" class="close-button" aria-label="关闭结算" @click="closeCheckoutDialog">
+            <svg class="ico"><use href="#i-close"/></svg>
+          </button>
+        </div>
+
+        <!-- Loading Quote State -->
+        <div v-if="quoteLoading" class="dialog-body" style="text-align:center;padding:40px">
+          <p>正在生成权威服务端报价…</p>
+        </div>
+
+        <!-- Error State -->
+        <div v-else-if="checkoutErrorMessage && !activeOrderResponse" class="dialog-body">
+          <div class="important-note" style="background:#fff2f0;border-color:#ffccc7;color:#cf1322">
+            <svg class="ico"><use href="#i-info"/></svg>
+            <span>{{ checkoutErrorMessage }}</span>
+          </div>
+          <button type="button" class="button" style="width:100%;margin-top:16px" @click="closeCheckoutDialog">返回</button>
+        </div>
+
+        <!-- Payment Success View -->
+        <div v-else-if="paymentSuccess" class="dialog-body success-body">
+          <div class="success-circle"><svg class="ico"><use href="#i-check"/></svg></div>
+          <h3>{{ currentQuote?.kind === 'topup' ? '加油包已到账' : currentQuote?.action === 'upgrade' ? '套餐已升级' : currentQuote?.scheduled ? '已购买，待生效' : '套餐已开通' }}</h3>
+          <p v-if="currentQuote?.kind === 'topup'">
+            {{ formatNumber(currentQuote.issuedNow) }} 永久积分已加入账户。<br>当前套餐与本期积分保持不变。
+          </p>
+          <p v-else-if="currentQuote?.action === 'upgrade'">
+            {{ currentQuote.itemName }}已生效，本期补发 {{ formatNumber(currentQuote.issuedNow) }} 积分。<br>原有余额保留，到期时间不变。
+          </p>
+          <p v-else-if="currentQuote?.scheduled">
+            {{ currentQuote.itemName }}已安排在当前服务到期后启用。<br>本期积分、永久积分及当前已购权益均不变。
+          </p>
+          <p v-else>
+            {{ currentQuote?.itemName }}已生效，首期 {{ formatNumber(currentQuote?.issuedNow) }} 积分已到账。
+          </p>
+
+          <div class="success-facts">
+            <div v-if="currentQuote?.action === 'upgrade'">
+              <span>本次升级补款</span><b>¥{{ formatYuan(currentQuote.amountFen, 2) }}</b>
+            </div>
+            <div v-if="currentQuote?.action === 'upgrade'">
+              <span>本期积分到期</span><b>{{ formatTime(currentQuote.periodEndAt) }}</b>
+            </div>
+            <div>
+              <span>当前总可用积分</span><b>{{ formatNumber(totalBalance) }} 积分</b>
+            </div>
+          </div>
+
+          <div class="success-actions">
+            <button type="button" class="button" @click="closeCheckoutDialog(); selectTab('orders')">查看订单</button>
+            <button type="button" class="button primary" @click="closeCheckoutDialog()">返回套餐与积分</button>
+          </div>
+        </div>
+
+        <!-- Payment Form or QR View -->
+        <div v-else-if="currentQuote" class="dialog-body">
+          <div class="checkout-product">
+            <div class="checkout-product-left">
+              <span class="plan-mark"><svg class="ico"><use :href="`#i-${currentQuote.kind === 'topup' ? 'bolt' : 'spark'}`"/></svg></span>
+              <div>
+                <h3>{{ currentQuote.itemName }}{{ currentQuote.cycle ? ` · ${currentQuote.cycle === 'annual' ? '年付' : '月付'}` : '' }}</h3>
+                <p>{{ formatNumber(currentQuote.meta?.credits || currentQuote.meta?.planCredits || currentQuote.issuedNow) }} {{ currentQuote.kind === 'topup' ? '永久积分' : `积分 / 月${currentQuote.cycle === 'annual' ? ' · 按月发放' : ''}` }}</p>
+              </div>
+            </div>
+            <strong class="checkout-price num">
+              <small v-if="currentQuote.action === 'upgrade'" class="price-label">本次补款</small>
+              <small>¥</small>{{ formatYuan(currentQuote.amountFen, currentQuote.action === 'upgrade' ? 2 : null) }}
+            </strong>
+          </div>
+
+          <!-- Specifications dl -->
+          <dl class="checkout-specs">
+            <template v-if="currentQuote.kind === 'topup'">
+              <dt>到账方式</dt><dd>支付成功后，立即到账 {{ formatNumber(currentQuote.issuedNow) }} 积分</dd>
+              <dt>有效期</dt><dd><b>不设到期日，用完为止</b></dd>
+              <dt>会员要求</dt><dd>无需有效套餐，随时可用</dd>
+              <dt>已有权益</dt><dd>不改变当前套餐、积分与到期日</dd>
+            </template>
+            <template v-else-if="currentQuote.action === 'upgrade'">
+              <dt>套餐变更</dt><dd>{{ currentQuote.meta?.upgradeDetails?.oldPlanName }} → <b>{{ currentQuote.itemName }}</b>（{{ currentQuote.cycle === 'annual' ? '年付' : '月付' }}不变）</dd>
+              <dt>生效时间</dt><dd><b>支付成功后立即生效</b></dd>
+              <dt>服务到期</dt><dd>{{ formatTime(currentQuote.endAt) }}（保持不变）</dd>
+              <dt>本期补发</dt><dd><b>+{{ formatNumber(currentQuote.issuedNow) }} 积分</b>，{{ formatTime(currentQuote.periodEndAt) }} 到期</dd>
+              <dt>升级后可用</dt><dd>本期 {{ formatNumber(periodBalance) }} → <b>{{ formatNumber(periodBalance + currentQuote.issuedNow) }} 积分</b>；永久积分不变</dd>
+              <dt>后续额度</dt><dd>{{ currentQuote.cycle === 'annual' ? '本年付服务后续每月' : '续费后的完整周期每月' }} {{ formatNumber(currentQuote.meta?.planCredits) }} 积分</dd>
+            </template>
+            <template v-else>
+              <dt>生效时间</dt><dd><b>{{ currentQuote.scheduled ? `${formatTime(currentQuote.startAt)}（当前服务结束后）` : '支付成功后立即生效' }}</b></dd>
+              <dt>服务期限</dt><dd>{{ formatTime(currentQuote.startAt) }} — {{ formatTime(currentQuote.endAt) }}</dd>
+              <dt>积分发放</dt><dd>{{ currentQuote.cycle === 'annual' ? `每月 ${formatNumber(currentQuote.meta?.planCredits)} 积分，共 12 期` : `生效时一次发放 ${formatNumber(currentQuote.meta?.planCredits)} 积分` }}</dd>
+              <dt>首期到期</dt><dd>{{ formatTime(currentQuote.periodEndAt) }}，到期不结转</dd>
+              <dt>已有积分</dt><dd>{{ !currentSub ? '永久积分保留，独立使用' : '本期积分与永久积分均保持不变' }}</dd>
+            </template>
+          </dl>
+
+          <!-- Important note box -->
+          <div class="important-note">
+            <svg class="ico"><use :href="currentQuote.kind === 'topup' ? '#i-infinity' : currentQuote.action === 'upgrade' ? '#i-trend' : '#i-clock'"/></svg>
+            <span v-if="currentQuote.kind === 'topup'">本次到账为永久积分。即使套餐到期，仍可继续使用；有本期积分时优先使用本期积分。</span>
+            <span v-else-if="currentQuote.action === 'upgrade'">本次只支付剩余服务期的升级差价。不清空、不重发已有积分，本期仅按剩余时长补发增量；积分与服务结束时间均不延期。</span>
+            <span v-else-if="currentQuote.scheduled">现在支付，{{ formatTime(currentQuote.startAt) }} 启用新套餐。在此之前继续使用当前套餐，本期积分不会被覆盖或延期。</span>
+            <span v-else>从本次付款开始计算服务期。{{ currentQuote.cycle === 'annual' ? '全年费用一次支付，积分按月发放，不一次发完全年额度。' : '首期积分立即到账，当期未用完的积分到期失效。' }}</span>
+          </div>
+
+          <!-- Upgrade Details Collapsible -->
+          <details v-if="currentQuote.action === 'upgrade' && currentQuote.meta?.upgradeDetails" class="checkout-details">
+            <summary>查看差价与补发说明<svg class="ico sm"><use href="#i-down"/></svg></summary>
+            <div class="order-detail-list">
+              <div><span>原套餐整期价格</span><b>¥{{ formatYuan(currentQuote.meta.upgradeDetails.oldFullTermPrice) }}</b></div>
+              <div><span>目标套餐整期价格</span><b>¥{{ formatYuan(currentQuote.meta.upgradeDetails.targetFullTermPrice) }}</b></div>
+              <div><span>服务期剩余 / 总时长</span><b>{{ currentQuote.meta.upgradeDetails.serviceDaysLeft?.toFixed(0) }} / {{ currentQuote.meta.upgradeDetails.serviceDaysTotal?.toFixed(0) }} 天</b></div>
+              <div><span>本次升级补款</span><b>¥{{ formatYuan(currentQuote.amountFen, 2) }}</b></div>
+              <div><span>本期剩余 / 总时长</span><b>{{ currentQuote.meta.upgradeDetails.periodDaysLeft?.toFixed(0) }} / {{ currentQuote.meta.upgradeDetails.periodDaysTotal?.toFixed(0) }} 天</b></div>
+              <div><span>本期补发增量</span><b>{{ formatNumber(currentQuote.issuedNow) }} 积分</b></div>
+            </div>
+            <p>补款 = 两档整期价格差 × 剩余服务时长占比，金额四舍五入到分。补发 = 两档月度额度差 × 本期剩余时长占比，积分向上取整。两项分别计算，不进行人民币与积分兑换。</p>
+          </details>
+
+          <!-- Active Order Payment Area (QR Code & Status) -->
+          <div v-if="activeOrderResponse" class="qr-payment-area">
+            <div class="qr-container">
+              <img v-if="payQrCodeDataUrl" :src="payQrCodeDataUrl" alt="支付二维码" class="qr-image" />
+              <div v-else class="qr-loading">生成支付二维码中…</div>
+            </div>
+            <p class="qr-hint">请使用{{ selectedProvider === 'wxpay' ? '微信' : '支付宝' }}扫码完成付款</p>
+            <div v-if="activeOrderResponse.payUrl" class="qr-action-row">
+              <a :href="activeOrderResponse.payUrl" target="_blank" rel="noopener noreferrer" class="button">
+                在新窗口打开支付页面
+              </a>
+            </div>
+            <div v-if="fakeSettle" class="test-settle-row">
+              <a :href="fakeSettleUrl(activeOrderResponse.order.outTradeNo, selectedProvider)" target="_blank" class="text-button">
+                [测试环境] 模拟支付完成
+              </a>
+            </div>
+          </div>
+
+          <!-- Payment Methods & Acknowledge (Before order is created) -->
+          <template v-else>
+            <p class="payment-title">支付方式</p>
+            <div class="payment-methods">
+              <label class="payment-option" :class="{ selected: selectedProvider === 'alipay' }">
+                <span class="pay-mark alipay">支</span>
+                <span>支付宝</span>
+                <input type="radio" v-model="selectedProvider" value="alipay" name="provider" />
+              </label>
+              <label class="payment-option" :class="{ selected: selectedProvider === 'wxpay' }">
+                <span class="pay-mark wechat">微</span>
+                <span>微信支付</span>
+                <input type="radio" v-model="selectedProvider" value="wxpay" name="provider" />
+              </label>
+            </div>
+
+            <label class="acknowledge">
+              <input type="checkbox" v-model="acknowledgeChecked" />
+              <span>
+                我已了解{{ currentQuote.kind === 'topup' ? '加油包不设到期日' : currentQuote.action === 'upgrade' ? '本次升级补款、积分补发与到期规则' : currentQuote.scheduled ? '本次提前付款、服务到期后生效' : '套餐生效时间与积分到期规则' }}；确认付款后将生成支付订单。
+              </span>
+            </label>
+          </template>
+        </div>
+
+        <!-- Dialog Footer -->
+        <div v-if="currentQuote && !paymentSuccess" class="checkout-footer">
+          <div class="total-row">
+            <span>
+              {{ currentQuote.action === 'upgrade' ? '本次升级补款' : '本次应付' }}
+              <span class="saving">
+                {{ currentQuote.scheduled ? '提前购买 · 不覆盖当前服务' : currentQuote.kind === 'topup' ? '购买后立即到账' : currentQuote.action === 'upgrade' ? '只收剩余服务期差价' : '付款成功后立即生效' }}
+              </span>
+            </span>
+            <strong class="num">
+              <small>¥</small>{{ formatYuan(currentQuote.amountFen, currentQuote.action === 'upgrade' ? 2 : null) }}
+            </strong>
+          </div>
+          <button
+            v-if="!activeOrderResponse"
+            type="button"
+            class="button primary payment-button"
+            :disabled="!acknowledgeChecked || submittingOrder"
+            @click="submitPayment"
+          >
+            <svg class="ico sm"><use href="#i-lock"/></svg>
+            {{ submittingOrder ? '正在创建订单…' : `确认支付 ¥${formatYuan(currentQuote.amountFen, currentQuote.action === 'upgrade' ? 2 : null)}` }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rules Dialog -->
+    <div v-if="rulesModalOpen" class="dialog-backdrop" @click.self="rulesModalOpen = false">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <div>
+            <h2>积分消耗规则</h2>
+            <p>同一操作，所有套餐使用相同扣分规则。</p>
+          </div>
+          <button type="button" class="close-button" aria-label="关闭" @click="rulesModalOpen = false">
+            <svg class="ico"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <div class="dialog-body">
+          <div class="table-surface">
+            <table class="rule-table">
+              <thead>
+                <tr><th>图片生成 / 编辑</th><th>1K</th><th>2K</th><th>4K</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>标准模型 · 单张</td><td>1 分</td><td>2 分</td><td>3 分</td></tr>
+                <tr><td>进阶模型 · 单张</td><td>2 分</td><td>3 分</td><td>4 分</td></tr>
+                <tr><td>四张组图</td><td colspan="3">所选单张积分消耗 × 4</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-surface" style="margin-top:15px">
+            <table class="rule-table">
+              <thead>
+                <tr><th>其他创作操作</th><th>每次消耗</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>热点趋势分析（单维度）</td><td>1 积分</td></tr>
+                <tr><td>内容选题重写</td><td>1 积分</td></tr>
+                <tr><td>视频脚本生成</td><td>1 积分</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="important-note" style="margin-top:16px">
+            <svg class="ico"><use href="#i-shield"/></svg>
+            <span>先扣最早到期的积分，最后扣永久积分。系统原因失败按原来源释放预占；跨到期任务的补偿规则由正式计费系统处理。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Balance Breakdown Modal -->
+    <div v-if="balanceModalOpen" class="dialog-backdrop" @click.self="balanceModalOpen = false">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <div>
+            <h2>我的积分账户</h2>
+            <p>有效余额与来源一目了然。</p>
+          </div>
+          <button type="button" class="close-button" aria-label="关闭" @click="balanceModalOpen = false">
+            <svg class="ico"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <div class="dialog-body">
+          <div class="balance-lot">
+            <div class="lot-head">
+              <div>
+                <h3><svg class="ico sm"><use href="#i-calendar"/></svg> 本期积分</h3>
+                <p>{{ currentSub ? `${currentSub.planName} · ${formatTime(currentSub.currentPeriodStart)} — ${formatTime(currentSub.currentPeriodEnd)}` : '当前没有有效的周期套餐' }}</p>
+              </div>
+              <strong class="num">{{ formatNumber(periodBalance) }}</strong>
+            </div>
+            <div class="lot-details">
+              <span>{{ currentSub ? `${formatTime(currentSub.currentPeriodEnd)} 到期，不结转` : '开通后获得首期积分' }}</span>
+              <span class="tag amber">优先使用</span>
+            </div>
+            <p v-if="currentSub">本期已发 {{ formatNumber(currentSub.currentPeriodGrant) }} 积分，已用 {{ formatNumber(currentSub.usedCredits) }} 积分。{{ currentSub.cycle === 'annual' ? `年付服务至 ${formatTime(currentSub.serviceEnd)}。` : '' }}</p>
+          </div>
+
+          <div class="balance-lot">
+            <div class="lot-head">
+              <div>
+                <h3><svg class="ico sm"><use href="#i-bolt"/></svg> 加油包积分</h3>
+                <p>来自已购买的加油包</p>
+              </div>
+              <strong class="num">{{ formatNumber(permanentBalance - legacyBalance) }}</strong>
+            </div>
+            <div class="lot-details">
+              <span>不设到期日</span>
+              <span>周期积分使用完后扣减</span>
+            </div>
+          </div>
+
+          <div class="balance-lot">
+            <div class="lot-head">
+              <div>
+                <h3><svg class="ico sm"><use href="#i-history"/></svg> 历史保留积分</h3>
+                <p>旧规则下已获得的剩余积分</p>
+              </div>
+              <strong class="num">{{ formatNumber(legacyBalance) }}</strong>
+            </div>
+            <div class="lot-details">
+              <span>保留原有永久有效规则</span>
+              <span class="tag neutral">不过期</span>
+            </div>
+          </div>
+
+          <button type="button" class="button primary" style="width:100%;margin-top:8px" @click="balanceModalOpen = false; selectTab('ledger')">
+            查看积分流水<svg class="ico sm"><use href="#i-arrow"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Change Rules Modal -->
+    <div v-if="changesModalOpen" class="dialog-backdrop" @click.self="changesModalOpen = false">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <div>
+            <h2>套餐如何续费、升级或更换？</h2>
+            <p>不覆盖已购权益，不把月度积分到期当作年付服务到期。</p>
+          </div>
+          <button type="button" class="close-button" aria-label="关闭" @click="changesModalOpen = false">
+            <svg class="ico"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <div class="dialog-body">
+          <div class="change-rule-row">
+            <span class="plan-mark"><svg class="ico"><use href="#i-leaf"/></svg></span>
+            <div>
+              <h3>未开通 / 已到期：立即开通 / 重新开通</h3>
+              <p>支付成功后开始新的服务期，首期积分立即到账。已有永久积分不受影响。</p>
+            </div>
+          </div>
+          <div class="change-rule-row">
+            <span class="plan-mark"><svg class="ico"><use href="#i-calendar"/></svg></span>
+            <div>
+              <h3>同档、同周期：续费套餐</h3>
+              <p>在当前已付费服务期结束后衔接一份新服务，本期积分及有效期不变。年付续费从这一年服务结束后开始。</p>
+            </div>
+          </div>
+          <div class="change-rule-row">
+            <span class="plan-mark"><svg class="ico"><use href="#i-trend"/></svg></span>
+            <div>
+              <h3>同周期升档：补差价，立即升级</h3>
+              <p>按剩余服务时长计算补款；本期按剩余时长补发增量积分，现有积分、已用记录及到期日不变。年付后续尚未发放的月份使用新档位额度。</p>
+            </div>
+          </div>
+          <div class="change-rule-row">
+            <span class="plan-mark"><svg class="ico"><use href="#i-history"/></svg></span>
+            <div>
+              <h3>降档 / 月付年付切换：到期后生效</h3>
+              <p>可以提前购买，完整保留当前已付费服务，结束后再启用新套餐。本方案手动购买，支付时会明确列出新服务的开始和结束时间。</p>
+            </div>
+          </div>
+          <div class="important-note">
+            <svg class="ico"><use href="#i-shield"/></svg>
+            <span>每个账户只保留一个待生效套餐订单。已有安排时，先处理该订单再做新的续费或变更，避免重复购买。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scheduled Sub Modal -->
+    <div v-if="scheduledModalOpen" class="dialog-backdrop" @click.self="scheduledModalOpen = false">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <div>
+            <h2>已购套餐安排</h2>
+            <p>新服务开始前，当前已付费权益保持不变。</p>
+          </div>
+          <button type="button" class="close-button" aria-label="关闭" @click="scheduledModalOpen = false">
+            <svg class="ico"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <div v-if="scheduledSub" class="dialog-body">
+          <div class="checkout-product">
+            <div>
+              <h3>{{ scheduledSub.planName }} · {{ scheduledSub.cycle === 'annual' ? '年付' : '月付' }}</h3>
+              <p>{{ formatNumber(scheduledSub.monthlyCredits) }} 积分 / 月</p>
+            </div>
+            <span class="tag green">已支付 · 待生效</span>
+          </div>
+          <div class="order-detail-list">
+            <div><span>实际支付</span><b>¥{{ formatYuan(scheduledSub.amountFen) }}</b></div>
+            <div><span>新服务开始</span><b>{{ formatTime(scheduledSub.startAt) }}</b></div>
+            <div><span>新服务结束</span><b>{{ formatTime(scheduledSub.endAt) }}</b></div>
+            <div><span>当前可用积分</span><b>{{ formatNumber(totalBalance) }} 积分</b></div>
+          </div>
+          <div class="important-note">
+            <svg class="ico"><use href="#i-info"/></svg>
+            <span>已有一个待生效套餐，不重复收取续费或变更费用。如需调整请联系客服。</span>
+          </div>
+          <button type="button" class="button" style="width:100%;margin-top:15px" @click="scheduledModalOpen = false; selectTab('orders')">
+            查看订单
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Order Detail Modal -->
+    <div v-if="orderDetailModalOpen" class="dialog-backdrop" @click.self="orderDetailModalOpen = false">
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-head">
+          <div>
+            <h2>订单详情</h2>
+            <p>查看订单信息与履约规则。</p>
+          </div>
+          <button type="button" class="close-button" aria-label="关闭" @click="orderDetailModalOpen = false">
+            <svg class="ico"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <div v-if="selectedOrder" class="dialog-body">
+          <div class="checkout-product">
+            <div>
+              <h3>{{ selectedOrder.planName }}</h3>
+              <p>{{ selectedOrder.orderAction === 'upgrade' ? '升级差价订单' : selectedOrder.fulfillmentStatus === 'scheduled' ? '已购买，等待生效' : '已支付' }}</p>
+            </div>
+            <strong class="checkout-price num"><small>¥</small>{{ selectedOrder.amountYuan || formatYuan(selectedOrder.amountFen) }}</strong>
+          </div>
+          <div class="order-detail-list">
+            <div><span>订单号</span><b style="font-size:10px">{{ selectedOrder.outTradeNo }}</b></div>
+            <div><span>创建时间</span><b>{{ formatTime(selectedOrder.createdAt) }}</b></div>
+            <div><span>支付方式</span><b>{{ selectedOrder.provider === 'wxpay' ? '微信支付' : '支付宝' }}</b></div>
+            <div><span>额度</span><b>{{ selectedOrder.orderKind === 'topup' ? `${formatNumber(selectedOrder.planCredits)} 永久积分` : selectedOrder.orderAction === 'upgrade' ? `本期补发 ${formatNumber(selectedOrder.issuedNow)} 积分` : `${formatNumber(selectedOrder.planCredits)} 积分 / 月` }}</b></div>
+            <div v-if="selectedOrder.serviceStart"><span>服务开始</span><b>{{ formatTime(selectedOrder.serviceStart) }}</b></div>
+            <div v-if="selectedOrder.serviceEnd"><span>服务结束</span><b>{{ formatTime(selectedOrder.serviceEnd) }}</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast" :class="{ show: toastVisible }" role="status" aria-live="polite">
+      <svg class="ico sm"><use href="#i-info"/></svg>
+      <span>{{ toastMessage }}</span>
+    </div>
+  </div>
 </template>
 
 <style scoped>
-.billing-panel{width:100%;max-width:none;color:var(--workspace-text)}
-.billing-back{margin:0 0 18px;padding:0;border:0;background:transparent;color:var(--workspace-brand-ink);font:inherit;font-weight:700;cursor:pointer}
-.billing-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:4px 0 8px}
-.billing-kicker{display:block;margin-bottom:6px;color:var(--workspace-brand);font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
-.billing-title{margin:0;font-family:var(--workspace-font-heading);font-size:2rem;letter-spacing:-.04em}.billing-subtitle{margin:9px 0 0;color:var(--workspace-text-muted);font-size:14px;line-height:1.7}
-.billing-alert{margin:0 0 16px;padding:12px 15px;border:1px solid #f0d9a4;border-radius:10px;background:#fffaf0;color:#805a13}.billing-alert--error{border-color:#f4c8c8;background:#fff5f5;color:#a43b3b}
-.billing-loading,.billing-empty{margin-top:24px;padding:48px;border:1px solid var(--workspace-border);border-radius:14px;background:#fff;text-align:center}
-.billing-plans-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,320px));gap:18px;margin-top:28px}.billing-plan-card{position:relative;padding:24px;border:1px solid var(--workspace-border);border-radius:16px;background:#fff;box-shadow:0 8px 28px rgba(91,67,67,.05);transition:.18s ease}.billing-plan-card:hover,.billing-plan-card--selected{border-color:rgba(216,68,68,.42);box-shadow:0 14px 32px rgba(138,68,68,.1);transform:translateY(-2px)}
-.billing-plan-selected{position:absolute;top:16px;right:16px;padding:5px 9px;border-radius:999px;background:#fff0ed;color:var(--workspace-brand);font-size:11px;font-weight:800}.billing-plan-icon{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:#f7e8e4;color:var(--workspace-brand);font-weight:900}.billing-plan-card h2{margin:18px 0 0;font-size:18px}.billing-plan-credits{margin:10px 0 0;color:var(--workspace-brand-ink)}.billing-plan-credits strong{font-size:22px}.billing-plan-price{margin:14px 0 20px;font-size:26px;font-weight:800;letter-spacing:-.03em}.billing-plan-price span{margin-right:2px;font-size:15px}.billing-plan-action{width:100%;min-height:42px;border-radius:10px}
-
-/* 拦截弹窗 (Image #3) */
-.modal-backdrop{position:fixed;inset:0;z-index:999;display:grid;place-items:center;padding:20px;background:rgba(15,23,42,.45);backdrop-filter:blur(4px)}
-.notice-dialog{width:100%;max-width:440px;overflow:hidden;border:1px solid #e2e8f0;border-radius:12px;background:#fff;box-shadow:0 20px 45px rgba(0,0,0,.15);animation:dialogPop .2s cubic-bezier(.16,1,.3,1)}
-@keyframes dialogPop{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
-.notice-dialog-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #f1f5f9}
-.notice-dialog-title{display:flex;align-items:center;gap:8px}
-.info-icon{display:grid;width:24px;height:24px;place-items:center;border-radius:50%;background:#d84444;color:#fff;font-size:14px;font-weight:900}
-.notice-dialog-title strong{color:#0f172a;font-size:16px}
-.notice-dialog-close{padding:4px 8px;border:0;background:transparent;color:#94a3b8;font-size:16px;cursor:pointer}
-.notice-dialog-close:hover{color:#334155}
-.notice-dialog-body{padding:24px 20px;color:#334155;font-size:14px;line-height:1.6}
-.notice-dialog-foot{display:flex;justify-content:flex-end;gap:12px;padding:14px 20px;background:#f8fafc;border-top:1px solid #f1f5f9}
-.btn-cancel-return{min-height:36px;padding:0 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
-.btn-cancel-return:hover{background:#f1f5f9}
-.btn-cancel-confirm{min-height:36px;padding:0 18px;border:0;border-radius:6px;background:#d84444;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
-.btn-cancel-confirm:hover{background:#c83b3b}
-
-/* 确认支付方式界面 (Image #1) */
-.checkout-screen{display:grid;gap:24px;padding:4px 0}
-.checkout-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-.checkout-card{padding:26px;border:1px solid #e2e8f0;border-radius:14px;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.03)}
-.checkout-card-head{display:flex;align-items:center;gap:10px;margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid #f1f5f9}
-.checkout-card-head h2{margin:0;color:#1e293b;font-size:17px;font-weight:700}
-.head-icon{font-size:18px}
-.checkout-form-group{margin-bottom:16px}
-.checkout-form-group label{display:block;margin-bottom:6px;color:#64748b;font-size:13px;font-weight:600}
-.checkout-field-readonly{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 14px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;color:#1e293b;font-size:14px;font-weight:500}
-.field-icon{font-size:15px;color:#64748b}
-.checkout-amount-box{display:flex;align-items:center;min-height:50px;padding:0 16px;border:1.5px solid rgba(216,68,68,.32);border-radius:8px;background:#fff8f7;color:#d84444}
-.checkout-amount-box strong{font-size:24px;font-weight:800}
-
-.payment-method-list{display:grid;gap:14px}
-.method-card{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border:2px solid #e2e8f0;border-radius:12px;background:#fff;cursor:pointer;transition:.18s ease}
-.method-card:hover{border-color:#94a3b8;background:#f8fafc}
-.method-card--active{border-color:#d84444;background:#fff9f8}
-.method-brand{display:flex;align-items:center;gap:14px}
-.alipay-icon-box,.wxpay-icon-box{display:grid;width:44px;height:44px;place-items:center;border-radius:10px;color:#fff;font-size:22px;font-weight:900}
-.alipay-icon-box{background:#1672df}
-.wxpay-icon-box{background:#07c160}
-.method-labels{display:grid;gap:2px}
-.method-labels strong{color:#0f172a;font-size:16px}
-.method-labels small{color:#64748b;font-size:12px;text-transform:uppercase}
-.method-radio{display:grid;place-items:center}
-.radio-checked{display:grid;width:24px;height:24px;place-items:center;border-radius:50%;background:#d84444;color:#fff;font-size:14px;font-weight:900}
-.radio-unchecked{width:22px;height:22px;border:2px solid #cbd5e1;border-radius:50%}
-
-.checkout-submit-bar{margin-top:10px}
-.checkout-submit-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:50px;border:0;border-radius:10px;background:#d84444;color:#fff;font:inherit;font-size:16px;font-weight:700;box-shadow:0 8px 24px rgba(216,68,68,.25);cursor:pointer;transition:.15s ease}
-.checkout-submit-btn:hover:not(:disabled){background:#c83b3b;transform:translateY(-1px)}
-.submit-check-icon{font-size:18px;font-weight:900}
-
-/* 支付界面 (Image #2) */
-.payment-screen{overflow:hidden;border:1px solid #d9e0ec;border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(45,62,95,.12)}
-.payment-brandbar{display:flex;align-items:center;gap:13px;padding:20px 28px;background:linear-gradient(120deg,#3184f5,#1863d4);color:#fff}
-.payment-brandbar--wxpay{background:linear-gradient(120deg,#07c160,#059648)}
-.alipay-mark,.wxpay-mark{display:grid;width:52px;height:52px;place-items:center;border-radius:12px;background:#fff;font-size:30px;font-weight:900}
-.alipay-mark{color:#1684df}
-.wxpay-mark{color:#07c160}
-.payment-brandbar div{display:grid}
-.payment-brandbar strong{font-size:24px}
-.payment-brandbar small{font-size:11px;font-weight:800}
-.payment-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.8fr)}
-.payment-summary,.payment-check-panel{min-height:360px;padding:38px}
-.payment-summary{border-right:1px solid #e3e7ef}
-.payment-eyebrow{color:#8290a5;font-size:13px}
-.payment-amount{display:block;margin:8px 0 26px;font-size:40px;letter-spacing:-.04em}
-.payment-amount small{font-size:18px}
-.payment-actions{display:flex;gap:12px}
-.payment-primary,.payment-secondary,.payment-check{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:10px;font:inherit;font-weight:800;cursor:pointer}
-.payment-primary{background:#1672df;color:#fff;text-decoration:none}
-.payment-primary--wxpay{background:#07c160}
-.payment-secondary,.payment-check{border:1px solid #dce2ec;background:#f8faff;color:#253044}
-.payment-summary p{max-width:480px;margin-top:30px;color:#657086;line-height:1.7}
-.payment-check-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
-.payment-qrcode{width:248px;max-width:100%;height:auto;margin-bottom:18px;border:10px solid #fff;border-radius:12px;box-shadow:0 10px 30px rgba(36,71,118,.12)}
-.payment-qr-loading{display:grid;width:248px;max-width:100%;min-height:248px;place-items:center;margin-bottom:18px;border-radius:12px;background:#f5f8fc;color:#7c8799}
-.payment-check-panel>strong{font-size:20px}
-.payment-check-panel>small{margin:9px 0 20px;color:#7c8799}
-.payment-meta{display:grid;grid-template-columns:.7fr 1fr .7fr 2fr;gap:18px;padding:18px 28px;border-top:1px solid #e3e7ef;background:#fbfcff}
-.payment-meta span{display:grid;gap:4px}
-.payment-meta small{color:#8792a4}
-.payment-meta b{overflow-wrap:anywhere}
-.payment-qr-error{padding:20px;border:1px solid #f2c8c8;background:#fff6f6;color:#a43b3b;line-height:1.6}
-
-/* 订单详情 */
-.paid-success{display:flex;flex-direction:column;align-items:center;padding:48px 24px;margin-bottom:20px;border:1px solid var(--workspace-border);border-radius:16px;background:#fff;text-align:center}
-.paid-check{display:grid;width:86px;height:86px;place-items:center;border-radius:50%;background:#2fb61e;color:#fff;font-size:52px;font-weight:900}
-.paid-success h1{margin:20px 0 4px}
-.paid-success p{margin:0 0 22px;color:var(--workspace-text-muted)}
-.success-return-btn{min-height:42px;padding:0 20px;border:1px solid rgba(216,68,68,.18);border-radius:10px;background:#d84444;color:#fff;font:inherit;font-weight:800;box-shadow:0 8px 20px rgba(216,68,68,.18);cursor:pointer}
-.success-return-btn:hover{background:#c83b3b;transform:translateY(-1px)}
-.order-detail-layout{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(320px,.8fr);gap:20px}
-.order-detail-layout--paid{grid-template-columns:1fr}
-.order-detail-main{display:grid;gap:16px}
-.detail-card{padding:24px;border:1px solid var(--workspace-border);border-radius:14px;background:#fff}
-.detail-card h2,.detail-checkout h2{margin:0 0 22px;font-size:18px}
-.detail-card-head{display:flex;align-items:center;justify-content:space-between}
-.detail-card dl{display:grid;grid-template-columns:150px 1fr;gap:12px;margin:0}
-.detail-card dt{color:#92909a}
-.detail-card dd{margin:0;overflow-wrap:anywhere}
-.danger-btn{padding:8px 14px;border:0;border-radius:999px;background:#d84444;color:#fff;font:inherit;font-weight:700;cursor:pointer}
-.detail-payment-method{display:grid;gap:10px}
-.alipay-inline,.wxpay-inline{display:flex;align-items:center;gap:10px}
-.alipay-inline b,.wxpay-inline b{display:grid;width:34px;height:34px;place-items:center;border-radius:8px;color:#fff}
-.alipay-inline b{background:#1684df}
-.wxpay-inline b{background:#07c160}
-.detail-checkout{align-self:start;padding:24px;border-radius:14px;background:#222c3b;color:#fff}
-.detail-checkout>div{display:flex;justify-content:space-between;margin-bottom:38px}
-.detail-checkout>small{color:#94a0b2}
-.detail-checkout>strong{display:block;margin:6px 0 18px;font-size:30px}
-.checkout-btn{width:100%;min-height:42px;border:0;border-radius:8px;background:#1672df;color:#fff;font:inherit;font-weight:800;cursor:pointer}
-
-/* 订单列表 */
-.billing-orders{margin-top:52px;scroll-margin-top:24px}
-.billing-orders-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
-.billing-orders-head h2{margin:0;font-size:22px}
-.billing-refresh{min-height:38px;padding:0 14px;border:1px solid var(--workspace-border);border-radius:9px;background:#fff;color:var(--workspace-text);font:inherit;font-weight:700;cursor:pointer}
-.billing-table-wrap{width:100%;overflow:auto;border:1px solid var(--workspace-border);border-radius:14px;background:#fff}
-.billing-table{width:100%;min-width:960px;border-collapse:collapse}
-.billing-table th,.billing-table td{padding:15px 18px;border-bottom:1px solid #eee8e6;text-align:left;vertical-align:middle}
-.billing-table th{background:#faf7f5;color:#766d6f;font-size:12px;font-weight:800}
-.billing-table tbody tr:last-child td{border-bottom:0}
-.billing-table td{font-size:13px}
-.billing-table td:nth-child(2){display:grid;gap:3px}
-.billing-table td small{color:var(--workspace-text-muted)}
-.order-link,.text-action{padding:0;border:0;background:transparent;color:var(--workspace-brand-ink);font:inherit;font-weight:700;cursor:pointer}
-.status-dot{display:inline-flex;align-items:center;gap:7px}
-.status-dot:before{width:7px;height:7px;border-radius:50%;background:#9b9395;content:""}
-.status-dot[data-tone="pending"]:before{background:#e14e4e}
-.status-dot[data-tone="success"]:before{background:#24a565}
-.table-provider-badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
-.table-provider-badge--alipay{background:#edf4fc;color:#1672df}
-.table-provider-badge--wx{background:#eefbf3;color:#07c160}
-.table-actions{display:flex;align-items:center;gap:12px;white-space:nowrap}
-.text-action--muted{color:#8e8587}
-.table-actions a{color:var(--workspace-brand-ink);font-weight:700;text-decoration:none}
-.billing-orders-empty{padding:32px;border:1px dashed var(--workspace-border);border-radius:12px;color:var(--workspace-text-muted);text-align:center}
-.close-result[data-tone="success"]{color:#248657}
-.close-result[data-tone="error"]{max-width:220px;color:#b83e3e;white-space:normal}
-
-@media(max-width:900px){
-  .billing-head{display:grid}
-  .billing-plans-grid{grid-template-columns:1fr}
-  .checkout-grid{grid-template-columns:1fr}
-  .payment-grid,.order-detail-layout{grid-template-columns:1fr}
-  .payment-summary{border-right:0;border-bottom:1px solid #e3e7ef}
-  .payment-meta{grid-template-columns:1fr 1fr}
-  .detail-checkout{order:-1}
+.billing-view-root {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  color: var(--workspace-text, #120f10);
+  font-family: var(--font-family-base, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif);
 }
-@media(max-width:600px){
-  .payment-summary,.payment-check-panel{min-height:auto;padding:26px 20px}
-  .payment-actions{display:grid}
-  .payment-meta{grid-template-columns:1fr}
-  .detail-card{padding:19px}
-  .detail-card dl{grid-template-columns:1fr;gap:5px}
-  .detail-card dd{margin-bottom:10px}
-  .billing-table-wrap{border-radius:10px}
+
+/* Typography & SVGs */
+.ico {
+  width: 16px;
+  height: 16px;
+  vertical-align: -2px;
+  flex-shrink: 0;
+}
+.ico.sm {
+  width: 13px;
+  height: 13px;
+}
+.num {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Buttons */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--workspace-border-strong, rgba(18,16,17,.12));
+  border-radius: var(--workspace-radius, 8px);
+  background: #fff;
+  color: var(--workspace-text, #120f10);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+.button:hover {
+  border-color: rgba(216,68,68,.3);
+  color: var(--workspace-brand, #d84444);
+}
+.button.primary {
+  border-color: var(--workspace-brand, #d84444);
+  background: var(--workspace-brand, #d84444);
+  color: #fff;
+}
+.button.primary:hover {
+  background: var(--workspace-brand-hover, #c83b3b);
+}
+.button.subtle {
+  border-color: rgba(18,16,17,.1);
+  background: #fff;
+  color: var(--workspace-text, #120f10);
+}
+.button.subtle:hover {
+  background: #faf7f5;
+}
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--workspace-brand, #d84444);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.text-button:hover {
+  text-decoration: underline;
+}
+
+/* Tags */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff0ed;
+  color: var(--workspace-brand, #d84444);
+  font-size: 11px;
+  font-weight: 600;
+}
+.tag.neutral {
+  background: #f0ece9;
+  color: #63544d;
+}
+.tag.green {
+  background: #e9f5f0;
+  color: #2b735f;
+}
+.tag.amber {
+  background: #fff6e8;
+  color: #94651e;
+}
+
+/* Topline & Header */
+.topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.breadcrumbs b {
+  color: var(--workspace-text, #120f10);
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.page-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px 0;
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+}
+
+/* Wallet Section */
+.wallet {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.wallet-cell {
+  background: #fff;
+  border: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  border-radius: var(--workspace-radius, 8px);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 14px rgba(80,44,44,.02);
+}
+.wallet-cell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  font-weight: 500;
+}
+.balance {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.balance strong {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
+  color: #120f10;
+}
+.balance small {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.balance-denominator {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.quota-track {
+  width: 100%;
+  height: 6px;
+  background: #eee8e4;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.quota-track span {
+  display: block;
+  height: 100%;
+  background: var(--workspace-brand, #d84444);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.permanent-note {
+  font-size: 11px;
+  color: #8c786d;
+  margin-bottom: 10px;
+}
+.wallet-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+
+/* Alert Strips */
+.wallet-rule,
+.subscription-status,
+.pending-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-radius: var(--workspace-radius, 8px);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.wallet-rule {
+  background: #fbf8f5;
+  border: 1px solid rgba(18,16,17,.06);
+  color: #53453e;
+}
+.wallet-rule-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.subscription-status {
+  background: #fff8f6;
+  border: 1px solid rgba(216,68,68,.12);
+  color: #633f38;
+}
+.pending-banner {
+  background: #f0f9f5;
+  border: 1px solid rgba(54,125,105,.2);
+  color: #245e4e;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  margin: 18px 0 22px;
+  padding-bottom: 2px;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--workspace-text-muted, #6f6368);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: -3px;
+}
+.tab[aria-selected="true"] {
+  color: var(--workspace-brand, #d84444);
+  border-bottom-color: var(--workspace-brand, #d84444);
+}
+.tab-note {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #f0ece9;
+  color: #63544d;
+}
+
+/* Section Head */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.section-head h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+}
+.section-head p {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+}
+
+/* Cycle Toggle */
+.billing-toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.billing-toggle {
+  display: inline-flex;
+  background: #f0ece9;
+  padding: 3px;
+  border-radius: 999px;
+}
+.cycle-button {
+  border: 0;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #63544d;
+  cursor: pointer;
+}
+.cycle-button.active {
+  background: #fff;
+  color: #120f10;
+  box-shadow: 0 2px 6px rgba(0,0,0,.06);
+}
+.save-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--workspace-brand, #d84444);
+  background: #fff0ed;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+/* Plans Grid */
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.plan-card {
+  position: relative;
+  background: #fff;
+  border: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(80,44,44,.03);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.plan-card.featured {
+  border-color: rgba(216,68,68,.3);
+  box-shadow: 0 10px 28px rgba(216,68,68,.06);
+}
+.recommend {
+  position: absolute;
+  top: -10px;
+  right: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--workspace-brand, #d84444);
+  color: #fff;
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+.plan-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.plan-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plan-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #fff0ed;
+  color: var(--workspace-brand, #d84444);
+}
+.plan-name h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+}
+.plan-tag {
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  background: #f4efeb;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.plan-tag.current {
+  background: #fff0ed;
+  color: var(--workspace-brand, #d84444);
+  font-weight: 600;
+}
+.plan-desc {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0 0 16px 0;
+  min-height: 34px;
+}
+.price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+.price-currency {
+  font-size: 18px;
+  font-weight: 700;
+  color: #120f10;
+}
+.price-number {
+  font-size: 32px;
+  font-weight: 800;
+  color: #120f10;
+}
+.price-unit {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.price-caption {
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin-bottom: 16px;
+}
+.quota-block {
+  background: #fdfbf9;
+  border: 1px solid rgba(18,16,17,.06);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.quota-big {
+  font-size: 20px;
+  font-weight: 800;
+  color: #120f10;
+  margin-bottom: 4px;
+}
+.quota-big span {
+  font-size: 12px;
+  font-weight: normal;
+  color: var(--workspace-text-muted, #6f6368);
+  margin-left: 4px;
+}
+.quota-desc {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.plan-use-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8c786d;
+  margin: 0 0 8px 0;
+}
+.plan-feature {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--workspace-text-body, #4b4244);
+  margin-bottom: 6px;
+}
+.plan-feature svg {
+  color: #2b735f;
+}
+.plan-bottom {
+  margin-top: auto;
+  padding-top: 16px;
+}
+.plan-cta {
+  width: 100%;
+}
+.plan-bottom-note {
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  text-align: center;
+  margin: 6px 0 0 0;
+  min-height: 16px;
+}
+
+.usage-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0 0 16px 0;
+}
+.common-benefits {
+  background: #fbf8f5;
+  border: 1px solid rgba(18,16,17,.06);
+  border-radius: 8px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.benefit-items {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--workspace-text-body, #4b4244);
+  font-size: 12px;
+}
+.benefit-items span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.next-period-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #63544d;
+  background: #fdfbf9;
+  border: 1px solid rgba(18,16,17,.06);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+/* Topup Tab */
+.topup-intro {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #fef8ee;
+  border: 1px solid rgba(148,101,30,.15);
+  color: #795318;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 12px;
+  margin-bottom: 20px;
+}
+.topup-credit-hero {
+  margin: 10px 0 14px;
+}
+.topup-credit-hero strong {
+  font-size: 32px;
+  font-weight: 800;
+  color: #120f10;
+}
+.topup-credit-hero span {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin-left: 6px;
+}
+.compare-box {
+  background: #fff;
+  border: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 24px;
+}
+.compare-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(18,16,17,.06);
+}
+.compare-top h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+}
+.compare-top p {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+}
+.compare-options {
+  display: flex;
+  gap: 12px;
+}
+.compare-option {
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #f8f5f2;
+  font-size: 12px;
+}
+.compare-option span {
+  display: block;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.compare-option strong {
+  color: #120f10;
+}
+.compare-option.active {
+  background: #fff0ed;
+  border: 1px solid rgba(216,68,68,.18);
+}
+.compare-option.active span {
+  color: #a44848;
+}
+.compare-option.active strong {
+  color: var(--workspace-brand, #d84444);
+}
+.compare-bottom {
+  padding: 10px 24px;
+  background: #fdfbf9;
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Ledger Tab */
+.ledger-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.ledger-stat {
+  background: #fff;
+  border: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  border-radius: 8px;
+  padding: 14px 18px;
+}
+.ledger-stat span {
+  display: block;
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin-bottom: 4px;
+}
+.ledger-stat strong {
+  font-size: 24px;
+  font-weight: 800;
+}
+
+/* Tables */
+.table-surface {
+  background: #fff;
+  border: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  border-radius: 8px;
+  overflow: hidden;
+}
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(18,16,17,.06);
+}
+.filter-group {
+  display: flex;
+  gap: 4px;
+  background: #f4efeb;
+  padding: 2px;
+  border-radius: 6px;
+}
+.filter {
+  border: 0;
+  background: transparent;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #63544d;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.filter.active {
+  background: #fff;
+  color: #120f10;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+.search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f8f5f2;
+  border: 1px solid rgba(18,16,17,.08);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+.search-wrap input {
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  outline: none;
+  width: 180px;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+th {
+  background: #fdfbf9;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--workspace-text-muted, #6f6368);
+  border-bottom: 1px solid rgba(18,16,17,.06);
+}
+td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(18,16,17,.04);
+  color: var(--workspace-text-body, #4b4244);
+}
+.primary-cell strong {
+  display: block;
+  color: #120f10;
+}
+.primary-cell small {
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+td small {
+  display: block;
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.delta {
+  font-weight: 700;
+}
+.delta.positive {
+  color: #2b735f;
+}
+.delta.negative {
+  color: #4b4244;
+}
+.status {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #e9f5f0;
+  color: #2b735f;
+}
+.status.closed {
+  background: #f4efeb;
+  color: #8c786d;
+}
+.table-empty {
+  text-align: center;
+  padding: 36px 16px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.table-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  background: #fdfbf9;
+}
+
+/* FAQ */
+.faq {
+  margin: 36px 0 24px;
+}
+.faq-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.faq-heading h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+}
+.faq-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+details {
+  background: #fff;
+  border: 1px solid var(--workspace-border, rgba(18,16,17,.08));
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: #120f10;
+  cursor: pointer;
+  user-select: none;
+}
+details p {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  line-height: 1.6;
+  margin: 10px 0 0 0;
+}
+
+/* Page Footer */
+.page-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 0 36px;
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  border-top: 1px solid rgba(18,16,17,.06);
+}
+
+/* Dialog / Modals */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18,16,17,.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 16px;
+}
+.dialog {
+  background: #fff;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 20px 48px rgba(0,0,0,.15);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(18,16,17,.06);
+}
+.dialog-head h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+}
+.dialog-head p {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+}
+.close-button {
+  border: 0;
+  background: transparent;
+  color: var(--workspace-text-muted, #6f6368);
+  cursor: pointer;
+  padding: 4px;
+}
+.dialog-body {
+  padding: 20px 24px;
+}
+.checkout-product {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fbf8f5;
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.checkout-product-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.checkout-product h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 2px 0;
+}
+.checkout-product p {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+}
+.checkout-price {
+  font-size: 24px;
+  font-weight: 800;
+  color: #120f10;
+  text-align: right;
+}
+.checkout-price small {
+  font-size: 14px;
+}
+.price-label {
+  display: block;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--workspace-brand, #d84444);
+}
+.checkout-specs {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 8px 16px;
+  font-size: 12px;
+  margin: 0 0 16px 0;
+}
+.checkout-specs dt {
+  color: var(--workspace-text-muted, #6f6368);
+}
+.checkout-specs dd {
+  margin: 0;
+  color: var(--workspace-text, #120f10);
+}
+.important-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #fff8f6;
+  border: 1px solid rgba(216,68,68,.12);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #633f38;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.checkout-details {
+  margin-bottom: 16px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: #fdfbf9;
+  padding: 10px 14px;
+  border: 1px solid rgba(18,16,17,.06);
+}
+.checkout-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--workspace-brand, #d84444);
+}
+.order-detail-list {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.order-detail-list div {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px dashed rgba(18,16,17,.06);
+  padding-bottom: 4px;
+}
+.order-detail-list span {
+  color: var(--workspace-text-muted, #6f6368);
+}
+.payment-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #120f10;
+  margin: 0 0 8px 0;
+}
+.payment-methods {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.payment-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(18,16,17,.1);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+.payment-option.selected {
+  border-color: var(--workspace-brand, #d84444);
+  background: #fff8f6;
+}
+.payment-option input {
+  margin-left: auto;
+}
+.pay-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+}
+.pay-mark.alipay {
+  background: #1677ff;
+}
+.pay-mark.wechat {
+  background: #07c160;
+}
+.acknowledge {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.acknowledge input {
+  margin-top: 2px;
+}
+.checkout-footer {
+  padding: 16px 24px;
+  border-top: 1px solid rgba(18,16,17,.06);
+  background: #fdfbf9;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+.total-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.total-row > span {
+  font-size: 13px;
+  color: var(--workspace-text-body, #4b4244);
+}
+.total-row .saving {
+  display: block;
+  font-size: 11px;
+  color: var(--workspace-brand, #d84444);
+}
+.total-row strong {
+  font-size: 26px;
+  font-weight: 800;
+  color: #120f10;
+}
+.payment-button {
+  width: 100%;
+  min-height: 44px;
+  font-size: 15px;
+}
+
+/* QR Payment Area */
+.qr-payment-area {
+  text-align: center;
+  padding: 16px 0;
+}
+.qr-container {
+  display: inline-block;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid rgba(18,16,17,.1);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.qr-image {
+  display: block;
+  width: 180px;
+  height: 180px;
+}
+.qr-loading {
+  width: 180px;
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.qr-hint {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0 0 12px 0;
+}
+.qr-action-row {
+  margin-bottom: 8px;
+}
+.test-settle-row {
+  margin-top: 8px;
+}
+
+/* Success View */
+.success-body {
+  text-align: center;
+  padding: 30px 24px;
+}
+.success-circle {
+  width: 52px;
+  height: 52px;
+  background: #e9f5f0;
+  color: #2b735f;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+.success-circle svg {
+  width: 28px;
+  height: 28px;
+}
+.success-body h3 {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 0 0 8px 0;
+}
+.success-body p {
+  font-size: 13px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0 0 18px 0;
+  line-height: 1.5;
+}
+.success-facts {
+  background: #fdfbf9;
+  border: 1px solid rgba(18,16,17,.06);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  text-align: left;
+  font-size: 12px;
+}
+.success-facts div {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+.success-facts span {
+  color: var(--workspace-text-muted, #6f6368);
+}
+.success-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Balance lot in breakdown */
+.balance-lot {
+  background: #fbf8f5;
+  border: 1px solid rgba(18,16,17,.06);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.lot-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.lot-head h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 2px 0;
+}
+.lot-head p {
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+}
+.lot-head strong {
+  font-size: 22px;
+  font-weight: 800;
+  color: #120f10;
+}
+.lot-details {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--workspace-text-muted, #6f6368);
+}
+.balance-lot > p {
+  font-size: 11px;
+  color: #8c786d;
+  margin: 6px 0 0 0;
+}
+
+/* Change Rule Row */
+.change-rule-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.change-rule-row h3 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+}
+.change-rule-row p {
+  font-size: 12px;
+  color: var(--workspace-text-muted, #6f6368);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Rule Table */
+.rule-table {
+  width: 100%;
+  font-size: 12px;
+}
+.rule-table th, .rule-table td {
+  padding: 8px 12px;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #120f10;
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.2s ease;
+  pointer-events: none;
+  z-index: 1000;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .wallet, .plans-grid, .faq-grid {
+    grid-template-columns: 1fr;
+  }
+  .common-benefits {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .benefit-items {
+    flex-wrap: wrap;
+  }
+  .compare-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
 }
 </style>

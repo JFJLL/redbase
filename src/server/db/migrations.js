@@ -531,6 +531,167 @@ const VERSIONED_MIGRATIONS = [
       }
     },
   },
+  {
+    version: 13,
+    name: "billing-v2-subscription-ledger",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS subscriptions (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          plan_id TEXT NOT NULL,
+          cycle TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          service_start TEXT NOT NULL,
+          service_end TEXT NOT NULL,
+          anchor_day INTEGER NOT NULL,
+          current_period_start TEXT NOT NULL,
+          current_period_end TEXT NOT NULL,
+          current_period_grant INTEGER NOT NULL,
+          upgrade_cumulative_increment INTEGER NOT NULL DEFAULT 0,
+          pricing_basis_fen INTEGER NOT NULL,
+          actual_paid_total_fen INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_status
+          ON subscriptions(user_id, status);
+
+        CREATE TABLE IF NOT EXISTS subscription_schedules (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          order_id INTEGER NOT NULL,
+          plan_id TEXT NOT NULL,
+          cycle TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'scheduled',
+          start_at TEXT NOT NULL,
+          end_at TEXT NOT NULL,
+          amount_fen INTEGER NOT NULL,
+          monthly_credits INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_schedules_unique_pending
+          ON subscription_schedules(user_id) WHERE status = 'scheduled';
+
+        CREATE TABLE IF NOT EXISTS subscription_grants (
+          id INTEGER PRIMARY KEY,
+          subscription_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          period_index INTEGER NOT NULL,
+          period_start TEXT NOT NULL,
+          period_end TEXT NOT NULL,
+          credits INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          granted_at TEXT,
+          credit_lot_id INTEGER,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_grants_unique
+          ON subscription_grants(subscription_id, period_index);
+
+        CREATE TABLE IF NOT EXISTS credit_lots (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          source_type TEXT NOT NULL,
+          source_label TEXT NOT NULL,
+          order_id INTEGER,
+          subscription_id INTEGER,
+          grant_id INTEGER,
+          initial_credits INTEGER NOT NULL,
+          remaining_credits INTEGER NOT NULL,
+          reserved_credits INTEGER NOT NULL DEFAULT 0,
+          used_credits INTEGER NOT NULL DEFAULT 0,
+          starts_at TEXT NOT NULL,
+          expires_at TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_credit_lots_user_status_exp
+          ON credit_lots(user_id, status, expires_at);
+        CREATE INDEX IF NOT EXISTS idx_credit_lots_user_active
+          ON credit_lots(user_id, status);
+
+        CREATE TABLE IF NOT EXISTS credit_lot_allocations (
+          id INTEGER PRIMARY KEY,
+          credit_event_id INTEGER NOT NULL,
+          lot_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          credits_used INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_lot_alloc_event
+          ON credit_lot_allocations(credit_event_id);
+        CREATE INDEX IF NOT EXISTS idx_lot_alloc_lot
+          ON credit_lot_allocations(lot_id);
+
+        CREATE TABLE IF NOT EXISTS billing_quotes (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          cycle TEXT,
+          catalog_version TEXT NOT NULL,
+          amount_fen INTEGER NOT NULL,
+          issued_now INTEGER NOT NULL,
+          start_at TEXT NOT NULL,
+          end_at TEXT,
+          period_end_at TEXT,
+          scheduled INTEGER NOT NULL DEFAULT 0,
+          meta_json TEXT NOT NULL DEFAULT '{}',
+          expires_at TEXT NOT NULL,
+          used_at TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_billing_quotes_user
+          ON billing_quotes(user_id, created_at);
+      `);
+
+      const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
+      if (!orderCols.includes("quote_id")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN quote_id TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("fulfilled_at")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN fulfilled_at TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("fulfillment_status")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN fulfillment_status TEXT NOT NULL DEFAULT 'unfulfilled'");
+        db.exec("UPDATE payment_orders SET fulfillment_status = 'fulfilled', fulfilled_at = paid_at WHERE status = 'paid'");
+      }
+      if (!orderCols.includes("cycle")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN cycle TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("order_kind")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN order_kind TEXT NOT NULL DEFAULT 'plan'");
+      }
+      if (!orderCols.includes("order_action")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN order_action TEXT NOT NULL DEFAULT 'activate'");
+      }
+      if (!orderCols.includes("issued_now")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN issued_now INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!orderCols.includes("service_start")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN service_start TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("service_end")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN service_end TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("period_end")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN period_end TEXT NOT NULL DEFAULT ''");
+      }
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {
