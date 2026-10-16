@@ -7,6 +7,8 @@
 - Combined comparison: `outputs/ui-audit/07-video-layout-comparison.png`
 - State: completed three-segment G2 project opened from history at a 1692 × 842 CSS-pixel viewport.
 
+Note: the capture files above live under the git-ignored `outputs/` directory and are not kept in version control.
+
 ## Comparison
 
 - Layout: each segment now uses a two-column 1082 × 275 px body. The video is fixed at 489 × 275 px on the left and the 575 × 275 px prompt editor fills the right column.

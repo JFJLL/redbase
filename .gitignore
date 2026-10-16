@@ -22,6 +22,7 @@ outputs/
 redbase-model-cost-estimate.md
 docs/*
 !docs/admin-analytics-v1.md
+!docs/design-qa.md
 artifacts/
 .worktrees/
 cert/
