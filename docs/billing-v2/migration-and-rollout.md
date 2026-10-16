@@ -64,3 +64,19 @@ sqlite3 /path/to/backups/redbase_pre_v2_backup.sqlite "PRAGMA integrity_check;"
 - **严禁直接恢复上线前快照**：此举将抹除上线后用户已支付的真实订单、升级记录与扣减流水，造成账务严重错乱。
 - **向前修复策略**：
   若遇到业务异常，应关闭新套餐购买入口 (`ALIPAY_ENABLED=false` / `WXPAY_ENABLED=false`)，但保持旧订单回调对账与年付正常发放。通过发布补丁或数据修复脚本向前修复，禁止回退覆盖账本。
+
+
+---
+
+## 4. Version 14 增量迁移与数据修复演练
+
+在针对审查意见整改中，我们在 `schema_migrations` 追加了 Version 14 (`billing-v2-remediation`)：
+
+1. **增量字段与唯一约束**：
+   - `users.legacy_credits_migrated`：显式标记旧余额结转状态，首笔入账原子前置迁移，避免覆盖。
+   - `subscription_schedules.anchor_day` 与 `snapshot_json`：确保月末续期锚点传递与不可变快照履约。
+   - `subscriptions.upgrade_cumulative_exact` 与 `idx_subscriptions_unique_active`：支持高精度连续升级与数据库级生效订阅排他约束。
+   - `payment_orders` 增加快照与待核查审计字段。
+2. **演练与幂等重跑验证**：
+   - 执行 `node scripts/rehearse-billing-migration.js`，全量通过全新数据库、旧库升级、已执行 V13 库增量升级以及在途预占异常修复 4 个演练场景。
+   - 历史永久积分 100% 保持永久有效，零重复增发，零重复扣减。

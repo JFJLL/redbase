@@ -126,6 +126,13 @@ function getUserBillingOverview(userId, nowMs = getNowTimestamp(), db = getDbPro
       SELECT COALESCE(SUM(used_credits), 0) AS used
       FROM credit_lots
       WHERE subscription_id = ?
+        AND (expires_at = ? OR starts_at = ?)
+    `).get(activeSub.id, activeSub.current_period_end, activeSub.current_period_start);
+
+    const totalUsedRow = db.prepare(`
+      SELECT COALESCE(SUM(used_credits), 0) AS used
+      FROM credit_lots
+      WHERE subscription_id = ?
     `).get(activeSub.id);
 
     // Next grant date for annual
@@ -150,6 +157,7 @@ function getUserBillingOverview(userId, nowMs = getNowTimestamp(), db = getDbPro
       currentPeriodEnd: activeSub.current_period_end,
       currentPeriodGrant: activeSub.current_period_grant,
       usedCredits: Number(usedRow?.used || 0),
+      totalUsedCredits: Number(totalUsedRow?.used || 0),
       nextGrantAt,
     };
   }
@@ -223,12 +231,25 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
     }
 
     if (action === "activate") {
+      const existingActive = findActiveSubscription(uid, nowMs, db);
+      if (existingActive) {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'audit_required', audit_reason = '用户已有有效订阅，不能重复开通', updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, orderId);
+        return { status: "audit_required", reason: "用户已有有效订阅，不能重复开通" };
+      }
+
       const startMs = order.paid_at ? new Date(order.paid_at).getTime() : nowMs;
-      const anchorDay = toShanghaiDate(startMs).getUTCDate();
+      const anchorDay = order.anchor_day || toShanghaiDate(startMs).getUTCDate();
       const serviceStartIso = new Date(startMs).toISOString();
       const isAnnual = cycle === "annual";
       const serviceEndIso = new Date(addCalendarMonths(startMs, isAnnual ? 12 : 1, anchorDay)).toISOString();
       const periodEndIso = new Date(addCalendarMonths(startMs, 1, anchorDay)).toISOString();
+
+      // Use purchased quota snapshot (R7)
+      const initialCredits = Number(order.plan_credits || order.planCredits || order.issued_now || order.issuedNow || plan.credits || 0);
 
       const subResult = db.prepare(`
         INSERT INTO subscriptions (
@@ -246,7 +267,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         anchorDay,
         serviceStartIso,
         periodEndIso,
-        plan.credits,
+        initialCredits,
         order.amount_fen || order.amountFen,
         order.amount_fen || order.amountFen,
         nowIso,
@@ -261,7 +282,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         sourceLabel: "本期积分",
         orderId,
         subscriptionId,
-        credits: plan.credits,
+        credits: initialCredits,
         startsAt: serviceStartIso,
         expiresAt: periodEndIso,
         nowIso,
@@ -286,7 +307,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
             i,
             pStartIso,
             pEndIso,
-            plan.credits,
+            initialCredits,
             isFirst ? "granted" : "pending",
             isFirst ? nowIso : null,
             isFirst ? lotId : null,
@@ -307,37 +328,66 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
 
     if (action === "upgrade") {
       const activeSub = findActiveSubscription(uid, nowMs, db);
-      if (!activeSub) {
+      const expectedSubId = order.quote?.subscription_id || order.payload?.quote?.subscription_id;
+      const expectedPlanId = order.quote?.original_plan_id || order.payload?.quote?.original_plan_id;
+
+      if (!activeSub || (expectedSubId && activeSub.id !== expectedSubId) || (expectedPlanId && activeSub.plan_id !== expectedPlanId)) {
         db.prepare(`
           UPDATE payment_orders
-          SET fulfillment_status = 'audit_required', audit_reason = '升级时原订阅已失效', updated_at = ?
+          SET fulfillment_status = 'audit_required', audit_reason = '原订阅已发生变更或已失效，升级无法自动应用', updated_at = ?
           WHERE id = ?
         `).run(nowIso, orderId);
-        return { status: "audit_required", reason: "升级时原订阅已失效" };
+        return { status: "audit_required", reason: "原订阅已发生变更或已失效，升级无法自动应用" };
       }
 
       const issuedNow = Number(order.issued_now || order.issuedNow || 0);
       const nextBasis = getPriceFen(plan, activeSub.cycle);
       const paidAdd = Number(order.amount_fen || order.amountFen || 0);
+      const cumExact = Number(order.quote?.meta?.cumExact || (Number(activeSub.upgrade_cumulative_exact || 0) + (Number(order.quote?.meta?.exactIncrement || 0))));
+      const cumCeil = Number(order.quote?.meta?.cumCeil || (Number(activeSub.upgrade_cumulative_increment || 0) + issuedNow));
 
-      db.prepare(`
-        UPDATE subscriptions
-        SET plan_id = ?,
-            pricing_basis_fen = ?,
-            actual_paid_total_fen = actual_paid_total_fen + ?,
-            current_period_grant = current_period_grant + ?,
-            upgrade_cumulative_increment = upgrade_cumulative_increment + ?,
-            updated_at = ?
-        WHERE id = ?
-      `).run(
-        plan.id,
-        nextBasis,
-        paidAdd,
-        issuedNow,
-        issuedNow,
-        nowIso,
-        activeSub.id
-      );
+      const subCols = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
+      if (subCols.includes("upgrade_cumulative_exact")) {
+        db.prepare(`
+          UPDATE subscriptions
+          SET plan_id = ?,
+              pricing_basis_fen = ?,
+              actual_paid_total_fen = actual_paid_total_fen + ?,
+              current_period_grant = current_period_grant + ?,
+              upgrade_cumulative_increment = ?,
+              upgrade_cumulative_exact = ?,
+              updated_at = ?
+          WHERE id = ?
+        `).run(
+          plan.id,
+          nextBasis,
+          paidAdd,
+          issuedNow,
+          cumCeil,
+          cumExact,
+          nowIso,
+          activeSub.id
+        );
+      } else {
+        db.prepare(`
+          UPDATE subscriptions
+          SET plan_id = ?,
+              pricing_basis_fen = ?,
+              actual_paid_total_fen = actual_paid_total_fen + ?,
+              current_period_grant = current_period_grant + ?,
+              upgrade_cumulative_increment = upgrade_cumulative_increment + ?,
+              updated_at = ?
+          WHERE id = ?
+        `).run(
+          plan.id,
+          nextBasis,
+          paidAdd,
+          issuedNow,
+          issuedNow,
+          nowIso,
+          activeSub.id
+        );
+      }
 
       if (issuedNow > 0) {
         createCreditLot({
@@ -354,11 +404,12 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       }
 
       if (activeSub.cycle === "annual") {
+        const targetMonthlyCredits = Number(order.plan_credits || order.planCredits || plan.credits);
         db.prepare(`
           UPDATE subscription_grants
           SET credits = ?, updated_at = ?
           WHERE subscription_id = ? AND status = 'pending'
-        `).run(plan.credits, nowIso, activeSub.id);
+        `).run(targetMonthlyCredits, nowIso, activeSub.id);
       }
 
       db.prepare(`
@@ -374,23 +425,50 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       const startIso = order.service_start || order.serviceStart;
       const endIso = order.service_end || order.serviceEnd;
 
-      db.prepare(`
-        INSERT INTO subscription_schedules (
-          user_id, order_id, plan_id, cycle, status, start_at, end_at,
-          amount_fen, monthly_credits, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?)
-      `).run(
-        uid,
-        orderId,
-        plan.id,
-        cycle,
-        startIso,
-        endIso,
-        order.amount_fen || order.amountFen,
-        plan.credits,
-        nowIso,
-        nowIso
-      );
+      const activeSub = findActiveSubscription(uid, nowMs, db);
+      const anchorDay = activeSub?.anchor_day || toShanghaiDate(new Date(startIso).getTime()).getUTCDate();
+      const monthlyCredits = Number(order.plan_credits || order.planCredits || plan.credits);
+
+      const schedCols = db.prepare("PRAGMA table_info(subscription_schedules)").all().map((c) => c.name);
+      if (schedCols.includes("anchor_day")) {
+        db.prepare(`
+          INSERT INTO subscription_schedules (
+            user_id, order_id, plan_id, cycle, status, start_at, end_at,
+            amount_fen, monthly_credits, anchor_day, snapshot_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          uid,
+          orderId,
+          plan.id,
+          cycle,
+          startIso,
+          endIso,
+          order.amount_fen || order.amountFen,
+          monthlyCredits,
+          anchorDay,
+          JSON.stringify({ planId: plan.id, cycle, monthlyCredits }),
+          nowIso,
+          nowIso
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO subscription_schedules (
+            user_id, order_id, plan_id, cycle, status, start_at, end_at,
+            amount_fen, monthly_credits, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?)
+        `).run(
+          uid,
+          orderId,
+          plan.id,
+          cycle,
+          startIso,
+          endIso,
+          order.amount_fen || order.amountFen,
+          monthlyCredits,
+          nowIso,
+          nowIso
+        );
+      }
 
       db.prepare(`
         UPDATE payment_orders
@@ -425,10 +503,12 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
       `).run(nowIso, schedule.user_id, schedule.start_at);
 
       const plan = getPlan(schedule.plan_id);
-      if (!plan) return;
+      if (!plan && !schedule.monthly_credits) return;
       const startMs = new Date(schedule.start_at).getTime();
-      const anchorDay = toShanghaiDate(startMs).getUTCDate();
+      // Preserve original anchor day from schedule (R5)
+      const anchorDay = schedule.anchor_day || toShanghaiDate(startMs).getUTCDate();
       const isAnnual = schedule.cycle === "annual";
+      const monthlyCredits = Number(schedule.monthly_credits || plan?.credits || 0);
       const periodEndIso = new Date(addCalendarMonths(startMs, 1, anchorDay)).toISOString();
 
       const subResult = db.prepare(`
@@ -447,7 +527,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         anchorDay,
         schedule.start_at,
         periodEndIso,
-        plan.credits,
+        monthlyCredits,
         schedule.amount_fen,
         schedule.amount_fen,
         nowIso,
@@ -461,7 +541,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         sourceLabel: "本期积分",
         orderId: schedule.order_id,
         subscriptionId,
-        credits: plan.credits,
+        credits: monthlyCredits,
         startsAt: schedule.start_at,
         expiresAt: periodEndIso,
         nowIso,
@@ -486,7 +566,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
             i,
             pStartIso,
             pEndIso,
-            plan.credits,
+            monthlyCredits,
             isFirst ? "granted" : "pending",
             isFirst ? nowIso : null,
             isFirst ? lotId : null,
@@ -501,6 +581,15 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         SET status = 'activated', updated_at = ?
         WHERE id = ?
       `).run(nowIso, schedule.id);
+
+      // Sync payment_orders fulfillment_status to fulfilled (R9)
+      if (schedule.order_id) {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'fulfilled', fulfilled_at = ?, updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, nowIso, schedule.order_id);
+      }
     })();
   }
 
@@ -536,6 +625,25 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         expiresAt: grant.period_end,
         nowIso,
       }, db);
+
+      // Record visible credit event for annual installment (R8)
+      db.prepare(`
+        INSERT INTO credit_events (
+          user_id, action_type, action_label, credit_delta, credit_cost,
+          created_at, summary, payload_json
+        ) VALUES (?, 'cycle_grant', '周期积分发放', ?, 0, ?, ?, ?)
+      `).run(
+        grant.user_id,
+        grant.credits,
+        nowIso,
+        `年付分期积分发放（第 ${grant.period_index} 期，共 12 期）`,
+        JSON.stringify({
+          subscriptionId: grant.subscription_id,
+          grantId: grant.id,
+          periodIndex: grant.period_index,
+          lotId,
+        })
+      );
 
       db.prepare(`
         UPDATE subscription_grants

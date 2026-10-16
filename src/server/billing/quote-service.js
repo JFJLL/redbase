@@ -200,9 +200,15 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
         }
 
         const quotaDiff = plan.credits - oldPlan.credits;
-        issuedNow = Math.ceil(quotaDiff * remainingPeriodRatio);
+        const exactIncrement = quotaDiff * remainingPeriodRatio;
+        const previousCumExact = Number(activeSub.upgrade_cumulative_exact || 0);
+        const previousIssued = Number(activeSub.upgrade_cumulative_increment || 0);
+        const cumExact = previousCumExact + exactIncrement;
+        const cumCeil = Math.ceil(cumExact);
+        issuedNow = cumCeil - previousIssued;
 
         meta.upgradeDetails = {
+          subscriptionId: activeSub.id,
           oldPlanId: oldPlan.id,
           oldPlanName: oldPlan.name,
           targetPlanId: plan.id,
@@ -217,8 +223,17 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
           serviceDaysTotal: serviceTotalMs / 86400000,
           periodDaysLeft: periodRemainingMs / 86400000,
           periodDaysTotal: periodTotalMs / 86400000,
+          exactIncrement,
+          previousCumExact,
+          cumExact,
+          previousIssued,
+          cumCeil,
           issuedNow,
+          serviceEnd: activeSub.service_end,
         };
+        meta.exactIncrement = exactIncrement;
+        meta.cumExact = cumExact;
+        meta.cumCeil = cumCeil;
       } else if (plan.rank < oldPlan.rank) {
         action = "downgrade";
         scheduled = true;
@@ -257,30 +272,63 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
     const expiresAt = new Date(maxExpiresAtMs).toISOString();
     const quoteId = generateQuoteId();
 
-    db.prepare(`
-      INSERT INTO billing_quotes (
-        id, user_id, kind, item_id, action, cycle, catalog_version,
-        amount_fen, issued_now, start_at, end_at, period_end_at,
-        scheduled, meta_json, expires_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      quoteId,
-      uid,
-      "plan",
-      plan.id,
-      action,
-      cycle,
-      CATALOG_VERSION,
-      amountFen,
-      issuedNow,
-      new Date(startAtMs).toISOString(),
-      new Date(endAtMs).toISOString(),
-      new Date(periodEndAtMs).toISOString(),
-      scheduled ? 1 : 0,
-      JSON.stringify(meta),
-      expiresAt,
-      nowIso
-    );
+    const quoteCols = db.prepare("PRAGMA table_info(billing_quotes)").all().map((c) => c.name);
+    if (quoteCols.includes("subscription_id")) {
+      db.prepare(`
+        INSERT INTO billing_quotes (
+          id, user_id, kind, item_id, action, cycle, catalog_version,
+          amount_fen, issued_now, start_at, end_at, period_end_at,
+          scheduled, meta_json, expires_at, created_at,
+          subscription_id, original_plan_id, original_service_end, subscription_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        quoteId,
+        uid,
+        "plan",
+        plan.id,
+        action,
+        cycle,
+        CATALOG_VERSION,
+        amountFen,
+        issuedNow,
+        new Date(startAtMs).toISOString(),
+        new Date(endAtMs).toISOString(),
+        new Date(periodEndAtMs).toISOString(),
+        scheduled ? 1 : 0,
+        JSON.stringify(meta),
+        expiresAt,
+        nowIso,
+        activeSub ? activeSub.id : null,
+        activeSub ? activeSub.plan_id : "",
+        activeSub ? activeSub.service_end : "",
+        activeSub ? String(activeSub.updated_at || "") : ""
+      );
+    } else {
+      db.prepare(`
+        INSERT INTO billing_quotes (
+          id, user_id, kind, item_id, action, cycle, catalog_version,
+          amount_fen, issued_now, start_at, end_at, period_end_at,
+          scheduled, meta_json, expires_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        quoteId,
+        uid,
+        "plan",
+        plan.id,
+        action,
+        cycle,
+        CATALOG_VERSION,
+        amountFen,
+        issuedNow,
+        new Date(startAtMs).toISOString(),
+        new Date(endAtMs).toISOString(),
+        new Date(periodEndAtMs).toISOString(),
+        scheduled ? 1 : 0,
+        JSON.stringify(meta),
+        expiresAt,
+        nowIso
+      );
+    }
 
     return {
       quoteId,
@@ -328,6 +376,35 @@ function verifyAndConsumeQuote(quoteId, userId, nowMs = getNowTimestamp()) {
   const nowIso = new Date(nowMs).toISOString();
   if (quote.expires_at <= nowIso) {
     throw new Error("报价已过期，请重新确认套餐与价格");
+  }
+
+  // Enforce subscription state consistency for upgrade quotes (R3)
+  if (quote.action === "upgrade") {
+    const activeSub = findActiveSubscription(userId, nowMs);
+    const expectedSubId = quote.subscription_id || quote.meta?.upgradeDetails?.subscriptionId;
+    const expectedPlanId = quote.original_plan_id || quote.meta?.upgradeDetails?.oldPlanId;
+    const expectedServiceEnd = quote.original_service_end || quote.meta?.upgradeDetails?.serviceEnd;
+
+    if (!activeSub) {
+      throw new Error("原订阅已失效，无法升级");
+    }
+    if (expectedSubId && activeSub.id !== expectedSubId) {
+      throw new Error("原订阅已发生变更，该升级报价已失效，请重新获取报价");
+    }
+    if (expectedPlanId && activeSub.plan_id !== expectedPlanId) {
+      throw new Error("原订阅已发生变更，该升级报价已失效，请重新获取报价");
+    }
+    if (expectedServiceEnd && activeSub.service_end !== expectedServiceEnd) {
+      throw new Error("原订阅服务期已发生变更，该升级报价已失效，请重新获取报价");
+    }
+  }
+
+  // Prevent multiple active activations (R4)
+  if (quote.action === "activate") {
+    const activeSub = findActiveSubscription(userId, nowMs);
+    if (activeSub) {
+      throw new Error("用户当前已有生效套餐，不能重复开通");
+    }
   }
 
   db.prepare(`UPDATE billing_quotes SET used_at = ? WHERE id = ?`).run(nowIso, quote.id);

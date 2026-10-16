@@ -2,6 +2,7 @@ const { getDbProxy } = require("../db/connection");
 const { runTransaction } = require("../db/repositories/core-repository");
 const { findUserById, updateUserCredits } = require("../db/repositories/auth-repository");
 const { insertCreditEvent } = require("../db/repositories/admin-repository");
+const { createCreditLot, syncUserCreditsCache } = require("../billing/credit-ledger");
 
 const db = getDbProxy();
 
@@ -53,7 +54,30 @@ function refundVideoCredits({
     if (!refundAmount) return { refunded: false, amount: 0, eventId: null };
     const user = findUserById(userId);
     if (!user) return { refunded: false, amount: 0, eventId: null };
-    updateUserCredits(user.id, Number(user.credits || 0) + refundAmount);
+
+    const allocations = reservationEventId ? db.prepare("SELECT * FROM credit_lot_allocations WHERE credit_event_id = ?").all(reservationEventId) : [];
+    if (allocations.length > 0) {
+      for (const alloc of allocations) {
+        db.prepare(`
+          UPDATE credit_lots
+          SET remaining_credits = remaining_credits + ?,
+              used_credits = MAX(0, used_credits - ?),
+              status = 'active',
+              updated_at = ?
+          WHERE id = ?
+        `).run(alloc.credits_used, alloc.credits_used, new Date().toISOString(), alloc.lot_id);
+      }
+    } else {
+      createCreditLot({
+        userId: user.id,
+        sourceType: "compensation",
+        sourceLabel: "视频任务失败返还",
+        credits: refundAmount,
+        startsAt: new Date().toISOString(),
+        expiresAt: null,
+      }, db);
+    }
+    syncUserCreditsCache(user.id, db);
     const event = insertCreditEvent({
       userId: user.id,
       actionType: "videoProjectRefund",

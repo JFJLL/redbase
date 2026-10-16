@@ -160,10 +160,11 @@ function formatYuan(fen: number | undefined | null, decimals: number | null = nu
 
 function formatTime(iso: string | undefined | null): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return String(iso);
+  const d = new Date(ts + 8 * 3600 * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getUTCFullYear()}.${pad(d.getUTCMonth() + 1)}.${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 function getActionForPlan(planId: string): PlanAction {
@@ -284,8 +285,17 @@ function startOrderPolling(outTradeNo: string): void {
       if (res.order.status === "paid") {
         stopOrderPolling();
         paymentSuccess.value = true;
+        if (activeOrderResponse.value) {
+          activeOrderResponse.value.order = res.order;
+        }
         await refreshAllData();
-        toast("支付成功，权益已自动入账！");
+        if (res.order.fulfillmentStatus === "audit_required") {
+          toast("支付已收到，订单已进入人工核查流程，请查看详情。");
+        } else if (res.order.fulfillmentStatus === "scheduled") {
+          toast("支付成功！新套餐已预约，将于当前服务结束后生效。");
+        } else {
+          toast("支付成功，权益已自动入账！");
+        }
       } else if (res.order.status === "closed" || res.order.status === "expired" || res.order.status === "failed") {
         stopOrderPolling();
         checkoutErrorMessage.value = `订单状态：${res.order.status}`;
@@ -364,7 +374,24 @@ async function refreshAllData(): Promise<void> {
   if (activeTab.value === "orders") loadOrders();
 }
 
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    if (orderDetailModalOpen.value) {
+      orderDetailModalOpen.value = false;
+    } else if (scheduledModalOpen.value) {
+      scheduledModalOpen.value = false;
+    } else if (rulesModalOpen.value || balanceModalOpen.value || changesModalOpen.value) {
+      rulesModalOpen.value = false;
+      balanceModalOpen.value = false;
+      changesModalOpen.value = false;
+    } else if (checkoutOpen.value) {
+      closeCheckoutDialog();
+    }
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener("keydown", handleKeydown);
   await refreshAllData();
   loadingOverview.value = false;
   loadingCatalog.value = false;
@@ -386,6 +413,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleKeydown);
   stopOrderPolling();
   if (toastTimer) clearTimeout(toastTimer);
 });
@@ -942,7 +970,13 @@ function onLedgerSearchInput(e: Event): void {
                       {{ o.orderKind === 'topup' ? `${formatNumber(o.planCredits)} 永久积分` : o.orderAction === 'upgrade' ? `本期补发 ${formatNumber(o.issuedNow)} 积分` : `${formatNumber(o.planCredits)} 积分 / 月` }}
                     </span>
                     <small>
-                      {{ o.status === 'closed' ? '未发放' : o.orderKind === 'topup' ? '一次到账 · 不过期' : o.fulfillmentStatus === 'scheduled' ? '服务衔接 · 到期后发放' : o.orderAction === 'upgrade' ? '已补发 · 原到期日不变' : o.cycle === 'annual' ? '按月发放 · 共 12 期' : '首期已发放' }}
+                      {{ o.status === 'closed' ? '未发放' :
+                         o.status !== 'paid' ? '未支付' :
+                         o.fulfillmentStatus === 'audit_required' ? '已支付 · 待核查' :
+                         o.orderKind === 'topup' ? '一次到账 · 不过期' :
+                         o.fulfillmentStatus === 'scheduled' ? '服务衔接 · 到期后生效' :
+                         o.orderAction === 'upgrade' ? `已补发 ${formatNumber(o.issuedNow || 0)} 积分 · 原到期日不变` :
+                         o.cycle === 'annual' ? '按月发放 · 共 12 期' : '首期已发放' }}
                     </small>
                   </td>
                   <td>{{ o.provider === 'wxpay' ? '微信支付' : '支付宝' }}</td>

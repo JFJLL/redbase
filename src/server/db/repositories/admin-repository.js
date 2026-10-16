@@ -7,6 +7,8 @@ const {
   createCreditLot,
   syncUserCreditsCache,
   migrateLegacyUserCredits,
+  getUserWalletBalances,
+  rescanExpiredLots,
 } = require("../../billing/credit-ledger");
 const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
 const {
@@ -111,27 +113,32 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
   }
 
   migrateLegacyUserCredits(userId, db);
+  rescanExpiredLots(userId, Date.now(), db);
+  const nowIso = new Date().toISOString();
+
+  const wallet = getUserWalletBalances(userId, Date.now(), db);
   const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
   const excellentReservationCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-  const result = db.prepare(`
-    UPDATE users
-    SET credits = credits - ?
-    WHERE id = ?
-      AND credits - COALESCE((
+
+  const pendingReservations = Number(db.prepare(`
+    SELECT (
+      COALESCE((
         SELECT SUM(credit_cost)
         FROM trend_analysis_requests
-        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-      ), 0) - COALESCE((
+        WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+      ), 0) + COALESCE((
         SELECT SUM(credit_cost)
         FROM excellent_remix_billing_requests
-        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-      ), 0) - COALESCE((
+        WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+      ), 0) + COALESCE((
         SELECT SUM(credit_cost)
         FROM video_project_billing_requests
-        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-      ), 0) >= ?
-  `).run(cost, Number(userId), reservationCutoff, excellentReservationCutoff, reservationCutoff, cost);
-  if (result.changes !== 1) {
+        WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+      ), 0)
+    ) AS total
+  `).get(Number(userId), reservationCutoff, Number(userId), excellentReservationCutoff, Number(userId), reservationCutoff)?.total || 0);
+
+  if (wallet.totalAvailable - pendingReservations < cost) {
     return { spent: false, user: findUserById(userId), creditEvent: null };
   }
 
@@ -141,14 +148,16 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
     creditDelta: -cost,
     creditCost: cost,
   });
-  try {
-    spendCreditsFromLots({
-      userId,
-      amount: cost,
-      creditEventId: creditEvent.id,
-      nowIso: new Date().toISOString(),
-    }, db);
-  } catch (_) {}
+
+  // Atomic deduction from lots; if insufficient or error, throws and rolls back the transaction!
+  spendCreditsFromLots({
+    userId,
+    amount: cost,
+    creditEventId: creditEvent.id,
+    nowIso,
+  }, db);
+
+  syncUserCreditsCache(userId, db);
   return { spent: true, user: findUserById(userId), creditEvent };
 }
 
@@ -457,13 +466,14 @@ function refundCreditEventIfNeededInTransaction({ creditEventId, userId, reason 
       }
     }
   } else {
+    const compExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
     createCreditLot({
       userId: user.id,
       sourceType: "compensation",
-      sourceLabel: "任务失败返还",
+      sourceLabel: "系统故障补偿",
       credits: refundAmount,
       startsAt: nowIso,
-      expiresAt: null,
+      expiresAt: compExpiresAt,
       nowIso,
     }, db);
   }

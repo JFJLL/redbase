@@ -76,3 +76,34 @@
 - **支付宝与微信支付真实凭据**：
   由于本地运行环境未配置具备商户权限的实名微信/支付宝商户密钥进行真实扣款，自动化测试与本地验证使用已配置好的 `FakeAlipayProvider` 与 `FakeWxpayProvider` 以及沙箱签名校验机制。
   真实支付渠道待线上商户密钥与回调外网地址具备后进行最终实测。代码中已保证所有回调签名校验、金额核对与幂等机制 100% 沿用生产标准。
+
+
+---
+
+## 4. 定向整改落地与审查问题修复说明 (Remediation Addendum)
+
+在针对提交 `79220ac` 的审查报告指出的 11 项业务断言缺陷（R1–R11）中，本轮整改已实现全链路闭环修复：
+
+1. **统一账本与消除余额旁路 (R1, R2)**：
+   - 彻底移除了 `trend-analysis-repository.js`、`excellent-remix-billing-repository.js`、`admin-repository.js`、`video-billing.js` 中直接写 `UPDATE users SET credits` 的旁路代码。
+   - 所有任务消费、预占与退款统一接入批次账本 (`spendCreditsFromLots` / `settleReservedCreditsFromLots` / `refundCreditEventIfNeeded`)。
+   - 消费后读取钱包、个人中心刷新或重启服务，余额均严格保持，分配记录完整保留。
+2. **报价防重与账户互斥 (R3, R4)**：
+   - `billing_quotes` 绑定原订阅 ID、版本时间戳与当前档位；订阅已变更时，旧升级报价消费被拒绝，避免二次补发。
+   - 增加 `idx_subscriptions_unique_active` 唯一索引，数据库层强制保证单账户最多一个生效订阅，阻止并发开通冲突。
+3. **月末日历锚点传递 (R5)**：
+   - `subscription_schedules` 增加 `anchor_day` 字段；排期激活时直接沿用原始 31 日锚点，平年 2 月截断后在 3 月准确恢复至 31 日。
+4. **连续升级高精度增量累加 (R6)**：
+   - 增加 `upgrade_cumulative_exact` 浮点累积字段，按 `ceil(cumExact) - alreadyIssued` 算法计算当次增量，杜绝多次升级反复 ceil 导致多发。
+5. **成交权益不可变快照 (R7)**：
+   - 履约与发放统一读取订单及排期快照中的额度（如 400 分），目录调价或修改不改写已售权益。
+6. **年付分期与到期可见流水 (R8)**：
+   - 年付逐月分期发放时原子插入 `cycle_grant` 流水；过期批次扫描时原子记录 `cycle_expire` 流水，明细与导出对账清晰。
+7. **排期激活履约同步 (R9)**：
+   - 排期激活时，同步将关联订单更新为 `fulfillment_status = 'fulfilled'`。前端按最新真实履约状态提示，不再在待核查或未付款时虚报入账。
+8. **首笔入账前置开账 (R10)**：
+   - `createCreditLot`、`spendCreditsFromLots` 等写入路径在插入新批次前原子执行 `migrateLegacyUserCredits`，旧余额结转为永久保留批次。
+9. **年付当期统计范围限定 (R11)**：
+   - `getUserBillingOverview` 中的 `usedCredits` 严格限定在当前权益周期内，避免将整年历史使用量误标为当期已用。
+
+全量 17 项定向回归测试全绿，全仓计费测试全绿，全套真实应用截图已归档至 `docs/billing-v2/remediation/ui-verification/`。

@@ -692,6 +692,64 @@ const VERSIONED_MIGRATIONS = [
       }
     },
   },
+  {
+    version: 14,
+    name: "billing-v2-remediation",
+    apply() {
+      const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+      if (!userCols.includes("legacy_credits_migrated")) {
+        db.exec("ALTER TABLE users ADD COLUMN legacy_credits_migrated INTEGER NOT NULL DEFAULT 0");
+        db.exec("UPDATE users SET legacy_credits_migrated = 1 WHERE id IN (SELECT DISTINCT user_id FROM credit_lots WHERE source_type = 'legacy')");
+      }
+
+      const scheduleCols = db.prepare("PRAGMA table_info(subscription_schedules)").all().map((c) => c.name);
+      if (!scheduleCols.includes("anchor_day")) {
+        db.exec("ALTER TABLE subscription_schedules ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!scheduleCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE subscription_schedules ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+
+      const subCols = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
+      if (!subCols.includes("upgrade_cumulative_exact")) {
+        db.exec("ALTER TABLE subscriptions ADD COLUMN upgrade_cumulative_exact REAL NOT NULL DEFAULT 0");
+      }
+      if (!subCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE subscriptions ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+
+      const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
+      if (!orderCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+      if (!orderCols.includes("audit_reason")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_reason TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("audit_at")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_at TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("anchor_day")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0");
+      }
+
+      const quoteCols = db.prepare("PRAGMA table_info(billing_quotes)").all().map((c) => c.name);
+      if (!quoteCols.includes("subscription_id")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN subscription_id INTEGER");
+      }
+      if (!quoteCols.includes("original_plan_id")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN original_plan_id TEXT NOT NULL DEFAULT ''");
+      }
+      if (!quoteCols.includes("original_service_end")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN original_service_end TEXT NOT NULL DEFAULT ''");
+      }
+      if (!quoteCols.includes("subscription_version")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN subscription_version TEXT NOT NULL DEFAULT ''");
+      }
+
+      db.exec("UPDATE subscriptions SET status = 'superseded', updated_at = datetime('now') WHERE status = 'active' AND id NOT IN (SELECT MAX(id) FROM subscriptions WHERE status = 'active' GROUP BY user_id);");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique_active ON subscriptions(user_id) WHERE status = 'active';");
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

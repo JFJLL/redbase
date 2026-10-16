@@ -3,6 +3,7 @@ const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS,
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
 const { findBrandByOwner, upsertBrandFull } = require("./brand-repository");
+const { spendCreditsFromLots, syncUserCreditsCache, migrateLegacyUserCredits } = require("../../billing/credit-ledger");
 const {
   recordTrendAnalysisStarted,
   recordTrendAnalysisCompleted,
@@ -130,44 +131,30 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
     if (!currentBrand) throw new Error("品牌不存在或已被删除。");
     const nextBrand = buildBrand(currentBrand);
     const savedBrand = upsertBrandFull(nextBrand);
-    const excellentSettleCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-    const spend = db.prepare(`
-      UPDATE users SET credits = credits - ?
-      WHERE id = ?
-        AND credits - COALESCE((
-          SELECT SUM(credit_cost)
-          FROM trend_analysis_requests
-          WHERE user_id = users.id
-            AND status = 'reserved'
-            AND NOT (request_id = ? AND brand_id = ? AND bucket_key = ?)
-        ), 0) - COALESCE((
-          SELECT SUM(credit_cost)
-          FROM excellent_remix_billing_requests
-          WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-        ), 0) >= ?
-    `).run(
-      Number(request.credit_cost),
-      Number(userId),
-      String(requestId),
-      Number(brandId),
-      String(bucketKey),
-      excellentSettleCutoff,
-      Number(request.credit_cost),
-    );
-    if (spend.changes !== 1) throw new Error("积分余额已发生变化，本次趋势未保存，请重新生成。");
-    const creditEvent = insertCreditEvent({
-      ...(event || {}),
-      userId,
-      creditDelta: -Number(request.credit_cost),
-      creditCost: Number(request.credit_cost),
-      payload: { ...(event?.payload || {}), requestId, bucketKey, analysisId },
-    });
     const timestamp = new Date().toISOString();
+    const cost = Number(request.credit_cost || 0);
+    let creditEvent = null;
+    if (cost > 0) {
+      creditEvent = insertCreditEvent({
+        ...(event || {}),
+        userId,
+        creditDelta: -cost,
+        creditCost: cost,
+        payload: { ...(event?.payload || {}), requestId, bucketKey, analysisId },
+      });
+      spendCreditsFromLots({
+        userId,
+        amount: cost,
+        creditEventId: creditEvent.id,
+        nowIso: timestamp,
+      }, db);
+      syncUserCreditsCache(userId, db);
+    }
     db.prepare(`
       UPDATE trend_analysis_requests
       SET status = 'completed', analysis_id = ?, credit_event_id = ?, error = '', updated_at = ?
       WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ?
-    `).run(Number(analysisId), Number(creditEvent.id), timestamp, requestId, Number(userId), Number(brandId), String(bucketKey));
+    `).run(Number(analysisId), creditEvent ? Number(creditEvent.id) : null, timestamp, requestId, Number(userId), Number(brandId), String(bucketKey));
     try {
       recordTrendAnalysisCompleted({
         requestId,

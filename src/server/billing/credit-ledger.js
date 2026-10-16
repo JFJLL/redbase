@@ -2,17 +2,41 @@
 
 const { getDbProxy, transaction } = require("../db/connection");
 const { getNowTimestamp, getNowIso } = require("./period-utils");
+const { allocateCounter } = require("../db/repositories/core-repository");
+
+function insertLedgerCreditEvent(db, {
+  userId,
+  actionType,
+  actionLabel,
+  creditDelta,
+  creditCost = 0,
+  createdAt,
+  summary = "",
+  payload = {},
+}) {
+  const eventId = allocateCounter("nextCreditEventId", 1);
+  db.prepare(`
+    INSERT INTO credit_events (
+      id, user_id, action_type, action_label, credit_delta, credit_cost,
+      created_at, summary, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    eventId,
+    Number(userId),
+    actionType,
+    actionLabel,
+    Number(creditDelta || 0),
+    Number(creditCost || 0),
+    createdAt || getNowIso(),
+    summary,
+    JSON.stringify(payload || {})
+  );
+  return { id: eventId };
+}
 
 function syncUserCreditsCache(userId, db = getDbProxy()) {
   const uid = Number(userId);
   const nowIso = getNowIso();
-  const lotCount = db.prepare("SELECT COUNT(*) AS count FROM credit_lots WHERE user_id = ?").get(uid)?.count || 0;
-  if (lotCount === 0) {
-    const user = db.prepare("SELECT credits FROM users WHERE id = ?").get(uid);
-    if (user && user.credits > 0) {
-      migrateLegacyUserCredits(uid, db);
-    }
-  }
   const row = db.prepare(`
     SELECT COALESCE(SUM(remaining_credits - reserved_credits), 0) AS available
     FROM credit_lots
@@ -32,7 +56,7 @@ function rescanExpiredLots(userId, nowMs = getNowTimestamp(), db = getDbProxy())
   const nowIso = new Date(nowMs).toISOString();
 
   const expiredLots = db.prepare(`
-    SELECT id, remaining_credits, reserved_credits
+    SELECT id, remaining_credits, reserved_credits, source_type, source_label
     FROM credit_lots
     WHERE user_id = ?
       AND status = 'active'
@@ -44,6 +68,23 @@ function rescanExpiredLots(userId, nowMs = getNowTimestamp(), db = getDbProxy())
     if (lot.reserved_credits <= 0) {
       db.prepare(`UPDATE credit_lots SET status = 'expired', updated_at = ? WHERE id = ?`)
         .run(nowIso, lot.id);
+
+      if (lot.remaining_credits > 0) {
+        insertLedgerCreditEvent(db, {
+          userId: uid,
+          actionType: "cycle_expire",
+          actionLabel: "周期积分到期",
+          creditDelta: -lot.remaining_credits,
+          creditCost: 0,
+          createdAt: nowIso,
+          summary: `周期积分到期失效 ${lot.remaining_credits} 积分`,
+          payload: {
+            lotId: lot.id,
+            sourceType: lot.source_type,
+            expiredCredits: lot.remaining_credits,
+          },
+        });
+      }
     }
   }
 
@@ -109,6 +150,11 @@ function createCreditLot({
     throw new Error(`创建积分批次失败：积分数必须为正整数（${credits}）`);
   }
 
+  // Ensure unmigrated legacy credits are safely migrated BEFORE inserting any new lot!
+  if (sourceType !== "legacy") {
+    migrateLegacyUserCredits(uid, db);
+  }
+
   const result = db.prepare(`
     INSERT INTO credit_lots (
       user_id, source_type, source_label, order_id, subscription_id, grant_id,
@@ -161,6 +207,7 @@ function spendCreditsFromLots({
     return [];
   }
 
+  migrateLegacyUserCredits(uid, db);
   const lots = getActiveUsableLotsInFifoOrder(uid, nowIso, db);
   let needed = cost;
   const allocations = [];
@@ -216,6 +263,7 @@ function reserveCreditsFromLots({
     return [];
   }
 
+  migrateLegacyUserCredits(uid, db);
   const lots = getActiveUsableLotsInFifoOrder(uid, nowIso, db);
   let needed = cost;
   const reservations = [];
@@ -323,6 +371,23 @@ function releaseReservedCreditsFromLots({
       SET reserved_credits = ?, status = ?, updated_at = ?
       WHERE id = ?
     `).run(nextReserved, nextStatus, nowIso, lot.id);
+
+    if (isExpired && releaseAmount > 0) {
+      insertLedgerCreditEvent(db, {
+        userId: uid,
+        actionType: "cycle_expire",
+        actionLabel: "周期积分到期",
+        creditDelta: -releaseAmount,
+        creditCost: 0,
+        createdAt: nowIso,
+        summary: `任务释放后已过期失效 ${releaseAmount} 积分`,
+        payload: {
+          lotId: lot.id,
+          sourceType: lot.source_type,
+          expiredCredits: releaseAmount,
+        },
+      });
+    }
   }
 
   syncUserCreditsCache(uid, db);
@@ -330,26 +395,46 @@ function releaseReservedCreditsFromLots({
 
 function migrateLegacyUserCredits(userId, db = getDbProxy()) {
   const uid = Number(userId);
-  const lotCount = db.prepare(`
-    SELECT COUNT(*) AS count FROM credit_lots WHERE user_id = ?
-  `).get(uid)?.count || 0;
-  if (lotCount > 0) return 0;
+  const user = db.prepare(`
+    SELECT id, credits, legacy_credits_migrated, created_at FROM users WHERE id = ?
+  `).get(uid);
+  if (!user) return 0;
+  if (user.legacy_credits_migrated === 1) return 0;
 
-  const user = db.prepare(`SELECT id, credits, created_at FROM users WHERE id = ?`).get(uid);
-  if (!user || user.credits <= 0) return 0;
+  const legacyLot = db.prepare(`
+    SELECT id FROM credit_lots WHERE user_id = ? AND source_type = 'legacy' LIMIT 1
+  `).get(uid);
+  if (legacyLot) {
+    db.prepare(`UPDATE users SET legacy_credits_migrated = 1 WHERE id = ?`).run(uid);
+    return 0;
+  }
 
+  const credits = Number(user.credits || 0);
   const nowIso = getNowIso();
-  createCreditLot({
-    userId: uid,
-    sourceType: "legacy",
-    sourceLabel: "历史保留积分",
-    credits: user.credits,
-    startsAt: user.created_at || nowIso,
-    expiresAt: null, // Permanent!
-    nowIso,
-  }, db);
+  if (credits > 0) {
+    const lotResult = db.prepare(`
+      INSERT INTO credit_lots (
+        user_id, source_type, source_label, order_id, subscription_id, grant_id,
+        initial_credits, remaining_credits, reserved_credits, used_credits,
+        starts_at, expires_at, status, created_at, updated_at
+      ) VALUES (?, 'legacy', '历史保留积分', NULL, NULL, NULL, ?, ?, 0, 0, ?, NULL, 'active', ?, ?)
+    `).run(uid, credits, credits, user.created_at || nowIso, nowIso, nowIso);
 
-  return user.credits;
+    insertLedgerCreditEvent(db, {
+      userId: uid,
+      actionType: "legacy_migration",
+      actionLabel: "历史积分结转",
+      creditDelta: 0,
+      creditCost: 0,
+      createdAt: nowIso,
+      summary: `历史有效积分结转为永久积分（${credits} 积分）`,
+      payload: { lotId: lotResult.lastInsertRowid, originalCredits: credits },
+    });
+  }
+
+  db.prepare(`UPDATE users SET legacy_credits_migrated = 1 WHERE id = ?`).run(uid);
+  syncUserCreditsCache(uid, db);
+  return credits;
 }
 
 function migrateAllLegacyUsers(db = getDbProxy()) {
@@ -378,4 +463,5 @@ module.exports = {
   releaseReservedCreditsFromLots,
   migrateLegacyUserCredits,
   migrateAllLegacyUsers,
+  insertLedgerCreditEvent,
 };

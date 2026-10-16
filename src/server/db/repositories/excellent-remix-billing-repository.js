@@ -7,6 +7,7 @@ const {
 } = require("./core-repository");
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
+const { spendCreditsFromLots, syncUserCreditsCache, migrateLegacyUserCredits } = require("../../billing/credit-ledger");
 const {
   recordExcellentDirectionCompleted,
   recordExcellentDirectionFailed,
@@ -304,30 +305,6 @@ function settleExcellentBillingRequest({
     const cost = isModelResult ? Number(request.credit_cost || 0) : 0;
     let creditEvent = null;
     if (cost > 0) {
-      const trendCutoff = new Date(now.getTime() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
-      const excellentCutoff = new Date(now.getTime() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-      const spend = db.prepare(`
-        UPDATE users SET credits = credits - ?
-        WHERE id = ?
-          AND credits - COALESCE((
-            SELECT SUM(credit_cost) FROM excellent_remix_billing_requests
-            WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-              AND NOT (request_id = ? AND kind = ?)
-          ), 0) - COALESCE((
-            SELECT SUM(credit_cost) FROM trend_analysis_requests
-            WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-          ), 0) >= ?
-      `).run(cost, Number(userId), excellentCutoff, String(requestId), String(kind), trendCutoff, cost);
-      if (spend.changes !== 1) {
-        // Mark failed inside this transaction, then report the error after commit
-        // so the status update is not rolled back by the throw.
-        db.prepare(`
-          UPDATE excellent_remix_billing_requests
-          SET status = 'failed', error = 'insufficient credits at settle', updated_at = ?
-          WHERE request_id = ? AND user_id = ? AND kind = ?
-        `).run(now.toISOString(), String(requestId), Number(userId), String(kind));
-        return { insufficientAtSettle: true };
-      }
       creditEvent = insertCreditEvent({
         ...(event || {}),
         userId,
@@ -335,6 +312,22 @@ function settleExcellentBillingRequest({
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, billingKind: kind },
       });
+      try {
+        spendCreditsFromLots({
+          userId,
+          amount: cost,
+          creditEventId: creditEvent.id,
+          nowIso: now.toISOString(),
+        }, db);
+        syncUserCreditsCache(userId, db);
+      } catch (err) {
+        db.prepare(`
+          UPDATE excellent_remix_billing_requests
+          SET status = 'failed', error = 'insufficient credits at settle', updated_at = ?
+          WHERE request_id = ? AND user_id = ? AND kind = ?
+        `).run(now.toISOString(), String(requestId), Number(userId), String(kind));
+        return { insufficientAtSettle: true };
+      }
     }
 
     const timestamp = now.toISOString();
