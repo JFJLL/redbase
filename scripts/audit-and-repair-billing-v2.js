@@ -3,6 +3,7 @@
 const Database = require("better-sqlite3");
 const { openDatabase, getDbProxy } = require("../src/server/db/connection");
 const { formatShanghaiDate, getNowIso } = require("../src/server/billing/period-utils");
+const { reconstructSubscriptionSnapshot } = require("../src/server/billing/snapshot-recovery");
 
 function auditBillingDatabase(database = null, options = {}) {
   const db = database || openDatabase();
@@ -106,6 +107,69 @@ function auditBillingDatabase(database = null, options = {}) {
   `).all();
   console.log(`- 已过期但缺失 cycle_expire 流水批次数: ${lotsWithMissingEvents.length}`);
 
+  // 5. Audit Subscription Snapshots (I4)
+  const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+  const subscriptionSnapshotAudits = [];
+  for (const sub of allSubs) {
+    let currentSnap = null;
+    try { currentSnap = JSON.parse(sub.snapshot_json || "{}"); } catch (_) {}
+    const expected = reconstructSubscriptionSnapshot(sub, db);
+    const candidateOrders = db.prepare(`
+      SELECT o.id, o.plan_id, o.order_action, o.status, o.amount_fen, o.snapshot_json
+      FROM credit_lots l
+      JOIN payment_orders o ON o.id = l.order_id
+      WHERE l.subscription_id = ?
+    `).all(sub.id);
+    const upgradeOrders = db.prepare(`
+      SELECT id, plan_id, order_action, status, amount_fen, snapshot_json
+      FROM payment_orders
+      WHERE user_id = ? AND status = 'paid' AND order_action = 'upgrade'
+    `).all(sub.user_id);
+    const grants = db.prepare(`
+      SELECT period_index, credits, status FROM subscription_grants WHERE subscription_id = ? ORDER BY period_index ASC
+    `).all(sub.id);
+
+    let conflictReason = "valid";
+    let actionTaken = "none";
+    if (!expected) {
+      conflictReason = "无法唯一重建权益快照";
+      actionTaken = "audit_required";
+    } else if (!currentSnap || !currentSnap.monthlyCredits) {
+      conflictReason = "快照缺失";
+      actionTaken = dryRun ? "需回填" : "已回填";
+      if (!dryRun) {
+        db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+      }
+    } else if (currentSnap.monthlyCredits !== expected.monthlyCredits || currentSnap.planId !== sub.plan_id) {
+      conflictReason = `快照权益与真实履约链不一致 (当前: ${currentSnap.monthlyCredits} 分 [${currentSnap.planId || ""}], 真实: ${expected.monthlyCredits} 分 [${expected.planId}])`;
+      actionTaken = dryRun ? "需修正" : "已修正";
+      if (!dryRun) {
+        db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+      }
+    }
+
+    if (conflictReason !== "valid") {
+      subscriptionSnapshotAudits.push({
+        subscriptionId: sub.id,
+        userId: sub.user_id,
+        planId: sub.plan_id,
+        cycle: sub.cycle,
+        currentSnapshot: currentSnap,
+        expectedSnapshot: expected,
+        candidateOrders,
+        upgradeOrders,
+        grants,
+        conflictReason,
+        actionTaken,
+      });
+    }
+  }
+  console.log(`\n[订阅快照真实权益审计]`);
+  console.log(`- 异常或需回填订阅数: ${subscriptionSnapshotAudits.length}`);
+  for (const a of subscriptionSnapshotAudits) {
+    console.log(`  * 订阅 #${a.subscriptionId} (用户 ${a.userId}, 套餐 ${a.planId}/${a.cycle}): ${a.conflictReason} -> [${a.actionTaken}]`);
+  }
+
   console.log(`\n=== 审计完成 ===\n`);
   return {
     categoryA,
@@ -116,6 +180,7 @@ function auditBillingDatabase(database = null, options = {}) {
     paidUnfulfilledOrders,
     auditRequiredOrders,
     lotsWithMissingEvents,
+    subscriptionSnapshotAudits,
   };
 }
 

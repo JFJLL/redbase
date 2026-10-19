@@ -1,0 +1,69 @@
+[alipay] precreate failed {
+  outTradeNo: 'rb_1792403691628_dad2084bdecd64',
+  error: '当前调用IP不在可信名单中'
+}
+[alipay] notify processing failed {
+  outTradeNo: 'rb_1792403691657_da500ea8423b45',
+  error: 'UNIQUE constraint failed: payment_orders.trade_no'
+}
+✔ recharge plans require login and expose configured plans (6.4679ms)
+✔ P6: recharge plans are hidden when alipay is disabled (1.758ms)
+[alipay] paid-on-close identity mismatch { outTradeNo: 'rb_1792403691730_e40ac34052db66' }
+[alipay] paid-on-close identity mismatch { outTradeNo: 'rb_1792403691735_5c9d773a63a16c' }
+[reconcile] provider identity mismatch {
+  outTradeNo: 'rb_1792403691739_a20454efffae49',
+  actualOutTradeNo: 'redbase_different_order',
+  appIdMatched: true,
+  sellerIdMatched: true
+}
+[alipay] active order check returned an unsafe outcome { outTradeNo: 'rb_1792403691739_a20454efffae49', outcome: 'failed' }
+[reconcile] amount mismatch {
+  outTradeNo: 'rb_1792403691742_3a20e2a59a1194',
+  expected: '99.00',
+  actual: '9.99'
+}
+[alipay] active order check returned an unsafe outcome { outTradeNo: 'rb_1792403691742_3a20e2a59a1194', outcome: 'failed' }
+✔ P6: recharge plans are hidden when the payment gateway is unavailable (1.3986ms)
+[alipay] active order check returned an unsafe outcome { outTradeNo: 'rb_1792403691746_32b38d64ebe9c0', outcome: 'unknown' }
+✔ P6: recharge plans stay visible when alipay is enabled and configured (1.3844ms)
+✔ create order is idempotent and rejects unconfigured plans (13.9423ms)
+✔ precreate failure preserves the PC pay link and returns a clear QR fallback (4.5112ms)
+✔ rollback mode blocks new orders but keeps notify processing (11ms)
+✔ notify rejects bad signature, wrong merchant, wrong amount and unknown orders (5.4891ms)
+✔ valid notify pays the order and credits exactly once (6.1664ms)
+✔ a second order cannot reuse an existing trade_no (8.013ms)
+✔ synchronous return never credits and late payment is allowed after expiry (6.0006ms)
+✔ twenty concurrent notifications credit only once without 500s (12.1813ms)
+✔ orders are scoped to the owner and close/paid transitions are guarded (12.5105ms)
+✔ P0: a closed order must never silently accept a later provider payment (3.9925ms)
+✔ P0: closing an already paid provider order settles it instead of closing (6.1377ms)
+✔ P0: closing without a gateway refuses locally instead of silently closing (2.6216ms)
+✔ a provider-missing trade closes locally only after a confirming query (3.4226ms)
+✔ a missing-trade close remains pending when the confirmation query finds a live trade (2.9648ms)
+✔ a missing-trade close does not locally close an already closed provider trade (3.8074ms)
+✔ fake settle page settles through the same notify path (4.5214ms)
+✔ owned pending orders can refresh their pay link and actively reconcile payment status (8.4798ms)
+✔ P0: paid-on-close rejects missing identity or a wrong amount (9.1549ms)
+✔ active reconciliation rejects a same-amount response for a different order (3.2864ms)
+✔ active reconciliation reports provider amount and status anomalies (6.8286ms)
+✔ processAlipayNotify returns failure for unknown trade status (0.303ms)
+✔ creates a WeChat Pay order with native QR code and records provider=wxpay (2.435ms)
+✔ WeChat Pay notification settles order, credits user, and produces idempotency across duplicates (5.3215ms)
+✔ WeChat Pay active check reconciles pending order and fake settle works (15.3074ms)
+✔ versioned migrations preserve users/sessions/credit_events exactly and clear legacy plaintext codes (110.6507ms)
+✔ the backup copy stays byte-identical and untouched (3.4359ms)
+✔ an expired order that was actually paid is settled by reconciliation (10.8092ms)
+✔ an expired unpaid order is marked expired and stays reconcilable (7.4269ms)
+✔ a closed order that was actually paid is flagged for audit, never silently dropped (4.4755ms)
+✔ trend analysis freezes credits, saves and charges atomically, and replays idempotently (18.4441ms)
+✔ failed reserved trend analysis keeps credits unchanged (5.8641ms)
+✔ active bucket reservations block alternate request IDs and protect frozen credits (8.0087ms)
+✔ active trend work remains reserved for the full bounded generation window (5.3287ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 455.9957

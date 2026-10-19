@@ -1,0 +1,17 @@
+✔ I1: DB failure during settlement rolls back atomic money state, leaves reservation intact, then clean failure releases it (16.8529ms)
+✔ I1 Coverage: Settle retry succeeds after transient DB error, and duplicate settlement replays idempotently (3.7828ms)
+✔ I2 Coverage: Stale success, missing token, wrong signature, and post-completion late failures are rejected without side-effects (5.841ms)
+✔ I4 Coverage: Ambiguous unresolvable subscription throws clear audit error without guessing catalog prices (1.1841ms)
+✔ I2: Late failure callback for old attempt T1 has zero side-effects on active attempt T2 (5.4992ms)
+✔ I3: Migration V18/V19 safely handles historical released attempt and active retry on same lot without UNIQUE conflict (1.0862ms)
+✔ I4a: Active Pro monthly service with future scheduled Business plan rebuilds snapshot as 400, not 1500 (10.1248ms)
+✔ I4b: Upgraded Pro annual subscription rebuilds snapshot as 400, preserving period 1 grant of 100, and calculates upgrade diff from 400 (6.0849ms)
+✔ Multi-process concurrency: competing settlements and late failures on real disk SQLite enforce mutex and idempotency (377.278ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 600.8178

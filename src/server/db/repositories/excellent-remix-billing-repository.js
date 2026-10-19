@@ -333,7 +333,9 @@ function settleExcellentBillingRequest({
   event,
   now = new Date(),
 }) {
-  const outcome = runTransaction(() => {
+  let outcome;
+  try {
+    outcome = runTransaction(() => {
     const request = findExcellentBillingRequest({ requestId, userId, kind });
     if (!request) throw new Error("计费请求不存在或已过期，请重新生成。");
     if (
@@ -371,23 +373,14 @@ function settleExcellentBillingRequest({
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, billingKind: kind },
       });
-        try {
-          settleCreditsForTask({
-            userId,
-            taskKey,
-            taskId: `${kind}_${requestId}`,
-            taskType: `excellent_${kind}`,
-            creditEventId: creditEvent.id,
-            nowIso: now.toISOString(),
-          }, db);
-        } catch (settleErr) {
-          db.prepare(`
-            UPDATE excellent_remix_billing_requests
-            SET status = 'failed', error = ?, updated_at = ?
-            WHERE request_id = ? AND user_id = ? AND kind = ?
-          `).run(settleErr.message, now.toISOString(), String(requestId), Number(userId), String(kind));
-          return { settleFailed: true };
-        }
+      settleCreditsForTask({
+        userId,
+        taskKey,
+        taskId: `${kind}_${requestId}`,
+        taskType: `excellent_${kind}`,
+        creditEventId: creditEvent.id,
+        nowIso: now.toISOString(),
+      }, db);
       syncUserCreditsCache(userId, db);
     } else {
       releaseCreditsForTask({
@@ -435,11 +428,21 @@ function settleExcellentBillingRequest({
       windowCount: countDirectionSuccessesInWindow(userId, now.getTime()),
     };
   });
-  if (outcome && (outcome.insufficientAtSettle || outcome.settleFailed)) {
-    const error = new Error("积分余额已发生变化，本次结果未保存，请重新生成。");
-    error.code = "INSUFFICIENT_CREDITS";
-    error.statusCode = 402;
-    throw error;
+  } catch (err) {
+    if (err && err.code === "RESERVATION_NOT_FOUND") {
+      try {
+        db.prepare(`
+          UPDATE excellent_remix_billing_requests
+          SET status = 'failed', error = ?, updated_at = ?
+          WHERE request_id = ? AND user_id = ? AND kind = ? AND status = 'reserved'
+        `).run("积分余额已发生变化，未找到有效预占", now.toISOString(), String(requestId), Number(userId), String(kind));
+      } catch (_) {}
+      const mappedErr = new Error("积分余额已发生变化，本次结果未保存，请重新生成。");
+      mappedErr.code = "RESERVATION_NOT_FOUND";
+      mappedErr.statusCode = 402;
+      throw mappedErr;
+    }
+    throw err;
   }
   return outcome;
 }
@@ -456,14 +459,62 @@ function failExcellentBillingRequest({
 }) {
   return runTransaction(() => {
     const timestamp = now.toISOString();
-    const taskKey = reservationToken
-      ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
-      : `excellent_${kind}:${userId}:${requestId}`;
+    const token = String(reservationToken || "").trim();
+    if (!token) {
+      const err = new Error("缺少有效的计费尝试令牌 (reservationToken)，无法释放预占。");
+      err.code = "STALE_BILLING_ATTEMPT";
+      err.statusCode = 409;
+      throw err;
+    }
+
     const request = findExcellentBillingRequest({ requestId, userId, kind });
-    const finalKey = request?.task_key || taskKey;
+    if (!request) {
+      const err = new Error("计费请求不存在或已失效。");
+      err.code = "STALE_BILLING_ATTEMPT";
+      err.statusCode = 409;
+      throw err;
+    }
+
+    if (inputSignature && request.input_signature !== String(inputSignature)) {
+      const err = new Error("计费请求已被新的生成尝试替代，请重试。");
+      err.code = "STALE_BILLING_ATTEMPT";
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const attemptTaskKey = `excellent_${kind}:${userId}:${requestId}:${token}`;
+
+    if (request.created_at !== token) {
+      const oldRes = db.prepare(`
+        SELECT status FROM task_credit_reservations WHERE task_key = ?
+      `).all(attemptTaskKey);
+      if (oldRes && oldRes.length > 0) {
+        const hasReserved = oldRes.some((r) => r.status === "reserved");
+        if (hasReserved) {
+          releaseCreditsForTask({
+            userId,
+            taskKey: attemptTaskKey,
+            taskId: `${kind}_${requestId}`,
+            taskType: `excellent_${kind}`,
+            nowIso: timestamp,
+          }, db);
+          syncUserCreditsCache(userId, db);
+        }
+      }
+      return { status: "stale", ignored: true, attemptTaskKey };
+    }
+
+    if (request.status === "completed") {
+      return { status: "stale", ignored: true, attemptTaskKey };
+    }
+
+    if (request.status === "failed") {
+      return { status: "failed", replayed: true, attemptTaskKey };
+    }
+
     releaseCreditsForTask({
       userId,
-      taskKey: finalKey,
+      taskKey: attemptTaskKey,
       taskId: `${kind}_${requestId}`,
       taskType: `excellent_${kind}`,
       nowIso: timestamp,
@@ -473,15 +524,14 @@ function failExcellentBillingRequest({
     db.prepare(`
       UPDATE excellent_remix_billing_requests
       SET status = 'failed', credit_cost = 0, counted = 0, error = ?, updated_at = ?
-      WHERE request_id = ? AND user_id = ? AND kind = ? AND input_signature = ? AND created_at = ? AND status = 'reserved'
+      WHERE request_id = ? AND user_id = ? AND kind = ? AND created_at = ? AND status = 'reserved'
     `).run(
       errorText,
       timestamp,
       String(requestId),
       Number(userId),
       String(kind),
-      String(inputSignature || ""),
-      String(reservationToken || ""),
+      token,
     );
     try {
       if (kind === EXCELLENT_BILLING_KIND_DIRECTION) {
@@ -490,6 +540,7 @@ function failExcellentBillingRequest({
         recordExcellentFusionFailed({ requestId, userId, error: errorText, failedAt: timestamp });
       }
     } catch (_) {}
+    return { status: "failed", attemptTaskKey };
   });
 }
 

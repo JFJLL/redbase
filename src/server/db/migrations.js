@@ -2,6 +2,7 @@ const { getDbProxy } = require("./connection");
 const { transaction } = require("./connection");
 const { loadAppConfig } = require("../config");
 const { isAdminUser } = require("../api/domain-utils");
+const { reconstructSubscriptionSnapshot } = require("../billing/snapshot-recovery");
 
 const db = getDbProxy();
 
@@ -1012,14 +1013,35 @@ const VERSIONED_MIGRATIONS = [
         } else if (String(row.task_type).startsWith("excellent_")) {
           const kind = String(row.task_type).replace(/^excellent_/, "");
           const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
-          const reqs = db.prepare(`
-            SELECT request_id, created_at, task_key FROM excellent_remix_billing_requests
-            WHERE user_id = ? AND request_id = ? AND kind = ?
-          `).all(row.user_id, cleanTid, kind);
-          if (reqs && reqs.length === 1) {
-            const canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${reqs[0].created_at}`;
+          const parts = String(row.task_key || "").split(":");
+          const isAlreadyCanonical = parts.length >= 4 && parts[0] === `excellent_${kind}` && parts[1] === String(row.user_id) && parts[2] === cleanTid && parts[3] !== "";
+          if (isAlreadyCanonical) {
+            continue;
+          }
+
+          let canonicalKey = "";
+          let req = null;
+          try {
+            req = db.prepare(`
+              SELECT request_id, created_at, task_key, status FROM excellent_remix_billing_requests
+              WHERE user_id = ? AND request_id = ? AND kind = ?
+            `).get(row.user_id, cleanTid, kind);
+          } catch (_) {}
+
+          if (row.status === "reserved" && req && req.status === "reserved" && req.created_at) {
+            canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${req.created_at}`;
+          } else {
+            canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${row.created_at}`;
+          }
+
+          const exists = db.prepare("SELECT 1 FROM task_credit_reservations WHERE task_key = ? AND lot_id = ? AND id != ?").get(canonicalKey, row.lot_id, row.id);
+          if (!exists) {
             db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(canonicalKey, row.id);
-            db.prepare("UPDATE excellent_remix_billing_requests SET task_key = ? WHERE user_id = ? AND request_id = ? AND kind = ?").run(canonicalKey, row.user_id, cleanTid, kind);
+            if (req && req.status === "reserved" && (!req.task_key || req.task_key === "")) {
+              db.prepare("UPDATE excellent_remix_billing_requests SET task_key = ? WHERE user_id = ? AND request_id = ? AND kind = ?").run(canonicalKey, row.user_id, cleanTid, kind);
+            }
+          } else {
+            db.prepare("UPDATE task_credit_reservations SET status = 'audit_required' WHERE id = ?").run(row.id);
           }
         }
       }
@@ -1027,33 +1049,63 @@ const VERSIONED_MIGRATIONS = [
       // 4. Backfill empty snapshot_json in subscriptions
       const subs = db.prepare("SELECT * FROM subscriptions WHERE snapshot_json = '' OR snapshot_json = '{}'").all();
       for (const sub of subs) {
-        let monthlyCredits = 0;
-        const grant = db.prepare("SELECT credits FROM subscription_grants WHERE subscription_id = ? ORDER BY period_index ASC LIMIT 1").get(sub.id);
-        if (grant && grant.credits > 0) {
-          monthlyCredits = Number(grant.credits);
-        } else {
-          const order = db.prepare("SELECT snapshot_json, plan_credits FROM payment_orders WHERE user_id = ? AND status = 'paid' AND order_kind = 'plan' ORDER BY id DESC LIMIT 1").get(sub.user_id);
-          if (order) {
-            try {
-              const os = JSON.parse(order.snapshot_json || "{}");
-              monthlyCredits = Number(os.monthlyCredits || order.plan_credits || 0);
-            } catch (_) {}
+        const snapshot = reconstructSubscriptionSnapshot(sub, db);
+        if (snapshot) {
+          db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(snapshot), sub.id);
+        }
+      }
+    },
+  },
+  {
+    version: 19,
+    name: "billing-v2-attempt-identity-and-snapshot-repair",
+    apply() {
+      // 1. Repair historical released/settled reservations where an earlier migration may have overwritten task_key
+      const badExcRows = db.prepare(`
+        SELECT r.id, r.user_id, r.task_id, r.task_type, r.task_key, r.created_at, r.lot_id, r.status
+        FROM task_credit_reservations r
+        WHERE r.status IN ('released', 'settled')
+          AND r.task_type LIKE 'excellent_%'
+      `).all();
+
+      for (const row of badExcRows) {
+        const kind = String(row.task_type).replace(/^excellent_/, "");
+        const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
+        const parts = String(row.task_key || "").split(":");
+        if (parts.length >= 4) {
+          const keyTimestamp = parts.slice(3).join(":");
+          let activeReq = null;
+          try {
+            activeReq = db.prepare(`
+              SELECT created_at FROM excellent_remix_billing_requests
+              WHERE user_id = ? AND request_id = ? AND kind = ? AND status = 'reserved'
+            `).get(row.user_id, cleanTid, kind);
+          } catch (_) {}
+          if (activeReq && activeReq.created_at === keyTimestamp && activeReq.created_at !== row.created_at) {
+            const restoredKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${row.created_at}`;
+            const exists = db.prepare("SELECT 1 FROM task_credit_reservations WHERE task_key = ? AND lot_id = ? AND id != ?").get(restoredKey, row.lot_id, row.id);
+            if (!exists) {
+              db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(restoredKey, row.id);
+            } else {
+              db.prepare("UPDATE task_credit_reservations SET status = 'audit_required' WHERE id = ?").run(row.id);
+            }
           }
         }
-        if (monthlyCredits > 0) {
-          const snapshot = {
-            version: "v2",
-            planId: sub.plan_id,
-            cycle: sub.cycle,
-            monthlyCredits,
-            initialCredits: monthlyCredits,
-            pricingBasisFen: sub.pricing_basis_fen,
-            actualPaidTotalFen: sub.actual_paid_total_fen,
-            anchorDay: sub.anchor_day,
-            serviceStart: sub.service_start,
-            serviceEnd: sub.service_end,
-          };
-          db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(snapshot), sub.id);
+      }
+
+      // 2. Audit and repair all subscriptions where bad snapshot was backfilled
+      const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+      for (const sub of allSubs) {
+        let currentSnap = null;
+        try { currentSnap = JSON.parse(sub.snapshot_json || "{}"); } catch (_) {}
+        const expected = reconstructSubscriptionSnapshot(sub, db);
+        if (expected) {
+          const isMissing = !currentSnap || !currentSnap.monthlyCredits;
+          const isWrongCredits = currentSnap && currentSnap.monthlyCredits !== expected.monthlyCredits;
+          const isWrongPlan = currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id;
+          if (isMissing || isWrongCredits || isWrongPlan) {
+            db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+          }
         }
       }
     },

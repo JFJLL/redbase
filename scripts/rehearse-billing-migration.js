@@ -419,7 +419,81 @@ function testV18ReservationIdentityAndSubscriptionSnapshot() {
     throw new Error(`V18 未将旧键更新为规范格式，当前: ${updatedRes.task_key}`);
   }
 
+  // Verify V18 multi-attempt safety on same lot (I3)
+  const excReqId = "req_rehearse_exc_v18";
+  const t1Time = "2026-01-01T01:00:00.000Z";
+  const t2Time = "2026-01-01T02:00:00.000Z";
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (90883, ?, 'topup', '永久积分', 10, 9, 1, 0, '2026-01-01', NULL, 'active', '2026-01-01', '2026-01-01')").run(uid);
+  conn.prepare("INSERT OR REPLACE INTO excellent_remix_billing_requests (request_id, user_id, kind, input_signature, status, credit_cost, created_at, updated_at, task_key) VALUES (?, ?, 'direction', 'sig88', 'reserved', 1, ?, ?, '')").run(excReqId, uid, t2Time, t2Time);
+  conn.prepare("INSERT OR REPLACE INTO task_credit_reservations (id, task_key, task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at) VALUES (90884, ?, ?, ?, 'excellent_direction', 90883, 1, 'released', ?, ?)").run(`excellent_direction:${uid}:${excReqId}`, excReqId, uid, t1Time, t1Time);
+  conn.prepare("INSERT OR REPLACE INTO task_credit_reservations (id, task_key, task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at) VALUES (90885, ?, ?, ?, 'excellent_direction', 90883, 1, 'reserved', ?, ?)").run(`excellent_direction:${uid}:${excReqId}:${t2Time}`, excReqId, uid, t2Time, t2Time);
+
+  // Re-run V18 on multi-attempt setup
+  v18.apply();
+
+  const t1Res = conn.prepare("SELECT task_key, status FROM task_credit_reservations WHERE id = 90884").get();
+  const t2Res = conn.prepare("SELECT task_key, status FROM task_credit_reservations WHERE id = 90885").get();
+  if (t1Res.task_key === t2Res.task_key) {
+    throw new Error(`V18 将不同尝试合并成了相同 task_key: ${t1Res.task_key}`);
+  }
+  if (t1Res.status !== "released" || t2Res.status !== "reserved") {
+    throw new Error(`V18 破坏了预占状态: T1=${t1Res.status}, T2=${t2Res.status}`);
+  }
+
   console.log("✔ V18 任务身份规范对齐与订阅快照回填演练通过");
+}
+
+function testV19AttemptIdentityAndSnapshotRepair() {
+  console.log("\n--- [演练场景 9] V19 历史尝试身份修复与订阅快照回填修正演练 ---");
+  const conn = require("../src/server/db/connection").openDatabase();
+  const { VERSIONED_MIGRATIONS } = require("../src/server/db/migrations");
+
+  const uidPro = 9091;
+  const uidAnnual = 9092;
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V19UserPro', '13990910001', 'h', 'customer', 0, 1, '2026-01-01')").run(uidPro);
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V19UserAnnual', '13990920001', 'h', 'customer', 0, 1, '2026-01-01')").run(uidAnnual);
+
+  // I4a setup: Pro monthly (400) + future scheduled Business (1500), corrupted by bad V18 to 1500
+  const subProId = 9091;
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (90910, 'out_pro_9091', ?, 'idem_pro_9091', 'pro', '专业版', 400, 4900, 'paid', 'plan', 'activate', 'monthly', 'fulfilled', '{\"monthlyCredits\":400,\"planId\":\"pro\",\"cycle\":\"monthly\",\"pricingBasisFen\":4900}', '2026-02-01', '2026-01-01', '2026-01-01')").run(uidPro);
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, order_id, subscription_id, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (909101, ?, 'cycle', '本期积分', 90910, ?, 400, 400, 0, 0, '2026-01-01', '2026-02-01', 'active', '2026-01-01', '2026-01-01')").run(uidPro, subProId);
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'pro', 'monthly', 'active', '2026-01-01', '2026-02-01', 1, '2026-01-01', '2026-02-01', 400, 0, 4900, 4900, '{\"monthlyCredits\":1500,\"planId\":\"business\"}', '2026-01-01', '2026-01-01')").run(subProId, uidPro);
+
+  // Future scheduled order
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (90911, 'out_biz_9091', ?, 'idem_biz_9091', 'business', '业务版', 1500, 14900, 'paid', 'plan', 'interval', 'monthly', 'scheduled', '{\"monthlyCredits\":1500,\"planId\":\"business\",\"cycle\":\"monthly\",\"pricingBasisFen\":14900}', '2026-03-01', '2026-01-15', '2026-01-15')").run(uidPro);
+  conn.prepare("INSERT OR REPLACE INTO subscription_schedules (id, user_id, order_id, plan_id, cycle, status, start_at, end_at, amount_fen, monthly_credits, snapshot_json, created_at, updated_at) VALUES (90912, ?, 90911, 'business', 'monthly', 'scheduled', '2026-02-01', '2026-03-01', 14900, 1500, '{\"monthlyCredits\":1500}', '2026-01-15', '2026-01-15')").run(uidPro);
+
+  // I4b setup: Lite annual upgraded to Pro annual, corrupted by bad V18 to 100
+  const subAnnualId = 9092;
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (90920, 'out_lite_9092', ?, 'idem_lite_9092', 'lite', '轻量版', 100, 19900, 'paid', 'plan', 'activate', 'annual', 'fulfilled', '{\"monthlyCredits\":100,\"planId\":\"lite\",\"cycle\":\"annual\",\"pricingBasisFen\":19900}', '2027-01-01', '2026-01-01', '2026-01-01')").run(uidAnnual);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (90921, 'out_upg_9092', ?, 'idem_upg_9092', 'pro', '专业版', 400, 29100, 'paid', 'plan', 'upgrade', 'annual', 'fulfilled', '{\"monthlyCredits\":400,\"targetMonthlyCredits\":400,\"planId\":\"pro\",\"cycle\":\"annual\",\"originalSubscriptionId\":9092,\"pricingBasisFen\":49000}', '2027-01-01', '2026-01-10', '2026-01-10')").run(uidAnnual);
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'pro', 'annual', 'active', '2026-01-01', '2027-01-01', 1, '2026-02-01', '2026-03-01', 400, 0, 49000, 49000, '{\"monthlyCredits\":100,\"planId\":\"lite\"}', '2026-01-01', '2026-01-10')").run(subAnnualId, uidAnnual);
+  conn.prepare("INSERT OR REPLACE INTO subscription_grants (id, subscription_id, user_id, period_index, period_start, period_end, credits, status, created_at, updated_at) VALUES (909201, ?, ?, 1, '2026-01-01', '2026-02-01', 100, 'granted', '2026-01-01', '2026-01-01')").run(subAnnualId, uidAnnual);
+  for (let p = 2; p <= 12; p++) {
+    conn.prepare("INSERT OR REPLACE INTO subscription_grants (id, subscription_id, user_id, period_index, period_start, period_end, credits, status, created_at, updated_at) VALUES (?, ?, ?, ?, '2026-02-01', '2026-03-01', 400, 'pending', '2026-01-01', '2026-01-10')").run(909200 + p, subAnnualId, uidAnnual, p);
+  }
+
+  const v19 = VERSIONED_MIGRATIONS.find((m) => m.version === 19);
+  v19.apply();
+
+  const repairedPro = conn.prepare("SELECT snapshot_json FROM subscriptions WHERE id = ?").get(subProId);
+  const proSnap = JSON.parse(repairedPro.snapshot_json);
+  if (proSnap.monthlyCredits !== 400 || proSnap.planId !== "pro") {
+    throw new Error(`V19 未能正确修复 I4a 专业版快照，当前: ${repairedPro.snapshot_json}`);
+  }
+
+  const repairedAnnual = conn.prepare("SELECT snapshot_json FROM subscriptions WHERE id = ?").get(subAnnualId);
+  const annualSnap = JSON.parse(repairedAnnual.snapshot_json);
+  if (annualSnap.monthlyCredits !== 400 || annualSnap.planId !== "pro") {
+    throw new Error(`V19 未能正确修复 I4b 年付升级快照，当前: ${repairedAnnual.snapshot_json}`);
+  }
+
+  const period1Grant = conn.prepare("SELECT credits FROM subscription_grants WHERE subscription_id = ? AND period_index = 1").get(subAnnualId);
+  if (period1Grant.credits !== 100) {
+    throw new Error(`V19 错误覆盖了历史第一期发放额度: ${period1Grant.credits}`);
+  }
+
+  console.log("✔ V19 历史尝试身份修复与订阅快照回填修正演练通过");
 }
 
 function runRehearsal() {
@@ -431,6 +505,7 @@ function runRehearsal() {
   testV13CycleOnlyNoLegacyDuplication();
   testV17TableReconstructionAndExpiryNormalization();
   testV18ReservationIdentityAndSubscriptionSnapshot();
+  testV19AttemptIdentityAndSnapshotRepair();
   console.log("\n=== RedBase 套餐与积分 V2 数据迁移隔离演练全部 100% 通过 ===");
 }
 

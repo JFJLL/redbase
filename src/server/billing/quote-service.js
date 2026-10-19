@@ -10,6 +10,7 @@ const {
   toShanghaiDate,
   formatShanghaiDate,
 } = require("./period-utils");
+const { reconstructSubscriptionSnapshot } = require("./snapshot-recovery");
 
 const DEFAULT_QUOTE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -32,51 +33,19 @@ function getSubscriptionSnapshot(sub, db = getDbProxy()) {
   if (!sub) return {};
   try {
     const s = JSON.parse(sub.snapshot_json || "{}");
-    if (s && Number(s.monthlyCredits) > 0) return s;
-  } catch (_) {}
-
-  const firstGrant = db.prepare(`
-    SELECT credits FROM subscription_grants
-    WHERE subscription_id = ?
-    ORDER BY period_index ASC LIMIT 1
-  `).get(sub.id);
-  if (firstGrant && Number(firstGrant.credits) > 0) {
-    const s = {
-      version: "v2",
-      planId: sub.plan_id,
-      cycle: sub.cycle,
-      monthlyCredits: Number(firstGrant.credits),
-      pricingBasisFen: sub.pricing_basis_fen,
-    };
-    try {
-      db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(s), sub.id);
-    } catch (_) {}
-    return s;
-  }
-
-  const order = db.prepare(`
-    SELECT snapshot_json, plan_credits FROM payment_orders
-    WHERE user_id = ? AND status = 'paid' AND order_kind = 'plan'
-    ORDER BY id DESC LIMIT 1
-  `).get(sub.user_id);
-  if (order) {
-    try {
-      const os = JSON.parse(order.snapshot_json || "{}");
-      const mc = Number(os.monthlyCredits || order.plan_credits || 0);
-      if (mc > 0) {
-        const s = {
-          version: "v2",
-          planId: sub.plan_id,
-          cycle: sub.cycle,
-          monthlyCredits: mc,
-          pricingBasisFen: sub.pricing_basis_fen,
-        };
-        try {
-          db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(s), sub.id);
-        } catch (_) {}
+    if (s && Number(s.monthlyCredits) > 0) {
+      if (!s.planId || s.planId === sub.plan_id) {
         return s;
       }
+    }
+  } catch (_) {}
+
+  const reconstructed = reconstructSubscriptionSnapshot(sub, db);
+  if (reconstructed) {
+    try {
+      db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(reconstructed), sub.id);
     } catch (_) {}
+    return reconstructed;
   }
 
   return {};
@@ -244,10 +213,16 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
         const oldPurchasedCredits = Number(
           subSnapshot.monthlyCredits ||
           subSnapshot.planCredits ||
-          oldPlan.credits
+          0
         );
+        if (!oldPurchasedCredits) {
+          throw new Error("当前订阅权益快照待核查，无法自动计算升级差额，请联系客服处理");
+        }
 
-        const oldFullTermPrice = activeSub.pricing_basis_fen || subSnapshot.fullTermPriceFen || getPriceFen(oldPlan, cycle);
+        const oldFullTermPrice = activeSub.pricing_basis_fen || subSnapshot.pricingBasisFen || subSnapshot.fullTermPriceFen || 0;
+        if (!oldFullTermPrice) {
+          throw new Error("当前订阅计费基准待核查，无法自动计算升级差额，请联系客服处理");
+        }
         const targetFullTermPrice = getPriceFen(plan, cycle);
         const priceDiff = targetFullTermPrice - oldFullTermPrice;
 
