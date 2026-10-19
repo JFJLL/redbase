@@ -10,7 +10,11 @@ const {
   toShanghaiDate,
   formatShanghaiDate,
 } = require("./period-utils");
-const { reconstructSubscriptionSnapshot } = require("./snapshot-recovery");
+const {
+  reconstructSubscriptionSnapshot,
+  inspectSubscriptionSnapshot,
+  safeUpdateSubscriptionSnapshot,
+} = require("./snapshot-recovery");
 
 const DEFAULT_QUOTE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -31,21 +35,43 @@ function findActiveSubscription(userId, nowMs = getNowTimestamp()) {
 
 function getSubscriptionSnapshot(sub, db = getDbProxy()) {
   if (!sub) return {};
+  let currentSnap = null;
   try {
-    const s = JSON.parse(sub.snapshot_json || "{}");
-    if (s && Number(s.monthlyCredits) > 0) {
-      if (!s.planId || s.planId === sub.plan_id) {
-        return s;
-      }
-    }
+    currentSnap = JSON.parse(sub.snapshot_json || "{}");
   } catch (_) {}
 
-  const reconstructed = reconstructSubscriptionSnapshot(sub, db);
-  if (reconstructed) {
-    try {
-      db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(reconstructed), sub.id);
-    } catch (_) {}
-    return reconstructed;
+  const catalogPlan = getPlan(sub.plan_id);
+  const isHealthySnapshot = Boolean(
+    currentSnap &&
+    Number(currentSnap.monthlyCredits) > 0 &&
+    currentSnap.planId === sub.plan_id &&
+    currentSnap.cycle === sub.cycle &&
+    (!catalogPlan || currentSnap.monthlyCredits === catalogPlan.credits)
+  );
+
+  const inspection = inspectSubscriptionSnapshot(sub, db);
+
+  if (inspection.status === "resolved" && inspection.snapshot) {
+    const resolved = inspection.snapshot;
+    if (resolved.planId !== sub.plan_id) {
+      return {};
+    }
+    if (!isHealthySnapshot || currentSnap?.monthlyCredits !== resolved.monthlyCredits || currentSnap?.planId !== resolved.planId) {
+      try {
+        safeUpdateSubscriptionSnapshot(sub, resolved, db);
+      } catch (_) {}
+    }
+    return resolved;
+  }
+
+  // If inspection found conflict or unresolved:
+  // Never accept a snapshot whose planId conflicts with sub.plan_id!
+  if (currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id) {
+    return {};
+  }
+
+  if (isHealthySnapshot && inspection.status !== "conflict") {
+    return currentSnap;
   }
 
   return {};

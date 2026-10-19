@@ -3,7 +3,10 @@
 const Database = require("better-sqlite3");
 const { openDatabase, getDbProxy } = require("../src/server/db/connection");
 const { formatShanghaiDate, getNowIso } = require("../src/server/billing/period-utils");
-const { reconstructSubscriptionSnapshot } = require("../src/server/billing/snapshot-recovery");
+const {
+  reconstructSubscriptionSnapshot,
+  inspectSubscriptionSnapshot,
+} = require("../src/server/billing/snapshot-recovery");
 
 function auditBillingDatabase(database = null, options = {}) {
   const db = database || openDatabase();
@@ -113,15 +116,16 @@ function auditBillingDatabase(database = null, options = {}) {
   for (const sub of allSubs) {
     let currentSnap = null;
     try { currentSnap = JSON.parse(sub.snapshot_json || "{}"); } catch (_) {}
-    const expected = reconstructSubscriptionSnapshot(sub, db);
+    const inspection = inspectSubscriptionSnapshot(sub, db);
+    const expected = inspection.snapshot;
     const candidateOrders = db.prepare(`
-      SELECT o.id, o.plan_id, o.order_action, o.status, o.amount_fen, o.snapshot_json
+      SELECT o.id, o.plan_id, o.order_action, o.status, o.fulfillment_status, o.amount_fen, o.snapshot_json
       FROM credit_lots l
       JOIN payment_orders o ON o.id = l.order_id
       WHERE l.subscription_id = ?
     `).all(sub.id);
     const upgradeOrders = db.prepare(`
-      SELECT id, plan_id, order_action, status, amount_fen, snapshot_json
+      SELECT id, plan_id, order_action, status, fulfillment_status, amount_fen, snapshot_json
       FROM payment_orders
       WHERE user_id = ? AND status = 'paid' AND order_action = 'upgrade'
     `).all(sub.user_id);
@@ -131,9 +135,12 @@ function auditBillingDatabase(database = null, options = {}) {
 
     let conflictReason = "valid";
     let actionTaken = "none";
-    if (!expected) {
-      conflictReason = "无法唯一重建权益快照";
+    if (inspection.status !== "resolved" || !expected) {
+      conflictReason = inspection.reason || "无法唯一重建权益快照";
       actionTaken = "audit_required";
+      if (!dryRun && currentSnap && currentSnap.planId !== sub.plan_id) {
+        db.prepare("UPDATE subscriptions SET snapshot_json = '' WHERE id = ?").run(sub.id);
+      }
     } else if (!currentSnap || !currentSnap.monthlyCredits) {
       conflictReason = "快照缺失";
       actionTaken = dryRun ? "需回填" : "已回填";
@@ -156,6 +163,10 @@ function auditBillingDatabase(database = null, options = {}) {
         cycle: sub.cycle,
         currentSnapshot: currentSnap,
         expectedSnapshot: expected,
+        inspectionStatus: inspection.status,
+        inspectionReason: inspection.reason,
+        effectiveUpgrades: inspection.evidence?.effectiveUpgrades || [],
+        unfulfilledUpgrades: inspection.evidence?.unfulfilledUpgrades || [],
         candidateOrders,
         upgradeOrders,
         grants,

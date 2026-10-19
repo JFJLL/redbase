@@ -2,7 +2,10 @@ const { getDbProxy } = require("./connection");
 const { transaction } = require("./connection");
 const { loadAppConfig } = require("../config");
 const { isAdminUser } = require("../api/domain-utils");
-const { reconstructSubscriptionSnapshot } = require("../billing/snapshot-recovery");
+const {
+  reconstructSubscriptionSnapshot,
+  inspectSubscriptionSnapshot,
+} = require("../billing/snapshot-recovery");
 
 const db = getDbProxy();
 
@@ -1105,6 +1108,34 @@ const VERSIONED_MIGRATIONS = [
           const isWrongPlan = currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id;
           if (isMissing || isWrongCredits || isWrongPlan) {
             db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+          }
+        }
+      }
+    },
+  },
+  {
+    version: 20,
+    name: "billing-v2-snapshot-provenance-repair",
+    apply() {
+      const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+      for (const sub of allSubs) {
+        const inspection = inspectSubscriptionSnapshot(sub, db);
+        let currentSnap = null;
+        try { currentSnap = JSON.parse(sub.snapshot_json || "{}"); } catch (_) {}
+
+        if (inspection.status === "resolved" && inspection.snapshot) {
+          const expected = inspection.snapshot;
+          const isMissing = !currentSnap || !currentSnap.monthlyCredits;
+          const isWrongCredits = currentSnap && currentSnap.monthlyCredits !== expected.monthlyCredits;
+          const isWrongPlan = currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id;
+          if (isMissing || isWrongCredits || isWrongPlan) {
+            db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+          }
+        } else if (inspection.status === "unresolved" || inspection.status === "conflict") {
+          if (currentSnap && (currentSnap.planId !== sub.plan_id || inspection.status === "unresolved")) {
+            if (inspection.status === "unresolved") {
+              db.prepare("UPDATE subscriptions SET snapshot_json = '' WHERE id = ?").run(sub.id);
+            }
           }
         }
       }

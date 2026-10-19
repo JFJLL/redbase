@@ -1,0 +1,15 @@
+✔ J1: Annual subscription upgraded in Month 12 preserves 400 entitlement and is not downgraded by grant 12 of 100 (21.655ms)
+✔ J1 Coverage: Upgrade in Month 1, Month 6, and upgrade with issuedNow = 0 (9.7311ms)
+✔ J2: paid + audit_required upgrade does not change current entitlement and is not backfilled by migration (8.7776ms)
+✔ J3: Subscription with missing provenance cannot borrow another subscription's older order and enters audit (8.4794ms)
+✔ J1 Coverage: Consecutive upgrades in month 12 (Light -> Pro -> Business) correctly traces to Business 1500 (18.6851ms)
+✔ J2 Coverage: paid + unfulfilled and paid + processing do not alter active entitlement (5.8549ms)
+✔ J3 Coverage: Subscription with conflicting candidate orders flags conflict and refuses to auto-write (2.8077ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 301.9635

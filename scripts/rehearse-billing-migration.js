@@ -496,6 +496,78 @@ function testV19AttemptIdentityAndSnapshotRepair() {
   console.log("✔ V19 历史尝试身份修复与订阅快照回填修正演练通过");
 }
 
+function testV20SnapshotProvenanceRepair() {
+  console.log("\n--- [演练场景 10] V20 真实履约快照来源修复演练 (J1/J2/J3) ---");
+  const conn = require("../src/server/db/connection").openDatabase();
+  const { VERSIONED_MIGRATIONS } = require("../src/server/db/migrations");
+
+  // Setup J1: Lite annual upgraded to Pro in month 12
+  // All 12 grants are granted. Period 12 grant is 100. Snapshot was corrupted to 100 by old V19.
+  const uidJ1 = 9201;
+  const subJ1Id = 9201;
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V20UserJ1', '13992010001', 'h', 'customer', 0, 1, '2026-01-01')").run(uidJ1);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (92010, 'out_lite_9201', ?, 'idem_l_9201', 'lite', '轻量版', 100, 19900, 'paid', 'plan', 'activate', 'annual', 'fulfilled', '{\"monthlyCredits\":100,\"planId\":\"lite\",\"cycle\":\"annual\",\"pricingBasisFen\":19900}', '2027-01-01', '2026-01-01', '2026-01-01')").run(uidJ1);
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, order_id, subscription_id, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (920101, ?, 'cycle', '本期积分', 92010, ?, 100, 0, 0, 100, '2026-01-01', '2026-02-01', 'active', '2026-01-01', '2026-01-01')").run(uidJ1, subJ1Id);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (92011, 'out_upg_9201', ?, 'idem_u_9201', 'pro', '专业版', 400, 4100, 'paid', 'plan', 'upgrade', 'annual', 'fulfilled', '{\"monthlyCredits\":400,\"targetMonthlyCredits\":400,\"planId\":\"pro\",\"cycle\":\"annual\",\"originalSubscriptionId\":9201,\"pricingBasisFen\":99900}', '2027-01-01', '2026-12-15', '2026-12-15')").run(uidJ1);
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'pro', 'annual', 'active', '2026-01-01', '2027-01-01', 1, '2026-12-01', '2027-01-01', 100, 0, 99900, 24000, '{\"monthlyCredits\":100,\"planId\":\"pro\"}', '2026-01-01', '2026-12-15')").run(subJ1Id, uidJ1);
+  for (let p = 1; p <= 12; p++) {
+    conn.prepare("INSERT OR REPLACE INTO subscription_grants (id, subscription_id, user_id, period_index, period_start, period_end, credits, status, created_at, updated_at) VALUES (?, ?, ?, ?, '2026-12-01', '2027-01-01', 100, 'granted', '2026-01-01', '2026-12-01')").run(920100 + p, subJ1Id, uidJ1, p);
+  }
+
+  // Setup J2: Pro monthly with audit_required Business upgrade order
+  const uidJ2 = 9202;
+  const subJ2Id = 9202;
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V20UserJ2', '13992020001', 'h', 'customer', 0, 1, '2026-06-01')").run(uidJ2);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (92020, 'out_pro_9202', ?, 'idem_pro_9202', 'pro', '专业版', 400, 4900, 'paid', 'plan', 'activate', 'monthly', 'fulfilled', '{\"monthlyCredits\":400,\"planId\":\"pro\",\"cycle\":\"monthly\",\"pricingBasisFen\":4900}', '2026-07-01', '2026-06-01', '2026-06-01')").run(uidJ2);
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, order_id, subscription_id, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (920201, ?, 'cycle', '本期积分', 92020, ?, 400, 400, 0, 0, '2026-06-01', '2026-07-01', 'active', '2026-06-01', '2026-06-01')").run(uidJ2, subJ2Id);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, audit_reason, snapshot_json, expires_at, created_at, updated_at) VALUES (92021, 'out_biz_9202', ?, 'idem_biz_9202', 'business', '业务版', 1500, 10000, 'paid', 'plan', 'upgrade', 'monthly', 'audit_required', '人工受控测试', '{\"monthlyCredits\":1500,\"targetMonthlyCredits\":1500,\"planId\":\"business\",\"cycle\":\"monthly\",\"originalSubscriptionId\":9202}', '2026-07-01', '2026-06-15', '2026-06-15')").run(uidJ2);
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'pro', 'monthly', 'active', '2026-06-01', '2026-07-01', 1, '2026-06-01', '2026-07-01', 400, 0, 4900, 4900, '{\"monthlyCredits\":1500,\"planId\":\"business\"}', '2026-06-01', '2026-06-15')").run(subJ2Id, uidJ2);
+
+  // Setup J3: User with Sub A (expired Light 100) and Sub B (Pro 400, unlinked)
+  const uidJ3 = 9203;
+  const subJ3AId = 92031;
+  const subJ3BId = 92032;
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V20UserJ3', '13992030001', 'h', 'customer', 0, 1, '2025-01-01')").run(uidJ3);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (92030, 'out_subA_9203', ?, 'idem_subA_9203', 'lite', '轻量版', 100, 2900, 'paid', 'plan', 'activate', 'monthly', 'fulfilled', '{\"monthlyCredits\":100,\"planId\":\"lite\",\"subscriptionId\":92031}', '2025-02-01', '2025-01-01', '2025-01-01')").run(uidJ3);
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'lite', 'monthly', 'expired', '2025-01-01', '2025-02-01', 1, '2025-01-01', '2025-02-01', 100, 0, 2900, 2900, '{\"monthlyCredits\":100,\"planId\":\"lite\"}', '2025-01-01', '2025-01-01')").run(subJ3AId, uidJ3);
+  // Sub B has bad snapshot corrupted to 100 by old V19
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'pro', 'monthly', 'active', '2026-06-01', '2026-07-01', 1, '2026-06-01', '2026-07-01', 0, 0, 0, 0, '{\"monthlyCredits\":100,\"planId\":\"lite\"}', '2026-06-01', '2026-06-01')").run(subJ3BId, uidJ3);
+
+  // Run migration V20
+  const v20 = VERSIONED_MIGRATIONS.find((m) => m.version === 20);
+  v20.apply();
+
+  // Assert J1: Sub J1 repaired to 400!
+  const repairedJ1 = conn.prepare("SELECT snapshot_json FROM subscriptions WHERE id = ?").get(subJ1Id);
+  const snapJ1 = JSON.parse(repairedJ1.snapshot_json);
+  if (snapJ1.monthlyCredits !== 400 || snapJ1.planId !== "pro") {
+    throw new Error(`V20 未能正确修复 J1 年付最后一期升级快照: ${repairedJ1.snapshot_json}`);
+  }
+  const g12 = conn.prepare("SELECT credits FROM subscription_grants WHERE subscription_id = ? AND period_index = 12").get(subJ1Id);
+  if (g12.credits !== 100) {
+    throw new Error(`V20 破坏了历史 grant 12 记录: ${g12.credits}`);
+  }
+
+  // Assert J2: Sub J2 repaired to Pro 400!
+  const repairedJ2 = conn.prepare("SELECT snapshot_json FROM subscriptions WHERE id = ?").get(subJ2Id);
+  const snapJ2 = JSON.parse(repairedJ2.snapshot_json);
+  if (snapJ2.monthlyCredits !== 400 || snapJ2.planId !== "pro") {
+    throw new Error(`V20 未能将 J2 待核查订单的错误快照还原为 Pro 400: ${repairedJ2.snapshot_json}`);
+  }
+  const orderJ2 = conn.prepare("SELECT fulfillment_status, status FROM payment_orders WHERE id = 92021").get();
+  if (orderJ2.fulfillment_status !== "audit_required" || orderJ2.status !== "paid") {
+    throw new Error(`V20 改变了待核查升级订单状态: ${JSON.stringify(orderJ2)}`);
+  }
+
+  // Assert J3: Sub J3B snapshot cleared / not borrowed from Sub A!
+  const repairedJ3B = conn.prepare("SELECT snapshot_json FROM subscriptions WHERE id = ?").get(subJ3BId);
+  if (repairedJ3B.snapshot_json !== "") {
+    throw new Error(`V20 未能清除 J3 无来源订阅的虚假快照: ${repairedJ3B.snapshot_json}`);
+  }
+
+  console.log("✔ V20 真实履约快照来源修复演练通过 (J1: 400分修复; J2: 待核查不覆盖; J3: 无来源不借用)");
+}
+
 function runRehearsal() {
   console.log("=== 开始执行 RedBase 套餐与积分 V2 数据迁移与审计修复完整演练 ===");
   testFreshDatabase();
@@ -506,6 +578,7 @@ function runRehearsal() {
   testV17TableReconstructionAndExpiryNormalization();
   testV18ReservationIdentityAndSubscriptionSnapshot();
   testV19AttemptIdentityAndSnapshotRepair();
+  testV20SnapshotProvenanceRepair();
   console.log("\n=== RedBase 套餐与积分 V2 数据迁移隔离演练全部 100% 通过 ===");
 }
 
