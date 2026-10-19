@@ -78,12 +78,14 @@ function findExcellentBillingRequest({ requestId, userId, kind }) {
 function expireStaleExcellentBillingReservations(userId, nowMs) {
   const cutoff = new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
   const stale = db.prepare(`
-    SELECT request_id, kind FROM excellent_remix_billing_requests
+    SELECT request_id, kind, created_at FROM excellent_remix_billing_requests
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
   `).all(Number(userId), cutoff);
   for (const row of stale) {
+    const taskKey = `excellent_${row.kind}:${userId}:${row.request_id}:${row.created_at}`;
     releaseCreditsForTask({
       userId,
+      taskKey,
       taskId: `${row.kind}_${row.request_id}`,
       taskType: `excellent_${row.kind}`,
       nowIso: new Date(nowMs).toISOString(),
@@ -250,10 +252,12 @@ function reserveExcellentBillingRequest({
     }
 
     const timestamp = now.toISOString();
+    const taskKey = `excellent_${kind}:${userId}:${normalizedRequestId}:${timestamp}`;
     if (cost > 0) {
       try {
         reserveCreditsForTask({
           userId: Number(userId),
+          taskKey,
           taskId: `${kind}_${normalizedRequestId}`,
           taskType: `excellent_${kind}`,
           amount: cost,
@@ -355,8 +359,12 @@ function settleExcellentBillingRequest({
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, billingKind: kind },
       });
+      const taskKey = reservationToken
+        ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
+        : `excellent_${kind}:${userId}:${requestId}`;
       const settled = settleCreditsForTask({
         userId,
+        taskKey,
         taskId: `${kind}_${requestId}`,
         taskType: `excellent_${kind}`,
         creditEventId: creditEvent.id,
@@ -364,9 +372,14 @@ function settleExcellentBillingRequest({
       }, db);
       syncUserCreditsCache(userId, db);
     } else {
+      const taskKey = reservationToken
+        ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
+        : `excellent_${kind}:${userId}:${requestId}`;
       releaseCreditsForTask({
         userId,
+        taskKey,
         taskId: `${kind}_${requestId}`,
+        taskType: `excellent_${kind}`,
         nowIso: now.toISOString(),
       }, db);
       syncUserCreditsCache(userId, db);
@@ -428,8 +441,12 @@ function failExcellentBillingRequest({
 }) {
   return runTransaction(() => {
     const timestamp = now.toISOString();
+    const taskKey = reservationToken
+      ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
+      : `excellent_${kind}:${userId}:${requestId}`;
     releaseCreditsForTask({
       userId,
+      taskKey,
       taskId: `${kind}_${requestId}`,
       taskType: `excellent_${kind}`,
       nowIso: timestamp,

@@ -19,6 +19,7 @@ const {
   findPaymentOrderByOutTradeNo,
   markPaymentOrderExpired,
 } = require("../../src/server/db/repositories/payment-repository");
+const { createQuote } = require("../../src/server/billing/quote-service");
 
 openDatabase();
 initializeDatabaseSchema();
@@ -135,17 +136,19 @@ async function api(method, url, options = {}) {
   return res;
 }
 
-async function createOrder(cookie = "redbase_session=token-a", idempotencyKey = `idem-${Date.now()}`) {
+async function createOrder(cookie = "redbase_session=token-a", idempotencyKey = `idem-${Date.now()}`, quoteId = null) {
+  const qId = quoteId || createQuote({ userId: 1, kind: "topup", itemId: "fuel-small" }).quoteId;
   return await api("POST", "/api/payments/alipay/orders", {
     cookie,
-    body: { planId: "p1", idempotencyKey },
+    body: { quoteId: qId, idempotencyKey },
   });
 }
 
-async function createWxOrder(cookie = "redbase_session=token-a", idempotencyKey = `wx-idem-${Date.now()}`) {
+async function createWxOrder(cookie = "redbase_session=token-a", idempotencyKey = `wx-idem-${Date.now()}`, quoteId = null) {
+  const qId = quoteId || createQuote({ userId: 1, kind: "topup", itemId: "fuel-small" }).quoteId;
   return await api("POST", "/api/payments/wxpay/orders", {
     cookie,
-    body: { planId: "p1", idempotencyKey },
+    body: { quoteId: qId, idempotencyKey },
   });
 }
 
@@ -164,7 +167,7 @@ function notifyParams(gateway, outTradeNo, overrides = {}) {
   return gateway.buildNotifyParams({
     outTradeNo,
     tradeNo: `FAKE${Date.now()}${Math.floor(Math.random() * 10000)}`,
-    totalAmount: order ? (order.amountFen / 100).toFixed(2) : "0.01",
+    totalAmount: order ? (order.amountFen / 100).toFixed(2) : "99.00",
     ...overrides,
   });
 }
@@ -233,16 +236,17 @@ test("P6: recharge plans stay visible when alipay is enabled and configured", as
 });
 
 test("create order is idempotent and rejects unconfigured plans", async () => {
-  const first = await createOrder("redbase_session=token-a", "idem-same-key-001");
+  const quote = createQuote({ userId: 1, kind: "topup", itemId: "fuel-small" });
+  const first = await createOrder("redbase_session=token-a", "idem-same-key-001", quote.quoteId);
   assert.equal(first.statusCode, 201);
   const firstBody = JSON.parse(first.body);
   assert.equal(firstBody.order.status, "pending");
   assert.match(firstBody.payUrl, /^http/);
   assert.equal(firstBody.qrCode, `https://qr.alipay.test/${firstBody.order.outTradeNo}`);
   assert.equal(firstBody.qrCodeError, "");
-  assert.equal(firstBody.order.amountYuan, "0.01");
+  assert.equal(firstBody.order.amountYuan, "99.00");
 
-  const replay = await createOrder("redbase_session=token-a", "idem-same-key-001");
+  const replay = await createOrder("redbase_session=token-a", "idem-same-key-001", quote.quoteId);
   assert.equal(replay.statusCode, 200);
   assert.equal(JSON.parse(replay.body).order.outTradeNo, firstBody.order.outTradeNo);
 
@@ -329,7 +333,7 @@ test("valid notify pays the order and credits exactly once", async () => {
   const orderRes = await createOrder("redbase_session=token-a", `idem-paid-${Date.now()}`);
   const order = JSON.parse(orderRes.body).order;
   const creditsBefore = Number(findUserByPhone("13900000001").credits);
-  const eventsBefore = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type = 'alipay_recharge'").get().count;
+  const eventsBefore = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type IN ('alipay_recharge', 'topup_purchase')").get().count;
 
   const params = notifyParams(gateway, order.outTradeNo);
   const first = await sendNotify(params);
@@ -340,13 +344,13 @@ test("valid notify pays the order and credits exactly once", async () => {
   const stored = findPaymentOrderByOutTradeNo(order.outTradeNo);
   assert.equal(stored.status, "paid");
   assert.equal(stored.tradeNo, params.trade_no);
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
   assert.equal(
-    db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type = 'alipay_recharge'").get().count,
+    db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type IN ('alipay_recharge', 'topup_purchase')").get().count,
     eventsBefore + 1,
   );
-  const event = db.prepare("SELECT * FROM credit_events WHERE action_type = 'alipay_recharge' ORDER BY id DESC LIMIT 1").get();
-  assert.equal(event.credit_delta, 10);
+  const event = db.prepare("SELECT * FROM credit_events WHERE action_type IN ('alipay_recharge', 'topup_purchase') ORDER BY id DESC LIMIT 1").get();
+  assert.equal(event.credit_delta, 25);
   assert.equal(stored.creditEventId, event.id);
 });
 
@@ -384,7 +388,7 @@ test("synchronous return never credits and late payment is allowed after expiry"
   const late = await sendNotify(notifyParams(gateway, order.outTradeNo, { trade_no: `LATE${Date.now()}` }));
   assert.equal(late.body, "success");
   assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "paid");
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
 });
 
 test("twenty concurrent notifications credit only once without 500s", async () => {
@@ -392,16 +396,16 @@ test("twenty concurrent notifications credit only once without 500s", async () =
   const orderRes = await createOrder("redbase_session=token-a", `idem-concurrent-${Date.now()}`);
   const order = JSON.parse(orderRes.body).order;
   const creditsBefore = Number(findUserByPhone("13900000001").credits);
-  const eventsBefore = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type = 'alipay_recharge'").get().count;
+  const eventsBefore = db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type IN ('alipay_recharge', 'topup_purchase')").get().count;
   const params = notifyParams(gateway, order.outTradeNo);
 
   const results = await Promise.all(
     Array.from({ length: 20 }, () => sendNotify(params)),
   );
   assert.equal(results.every((res) => res.body === "success"), true);
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
   assert.equal(
-    db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type = 'alipay_recharge'").get().count,
+    db.prepare("SELECT COUNT(*) AS count FROM credit_events WHERE action_type IN ('alipay_recharge', 'topup_purchase')").get().count,
     eventsBefore + 1,
   );
 });
@@ -457,12 +461,12 @@ test("P0: a closed order must never silently accept a later provider payment", a
 
   // Provider still (or again) reports a successful payment after local close.
   const lateTradeNo = `LATE${Date.now()}`;
-  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: lateTradeNo, totalAmount: "0.01" });
+  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: lateTradeNo, totalAmount: order.amountYuan });
   const notify = await sendNotify(
     gateway.buildNotifyParams({
       outTradeNo: order.outTradeNo,
       tradeNo: lateTradeNo,
-      totalAmount: "0.01",
+      totalAmount: order.amountYuan,
     }),
   );
 
@@ -478,7 +482,7 @@ test("P0: closing an already paid provider order settles it instead of closing",
   const orderRes = await createOrder("redbase_session=token-a", `idem-close-already-paid-${Date.now()}`);
   const order = JSON.parse(orderRes.body).order;
   const creditsBefore = Number(findUserByPhone("13900000001").credits);
-  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: "ALREADY_PAID", totalAmount: "0.01" });
+  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: "ALREADY_PAID", totalAmount: order.amountYuan });
 
   const closeRes = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/close`, {
     cookie: "redbase_session=token-a",
@@ -488,7 +492,7 @@ test("P0: closing an already paid provider order settles it instead of closing",
   assert.equal(closeRes.statusCode, 200);
   assert.equal(JSON.parse(closeRes.body).order.status, "paid");
   assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "paid");
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
 });
 
 test("P0: closing without a gateway refuses locally instead of silently closing", async () => {
@@ -632,7 +636,7 @@ test("owned pending orders can refresh their pay link and actively reconcile pay
   });
   assert.equal(foreignCheck.statusCode, 404);
 
-  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: `CHECK${Date.now()}`, totalAmount: "0.01" });
+  gateway.settle({ outTradeNo: order.outTradeNo, tradeNo: `CHECK${Date.now()}`, totalAmount: order.amountYuan });
   const creditsBefore = Number(findUserByPhone("13900000001").credits);
   const checked = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
     cookie: "redbase_session=token-a",
@@ -641,14 +645,14 @@ test("owned pending orders can refresh their pay link and actively reconcile pay
 
   assert.equal(checked.statusCode, 200);
   assert.equal(JSON.parse(checked.body).order.status, "paid");
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
 
   const checkedAgain = await api("POST", `/api/payments/alipay/orders/${order.outTradeNo}/check`, {
     cookie: "redbase_session=token-a",
     body: {},
   });
   assert.equal(checkedAgain.statusCode, 200);
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
 });
 
 test("P0: paid-on-close rejects missing identity or a wrong amount", async () => {
@@ -674,7 +678,7 @@ test("P0: paid-on-close rejects missing identity or a wrong amount", async () =>
       tradeNo: `BADAMOUNT${Date.now()}`,
       totalAmount: "9.99",
     }));
-    await runCase("identity", () => ({ alreadyPaid: true, tradeNo: "", totalAmount: "0.01" }));
+    await runCase("identity", (o) => ({ alreadyPaid: true, tradeNo: "", totalAmount: o.amountYuan }));
   } finally {
     gateway.closeTrade = originalCloseTrade;
   }
@@ -690,7 +694,7 @@ test("active reconciliation rejects a same-amount response for a different order
       out_trade_no: "redbase_different_order",
       trade_no: `MISMATCH${Date.now()}`,
       trade_status: "TRADE_SUCCESS",
-      total_amount: "0.01",
+      total_amount: order.amountYuan,
     },
   });
   const creditsBefore = Number(findUserByPhone("13900000001").credits);
@@ -725,7 +729,7 @@ test("active reconciliation reports provider amount and status anomalies", async
   };
   try {
     await runCase("amount", { trade_no: `AMOUNT${Date.now()}`, trade_status: "TRADE_SUCCESS", total_amount: "9.99" });
-    await runCase("status", { trade_no: `STATUS${Date.now()}`, trade_status: "TRADE_SUSPICIOUS", total_amount: "0.01" });
+    await runCase("status", { trade_no: `STATUS${Date.now()}`, trade_status: "TRADE_SUSPICIOUS", total_amount: "99.00" });
   } finally {
     gateway.queryOrder = originalQueryOrder;
   }
@@ -753,7 +757,7 @@ test("creates a WeChat Pay order with native QR code and records provider=wxpay"
   const body = JSON.parse(res.body);
   assert.equal(body.order.status, "pending");
   assert.equal(body.order.provider, "wxpay");
-  assert.equal(body.order.amountYuan, "0.01");
+  assert.equal(body.order.amountYuan, "99.00");
   assert.match(body.qrCode, /^weixin:\/\/wxpay\/bizpayurl/);
 
   const stored = findPaymentOrderByOutTradeNo(body.order.outTradeNo);
@@ -770,7 +774,7 @@ test("WeChat Pay notification settles order, credits user, and produces idempote
   const payload = gateway.buildNotifyPayload({
     outTradeNo: order.outTradeNo,
     transactionId: `WXTRANS_${Date.now()}`,
-    amountFen: 1,
+    amountFen: order.amountFen,
     tradeState: "SUCCESS",
   });
 
@@ -785,7 +789,7 @@ test("WeChat Pay notification settles order, credits user, and produces idempote
   const stored = findPaymentOrderByOutTradeNo(order.outTradeNo);
   assert.equal(stored.status, "paid");
   assert.equal(stored.provider, "wxpay");
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
 });
 
 test("WeChat Pay active check reconciles pending order and fake settle works", async () => {
@@ -794,14 +798,14 @@ test("WeChat Pay active check reconciles pending order and fake settle works", a
   const order = JSON.parse(orderRes.body).order;
   const creditsBefore = Number(findUserByPhone("13900000001").credits);
 
-  gateway.settle({ outTradeNo: order.outTradeNo, transactionId: `WXCHECK_${Date.now()}`, amountFen: 1 });
+  gateway.settle({ outTradeNo: order.outTradeNo, transactionId: `WXCHECK_${Date.now()}`, amountFen: order.amountFen });
   const checkRes = await api("POST", `/api/payments/wxpay/orders/${order.outTradeNo}/check`, {
     cookie: "redbase_session=token-a",
     body: {},
   });
   assert.equal(checkRes.statusCode, 200);
   assert.equal(JSON.parse(checkRes.body).order.status, "paid");
-  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 10);
+  assert.equal(Number(findUserByPhone("13900000001").credits), creditsBefore + 25);
 
   const closable = await createWxOrder("redbase_session=token-a", `wx-close-${Date.now()}`);
   const closableOrder = JSON.parse(closable.body).order;

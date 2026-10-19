@@ -8,7 +8,7 @@ const { getWxpayProvider } = require("../integrations/wxpay");
 const { fenToYuanString } = require("../billing/money");
 const { reconcileOne } = require("../billing/reconcile-orders");
 const { PLANS, TOPUPS, CATALOG_VERSION, getPlan, getTopup, getLegacyPlan } = require("../billing/catalog");
-const { getNowTimestamp, getNowIso, formatShanghaiDate } = require("../billing/period-utils");
+const { getNowTimestamp, getNowIso, formatShanghaiDate, normalizeProviderPaidAt } = require("../billing/period-utils");
 const { createQuote, verifyAndConsumeQuote, findQuoteById } = require("../billing/quote-service");
 const { getUserBillingOverview } = require("../billing/subscription-service");
 const { rescanExpiredLots } = require("../billing/credit-ledger");
@@ -166,7 +166,8 @@ function processAlipayNotify({ params, appConfig, gateway, nowIso }) {
       });
       return { ok: false, reason: "order_closed_provider_paid" };
     }
-    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso });
+    const providerPaidAt = normalizeProviderPaidAt(params.gmt_payment || params.notify_time);
+    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso, providerPaidAt });
     if (settled.order.status !== "paid") {
       markPaymentOrderAudit({
         outTradeNo,
@@ -248,7 +249,8 @@ function processWxpayNotify({ headers, rawBody, appConfig, gateway, nowIso }) {
       });
       return { ok: false, reason: "order_closed_provider_paid" };
     }
-    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso });
+    const providerPaidAt = normalizeProviderPaidAt(decrypted.success_time);
+    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso, providerPaidAt });
     if (settled.order.status !== "paid") {
       markPaymentOrderAudit({
         outTradeNo,
@@ -605,27 +607,20 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         const activePending = db.prepare(`
           SELECT * FROM payment_orders
           WHERE user_id = ? AND order_kind = 'plan'
-            AND status IN ('created', 'pending')
-            AND expires_at > ?
+            AND (
+              status IN ('created', 'pending', 'expired')
+              OR (status = 'paid' AND (fulfillment_status IN ('unfulfilled', 'processing', 'scheduled', 'audit_required') OR audit_reason <> ''))
+            )
           ORDER BY id DESC LIMIT 1
-        `).get(user.id, nowIso);
+        `).get(user.id);
 
         if (activePending) {
           json(res, 409, {
-            error: "您当前有一个未完成的套餐订单，请先完成支付或等待订单关闭",
+            error: "当前账户已有进行中或待生效的套餐订单，请先完成、生效或取消原订单",
             pendingOrder: sanitizeOrder(mapPaymentOrderRow(activePending)),
           });
           return true;
         }
-      }
-    } else if (process.env.NODE_ENV === "test" || appConfig?.billing?.rechargePlans?.some((p) => p.id === planId)) {
-      plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId)
-        || getPlan(planId)
-        || getTopup(planId)
-        || getLegacyPlan(planId);
-      if (!plan) {
-        badRequest(res, "充值套餐未配置或不存在");
-        return true;
       }
     } else {
       badRequest(res, "充值套餐必须通过服务端报价下单，历史商品已停止新售");
@@ -634,7 +629,6 @@ async function handlePaymentRoutes(context, req, res, pathname) {
 
     try {
       transaction(() => {
-        if (quoteId) {
         consumedQuote = verifyAndConsumeQuote(quoteId, user.id);
         const outTradeNo = createOutTradeNo();
         const expiresAtIso = consumedQuote.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
@@ -656,24 +650,15 @@ async function handlePaymentRoutes(context, req, res, pathname) {
           quote: consumedQuote,
           acquireLock: true,
         });
-        } else {
-          const outTradeNo = createOutTradeNo();
-          const expiresAtIso = new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
-          order = insertPaymentOrder({
-            outTradeNo,
-            userId: user.id,
-            idempotencyKey,
-            plan,
-            status: "created",
-            provider: "alipay",
-            nowIso,
-            expiresAtIso,
-            quote: null,
-            acquireLock: true,
-          });
-        }
       })();
     } catch (err) {
+      if (err.code === "PLAN_ORDER_CONFLICT") {
+        json(res, 409, {
+          error: err.message,
+          pendingOrder: err.pendingOrder ? sanitizeOrder(err.pendingOrder) : null,
+        });
+        return true;
+      }
       badRequest(res, err.message || "报价消费或创建订单失败");
       return true;
     }
@@ -788,27 +773,20 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         const activePending = db.prepare(`
           SELECT * FROM payment_orders
           WHERE user_id = ? AND order_kind = 'plan'
-            AND status IN ('created', 'pending')
-            AND expires_at > ?
+            AND (
+              status IN ('created', 'pending', 'expired')
+              OR (status = 'paid' AND (fulfillment_status IN ('unfulfilled', 'processing', 'scheduled', 'audit_required') OR audit_reason <> ''))
+            )
           ORDER BY id DESC LIMIT 1
-        `).get(user.id, nowIso);
+        `).get(user.id);
 
         if (activePending) {
           json(res, 409, {
-            error: "您当前有一个未完成的套餐订单，请先完成支付或等待订单关闭",
+            error: "当前账户已有进行中或待生效的套餐订单，请先完成、生效或取消原订单",
             pendingOrder: sanitizeOrder(mapPaymentOrderRow(activePending)),
           });
           return true;
         }
-      }
-    } else if (process.env.NODE_ENV === "test" || appConfig?.billing?.rechargePlans?.some((p) => p.id === planId)) {
-      plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId)
-        || getPlan(planId)
-        || getTopup(planId)
-        || getLegacyPlan(planId);
-      if (!plan) {
-        badRequest(res, "充值套餐未配置或不存在");
-        return true;
       }
     } else {
       badRequest(res, "充值套餐必须通过服务端报价下单，历史商品已停止新售");
@@ -817,7 +795,6 @@ async function handlePaymentRoutes(context, req, res, pathname) {
 
     try {
       transaction(() => {
-        if (quoteId) {
         consumedQuote = verifyAndConsumeQuote(quoteId, user.id);
         const outTradeNo = createOutTradeNo();
         const expiresAtIso = consumedQuote.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
@@ -839,24 +816,15 @@ async function handlePaymentRoutes(context, req, res, pathname) {
           quote: consumedQuote,
           acquireLock: true,
         });
-        } else {
-          const outTradeNo = createOutTradeNo();
-          const expiresAtIso = new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
-          order = insertPaymentOrder({
-            outTradeNo,
-            userId: user.id,
-            idempotencyKey,
-            plan,
-            status: "created",
-            provider: "wxpay",
-            nowIso,
-            expiresAtIso,
-            quote: null,
-            acquireLock: true,
-          });
-        }
       })();
     } catch (err) {
+      if (err.code === "PLAN_ORDER_CONFLICT") {
+        json(res, 409, {
+          error: err.message,
+          pendingOrder: err.pendingOrder ? sanitizeOrder(err.pendingOrder) : null,
+        });
+        return true;
+      }
       badRequest(res, err.message || "报价消费或创建订单失败");
       return true;
     }
@@ -1074,10 +1042,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         return true;
       }
       const nowIso = new Date().toISOString();
+      const providerPaidAt = normalizeProviderPaidAt(closeResult.paidAt || closeResult.gmt_payment || closeResult.send_pay_date);
       const settled = settlePaidPaymentOrder({
         outTradeNo,
         tradeNo: String(closeResult.tradeNo),
         nowIso,
+        providerPaidAt,
       });
       json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
       return true;
@@ -1223,10 +1193,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       }
       if (queryResult?.data?.trade_status === "TRADE_SUCCESS") {
         const nowIso = new Date().toISOString();
+        const providerPaidAt = normalizeProviderPaidAt(queryResult.data.success_time || queryResult.data.paid_at || queryResult.data.paidAt);
         const settled = settlePaidPaymentOrder({
           outTradeNo,
           tradeNo: String(queryResult.data.trade_no || ""),
           nowIso,
+          providerPaidAt,
         });
         json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
         return true;
@@ -1239,10 +1211,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     }
     if (closeResult?.alreadyPaid) {
       const nowIso = new Date().toISOString();
+      const providerPaidAt = normalizeProviderPaidAt(closeResult.paidAt || closeResult.success_time);
       const settled = settlePaidPaymentOrder({
         outTradeNo,
         tradeNo: String(closeResult.tradeNo),
         nowIso,
+        providerPaidAt,
       });
       json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
       return true;

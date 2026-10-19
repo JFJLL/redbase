@@ -225,7 +225,7 @@ class FakeWxpayProvider {
     };
   }
 
-  settle({ outTradeNo, transactionId, amountFen }) {
+  settle({ outTradeNo, transactionId, amountFen, successTime }) {
     this.payments.set(String(outTradeNo || ""), {
       outTradeNo: String(outTradeNo || ""),
       transactionId: String(transactionId || `WXFAKE${Date.now()}`),
@@ -233,6 +233,7 @@ class FakeWxpayProvider {
       tradeStatus: "TRADE_SUCCESS",
       amountFen: Number(amountFen || 0),
       totalAmount: fenToYuanString(amountFen),
+      success_time: successTime || new Date().toISOString(),
       appId: this.appId,
       mchId: this.mchId,
       notifiedAt: new Date().toISOString(),
@@ -265,6 +266,8 @@ class FakeWxpayProvider {
         trade_status: payment.tradeStatus,
         total_amount: payment.totalAmount,
         amount_fen: payment.amountFen,
+        success_time: payment.success_time || payment.notifiedAt || new Date().toISOString(),
+        paid_at: payment.success_time || payment.notifiedAt || new Date().toISOString(),
         mchid: payment.mchId,
         appid: payment.appId,
       },
@@ -283,6 +286,8 @@ class FakeWxpayProvider {
         outTradeNo: String(existing.outTradeNo || outTradeNo || ""),
         tradeNo: String(existing.transactionId || ""),
         totalAmount: String(existing.totalAmount || ""),
+        success_time: String(existing.success_time || ""),
+        paidAt: String(existing.success_time || ""),
         appId: String(existing.appId || this.appId || ""),
         mchId: String(existing.mchId || this.mchId || ""),
       };
@@ -439,6 +444,8 @@ class RealWxpayProvider {
         outTradeNo,
         tradeNo: queryRes.data?.trade_no || "",
         totalAmount: queryRes.data?.total_amount || "",
+        success_time: queryRes.data?.success_time || "",
+        paidAt: queryRes.data?.success_time || "",
         appId: queryRes.data?.appid || this.appId,
         mchId: queryRes.data?.mchid || this.mchId,
       };

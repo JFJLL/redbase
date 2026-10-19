@@ -72,6 +72,20 @@ function isLeapYear(year) {
   return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
 }
 
+function normalizeProviderPaidAt(rawTime) {
+  if (!rawTime) return null;
+  const str = String(rawTime).trim();
+  if (!str) return null;
+  // Format: "YYYY-MM-DD HH:mm:ss" -> assume Beijing time (+08:00)
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(str)) {
+    const isoStr = str.replace(" ", "T") + "+08:00";
+    const d = new Date(isoStr);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 module.exports = {
   SHANGHAI_OFFSET_MS,
   setNowGetter,
@@ -83,4 +97,5 @@ module.exports = {
   formatShanghaiDate,
   addCalendarMonths,
   isLeapYear,
+  normalizeProviderPaidAt,
 };

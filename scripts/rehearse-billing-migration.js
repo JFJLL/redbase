@@ -351,6 +351,43 @@ function testV13CycleOnlyNoLegacyDuplication() {
   console.log("✔ V13 纯 cycle 批次账户升级演练通过：无重复开账，到期安全归零");
 }
 
+function testV17TableReconstructionAndExpiryNormalization() {
+  console.log("\n--- [演练场景 7] V17 预占表物理主键重建与到期防重规范化演练 ---");
+  const conn = require("../src/server/db/connection").openDatabase();
+
+  // Verify V17 table structure
+  const info = conn.prepare("PRAGMA table_info(task_credit_reservations)").all();
+  const idCol = info.find((c) => c.name === "id");
+  const taskIdCol = info.find((c) => c.name === "task_id");
+  if (!idCol || idCol.pk !== 1) throw new Error("V17 物理主键必须为 id 字段");
+  if (taskIdCol && taskIdCol.pk !== 0) throw new Error("V17 task_id 绝不能是物理主键");
+
+  const indexList = conn.prepare("PRAGMA index_list(task_credit_reservations)").all();
+  const uniqueIndex = indexList.find((idx) => idx.unique === 1 && idx.name.includes("uq_task_res_key_lot"));
+  if (!uniqueIndex) throw new Error("缺少 (task_key, lot_id) 业务唯一索引");
+
+  // Verify foreign key checks
+  const fks = conn.prepare("PRAGMA foreign_key_check(task_credit_reservations)").all();
+  if (fks.length > 0) throw new Error(`V17 预占表外键检查未通过: ${JSON.stringify(fks)}`);
+
+  // Verify legacy expired normalization
+  const { rescanExpiredLots, getUserWalletBalances } = require("../src/server/billing/credit-ledger");
+  const uid = 9077;
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'NormUser', '13990770001', 'h', 'customer', 0, 1, '2026-01-01')").run(uid);
+  const lotId = 90771;
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (?, ?, 'cycle', '本期积分', 20, 20, 0, 0, '2026-01-01', '2026-02-01', 'expired', '2026-01-01', '2026-01-01')").run(lotId, uid);
+  conn.prepare("INSERT OR REPLACE INTO credit_events (id, user_id, action_type, action_label, credit_delta, credit_cost, created_at, summary, payload_json) VALUES (907701, ?, 'cycle_expire', '周期积分到期', -20, 0, '2026-02-01', '到期', ?)").run(uid, JSON.stringify({ lotId, expiredCredits: 20 }));
+
+  rescanExpiredLots(uid, Date.now(), conn);
+  const events = conn.prepare("SELECT * FROM credit_events WHERE user_id = ? AND action_type = 'cycle_expire'").all(uid);
+  if (events.length !== 1) throw new Error(`规范化后到期事件数量应为 1，实际: ${events.length}`);
+
+  const lot = conn.prepare("SELECT remaining_credits, status FROM credit_lots WHERE id = ?").get(lotId);
+  if (lot.remaining_credits !== 0) throw new Error(`规范化后 remaining_credits 应为 0，实际: ${lot.remaining_credits}`);
+
+  console.log("✔ V17 物理主键重建与到期防重规范化演练通过");
+}
+
 function runRehearsal() {
   console.log("=== 开始执行 RedBase 套餐与积分 V2 数据迁移与审计修复完整演练 ===");
   testFreshDatabase();
@@ -358,6 +395,7 @@ function runRehearsal() {
   testV13DatabaseIncrementalUpgrade();
   testInFlightAndScheduleReconciliation();
   testV13CycleOnlyNoLegacyDuplication();
+  testV17TableReconstructionAndExpiryNormalization();
   console.log("\n=== RedBase 套餐与积分 V2 数据迁移隔离演练全部 100% 通过 ===");
 }
 

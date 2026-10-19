@@ -854,6 +854,113 @@ const VERSIONED_MIGRATIONS = [
       } catch (_) {}
     },
   },
+  {
+    version: 17,
+    name: "billing-v2-remaining-closeout",
+    apply() {
+      // Reconstruct task_credit_reservations table to fix the physical primary key.
+      // In SQLite, altering a table's primary key requires recreating the table.
+      // The physical primary key becomes 'id INTEGER PRIMARY KEY AUTOINCREMENT',
+      // and the business uniqueness constraint is UNIQUE (task_key, lot_id).
+      const hasOldTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_credit_reservations'").get();
+      if (hasOldTable) {
+        db.exec(`
+          CREATE TABLE task_credit_reservations_v17 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            task_type TEXT NOT NULL,
+            lot_id INTEGER NOT NULL,
+            reserved_credits INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
+          );
+        `);
+
+        const oldCols = db.prepare("PRAGMA table_info(task_credit_reservations)").all().map((c) => c.name);
+        const hasTaskKeyCol = oldCols.includes("task_key");
+        const oldRows = db.prepare("SELECT * FROM task_credit_reservations").all();
+        const insertStmt = db.prepare(`
+          INSERT INTO task_credit_reservations_v17 (
+            task_key, task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const row of oldRows) {
+          let canonicalKey = hasTaskKeyCol && row.task_key ? String(row.task_key).trim() : "";
+          if (!canonicalKey) {
+            if (row.task_type === "trend_analysis") {
+              try {
+                const req = db.prepare(`
+                  SELECT brand_id, bucket_key FROM trend_analysis_requests
+                  WHERE user_id = ? AND request_id = ?
+                `).all(row.user_id, row.task_id);
+                if (req && req.length === 1) {
+                  canonicalKey = `trend_analysis:${row.user_id}:${req[0].brand_id}:${req[0].bucket_key}:${row.task_id}`;
+                } else {
+                  canonicalKey = `trend_analysis:${row.user_id}:::${row.task_id}`;
+                }
+              } catch (_) {
+                canonicalKey = `trend_analysis:${row.user_id}:::${row.task_id}`;
+              }
+            } else if (String(row.task_type).startsWith("excellent_")) {
+              const kind = String(row.task_type).replace(/^excellent_/, "");
+              const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
+              canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}`;
+            } else {
+              canonicalKey = `${row.task_type}:${row.user_id}:${row.task_id}`;
+            }
+          }
+
+          insertStmt.run(
+            canonicalKey,
+            String(row.task_id),
+            Number(row.user_id),
+            String(row.task_type),
+            Number(row.lot_id),
+            Number(row.reserved_credits),
+            String(row.status || "reserved"),
+            String(row.created_at || new Date().toISOString()),
+            String(row.updated_at || new Date().toISOString())
+          );
+        }
+
+        db.exec(`
+          DROP TABLE task_credit_reservations;
+          ALTER TABLE task_credit_reservations_v17 RENAME TO task_credit_reservations;
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_task_res_key_lot ON task_credit_reservations(task_key, lot_id);
+          CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+        `);
+      } else {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS task_credit_reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            task_type TEXT NOT NULL,
+            lot_id INTEGER NOT NULL,
+            reserved_credits INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_task_res_key_lot ON task_credit_reservations(task_key, lot_id);
+          CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+        `);
+      }
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

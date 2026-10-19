@@ -87,6 +87,8 @@ function parseCloseTradeResult(data) {
       outTradeNo: String(source.out_trade_no ?? source.outTradeNo ?? ""),
       tradeNo: String(source.trade_no ?? source.tradeNo ?? ""),
       totalAmount: String(source.total_amount ?? source.totalAmount ?? ""),
+      gmt_payment: String(source.gmt_payment ?? source.send_pay_date ?? source.gmtPayment ?? ""),
+      paidAt: String(source.gmt_payment ?? source.send_pay_date ?? source.gmtPayment ?? ""),
       appId: String(source.app_id ?? source.appId ?? ""),
       sellerId: String(source.seller_id ?? source.sellerId ?? ""),
     };
@@ -126,12 +128,15 @@ class FakeAlipayProvider {
     return safeTimingEqual(signFakeParams(params), params?.sign);
   }
 
-  settle({ outTradeNo, tradeNo, totalAmount }) {
+  settle({ outTradeNo, tradeNo, totalAmount, gmtPayment }) {
+    const nowShanghai = new Date(Date.now() + 8 * 3600 * 1000).toISOString().replace("T", " ").slice(0, 19);
     this.payments.set(String(outTradeNo || ""), {
       outTradeNo: String(outTradeNo || ""),
       tradeNo: String(tradeNo || ""),
       tradeStatus: "TRADE_SUCCESS",
       totalAmount: String(totalAmount || ""),
+      gmt_payment: gmtPayment || nowShanghai,
+      send_pay_date: gmtPayment || nowShanghai,
       appId: FAKE_APP_ID,
       sellerId: FAKE_SELLER_ID,
       notifiedAt: new Date().toISOString(),
@@ -150,6 +155,9 @@ class FakeAlipayProvider {
         outTradeNo: String(existing.outTradeNo || outTradeNo || ""),
         tradeNo: String(existing.tradeNo || ""),
         totalAmount: String(existing.totalAmount || ""),
+        gmt_payment: String(existing.gmt_payment || existing.send_pay_date || ""),
+        send_pay_date: String(existing.send_pay_date || existing.gmt_payment || ""),
+        paidAt: String(existing.gmt_payment || existing.send_pay_date || ""),
         appId: String(existing.appId || this.appId || ""),
         sellerId: String(existing.sellerId || this.sellerId || ""),
       };
@@ -166,7 +174,8 @@ class FakeAlipayProvider {
     return { alreadyPaid: false, tradeStatus: "TRADE_CLOSED" };
   }
 
-  buildNotifyParams({ outTradeNo, tradeNo, totalAmount, tradeStatus = "TRADE_SUCCESS", appId = FAKE_APP_ID, sellerId = FAKE_SELLER_ID, ...overrides }) {
+  buildNotifyParams({ outTradeNo, tradeNo, totalAmount, tradeStatus = "TRADE_SUCCESS", appId = FAKE_APP_ID, sellerId = FAKE_SELLER_ID, gmtPayment, ...overrides }) {
+    const nowShanghai = new Date(Date.now() + 8 * 3600 * 1000).toISOString().replace("T", " ").slice(0, 19);
     const params = {
       app_id: appId,
       seller_id: sellerId,
@@ -174,6 +183,8 @@ class FakeAlipayProvider {
       trade_no: String(tradeNo || `FAKE${Date.now()}`),
       total_amount: String(totalAmount || ""),
       trade_status: tradeStatus,
+      gmt_payment: gmtPayment || nowShanghai,
+      notify_time: nowShanghai,
       notify_id: `fake-notify-${Date.now()}`,
       sign_type: "RSA2",
       ...overrides,

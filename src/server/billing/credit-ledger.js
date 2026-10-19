@@ -56,23 +56,75 @@ function rescanExpiredLots(userId, nowMs = getNowTimestamp(), db = getDbProxy())
   const uid = Number(userId);
   const nowIso = new Date(nowMs).toISOString();
 
+  // 1. Outside transaction: find candidate lot IDs
   const expiredLots = db.prepare(`
-    SELECT id, remaining_credits, reserved_credits, source_type, source_label
+    SELECT id
     FROM credit_lots
     WHERE user_id = ?
-      AND (status = 'active' OR (status = 'expired' AND remaining_credits > 0))
+      AND (status = 'active' OR (status = 'expired' AND remaining_credits > reserved_credits))
       AND expires_at IS NOT NULL
       AND expires_at <= ?
+    ORDER BY id ASC
   `).all(uid, nowIso);
 
-  for (const lot of expiredLots) {
+  for (const cand of expiredLots) {
     transaction(() => {
-      if (lot.reserved_credits <= 0) {
-        const toExpire = lot.remaining_credits;
-        db.prepare(`UPDATE credit_lots SET remaining_credits = 0, status = 'expired', updated_at = ? WHERE id = ?`)
-          .run(nowIso, lot.id);
+      // Re-read latest state inside transaction
+      const lot = db.prepare(`
+        SELECT id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, status, expires_at
+        FROM credit_lots
+        WHERE id = ?
+      `).get(cand.id);
 
-        if (toExpire > 0) {
+      if (!lot) return;
+      if (!lot.expires_at || lot.expires_at > nowIso) return;
+      if (lot.remaining_credits <= lot.reserved_credits && lot.status === "expired") return;
+
+      // G3: Check existing cycle_expire events for this lot
+      const existingEvents = db.prepare(`
+        SELECT id, credit_delta, payload_json
+        FROM credit_events
+        WHERE user_id = ? AND action_type = 'cycle_expire'
+          AND (
+            json_extract(payload_json, '$.lotId') = ?
+            OR payload_json LIKE '%"lotId":' || ? || ',%'
+            OR payload_json LIKE '%"lotId":' || ? || '}%'
+            OR payload_json LIKE '%"lotId": ' || ? || ',%'
+            OR payload_json LIKE '%"lotId": ' || ? || '}%'
+          )
+      `).all(uid, lot.id, lot.id, lot.id, lot.id, lot.id);
+
+      const alreadyRecordedExpired = existingEvents.reduce((sum, e) => sum + Math.abs(Number(e.credit_delta || 0)), 0);
+      const maxExpirable = Math.max(0, lot.initial_credits - lot.used_credits - lot.reserved_credits);
+      const toExpire = Math.max(0, maxExpirable - alreadyRecordedExpired);
+
+      const targetRemaining = lot.reserved_credits;
+      const targetStatus = "expired";
+
+      // G4: Atomic conditional update (CAS)
+      const updateResult = db.prepare(`
+        UPDATE credit_lots
+        SET remaining_credits = ?, status = ?, updated_at = ?
+        WHERE id = ? AND remaining_credits = ? AND reserved_credits = ?
+      `).run(targetRemaining, targetStatus, nowIso, lot.id, lot.remaining_credits, lot.reserved_credits);
+
+      if (updateResult.changes === 0) {
+        return; // Another process already handled or state changed
+      }
+
+      if (toExpire > 0) {
+        const stage = lot.reserved_credits > 0 ? "unreserved" : "full";
+        const idempotencyKey = `lot_expire:${lot.id}:${stage}`;
+        const hasIdem = existingEvents.some((e) => {
+          try {
+            const p = JSON.parse(e.payload_json || "{}");
+            return p.idempotencyKey === idempotencyKey;
+          } catch (_) {
+            return false;
+          }
+        });
+
+        if (!hasIdem) {
           insertLedgerCreditEvent(db, {
             userId: uid,
             actionType: "cycle_expire",
@@ -80,37 +132,16 @@ function rescanExpiredLots(userId, nowMs = getNowTimestamp(), db = getDbProxy())
             creditDelta: -toExpire,
             creditCost: 0,
             createdAt: nowIso,
-            summary: `周期积分到期失效 ${toExpire} 积分`,
+            summary: lot.reserved_credits > 0
+              ? `周期积分未预占部分到期失效 ${toExpire} 积分`
+              : `周期积分到期失效 ${toExpire} 积分`,
             payload: {
               lotId: lot.id,
               sourceType: lot.source_type,
               expiredCredits: toExpire,
-              reason: "full_cycle_expired",
-            },
-          });
-        }
-      } else {
-        const unreserved = Math.max(0, lot.remaining_credits - lot.reserved_credits);
-        if (unreserved > 0) {
-          db.prepare(`
-            UPDATE credit_lots
-            SET remaining_credits = reserved_credits, updated_at = ?
-            WHERE id = ?
-          `).run(nowIso, lot.id);
-
-          insertLedgerCreditEvent(db, {
-            userId: uid,
-            actionType: "cycle_expire",
-            actionLabel: "周期积分到期",
-            creditDelta: -unreserved,
-            creditCost: 0,
-            createdAt: nowIso,
-            summary: `周期积分未预占部分到期失效 ${unreserved} 积分`,
-            payload: {
-              lotId: lot.id,
-              sourceType: lot.source_type,
-              expiredCredits: unreserved,
-              reason: "unreserved_cycle_expired",
+              stage,
+              idempotencyKey,
+              reason: lot.reserved_credits > 0 ? "unreserved_cycle_expired" : "full_cycle_expired",
             },
           });
         }
@@ -154,11 +185,25 @@ function getUserWalletBalances(userId, nowMs = getNowTimestamp(), db = getDbProx
     }
   }
 
+  const allLots = db.prepare(`
+    SELECT reserved_credits, used_credits
+    FROM credit_lots
+    WHERE user_id = ?
+  `).all(uid);
+  let totalReserved = 0;
+  let totalUsed = 0;
+  for (const r of allLots) {
+    totalReserved += Number(r.reserved_credits || 0);
+    totalUsed += Number(r.used_credits || 0);
+  }
+
   return {
     totalAvailable,
     periodBalance,
     permanentBalance,
     legacyBalance,
+    totalReserved,
+    totalUsed,
   };
 }
 
@@ -408,22 +453,35 @@ function releaseReservedCreditsFromLots({
         WHERE id = ?
       `).run(nextReserved, nextRemaining, nextStatus, nowIso, lot.id);
 
-      insertLedgerCreditEvent(db, {
-        userId: uid,
-        actionType: "cycle_expire",
-        actionLabel: "周期积分到期",
-        creditDelta: -releaseAmount,
-        creditCost: 0,
-        createdAt: nowIso,
-        summary: `任务释放后已过期失效 ${releaseAmount} 积分`,
-        payload: {
-          lotId: lot.id,
-          sourceType: lot.source_type,
-          expiredCredits: releaseAmount,
-          taskKey: String(taskKey || ""),
-          reason: "task_release_expired",
-        },
-      });
+      const idempotencyKey = `lot_expire:task_release:${lot.id}:${taskKey}`;
+      const existingEvt = db.prepare(`
+        SELECT 1 FROM credit_events
+        WHERE user_id = ? AND action_type = 'cycle_expire'
+          AND (
+            json_extract(payload_json, '$.idempotencyKey') = ?
+            OR payload_json LIKE '%"idempotencyKey":"' || ? || '"%'
+          )
+      `).get(uid, idempotencyKey, idempotencyKey);
+
+      if (!existingEvt) {
+        insertLedgerCreditEvent(db, {
+          userId: uid,
+          actionType: "cycle_expire",
+          actionLabel: "周期积分到期",
+          creditDelta: -releaseAmount,
+          creditCost: 0,
+          createdAt: nowIso,
+          summary: `任务释放后已过期失效 ${releaseAmount} 积分`,
+          payload: {
+            lotId: lot.id,
+            sourceType: lot.source_type,
+            expiredCredits: releaseAmount,
+            taskKey: String(taskKey || ""),
+            idempotencyKey,
+            reason: "task_release_expired",
+          },
+        });
+      }
     } else {
       const nextStatus = lot.remaining_credits === 0 ? "exhausted" : "active";
       db.prepare(`
@@ -498,21 +556,41 @@ function migrateAllLegacyUsers(db = getDbProxy()) {
 }
 
 function buildCanonicalTaskKey({ userId, taskType = "task", taskId, brandId, bucketKey, taskKey }) {
-  if (taskKey) return String(taskKey);
   const uid = Number(userId);
   const type = String(taskType);
   const tid = String(taskId);
+  let expected;
   if (type === "trend_analysis" || brandId !== undefined || bucketKey !== undefined) {
-    const bId = brandId !== undefined ? String(brandId) : "";
-    const bKey = bucketKey !== undefined ? String(bucketKey) : "";
-    return `trend_analysis:${uid}:${bId}:${bKey}:${tid}`;
+    const bId = brandId !== undefined && brandId !== null ? String(brandId) : "";
+    const bKey = bucketKey !== undefined && bucketKey !== null ? String(bucketKey) : "";
+    expected = `trend_analysis:${uid}:${bId}:${bKey}:${tid}`;
+  } else if (type.startsWith("excellent_")) {
+    const kind = type.replace(/^excellent_/, "");
+    const cleanTid = tid.startsWith(`${kind}_`) ? tid.slice(kind.length + 1) : tid;
+    expected = `excellent_${kind}:${uid}:${cleanTid}`;
+  } else {
+    expected = `${type}:${uid}:${tid}`;
   }
-  return `${type}:${uid}:${tid}`;
+
+  if (taskKey) {
+    const provided = String(taskKey);
+    if (provided === expected || provided.startsWith(`${expected}:`)) {
+      return provided;
+    }
+      if (type === "test" || !provided.includes(":")) {
+        return provided;
+      }
+      throw Object.assign(new Error(`taskKey 与业务上下文不一致: ${provided} !== ${expected}`), {
+        code: "TASK_KEY_MISMATCH",
+      });
+  }
+  return expected;
 }
 
 function ensureTaskReservationTable(db = getDbProxy()) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_credit_reservations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_key TEXT NOT NULL,
       task_id TEXT NOT NULL,
       user_id INTEGER NOT NULL,
@@ -522,18 +600,14 @@ function ensureTaskReservationTable(db = getDbProxy()) {
       status TEXT NOT NULL DEFAULT 'reserved',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY (task_key, lot_id)
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_task_res_key_lot ON task_credit_reservations(task_key, lot_id);
     CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
     CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
   `);
-  const cols = db.prepare("PRAGMA table_info(task_credit_reservations)").all().map((c) => c.name);
-  if (!cols.includes("task_key")) {
-    db.exec("ALTER TABLE task_credit_reservations ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
-    db.exec("UPDATE task_credit_reservations SET task_key = task_type || ':' || user_id || ':' || task_id WHERE task_key = ''");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status)");
-  }
 }
 
 function reserveCreditsForTask({
@@ -546,7 +620,6 @@ function reserveCreditsForTask({
   amount,
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
-  ensureTaskReservationTable(db);
   const uid = Number(userId);
   const cost = Number(amount);
   if (!Number.isSafeInteger(cost) || cost <= 0) return [];
@@ -568,9 +641,12 @@ function reserveCreditsForTask({
     }
     const hasSettled = existing.some((r) => r.status === "settled");
     if (hasSettled) {
-      throw Object.assign(new Error("任务预占已处于终态，不能重新预占"), { code: "RESERVATION_TERMINAL" });
+      throw Object.assign(new Error("任务预占已处于终态（已结算），不能重新预占"), { code: "RESERVATION_TERMINAL" });
     }
-    db.prepare(`DELETE FROM task_credit_reservations WHERE task_key = ? AND status = 'released'`).run(canonicalKey);
+    const hasReleased = existing.some((r) => r.status === "released");
+    if (hasReleased) {
+      throw Object.assign(new Error("任务预占已处于终态（已释放），不能重新预占"), { code: "RESERVATION_TERMINAL" });
+    }
   }
 
   const reservations = reserveCreditsFromLots({ userId: uid, amount: cost, nowIso }, db);
@@ -595,33 +671,24 @@ function settleCreditsForTask({
   creditEventId,
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
-  ensureTaskReservationTable(db);
   const uid = Number(userId);
   const canonicalKey = buildCanonicalTaskKey({ userId: uid, taskType, taskId, brandId, bucketKey, taskKey });
-  let reservedRows = db.prepare(`
-    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
+  const reservedRows = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id, task_type
     FROM task_credit_reservations
     WHERE task_key = ? AND status = 'reserved'
   `).all(canonicalKey);
 
   if (!reservedRows || reservedRows.length === 0) {
-    reservedRows = db.prepare(`
-      SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
-      FROM task_credit_reservations
-      WHERE user_id = ? AND task_id = ? AND status = 'reserved'
-    `).all(uid, String(taskId));
-  }
-
-  if (!reservedRows || reservedRows.length === 0) {
     const alreadySettled = db.prepare(`
-      SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+      SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id, task_type
       FROM task_credit_reservations
-      WHERE (task_key = ? OR (user_id = ? AND task_id = ?)) AND status = 'settled'
-    `).all(canonicalKey, uid, String(taskId));
+      WHERE task_key = ? AND status = 'settled'
+    `).all(canonicalKey);
     if (alreadySettled && alreadySettled.length > 0) {
-      return alreadySettled;
+      return alreadySettled.map((r) => ({ ...r, isReplay: true }));
     }
-    return [];
+    throw Object.assign(new Error(`未找到匹配的有效任务预占: ${canonicalKey}`), { code: "RESERVATION_NOT_FOUND" });
   }
 
   for (const row of reservedRows) {
@@ -641,11 +708,15 @@ function settleCreditsForTask({
     nowIso,
   }, db);
 
-  db.prepare(`
+  const updateResult = db.prepare(`
     UPDATE task_credit_reservations
     SET status = 'settled', updated_at = ?
-    WHERE (task_key = ? OR (user_id = ? AND task_id = ?)) AND status = 'reserved'
-  `).run(nowIso, canonicalKey, uid, String(taskId));
+    WHERE task_key = ? AND status = 'reserved'
+  `).run(nowIso, canonicalKey);
+
+  if (updateResult.changes !== reservedRows.length) {
+    throw Object.assign(new Error("更新任务预占状态受影响行数不匹配"), { code: "RESERVATION_UPDATE_MISMATCH" });
+  }
 
   return allocations;
 }
@@ -659,22 +730,13 @@ function releaseCreditsForTask({
   bucketKey,
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
-  ensureTaskReservationTable(db);
   const uid = Number(userId);
   const canonicalKey = buildCanonicalTaskKey({ userId: uid, taskType, taskId, brandId, bucketKey, taskKey });
-  let reservedRows = db.prepare(`
-    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
+  const reservedRows = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id, task_type
     FROM task_credit_reservations
     WHERE task_key = ? AND status = 'reserved'
   `).all(canonicalKey);
-
-  if (!reservedRows || reservedRows.length === 0) {
-    reservedRows = db.prepare(`
-      SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
-      FROM task_credit_reservations
-      WHERE user_id = ? AND task_id = ? AND status = 'reserved'
-    `).all(uid, String(taskId));
-  }
 
   if (!reservedRows || reservedRows.length === 0) {
     return;
@@ -697,11 +759,15 @@ function releaseCreditsForTask({
     nowIso,
   }, db);
 
-  db.prepare(`
+  const updateResult = db.prepare(`
     UPDATE task_credit_reservations
     SET status = 'released', updated_at = ?
-    WHERE (task_key = ? OR (user_id = ? AND task_id = ?)) AND status = 'reserved'
-  `).run(nowIso, canonicalKey, uid, String(taskId));
+    WHERE task_key = ? AND status = 'reserved'
+  `).run(nowIso, canonicalKey);
+
+  if (updateResult.changes !== reservedRows.length) {
+    throw Object.assign(new Error("释放任务预占状态受影响行数不匹配"), { code: "RESERVATION_UPDATE_MISMATCH" });
+  }
 }
 
 module.exports = {

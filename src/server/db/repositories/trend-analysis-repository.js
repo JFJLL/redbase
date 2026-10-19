@@ -106,14 +106,22 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
       SELECT COALESCE(SUM(credit_cost), 0) AS total
       FROM trend_analysis_requests r
       WHERE r.user_id = ? AND r.status = 'reserved'
-        AND NOT EXISTS (SELECT 1 FROM task_credit_reservations t WHERE t.user_id = r.user_id AND t.task_id = r.request_id AND t.status = 'reserved')
+        AND NOT EXISTS (
+          SELECT 1 FROM task_credit_reservations t
+          WHERE t.task_key = ('trend_analysis:' || r.user_id || ':' || r.brand_id || ':' || r.bucket_key || ':' || r.request_id)
+            AND t.status = 'reserved'
+        )
     `).get(Number(userId))?.total || 0);
 
     const unmigratedExcellent = Number(db.prepare(`
       SELECT COALESCE(SUM(credit_cost), 0) AS total
       FROM excellent_remix_billing_requests r
       WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
-        AND NOT EXISTS (SELECT 1 FROM task_credit_reservations t WHERE t.user_id = r.user_id AND t.task_id LIKE '%' || r.request_id AND t.status = 'reserved')
+        AND NOT EXISTS (
+          SELECT 1 FROM task_credit_reservations t
+          WHERE t.task_key = ('excellent_' || r.kind || ':' || r.user_id || ':' || r.request_id)
+            AND t.status = 'reserved'
+        )
     `).get(Number(userId), new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString())?.total || 0);
 
     const effectiveAvailable = wallet.totalAvailable - unmigratedTrend - unmigratedExcellent;
@@ -189,19 +197,27 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, bucketKey, analysisId },
       });
-      const settled = settleCreditsForTask({
-        userId,
-        taskKey: canonicalTaskKey,
-        taskId: requestId,
-        taskType: "trend_analysis",
-        brandId,
-        bucketKey,
-        creditEventId: creditEvent.id,
-        nowIso: timestamp,
-      }, db);
+      let settled = [];
+      try {
+        settled = settleCreditsForTask({
+          userId,
+          taskKey: canonicalTaskKey,
+          taskId: requestId,
+          taskType: "trend_analysis",
+          brandId,
+          bucketKey,
+          creditEventId: creditEvent.id,
+          nowIso: timestamp,
+        }, db);
+      } catch (settleErr) {
+        if (settleErr.code !== "RESERVATION_NOT_FOUND") throw settleErr;
+      }
       if (!settled || settled.length === 0) {
-        const hasResRecord = db.prepare(`SELECT 1 FROM task_credit_reservations WHERE task_key = ?`).get(canonicalTaskKey);
-        if (!hasResRecord) {
+        const legacyReq = db.prepare(`
+          SELECT * FROM trend_analysis_requests
+          WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ? AND status = 'reserved'
+        `).get(requestId, Number(userId), Number(brandId), String(bucketKey));
+        if (legacyReq) {
           spendCreditsFromLots({
             userId,
             amount: cost,
@@ -210,7 +226,9 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
           }, db);
           syncUserCreditsCache(userId, db);
         } else {
-          throw new Error("任务预占记录异常或归属不符，拒绝直接补扣");
+          throw Object.assign(new Error(`结算任务预占失败，未找到有效预占: ${canonicalTaskKey}`), {
+            code: "RESERVATION_SETTLE_FAILED",
+          });
         }
       }
       syncUserCreditsCache(userId, db);
