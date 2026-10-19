@@ -14,6 +14,7 @@ const {
   reserveCreditsForTask,
   settleCreditsForTask,
   releaseCreditsForTask,
+  getUserWalletBalances,
 } = require("../../billing/credit-ledger");
 const {
   recordExcellentDirectionCompleted,
@@ -34,7 +35,7 @@ const EXCELLENT_BILLING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const BILLING_COLUMNS = `
   request_id, user_id, kind, input_signature, status, credit_cost, counted, cache_hit,
-  result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at
+  result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at, task_key
 `;
 
 function normalizeExcellentBillingRequestId(value) {
@@ -78,11 +79,11 @@ function findExcellentBillingRequest({ requestId, userId, kind }) {
 function expireStaleExcellentBillingReservations(userId, nowMs) {
   const cutoff = new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
   const stale = db.prepare(`
-    SELECT request_id, kind, created_at FROM excellent_remix_billing_requests
+    SELECT request_id, kind, created_at, task_key FROM excellent_remix_billing_requests
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
   `).all(Number(userId), cutoff);
   for (const row of stale) {
-    const taskKey = `excellent_${row.kind}:${userId}:${row.request_id}:${row.created_at}`;
+    const taskKey = row.task_key || `excellent_${row.kind}:${userId}:${row.request_id}:${row.created_at}`;
     releaseCreditsForTask({
       userId,
       taskKey,
@@ -244,40 +245,56 @@ function reserveExcellentBillingRequest({
 
     const user = findUserById(userId);
     if (!user) return { status: "invalid" };
-    if (cost > 0) {
-      const reserved = sumReservedExcellentBillingCredits(userId) + sumReservedTrendCredits(userId, nowMs);
-      if (Number(user.credits || 0) - reserved < cost) {
-        return { status: "insufficient", user, requiredCredits: cost, reservedCredits: reserved };
-      }
+    const wallet = getUserWalletBalances(userId, nowMs, db);
+    const unmigratedTrend = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM trend_analysis_requests r
+      WHERE r.user_id = ? AND r.status = 'reserved'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_credit_reservations t
+          WHERE t.task_key = r.task_key AND t.status = 'reserved'
+        )
+    `).get(Number(userId))?.total || 0);
+
+    const unmigratedExcellent = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM excellent_remix_billing_requests r
+      WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+        AND NOT EXISTS (
+          SELECT 1 FROM task_credit_reservations t
+          WHERE t.task_key = r.task_key AND t.status = 'reserved'
+        )
+    `).get(Number(userId), new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString())?.total || 0);
+
+    const effectiveAvailable = wallet.totalAvailable - unmigratedTrend - unmigratedExcellent;
+    if (cost > 0 && effectiveAvailable < cost) {
+      return { status: "insufficient", user: findUserById(userId), requiredCredits: cost, reservedCredits: wallet.totalReserved + unmigratedTrend + unmigratedExcellent };
     }
 
     const timestamp = now.toISOString();
     const taskKey = `excellent_${kind}:${userId}:${normalizedRequestId}:${timestamp}`;
     if (cost > 0) {
-      try {
-        reserveCreditsForTask({
-          userId: Number(userId),
-          taskKey,
-          taskId: `${kind}_${normalizedRequestId}`,
-          taskType: `excellent_${kind}`,
-          amount: cost,
-          nowIso: timestamp,
-        }, db);
-      } catch (err) {
-        return { status: "insufficient", user, requiredCredits: cost, reservedCredits: sumReservedExcellentBillingCredits(userId) };
-      }
+      reserveCreditsForTask({
+        userId: Number(userId),
+        taskKey,
+        taskId: `${kind}_${normalizedRequestId}`,
+        taskType: `excellent_${kind}`,
+        amount: cost,
+        nowIso: timestamp,
+      }, db);
     }
     const counted = kind === EXCELLENT_BILLING_KIND_DIRECTION ? 1 : 0;
     db.prepare(`
       INSERT INTO excellent_remix_billing_requests (
         request_id, user_id, kind, input_signature, status, credit_cost, counted, cache_hit,
-        result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'reserved', ?, ?, 0, '', '', NULL, '', ?, '', ?)
+        result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at, task_key
+      ) VALUES (?, ?, ?, ?, 'reserved', ?, ?, 0, '', '', NULL, '', ?, '', ?, ?)
       ON CONFLICT(request_id, user_id, kind) DO UPDATE SET
         status = 'reserved', input_signature = excluded.input_signature,
         credit_cost = excluded.credit_cost, counted = excluded.counted, cache_hit = 0,
         result_source = '', result_json = '', credit_event_id = NULL, error = '',
-        created_at = excluded.created_at, completed_at = '', updated_at = excluded.updated_at
+        created_at = excluded.created_at, completed_at = '', updated_at = excluded.updated_at,
+        task_key = excluded.task_key
     `).run(
       normalizedRequestId,
       Number(userId),
@@ -287,6 +304,7 @@ function reserveExcellentBillingRequest({
       counted,
       timestamp,
       timestamp,
+      taskKey,
     );
     return {
       status: "reserved",
@@ -340,15 +358,9 @@ function settleExcellentBillingRequest({
 
     const isModelResult = resultSource === "model";
     const cost = isModelResult ? Number(request.credit_cost || 0) : 0;
-    const user = findUserById(userId);
-    if (cost > 0 && Number(user?.credits || 0) < cost) {
-      db.prepare(`
-        UPDATE excellent_remix_billing_requests
-        SET status = 'failed', error = 'insufficient credits at settle', updated_at = ?
-        WHERE request_id = ? AND user_id = ? AND kind = ?
-      `).run(now.toISOString(), String(requestId), Number(userId), String(kind));
-      return { insufficientAtSettle: true };
-    }
+    const taskKey = request.task_key || (reservationToken
+      ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
+      : `excellent_${kind}:${userId}:${requestId}`);
 
     let creditEvent = null;
     if (cost > 0) {
@@ -359,22 +371,25 @@ function settleExcellentBillingRequest({
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, billingKind: kind },
       });
-      const taskKey = reservationToken
-        ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
-        : `excellent_${kind}:${userId}:${requestId}`;
-      const settled = settleCreditsForTask({
-        userId,
-        taskKey,
-        taskId: `${kind}_${requestId}`,
-        taskType: `excellent_${kind}`,
-        creditEventId: creditEvent.id,
-        nowIso: now.toISOString(),
-      }, db);
+        try {
+          settleCreditsForTask({
+            userId,
+            taskKey,
+            taskId: `${kind}_${requestId}`,
+            taskType: `excellent_${kind}`,
+            creditEventId: creditEvent.id,
+            nowIso: now.toISOString(),
+          }, db);
+        } catch (settleErr) {
+          db.prepare(`
+            UPDATE excellent_remix_billing_requests
+            SET status = 'failed', error = ?, updated_at = ?
+            WHERE request_id = ? AND user_id = ? AND kind = ?
+          `).run(settleErr.message, now.toISOString(), String(requestId), Number(userId), String(kind));
+          return { settleFailed: true };
+        }
       syncUserCreditsCache(userId, db);
     } else {
-      const taskKey = reservationToken
-        ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
-        : `excellent_${kind}:${userId}:${requestId}`;
       releaseCreditsForTask({
         userId,
         taskKey,
@@ -420,7 +435,7 @@ function settleExcellentBillingRequest({
       windowCount: countDirectionSuccessesInWindow(userId, now.getTime()),
     };
   });
-  if (outcome && outcome.insufficientAtSettle) {
+  if (outcome && (outcome.insufficientAtSettle || outcome.settleFailed)) {
     const error = new Error("积分余额已发生变化，本次结果未保存，请重新生成。");
     error.code = "INSUFFICIENT_CREDITS";
     error.statusCode = 402;
@@ -444,9 +459,11 @@ function failExcellentBillingRequest({
     const taskKey = reservationToken
       ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
       : `excellent_${kind}:${userId}:${requestId}`;
+    const request = findExcellentBillingRequest({ requestId, userId, kind });
+    const finalKey = request?.task_key || taskKey;
     releaseCreditsForTask({
       userId,
-      taskKey,
+      taskKey: finalKey,
       taskId: `${kind}_${requestId}`,
       taskType: `excellent_${kind}`,
       nowIso: timestamp,

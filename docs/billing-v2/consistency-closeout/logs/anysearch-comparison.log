@@ -1,0 +1,4025 @@
+[anysearch] direct request attempt failed {
+  attempt: 1,
+  maxAttempts: 2,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'ETIMEDOUT',
+  stage: 'unknown',
+  address: ''
+}
+[anysearch] direct request attempt failed {
+  attempt: 1,
+  maxAttempts: 4,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'ECONNRESET',
+  stage: 'response',
+  address: ''
+}
+[anysearch] direct request attempt failed {
+  attempt: 1,
+  maxAttempts: 4,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'ETIMEDOUT',
+  stage: 'unknown',
+  address: ''
+}
+[anysearch] direct request attempt failed {
+  attempt: 2,
+  maxAttempts: 4,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'ETIMEDOUT',
+  stage: 'unknown',
+  address: ''
+}
+[anysearch] direct request attempt failed {
+  attempt: 3,
+  maxAttempts: 4,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'ETIMEDOUT',
+  stage: 'unknown',
+  address: ''
+}
+[anysearch] direct request attempt failed {
+  attempt: 1,
+  maxAttempts: 2,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'ETIMEDOUT',
+  stage: 'unknown',
+  address: ''
+}
+✔ routes general and social-media searches by trend bucket (23.114ms)
+✔ medicine traffic evidence excludes medical and supplement topics before model generation (2.0052ms)
+✔ extracts publication dates and prioritizes fresh trend evidence (1.1919ms)
+✔ accepts category-level child-health evidence without requiring the medicine brand name (0.4071ms)
+✔ traffic evidence selection keeps marketing signals and rejects pure medical instructions (0.4901ms)
+✔ parses, sanitizes, deduplicates, and caps mixed evidence (8.2007ms)
+✔ classifies social hosts as social even when a general query returns them (0.3097ms)
+✔ blocks private and placeholder URLs before accessibility checks (0.5257ms)
+✔ rejects redirects to private addresses before issuing another request (1.0103ms)
+✔ pins the HTTP lookup to the already validated public address (0.4192ms)
+✔ treats anti-bot HEAD statuses as reachable without requiring a GET (0.1108ms)
+✔ sends the documented JSON-RPC batch payload and retries pre-response failures (2.997ms)
+✔ does not resend an AnySearch batch after a response-stage failure (1.033ms)
+✔ does not resend an AnySearch batch after an ambiguous server response (1.2373ms)
+✔ the default retry budget can reach the fourth AnySearch CDN edge (1.4835ms)
+✔ redacts AnySearch keys and token-shaped values in remote errors (0.1672ms)
+✔ stops before the network call when the daily AnySearch query budget is exhausted (0.3583ms)
+✔ counts every outbound retry attempt toward the conservative daily ceiling (0.6955ms)
+✔ uses the native direct HTTP client when no fetch implementation is injected (22.9318ms)
+[anysearch] direct request attempt failed {
+  attempt: 1,
+  maxAttempts: 4,
+  code: 'ANYSEARCH_NETWORK_ERROR',
+  transportCode: 'UNKNOWN',
+  stage: 'response',
+  address: ''
+}
+✔ does not resend a native AnySearch request after a partial localhost response (21.8494ms)
+✔ does not arm a connect timeout for a reused socket while waiting for response headers (1415.6552ms)
+✔ pins AnySearch HTTPS requests to a resolved public address for proxy-free servers (1.7541ms)
+✔ aborts a direct AnySearch request while DNS lookup is still pending (27.9669ms)
+✔ limits only AnySearch HTTPS requests to TLS 1.2 for CDN compatibility (0.2701ms)
+✔ rotates across resolved AnySearch CDN addresses instead of pinning every retry to the first edge (0.2451ms)
+✔ keeps CDN rotation stable across DNS order changes and cools down a failed edge (0.1466ms)
+✔ does not let one high-risk brand attribute authorize a different claim (4.1472ms)
+✔ treats food body-change challenges and pseudo-health drinking methods as hard claims (4.4638ms)
+✔ does not reclassify persisted evidence snippets as model-authored claims (0.274ms)
+✔ requires a hard numeric claim to appear in the cited reliable evidence (19.0299ms)
+✔ validates every hard claim instead of stopping after the first supported one (3.1371ms)
+✔ serializes same-process quota reservations before concurrent requests reach the network (0.7925ms)
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  queryCount: 4,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6091,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 19,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 65
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '折叠桌面灯小空间照明方向' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'pgy',
+  evidenceCount: 10,
+  userPromptLength: 4220,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  searchDurationMs: 0,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 5,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 1,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 25
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '折叠桌面灯小空间照明方向' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'pgy',
+  evidenceCount: 10,
+  userPromptLength: 4220,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  searchDurationMs: 0,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 5,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 23
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 2,
+  sampleKeywords: [ '新能源汽车充电政策与公共', '公共交通调度与公交线路规' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'pgy',
+  evidenceCount: 10,
+  userPromptLength: 4380,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  searchDurationMs: 0,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 5,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 22
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] Pgy evidence is sparse; switching to AnySearch {
+  brandId: 1,
+  brandName: 'LightMate',
+  evidenceCount: 1,
+  requiredCount: 10
+}
+[trend-analysis] failed without template fallback {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'xhs' ],
+  reason: '全网搜索服务尚未启用，已停止生成以避免无来源内容。'
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 12,
+  issueReasons: [ 'duplicate-summary', 'duplicate-reason', 'duplicate-ideas' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 6,
+      title: '表面不同7：宿舍床边照明｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'duplicate-summary'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 6,
+      title: '表面不同7：宿舍床边照明｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'duplicate-reason'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 6,
+      title: '表面不同7：宿舍床边照明｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'duplicate-ideas'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 7,
+      title: '表面不同8：手账拍摄补光｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'duplicate-summary'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 7,
+      title: '表面不同8：手账拍摄补光｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'duplicate-reason'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 4,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 4661,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 4,
+  transportAttempts: 2,
+  validationFailures: 12,
+  normalizationMs: 25,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 87
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 2,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'unsupported-hard-claim' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '保留原文1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'ideas.0.hook',
+      claim: '90%的家长'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 4175,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 2,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 1,
+  normalizationMs: 21,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 85
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'unsupported-hard-claim' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '第1轮字段修订1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'ideas.0.hook',
+      claim: '90%的家长'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 4226,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  issueCount: 1,
+  issueReasons: [ 'unsupported-hard-claim' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '第1轮字段修订1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'ideas.0.hook',
+      claim: '引发家长讨论'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 2,
+    calls_remaining: 3,
+    maxCalls: 5
+  }
+}
+[trend-analysis] delivering degraded trends with warnings {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  warningCount: 1,
+  issueReasons: [ 'unsupported-hard-claim' ]
+}
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 2,
+  normalizationMs: 21,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 1,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 88
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 2,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 46,
+  issueReasons: [
+    'near-duplicate-ideas',
+    'near-duplicate-title',
+    'near-duplicate-summary',
+    'near-duplicate-reason'
+  ],
+  examples: [
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 1
+    },
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      ideaIndex: 1
+    },
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      ideaIndex: 1
+    },
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 3,
+      ideaIndex: 1
+    },
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 4,
+      ideaIndex: 1
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 9233,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 2,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 10,
+  transportAttempts: 2,
+  validationFailures: 46,
+  normalizationMs: 27,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 85
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 70,
+  issueReasons: [
+    'trend-count',
+    'insufficient-reason-detail',
+    'missing-trend-tags',
+    'idea-count',
+    'missing-opportunity-field',
+    'near-duplicate-mechanism',
+    'duplicate-reason',
+    'near-duplicate-ideas',
+    'invalid-evidence-id'
+  ],
+  examples: [
+    {
+      reason: 'trend-count',
+      bucketKey: 'traffic',
+      expected: 10,
+      actual: 8
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      field: 'reason'
+    },
+    {
+      reason: 'missing-trend-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0
+    },
+    {
+      reason: 'idea-count',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      actual: 1
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      field: 'reason'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6829,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 2,
+  validationFailures: 70,
+  normalizationMs: 17,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 53
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'trend-count' ],
+  examples: [
+    {
+      reason: 'trend-count',
+      bucketKey: 'traffic',
+      expected: 10,
+      actual: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6343,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  issueCount: 1,
+  issueReasons: [ 'missing-idea-tags' ],
+  examples: [
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 2,
+    calls_remaining: 3,
+    maxCalls: 5
+  }
+}
+[trend-analysis] delivering degraded trends with warnings {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  warningCount: 1,
+  issueReasons: [ 'missing-idea-tags' ]
+}
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 2,
+  validationFailures: 2,
+  normalizationMs: 10,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 1,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 44
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'missing-idea-tags' ],
+  examples: [
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 2871,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  issueCount: 1,
+  issueReasons: [ 'missing-idea-tags' ],
+  examples: [
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 2,
+    calls_remaining: 3,
+    maxCalls: 5
+  }
+}
+[trend-analysis] delivering degraded trends with warnings {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  warningCount: 1,
+  issueReasons: [ 'missing-idea-tags' ]
+}
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 2,
+  normalizationMs: 17,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 1,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 78
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] main model call failed; degrading from evidence slots {
+  brandId: 1,
+  brandName: 'LightMate',
+  requestMode: 'full-generation',
+  code: 'UNKNOWN',
+  message: 'Unexpected end of JSON input: truncated model response'
+}
+[trend-analysis] delivering degraded trends with warnings {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  warningCount: 10,
+  issueReasons: []
+}
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 0,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 11,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 9
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 10,
+  issueReasons: [ 'missing-idea-tags' ],
+  examples: [
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 3,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 4,
+      ideaIndex: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6822,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 1,
+  modelRepairItems: 0,
+  transportAttempts: 2,
+  validationFailures: 10,
+  normalizationMs: 20,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 76
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 4,
+  issueReasons: [ 'missing-idea-tags' ],
+  examples: [
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      ideaIndex: 0
+    },
+    {
+      reason: 'missing-idea-tags',
+      bucketKey: 'traffic',
+      trendIndex: 3,
+      ideaIndex: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 4,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 4232,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 4,
+  transportAttempts: 2,
+  validationFailures: 4,
+  normalizationMs: 23,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 83
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 1,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '折叠桌面灯用户讨论桌面线' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 5626,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 6,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 39
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'trend-count' ],
+  examples: [
+    {
+      reason: 'trend-count',
+      bucketKey: 'traffic',
+      expected: 10,
+      actual: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6343,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  issueCount: 1,
+  issueReasons: [ 'trend-count' ],
+  examples: [
+    {
+      reason: 'trend-count',
+      bucketKey: 'traffic',
+      expected: 10,
+      actual: 0
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 2,
+    calls_remaining: 3,
+    maxCalls: 5
+  }
+}
+[trend-analysis] delivering degraded trends with warnings {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  warningCount: 10,
+  issueReasons: [ 'trend-count' ]
+}
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 2,
+  validationFailures: 2,
+  normalizationMs: 0,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 10,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 7
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  queryCount: 4,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6091,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'duplicate-title' ],
+  examples: [
+    {
+      bucketKey: 'track',
+      trendIndex: 9,
+      title: '重复趋势1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'duplicate-title'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 2873,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 1,
+  normalizationMs: 24,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 77
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 1,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '宝妈育儿技巧与桌面照明讨' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 5799,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'near-duplicate-title' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      title: '育儿技巧清单',
+      reason: 'near-duplicate-title'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 2780,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 1,
+  normalizationMs: 9,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 62
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  queryCount: 4,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 2,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6091,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  issueCount: 78,
+  issueReasons: [
+    'insufficient-reason-detail',
+    'missing-opportunity-field',
+    'near-duplicate-summary',
+    'near-duplicate-reason',
+    'near-duplicate-ideas',
+    'near-duplicate-title',
+    'missing-evidence-ids',
+    'unsupported-brand-claim'
+  ],
+  examples: [
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'track',
+      trendIndex: 0,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'track',
+      trendIndex: 1,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'track',
+      trendIndex: 2,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'track',
+      trendIndex: 3,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'track',
+      trendIndex: 4,
+      field: 'reason'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 10656,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  searchDurationMs: 2,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 10,
+  transportAttempts: 2,
+  validationFailures: 78,
+  normalizationMs: 20,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 58
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  queryCount: 4,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6091,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'unsupported-brand-claim' ],
+  examples: [
+    {
+      bucketKey: 'track',
+      trendIndex: 0,
+      title: '宣称扫描趋势1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'unsupported-brand-claim',
+      field: 'ideas.0.hook',
+      claim: '医疗级护眼灯真的更靠谱吗'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 4200,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 1,
+  normalizationMs: 27,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 84
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  queryCount: 4,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 2,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6091,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 1,
+  issueCount: 2,
+  issueReasons: [ 'unsupported-brand-claim' ],
+  examples: [
+    {
+      bucketKey: 'track',
+      trendIndex: 0,
+      title: '字段风险原始1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'unsupported-brand-claim',
+      field: 'ideas.0.audience',
+      claim: '孕妇专用人群'
+    },
+    {
+      bucketKey: 'track',
+      trendIndex: 0,
+      title: '字段风险原始1：小桌面摆位｜折叠桌面灯的舒适用光与小空间照明选择',
+      reason: 'unsupported-brand-claim',
+      field: 'ideas.0.tags.0',
+      claim: '#官方认证'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 4301,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'track' ],
+  searchDurationMs: 2,
+  modelRequestMs: 2,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 2,
+  normalizationMs: 24,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 93
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 4,
+  reliableCount: 2,
+  socialEvidenceCount: 2,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 4,
+  sampleKeywords: [ '折叠桌面灯消费者更关注舒', '家居照明的便携与小空间成', '用户讨论桌面拥挤与移动照' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 4,
+  userPromptLength: 6000,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 1,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 1,
+  validationFailures: 0,
+  normalizationMs: 11,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 1,
+  aiCallsRemaining: 4,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 64
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: '小快克',
+  brand_position: '面向儿童家长的内容发起者/整理者/共创方，以育儿场景与家长沟通为主要表达语境',
+  purchase_trigger: '育儿场景、家长沟通场景、信息核验与内容共创时机（非产品功效触发）',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 4,
+  evidenceCount: 2,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: '小快克',
+  signalCount: 2,
+  sampleKeywords: [ '母婴品牌家长沟通内容案例', '父母讨论育儿内容的来源核' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 2,
+  userPromptLength: 6663,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 4,
+  issueReasons: [ 'unsupported-hard-claim', 'ungrounded-title' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '治疗感冒的儿童用药指南',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'title',
+      claim: '治疗感冒'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '治疗感冒的儿童用药指南',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'summary',
+      claim: '感冒症状可快速缓解'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '治疗感冒的儿童用药指南',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'ideas.0.summary',
+      claim: '感冒症状可快速缓解'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '治疗感冒的儿童用药指南',
+      reason: 'ungrounded-title'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 2,
+  userPromptLength: 4637,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 4,
+  normalizationMs: 20,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 183
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: '小快克',
+  brand_position: '面向儿童家长的内容发起者/整理者/共创方，以育儿场景与家长沟通为主要表达语境',
+  purchase_trigger: '育儿场景、家长沟通场景、信息核验与内容共创时机（非产品功效触发）',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 4,
+  evidenceCount: 2,
+  reliableCount: 1,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: '小快克',
+  signalCount: 2,
+  sampleKeywords: [ '亲子家庭夏季公益穿搭内容', '家长讨论亲子夏季穿搭的内' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 2,
+  userPromptLength: 6483,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 111,
+  issueReasons: [
+    'insufficient-reason-detail',
+    'missing-opportunity-field',
+    'duplicate-reason',
+    'near-duplicate-ideas',
+    'near-duplicate-title',
+    'duplicate-summary',
+    'unsupported-hard-claim',
+    'ungrounded-title',
+    'ungrounded-body',
+    'ungrounded-reason',
+    'unsupported-brand-claim'
+  ],
+  examples: [
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 3,
+      field: 'reason'
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 4,
+      field: 'reason'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 2,
+  userPromptLength: 14147,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 2,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 10,
+  transportAttempts: 2,
+  validationFailures: 111,
+  normalizationMs: 11,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 122
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 1,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '关注新能源汽车充电政策讨' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 5822,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 9,
+  issueReasons: [
+    'trend-count',
+    'insufficient-reason-detail',
+    'missing-trend-tags',
+    'missing-opportunity-field',
+    'ungrounded-title',
+    'ungrounded-body',
+    'ungrounded-reason'
+  ],
+  examples: [
+    {
+      reason: 'trend-count',
+      bucketKey: 'traffic',
+      expected: 10,
+      actual: 1
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      field: 'reason'
+    },
+    {
+      reason: 'missing-trend-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '敏感肌面霜种草',
+      reason: 'missing-opportunity-field',
+      field: 'market_change'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '敏感肌面霜种草',
+      reason: 'missing-opportunity-field',
+      field: 'brand_opportunity'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 6672,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 2,
+  validationFailures: 9,
+  normalizationMs: 7,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 40
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 1,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '关注新能源汽车充电政策讨' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 5862,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 71,
+  issueReasons: [
+    'trend-count',
+    'insufficient-reason-detail',
+    'missing-trend-tags',
+    'missing-opportunity-field',
+    'near-duplicate-title',
+    'duplicate-summary',
+    'duplicate-reason',
+    'duplicate-ideas',
+    'unsupported-hard-claim',
+    'ungrounded-body',
+    'ungrounded-reason',
+    'ungrounded-title'
+  ],
+  examples: [
+    {
+      reason: 'trend-count',
+      bucketKey: 'traffic',
+      expected: 10,
+      actual: 8
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      field: 'reason'
+    },
+    {
+      reason: 'missing-trend-tags',
+      bucketKey: 'traffic',
+      trendIndex: 0
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      field: 'reason'
+    },
+    {
+      reason: 'missing-trend-tags',
+      bucketKey: 'traffic',
+      trendIndex: 1
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 6844,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 0,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 0,
+  transportAttempts: 2,
+  validationFailures: 71,
+  normalizationMs: 12,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 54
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: '小快克',
+  brand_position: '面向需要核对儿童健康信息的家长的内容发起者/整理者/共创方，以育儿场景与家长沟通为主要表达语境',
+  purchase_trigger: '育儿场景、家长沟通场景、信息核验与内容共创时机（非产品功效触发）',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 4,
+  evidenceCount: 1,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: '小快克',
+  signalCount: 1,
+  sampleKeywords: [ '母婴品牌家长沟通与信息核' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 6545,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 13,
+  issueReasons: [
+    'near-duplicate-mechanism',
+    'unsupported-hard-claim',
+    'unsafe-medicine-guidance'
+  ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 6,
+      title: '药品风险原始7：宿舍床边照明｜母婴品牌家长沟通与信息核验内容形式',
+      reason: 'near-duplicate-mechanism'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      title: '药品风险原始3：居家办公补光｜母婴品牌家长沟通与信息核验内容形式',
+      reason: 'unsupported-hard-claim',
+      evidenceIds: [Array],
+      field: 'ideas.1.title',
+      claim: '药品风险原始3B：一天'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '药品风险原始1：小桌面摆位｜母婴品牌家长沟通与信息核验内容形式',
+      reason: 'unsafe-medicine-guidance',
+      field: 'ideas.0.hook',
+      claim: '有娃家庭必备'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      title: '药品风险原始2：租房搬家收纳｜母婴品牌家长沟通与信息核验内容形式',
+      reason: 'unsafe-medicine-guidance',
+      field: 'ideas.0.hook',
+      claim: '评论区抽一位送一盒'
+    },
+    {
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      title: '药品风险原始3：居家办公补光｜母婴品牌家长沟通与信息核验内容形式',
+      reason: 'unsafe-medicine-guidance',
+      field: 'ideas.0.hook',
+      claim: '孩子自己冲药'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 19620,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 10,
+  transportAttempts: 2,
+  validationFailures: 13,
+  normalizationMs: 15,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 181
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: '小快克',
+  brand_position: '面向关注育儿内容来源与表达边界的家长的内容发起者/整理者/共创方，以育儿场景与家长沟通为主要表达语境',
+  purchase_trigger: '育儿场景、家长沟通场景、信息核验与内容共创时机（非产品功效触发）',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 1,
+  evidenceCount: 1,
+  reliableCount: 0,
+  socialEvidenceCount: 1,
+  durationMs: 0,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: '小快克',
+  signalCount: 1,
+  sampleKeywords: [ '母婴品牌家长沟通与信息核' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 6555,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 1,
+  issueReasons: [ 'unsafe-medicine-guidance' ],
+  examples: [
+    {
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      title: '别名后校验1：小桌面摆位｜母婴品牌家长沟通与信息核验内容形式',
+      reason: 'unsafe-medicine-guidance',
+      field: 'ideas.0.brandFit',
+      claim: '小快克推荐'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 1,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 4597,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: '小快克',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 0,
+  modelRequestMs: 0,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 1,
+  transportAttempts: 2,
+  validationFailures: 1,
+  normalizationMs: 9,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 186
+}
+[trend-analysis] brand intelligence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  brand_position: '面向租房与居家办公人群的折叠桌面灯品牌，优先占据居家整理与小空间改造场景',
+  purchase_trigger: '居家整理场景、小空间改造场景、日常使用场景；居家整理、搬家焕新、小空间改造与高频使用卡点；产品钩子：折叠桌面灯',
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] AnySearch evidence ready {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  queryCount: 5,
+  evidenceCount: 1,
+  reliableCount: 1,
+  socialEvidenceCount: 0,
+  durationMs: 1,
+  cacheHit: false
+}
+[trend-analysis] market signals extracted {
+  brandId: 1,
+  brandName: 'LightMate',
+  signalCount: 1,
+  sampleKeywords: [ '折叠桌面灯品牌观察' ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  maxGenerationAttempts: 3,
+  requestMode: 'full-generation',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 5755,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 0,
+    calls_remaining: 5,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 1, calls_remaining: 4 }
+[trend-analysis] model output rejected; requesting a model rewrite {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 1,
+  issueCount: 50,
+  issueReasons: [
+    'insufficient-reason-detail',
+    'near-duplicate-ideas',
+    'ungrounded-title',
+    'ungrounded-body',
+    'ungrounded-reason'
+  ],
+  examples: [
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      field: 'reason'
+    },
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 0,
+      ideaIndex: 1
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      field: 'reason'
+    },
+    {
+      reason: 'near-duplicate-ideas',
+      bucketKey: 'traffic',
+      trendIndex: 1,
+      ideaIndex: 1
+    },
+    {
+      reason: 'insufficient-reason-detail',
+      bucketKey: 'traffic',
+      trendIndex: 2,
+      field: 'reason'
+    }
+  ],
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[trend-analysis] calling single-bucket text model {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  generationAttempt: 2,
+  maxGenerationAttempts: 3,
+  requestMode: 'targeted-repair',
+  expectedCount: 10,
+  evidenceProvider: 'anysearch',
+  evidenceCount: 1,
+  userPromptLength: 9714,
+  transportAttemptsAllowed: 3,
+  aiBudget: {
+    task: 'trend_analysis',
+    calls_used: 1,
+    calls_remaining: 4,
+    maxCalls: 5
+  }
+}
+[ai-call-budget] { task: 'trend_analysis', calls_used: 2, calls_remaining: 3 }
+[trend-analysis] completed {
+  brandId: 1,
+  brandName: 'LightMate',
+  bucketKeys: [ 'traffic' ],
+  searchDurationMs: 1,
+  modelRequestMs: 1,
+  modelTtfbMs: null,
+  modelUsage: null,
+  modelAttempts: 2,
+  targetedRepairRequests: 1,
+  fullRegenerationRequests: 0,
+  modelRepairItems: 10,
+  transportAttempts: 2,
+  validationFailures: 50,
+  normalizationMs: 12,
+  citationReferencesResolved: 0,
+  aiCallsUsed: 2,
+  aiCallsRemaining: 3,
+  aiCallBudget: 5,
+  localRepairMs: 0,
+  repairedFields: 0,
+  filled: 0,
+  warningsCount: 0,
+  generated: 10,
+  returned: 10,
+  totalDurationMs: 55
+}
+✔ persists the daily query budget across process-state resets (13.4677ms)
+✔ balances requests across two keys and enforces the combined per-key ceiling (1.2777ms)
+✔ fails over to the other key when the selected key is rejected (1.0926ms)
+✔ marks a key exhausted when a 429 response explicitly reports quota exhaustion (0.8076ms)
+✔ filters prompt-like instructions from evidence text (0.1429ms)
+✔ fetches auditable mixed evidence and fails closed only when accessible sources are insufficient (4.7584ms)
+✔ returns initial marketing evidence without an authoritative fallback request (0.9154ms)
+✔ keeps accessible off-brand results as candidates flagged not brand-relevant (0.9556ms)
+✔ keeps relevant marketing evidence for long free-form product descriptions (0.7494ms)
+✔ isolates cached marketing evidence between brands with the same category fields (1.575ms)
+✔ invalidates cached traffic evidence when an edited description changes medicine safety filtering (1.1595ms)
+✔ prunes expired evidence cache entries and enforces a size cap (2.6197ms)
+✔ generates ten AnySearch trends with lightweight ideas in one model call (67.4524ms)
+✔ delivers the single xhs model call and strips unsupported hard claims locally (26.3456ms)
+✔ strips model-provided content assets from the lightweight trend response (24.9039ms)
+✔ delivers the single xhs model output without grounding business gates (23.3233ms)
+✖ does not treat sparse Pgy notes as evidence for ten unrelated trends (2.7227ms)
+✖ repairs four duplicated cards in one bounded targeted model request (88.6222ms)
+✔ applies a model rewrite only to rejected fields and preserves safe model copy (86.2415ms)
+✔ degrades locally when the single model repair leaves a scoped residue (88.7289ms)
+✔ repairs numbered near-clones instead of accepting superficial wording changes (86.3341ms)
+✔ retries incomplete model output and returns only the second model response (55.1277ms)
+✔ stops after one validation rewrite and degrades the residue instead of a third model call (45.4009ms)
+✔ bounds repeatedly invalid focused repairs to two logical model calls (78.4108ms)
+✔ degrades to evidence-backed lightweight trends when the first model call fails (10.0527ms)
+✔ regenerates the full model batch when more than four cards are invalid (77.049ms)
+✔ keeps four invalid cards in one targeted model repair (84.1361ms)
+✔ normalizes model-provided string tags without inventing fallback copy (1.3072ms)
+✔ fills missing category from bucket metadata without rewriting model copy (3.5965ms)
+✔ returns ten trends when AnySearch has only one relevant evidence item (39.7786ms)
+✔ degrades to evidence-backed lightweight trends when model output stays unparsable (8.3895ms)
+✔ retries duplicate trends instead of rewriting model copy locally (77.6888ms)
+✔ retries short Chinese prefix-duplicate titles through the model (63.0533ms)
+✔ retries missing evidence and unsupported claims with validation feedback (59.0406ms)
+✔ filters an unsupported brand claim from idea copy even when the brand name is omitted (85.1755ms)
+✔ scans unsupported qualification claims in idea audiences and tags (94.1174ms)
+✔ accepts lean trend ideas without content assets (65.504ms)
+✖ fills skeleton idea content assets once and skips complete ideas (1.55ms)
+✖ retries unsafe medicine copy in regenerated ideas and lazy content assets (1.8653ms)
+✔ does not repeat secondary model calls after a response-stage terminal failure (0.8783ms)
+✔ retries unverifiable medical fields instead of rewriting them locally (190.7978ms)
+✔ does not let unrelated reliable web evidence authorize dosage or efficacy claims (129.5744ms)
+✔ retries the model when cited evidence is semantically unrelated (40.9936ms)
+✔ retries an unrelated title even when other fields mention the evidence (55.2352ms)
+✔ blocks unsafe medicine marketing behaviors and preserves nearby safety reminders (7.0338ms)
+✔ blocks medicine self-triage, delayed care, direct dosing, and combination-use guidance (26.1303ms)
+✔ repairs unsafe medicine ideas through a real model rewrite path instead of local copy (182.6652ms)
+✔ revalidates medicine traffic copy after restoring the hidden brand alias (203.193ms)
+✔ rejects stale campaign windows while allowing an explicit historical review (0.8978ms)
+✔ forbids citation IDs in visible prose without mistaking product model names for sources (1.0032ms)
+✔ rejects internal evidence jargon and formulaic source-first recommendation reasons (0.1488ms)
+✔ renders internal evidence IDs with their real source titles without templating model copy (0.7897ms)
+✔ citation rendering does not rewrite S-series product model names (1.7391ms)
+✔ rejects two cards that reuse the same evidence and UGC prize mechanism (1.043ms)
+✔ rejects generic recommendation reasons while preserving source-specific analysis (201.4393ms)
+✔ rejects past-year, volatile-price, and malformed-punctuation copy before persistence (79.7436ms)
+✔ filters only stale-title, price-led, and malformed search results without dropping current context (4.5508ms)
+✔ shared currentness and price policy distinguishes transactions from business quantities (0.5613ms)
+✔ field-scoped tag repairs cannot create sparse arrays that pass validation (41.477ms)
+✔ does not accept a year or broad audience phrase as evidence grounding (55.95ms)
+✔ prompts treat search snippets as untrusted evidence and enforce real evidence IDs (2.1765ms)
+ℹ tests 93
+ℹ suites 0
+ℹ pass 89
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4390.9519
+
+✖ failing tests:
+
+test at tests\anysearch-integration.test.js:1641:1
+✖ does not treat sparse Pgy notes as evidence for ten unrelated trends (2.7227ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + Comparison {}
+  - Comparison {
+  -   code: 'ANYSEARCH_DISABLED'
+  - }
+  
+      at async TestContext.<anonymous> (D:\download\pic-vec\redbase-fullstack-latest\tests\anysearch-integration.test.js:1643:3)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: 本次分析未能获取到可用热点，请稍后重试。
+        at generateTrendBucketGroup (D:\download\pic-vec\redbase-fullstack-latest\src\server\ai\trend-service.js:4324:11),
+    expected: { code: 'ANYSEARCH_DISABLED' },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests\anysearch-integration.test.js:1660:1
+✖ repairs four duplicated cards in one bounded targeted model request (88.6222ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (D:\download\pic-vec\redbase-fullstack-latest\tests\anysearch-integration.test.js:1688:10)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\anysearch-integration.test.js:2333:1
+✖ fills skeleton idea content assets once and skips complete ideas (1.55ms)
+  Error: 当前选题的完整内容资产生成失败：Expected values to be strictly equal:
+  
+  480000 !== 80000
+  
+      at ensureTrendIdeaContentAssets (D:\download\pic-vec\redbase-fullstack-latest\src\server\ai\trend-service.js:4492:9)
+      at async TestContext.<anonymous> (D:\download\pic-vec\redbase-fullstack-latest\tests\anysearch-integration.test.js:2348:18)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)
+
+test at tests\anysearch-integration.test.js:2371:1
+✖ retries unsafe medicine copy in regenerated ideas and lazy content assets (1.8653ms)
+  Error: 文本模型暂时不可用：Expected values to be strictly equal:
+  
+  480000 !== 80000
+  
+      at regenerateTrendIdeas (D:\download\pic-vec\redbase-fullstack-latest\src\server\ai\trend-service.js:4395:9)
+      at async TestContext.<anonymous> (D:\download\pic-vec\redbase-fullstack-latest\tests\anysearch-integration.test.js:2394:23)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:788:7)

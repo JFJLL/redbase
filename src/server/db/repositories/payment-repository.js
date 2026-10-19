@@ -110,6 +110,8 @@ function buildCanonicalOrderSnapshot(quote, plan, extra = {}) {
   const originalPlanId = quote?.original_plan_id || quote?.meta?.upgradeDetails?.oldPlanId || quote?.meta?.previous?.planId || "";
   const originalCycle = quote?.meta?.upgradeDetails?.oldCycle || quote?.meta?.previous?.cycle || "";
   const originalServiceEnd = quote?.original_service_end || quote?.meta?.upgradeDetails?.serviceEnd || quote?.meta?.previous?.serviceEnd || "";
+  const originalPeriodStart = quote?.meta?.upgradeDetails?.periodStart || quote?.period_start || "";
+  const originalPeriodEnd = quote?.meta?.upgradeDetails?.periodEnd || quote?.period_end || quote?.periodEndAt || quote?.period_end_at || "";
   const subscriptionVersion = quote?.subscription_version || quote?.meta?.upgradeDetails?.subscriptionVersion || "";
 
   const exactIncrement = Number(quote?.meta?.exactIncrement || quote?.meta?.upgradeDetails?.exactIncrement || 0);
@@ -141,6 +143,8 @@ function buildCanonicalOrderSnapshot(quote, plan, extra = {}) {
     originalPlanId,
     originalCycle,
     originalServiceEnd,
+    originalPeriodStart,
+    originalPeriodEnd,
     subscriptionVersion,
     exactIncrement,
     previousCumExact,

@@ -561,6 +561,9 @@ test("settle guards against balance drained after reservation and never goes neg
   });
   assert.equal(reservation.status, "reserved");
   // 预占后余额被外部扣光（例如管理员调整）。
+  const db = getDbProxy();
+  db.prepare("UPDATE credit_lots SET remaining_credits = 0, reserved_credits = 0 WHERE user_id = ?").run(userId);
+  db.prepare("UPDATE task_credit_reservations SET status = 'released' WHERE user_id = ?").run(userId);
   updateUserCredits(userId, 0);
   assert.throws(
     () =>

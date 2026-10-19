@@ -28,6 +28,60 @@ function findActiveSubscription(userId, nowMs = getNowTimestamp()) {
   return row || null;
 }
 
+function getSubscriptionSnapshot(sub, db = getDbProxy()) {
+  if (!sub) return {};
+  try {
+    const s = JSON.parse(sub.snapshot_json || "{}");
+    if (s && Number(s.monthlyCredits) > 0) return s;
+  } catch (_) {}
+
+  const firstGrant = db.prepare(`
+    SELECT credits FROM subscription_grants
+    WHERE subscription_id = ?
+    ORDER BY period_index ASC LIMIT 1
+  `).get(sub.id);
+  if (firstGrant && Number(firstGrant.credits) > 0) {
+    const s = {
+      version: "v2",
+      planId: sub.plan_id,
+      cycle: sub.cycle,
+      monthlyCredits: Number(firstGrant.credits),
+      pricingBasisFen: sub.pricing_basis_fen,
+    };
+    try {
+      db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(s), sub.id);
+    } catch (_) {}
+    return s;
+  }
+
+  const order = db.prepare(`
+    SELECT snapshot_json, plan_credits FROM payment_orders
+    WHERE user_id = ? AND status = 'paid' AND order_kind = 'plan'
+    ORDER BY id DESC LIMIT 1
+  `).get(sub.user_id);
+  if (order) {
+    try {
+      const os = JSON.parse(order.snapshot_json || "{}");
+      const mc = Number(os.monthlyCredits || order.plan_credits || 0);
+      if (mc > 0) {
+        const s = {
+          version: "v2",
+          planId: sub.plan_id,
+          cycle: sub.cycle,
+          monthlyCredits: mc,
+          pricingBasisFen: sub.pricing_basis_fen,
+        };
+        try {
+          db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(s), sub.id);
+        } catch (_) {}
+        return s;
+      }
+    } catch (_) {}
+  }
+
+  return {};
+}
+
 function findPendingSchedule(userId) {
   const db = getDbProxy();
   const row = db.prepare(`
@@ -186,9 +240,7 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
         const remainingServiceRatio = serviceRemainingMs / serviceTotalMs;
         const remainingPeriodRatio = periodTotalMs > 0 ? (periodRemainingMs / periodTotalMs) : 0;
 
-        const subSnapshot = (() => {
-          try { return JSON.parse(activeSub.snapshot_json || "{}"); } catch (_) { return {}; }
-        })();
+        const subSnapshot = getSubscriptionSnapshot(activeSub, db);
         const oldPurchasedCredits = Number(
           subSnapshot.monthlyCredits ||
           subSnapshot.planCredits ||
@@ -239,6 +291,10 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
           cumCeil,
           issuedNow,
           serviceEnd: activeSub.service_end,
+          periodStart: activeSub.current_period_start,
+          periodEnd: activeSub.current_period_end,
+          targetMonthlyCredits: plan.credits,
+          oldPurchasedCredits,
         };
         meta.exactIncrement = exactIncrement;
         meta.cumExact = cumExact;

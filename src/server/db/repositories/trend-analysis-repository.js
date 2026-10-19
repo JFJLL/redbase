@@ -30,7 +30,7 @@ function normalizeRequestId(value) {
 function findTrendAnalysisRequest({ requestId, userId, brandId, bucketKey }) {
   return db.prepare(`
     SELECT request_id, user_id, brand_id, bucket_key, status, credit_cost,
-           analysis_id, credit_event_id, error, created_at, updated_at
+           analysis_id, credit_event_id, error, created_at, updated_at, task_key
     FROM trend_analysis_requests
     WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ?
   `).get(String(requestId), Number(userId), Number(brandId), String(bucketKey));
@@ -40,11 +40,11 @@ function expireStaleReservations(userId, nowMs = getNowTimestamp()) {
   const cutoff = new Date(nowMs - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
   const nowIso = getNowIso();
   const stale = db.prepare(`
-    SELECT request_id, brand_id, bucket_key FROM trend_analysis_requests
+    SELECT request_id, brand_id, bucket_key, task_key FROM trend_analysis_requests
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
   `).all(Number(userId), cutoff);
   for (const row of stale) {
-    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: row.request_id, brandId: row.brand_id, bucketKey: row.bucket_key });
+    const canonicalTaskKey = row.task_key || buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: row.request_id, brandId: row.brand_id, bucketKey: row.bucket_key });
     releaseCreditsForTask({
       userId,
       taskKey: canonicalTaskKey,
@@ -108,7 +108,7 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
       WHERE r.user_id = ? AND r.status = 'reserved'
         AND NOT EXISTS (
           SELECT 1 FROM task_credit_reservations t
-          WHERE t.task_key = ('trend_analysis:' || r.user_id || ':' || r.brand_id || ':' || r.bucket_key || ':' || r.request_id)
+          WHERE t.task_key = r.task_key
             AND t.status = 'reserved'
         )
     `).get(Number(userId))?.total || 0);
@@ -119,7 +119,7 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
       WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
         AND NOT EXISTS (
           SELECT 1 FROM task_credit_reservations t
-          WHERE t.task_key = ('excellent_' || r.kind || ':' || r.user_id || ':' || r.request_id)
+          WHERE t.task_key = r.task_key
             AND t.status = 'reserved'
         )
     `).get(Number(userId), new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString())?.total || 0);
@@ -145,9 +145,9 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
     db.prepare(`
       INSERT INTO trend_analysis_requests (
         request_id, user_id, brand_id, bucket_key, status, credit_cost,
-        analysis_id, credit_event_id, error, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'reserved', ?, NULL, NULL, '', ?, ?)
-    `).run(normalizedRequestId, Number(userId), Number(brandId), String(bucketKey), cost, timestamp, timestamp);
+        analysis_id, credit_event_id, error, created_at, updated_at, task_key
+      ) VALUES (?, ?, ?, ?, 'reserved', ?, NULL, NULL, '', ?, ?, ?)
+    `).run(normalizedRequestId, Number(userId), Number(brandId), String(bucketKey), cost, timestamp, timestamp, canonicalTaskKey);
     try {
       recordTrendAnalysisStarted({
         requestId: normalizedRequestId,
@@ -188,7 +188,7 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
     const timestamp = getNowIso();
     const cost = Number(request.credit_cost || 0);
     let creditEvent = null;
-    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: requestId, brandId, bucketKey });
+    const canonicalTaskKey = request.task_key || buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: requestId, brandId, bucketKey });
     if (cost > 0) {
       creditEvent = insertCreditEvent({
         ...(event || {}),
@@ -197,39 +197,20 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, bucketKey, analysisId },
       });
-      let settled = [];
-      try {
-        settled = settleCreditsForTask({
-          userId,
-          taskKey: canonicalTaskKey,
-          taskId: requestId,
-          taskType: "trend_analysis",
-          brandId,
-          bucketKey,
-          creditEventId: creditEvent.id,
-          nowIso: timestamp,
-        }, db);
-      } catch (settleErr) {
-        if (settleErr.code !== "RESERVATION_NOT_FOUND") throw settleErr;
-      }
+      const settled = settleCreditsForTask({
+        userId,
+        taskKey: canonicalTaskKey,
+        taskId: requestId,
+        taskType: "trend_analysis",
+        brandId,
+        bucketKey,
+        creditEventId: creditEvent.id,
+        nowIso: timestamp,
+      }, db);
       if (!settled || settled.length === 0) {
-        const legacyReq = db.prepare(`
-          SELECT * FROM trend_analysis_requests
-          WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ? AND status = 'reserved'
-        `).get(requestId, Number(userId), Number(brandId), String(bucketKey));
-        if (legacyReq) {
-          spendCreditsFromLots({
-            userId,
-            amount: cost,
-            creditEventId: creditEvent.id,
-            nowIso: timestamp,
-          }, db);
-          syncUserCreditsCache(userId, db);
-        } else {
-          throw Object.assign(new Error(`结算任务预占失败，未找到有效预占: ${canonicalTaskKey}`), {
-            code: "RESERVATION_SETTLE_FAILED",
-          });
-        }
+        throw Object.assign(new Error(`结算任务预占失败，未找到有效预占: ${canonicalTaskKey}`), {
+          code: "RESERVATION_SETTLE_FAILED",
+        });
       }
       syncUserCreditsCache(userId, db);
     }
@@ -253,8 +234,9 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
 
 function failTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, error }) {
   return runTransaction(() => {
+    const existingReq = findTrendAnalysisRequest({ requestId, userId, brandId, bucketKey });
     const timestamp = getNowIso();
-    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: requestId, brandId, bucketKey });
+    const canonicalTaskKey = existingReq?.task_key || buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: requestId, brandId, bucketKey });
     releaseCreditsForTask({
       userId,
       taskKey: canonicalTaskKey,

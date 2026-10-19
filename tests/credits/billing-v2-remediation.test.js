@@ -55,6 +55,7 @@ const {
   insertCreditEvent,
 } = require("../../src/server/db/repositories/admin-repository");
 const {
+  reserveTrendAnalysisRequest,
   completeTrendAnalysisRequest,
 } = require("../../src/server/db/repositories/trend-analysis-repository");
 const {
@@ -213,10 +214,14 @@ test("R1: trend completion deducts from credit_lots and is not restored by walle
   const brandId = brand.id;
   db.prepare("INSERT INTO analyses (id, brand_id, name, timestamp, position) VALUES (101, ?, 'Analysis 101', ?, 1)").run(brandId, nowIso);
 
-  db.prepare(`
-    INSERT INTO trend_analysis_requests (request_id, user_id, brand_id, bucket_key, status, credit_cost, created_at, updated_at)
-    VALUES (?, ?, ?, 'news', 'reserved', 1, ?, ?)
-  `).run(reqId, uid, brandId, nowIso, nowIso);
+  reserveTrendAnalysisRequest({
+    requestId: reqId,
+    userId: uid,
+    brandId,
+    bucketKey: "news",
+    creditCost: 1,
+    now: new Date(mockNow),
+  });
 
   completeTrendAnalysisRequest({
     requestId: reqId,

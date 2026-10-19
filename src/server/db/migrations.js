@@ -961,6 +961,103 @@ const VERSIONED_MIGRATIONS = [
       }
     },
   },
+  {
+    version: 18,
+    name: "billing-v2-reservation-identity-alignment",
+    apply() {
+      // 1. Ensure task_key column exists in trend_analysis_requests
+      const trendCols = db.prepare("PRAGMA table_info(trend_analysis_requests)").all().map((c) => c.name);
+      if (!trendCols.includes("task_key")) {
+        db.exec("ALTER TABLE trend_analysis_requests ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+      }
+      db.exec(`
+        UPDATE trend_analysis_requests
+        SET task_key = 'trend_analysis:' || user_id || ':' || brand_id || ':' || bucket_key || ':' || request_id
+        WHERE task_key = ''
+      `);
+
+      // 2. Ensure task_key column exists in excellent_remix_billing_requests
+      const hasExcTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='excellent_remix_billing_requests'").get();
+      if (hasExcTable) {
+        const excCols = db.prepare("PRAGMA table_info(excellent_remix_billing_requests)").all().map((c) => c.name);
+        if (!excCols.includes("task_key")) {
+          db.exec("ALTER TABLE excellent_remix_billing_requests ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+        }
+        db.exec(`
+          UPDATE excellent_remix_billing_requests
+          SET task_key = 'excellent_' || kind || ':' || user_id || ':' || request_id || ':' || created_at
+          WHERE task_key = ''
+        `);
+      }
+
+      // 3. Align non-canonical keys in task_credit_reservations
+      const resRows = db.prepare("SELECT * FROM task_credit_reservations").all();
+      for (const row of resRows) {
+        if (row.task_type === "trend_analysis") {
+          const parts = String(row.task_key || "").split(":");
+          const isOldFormat = parts.length < 5 || parts[2] === "" || parts[3] === "";
+          if (isOldFormat) {
+            const reqs = db.prepare(`
+              SELECT brand_id, bucket_key, request_id, task_key FROM trend_analysis_requests
+              WHERE user_id = ? AND request_id = ?
+            `).all(row.user_id, row.task_id);
+            if (reqs && reqs.length === 1) {
+              const canonicalKey = `trend_analysis:${row.user_id}:${reqs[0].brand_id}:${reqs[0].bucket_key}:${row.task_id}`;
+              db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(canonicalKey, row.id);
+              db.prepare("UPDATE trend_analysis_requests SET task_key = ? WHERE user_id = ? AND request_id = ?").run(canonicalKey, row.user_id, row.task_id);
+            } else if (reqs && reqs.length > 1) {
+              db.prepare("UPDATE task_credit_reservations SET status = 'audit_required' WHERE id = ?").run(row.id);
+            }
+          }
+        } else if (String(row.task_type).startsWith("excellent_")) {
+          const kind = String(row.task_type).replace(/^excellent_/, "");
+          const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
+          const reqs = db.prepare(`
+            SELECT request_id, created_at, task_key FROM excellent_remix_billing_requests
+            WHERE user_id = ? AND request_id = ? AND kind = ?
+          `).all(row.user_id, cleanTid, kind);
+          if (reqs && reqs.length === 1) {
+            const canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${reqs[0].created_at}`;
+            db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(canonicalKey, row.id);
+            db.prepare("UPDATE excellent_remix_billing_requests SET task_key = ? WHERE user_id = ? AND request_id = ? AND kind = ?").run(canonicalKey, row.user_id, cleanTid, kind);
+          }
+        }
+      }
+
+      // 4. Backfill empty snapshot_json in subscriptions
+      const subs = db.prepare("SELECT * FROM subscriptions WHERE snapshot_json = '' OR snapshot_json = '{}'").all();
+      for (const sub of subs) {
+        let monthlyCredits = 0;
+        const grant = db.prepare("SELECT credits FROM subscription_grants WHERE subscription_id = ? ORDER BY period_index ASC LIMIT 1").get(sub.id);
+        if (grant && grant.credits > 0) {
+          monthlyCredits = Number(grant.credits);
+        } else {
+          const order = db.prepare("SELECT snapshot_json, plan_credits FROM payment_orders WHERE user_id = ? AND status = 'paid' AND order_kind = 'plan' ORDER BY id DESC LIMIT 1").get(sub.user_id);
+          if (order) {
+            try {
+              const os = JSON.parse(order.snapshot_json || "{}");
+              monthlyCredits = Number(os.monthlyCredits || order.plan_credits || 0);
+            } catch (_) {}
+          }
+        }
+        if (monthlyCredits > 0) {
+          const snapshot = {
+            version: "v2",
+            planId: sub.plan_id,
+            cycle: sub.cycle,
+            monthlyCredits,
+            initialCredits: monthlyCredits,
+            pricingBasisFen: sub.pricing_basis_fen,
+            actualPaidTotalFen: sub.actual_paid_total_fen,
+            anchorDay: sub.anchor_day,
+            serviceStart: sub.service_start,
+            serviceEnd: sub.service_end,
+          };
+          db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(snapshot), sub.id);
+        }
+      }
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

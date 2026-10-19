@@ -123,17 +123,25 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
   const pendingReservations = Number(db.prepare(`
     SELECT (
       COALESCE((
-        SELECT SUM(credit_cost)
-        FROM trend_analysis_requests
-        WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+        SELECT SUM(r.credit_cost)
+        FROM trend_analysis_requests r
+        WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM task_credit_reservations t
+            WHERE t.task_key = r.task_key AND t.status = 'reserved'
+          )
       ), 0) + COALESCE((
-        SELECT SUM(credit_cost)
-        FROM excellent_remix_billing_requests
-        WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+        SELECT SUM(r.credit_cost)
+        FROM excellent_remix_billing_requests r
+        WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM task_credit_reservations t
+            WHERE t.task_key = r.task_key AND t.status = 'reserved'
+          )
       ), 0) + COALESCE((
-        SELECT SUM(credit_cost)
-        FROM video_project_billing_requests
-        WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
+        SELECT SUM(r.credit_cost)
+        FROM video_project_billing_requests r
+        WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
       ), 0)
     ) AS total
   `).get(Number(userId), reservationCutoff, Number(userId), excellentReservationCutoff, Number(userId), reservationCutoff)?.total || 0);

@@ -252,14 +252,29 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
 
       // Use purchased quota snapshot (R7)
       const initialCredits = Number(order.snapshot?.issuedNow ?? order.snapshot?.monthlyCredits ?? order.plan_credits ?? order.planCredits ?? plan.credits ?? 0);
+      const monthlyCredits = Number(order.snapshot?.monthlyCredits || plan.credits || initialCredits);
+      const subSnapshot = {
+        version: "v2",
+        planId: plan.id,
+        planName: plan.name,
+        cycle,
+        monthlyCredits,
+        initialCredits,
+        pricingBasisFen: order.snapshot?.pricingBasisFen || order.amount_fen || order.amountFen,
+        actualPaidTotalFen: order.amount_fen || order.amountFen,
+        anchorDay,
+        serviceStart: serviceStartIso,
+        serviceEnd: serviceEndIso,
+      };
+      const subSnapshotJson = JSON.stringify(subSnapshot);
 
       const subResult = db.prepare(`
         INSERT INTO subscriptions (
           user_id, plan_id, cycle, status, service_start, service_end,
           anchor_day, current_period_start, current_period_end,
           current_period_grant, upgrade_cumulative_increment,
-          pricing_basis_fen, actual_paid_total_fen, created_at, updated_at
-        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+          pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at
+        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `).run(
         uid,
         plan.id,
@@ -272,6 +287,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         initialCredits,
         order.amount_fen || order.amountFen,
         order.amount_fen || order.amountFen,
+        subSnapshotJson,
         nowIso,
         nowIso
       );
@@ -330,7 +346,22 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
     }
 
     if (action === "upgrade") {
-      const activeSub = findActiveSubscription(uid, nowMs, db);
+      const paidAtRaw = order.paidAt || order.paid_at;
+      const paidAtMs = paidAtRaw ? new Date(paidAtRaw).getTime() : nowMs;
+      const orderPeriodEnd = order.period_end || order.snapshot?.periodEndAt || order.snapshot?.originalPeriodEnd;
+      const orderPeriodEndMs = orderPeriodEnd ? new Date(orderPeriodEnd).getTime() : 0;
+
+      // D5: If payment occurred strictly after the quoted period ended, require audit
+      if (orderPeriodEndMs > 0 && paidAtMs > orderPeriodEndMs) {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'audit_required', audit_reason = '付款时间已晚于原报价周期到期时间', updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, orderId);
+        return { status: "audit_required", reason: "付款时间已晚于原报价周期到期时间" };
+      }
+
+      const activeSub = findActiveSubscription(uid, nowMs, db) || db.prepare("SELECT * FROM subscriptions WHERE id = ?").get(order.snapshot?.originalSubscriptionId || order.snapshot?.subscription_id);
       const expectedSubId = order.snapshot?.originalSubscriptionId || order.snapshot?.subscription_id || order.quote?.subscription_id;
       const expectedPlanId = order.snapshot?.originalPlanId || order.snapshot?.original_plan_id || order.quote?.original_plan_id;
 
@@ -343,76 +374,197 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         return { status: "audit_required", reason: "原订阅已发生变更或已失效，升级无法自动应用" };
       }
 
-      const issuedNow = Number(order.snapshot?.issuedNow ?? order.issued_now ?? order.issuedNow ?? 0);
+      const targetMonthlyCredits = Number(order.snapshot?.targetMonthlyCredits || order.snapshot?.monthlyCredits || plan.credits);
       const nextBasis = getPriceFen(plan, activeSub.cycle);
       const paidAdd = Number(order.amount_fen || order.amountFen || 0);
+      const issuedNow = Number(order.snapshot?.issuedNow ?? order.issued_now ?? order.issuedNow ?? 0);
+
+      const subPeriodStartMs = new Date(activeSub.current_period_start).getTime();
+      const periodAdvanced = orderPeriodEndMs > 0 && (nowMs >= orderPeriodEndMs || subPeriodStartMs >= orderPeriodEndMs);
+
       const cumExact = Number(order.snapshot?.cumExact ?? order.quote?.meta?.cumExact ?? (Number(activeSub.upgrade_cumulative_exact || 0) + Number(order.snapshot?.exactIncrement || 0)));
       const cumCeil = Number(order.snapshot?.cumCeil ?? order.quote?.meta?.cumCeil ?? (Number(activeSub.upgrade_cumulative_increment || 0) + issuedNow));
 
-      const subCols = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
-      if (subCols.includes("upgrade_cumulative_exact")) {
+      const updatedSnapshot = {
+        version: "v2",
+        planId: plan.id,
+        planName: plan.name,
+        cycle: activeSub.cycle,
+        monthlyCredits: targetMonthlyCredits,
+        pricingBasisFen: nextBasis,
+        actualPaidTotalFen: Number(activeSub.actual_paid_total_fen || 0) + paidAdd,
+        anchorDay: activeSub.anchor_day,
+        serviceStart: activeSub.service_start,
+        serviceEnd: activeSub.service_end,
+      };
+      const updatedSnapshotJson = JSON.stringify(updatedSnapshot);
+
+      if (periodAdvanced) {
+        // D3: Original period pro-rata grant belonged to original period which has ended; do not extend to new period
+        if (issuedNow > 0) {
+          createCreditLot({
+            userId: uid,
+            sourceType: "upgrade",
+            sourceLabel: "本期积分",
+            orderId,
+            subscriptionId: activeSub.id,
+            credits: issuedNow,
+            startsAt: order.paid_at || nowIso,
+            expiresAt: orderPeriodEnd,
+            nowIso,
+          }, db);
+        }
+
+        // D4: Top up current active period from old quota (e.g. 400) to target quota (e.g. 1500)
+        let currentGrant = db.prepare(`
+          SELECT * FROM subscription_grants
+          WHERE subscription_id = ? AND period_start = ?
+        `).get(activeSub.id, activeSub.current_period_start);
+
+        if (!currentGrant && activeSub.cycle === "annual") {
+          currentGrant = db.prepare(`
+            SELECT * FROM subscription_grants
+            WHERE subscription_id = ? AND status = 'granted'
+            ORDER BY period_index DESC LIMIT 1
+          `).get(activeSub.id);
+        }
+
+        if (currentGrant && currentGrant.credits < targetMonthlyCredits) {
+          const deficit = targetMonthlyCredits - currentGrant.credits;
+          createCreditLot({
+            userId: uid,
+            sourceType: "cycle",
+            sourceLabel: "本期积分",
+            orderId,
+            subscriptionId: activeSub.id,
+            credits: deficit,
+            startsAt: activeSub.current_period_start,
+            expiresAt: activeSub.current_period_end,
+            nowIso,
+          }, db);
+
+          insertLedgerCreditEvent(db, {
+            userId: uid,
+            actionType: "cycle_grant",
+            actionLabel: "升级跨期权益追补",
+            creditDelta: deficit,
+            creditCost: 0,
+            createdAt: nowIso,
+            summary: `升级${plan.name}追补本期差额 ${deficit} 积分（原发 ${currentGrant.credits} 积分，目标 ${targetMonthlyCredits} 积分）`,
+            payload: {
+              subscriptionId: activeSub.id,
+              grantId: currentGrant.id,
+              orderId,
+              deficit,
+              targetMonthlyCredits,
+              idempotencyKey: `upgrade_delay_topup:${activeSub.id}:${currentGrant.id}:${orderId}`,
+            },
+          });
+
+          db.prepare(`
+            UPDATE subscription_grants
+            SET credits = ?, updated_at = ?
+            WHERE id = ?
+          `).run(targetMonthlyCredits, nowIso, currentGrant.id);
+        }
+
+        if (activeSub.cycle === "annual") {
+          db.prepare(`
+            UPDATE subscription_grants
+            SET credits = ?, updated_at = ?
+            WHERE subscription_id = ? AND status = 'pending'
+          `).run(targetMonthlyCredits, nowIso, activeSub.id);
+        }
+
         db.prepare(`
           UPDATE subscriptions
           SET plan_id = ?,
               pricing_basis_fen = ?,
               actual_paid_total_fen = actual_paid_total_fen + ?,
-              current_period_grant = current_period_grant + ?,
-              upgrade_cumulative_increment = ?,
-              upgrade_cumulative_exact = ?,
+              current_period_grant = ?,
+              upgrade_cumulative_increment = 0,
+              upgrade_cumulative_exact = 0,
+              snapshot_json = ?,
               updated_at = ?
           WHERE id = ?
         `).run(
           plan.id,
           nextBasis,
           paidAdd,
-          issuedNow,
-          cumCeil,
-          cumExact,
+          targetMonthlyCredits,
+          updatedSnapshotJson,
           nowIso,
           activeSub.id
         );
       } else {
-        db.prepare(`
-          UPDATE subscriptions
-          SET plan_id = ?,
-              pricing_basis_fen = ?,
-              actual_paid_total_fen = actual_paid_total_fen + ?,
-              current_period_grant = current_period_grant + ?,
-              upgrade_cumulative_increment = upgrade_cumulative_increment + ?,
-              updated_at = ?
-          WHERE id = ?
-        `).run(
-          plan.id,
-          nextBasis,
-          paidAdd,
-          issuedNow,
-          issuedNow,
-          nowIso,
-          activeSub.id
-        );
-      }
+        const subCols = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
+        if (subCols.includes("upgrade_cumulative_exact")) {
+          db.prepare(`
+            UPDATE subscriptions
+            SET plan_id = ?,
+                pricing_basis_fen = ?,
+                actual_paid_total_fen = actual_paid_total_fen + ?,
+                current_period_grant = current_period_grant + ?,
+                upgrade_cumulative_increment = ?,
+                upgrade_cumulative_exact = ?,
+                snapshot_json = ?,
+                updated_at = ?
+            WHERE id = ?
+          `).run(
+            plan.id,
+            nextBasis,
+            paidAdd,
+            issuedNow,
+            cumCeil,
+            cumExact,
+            updatedSnapshotJson,
+            nowIso,
+            activeSub.id
+          );
+        } else {
+          db.prepare(`
+            UPDATE subscriptions
+            SET plan_id = ?,
+                pricing_basis_fen = ?,
+                actual_paid_total_fen = actual_paid_total_fen + ?,
+                current_period_grant = current_period_grant + ?,
+                upgrade_cumulative_increment = upgrade_cumulative_increment + ?,
+                snapshot_json = ?,
+                updated_at = ?
+            WHERE id = ?
+          `).run(
+            plan.id,
+            nextBasis,
+            paidAdd,
+            issuedNow,
+            issuedNow,
+            updatedSnapshotJson,
+            nowIso,
+            activeSub.id
+          );
+        }
 
-      if (issuedNow > 0) {
-        createCreditLot({
-          userId: uid,
-          sourceType: "upgrade",
-          sourceLabel: "本期积分",
-          orderId,
-          subscriptionId: activeSub.id,
-          credits: issuedNow,
-          startsAt: order.paid_at || nowIso,
-          expiresAt: activeSub.current_period_end,
-          nowIso,
-        }, db);
-      }
+        if (issuedNow > 0) {
+          createCreditLot({
+            userId: uid,
+            sourceType: "upgrade",
+            sourceLabel: "本期积分",
+            orderId,
+            subscriptionId: activeSub.id,
+            credits: issuedNow,
+            startsAt: order.paid_at || nowIso,
+            expiresAt: activeSub.current_period_end,
+            nowIso,
+          }, db);
+        }
 
-      if (activeSub.cycle === "annual") {
-        const targetMonthlyCredits = Number(order.snapshot?.targetMonthlyCredits || order.snapshot?.monthlyCredits || plan.credits);
-        db.prepare(`
-          UPDATE subscription_grants
-          SET credits = ?, updated_at = ?
-          WHERE subscription_id = ? AND status = 'pending'
-        `).run(targetMonthlyCredits, nowIso, activeSub.id);
+        if (activeSub.cycle === "annual") {
+          db.prepare(`
+            UPDATE subscription_grants
+            SET credits = ?, updated_at = ?
+            WHERE subscription_id = ? AND status = 'pending'
+          `).run(targetMonthlyCredits, nowIso, activeSub.id);
+        }
       }
 
       db.prepare(`
@@ -528,15 +680,33 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
       const anchorDay = schedule.anchor_day || toShanghaiDate(startMs).getUTCDate();
       const isAnnual = schedule.cycle === "annual";
       const monthlyCredits = Number(schedule.monthly_credits || plan?.credits || 0);
+      const schedSnapshot = (() => {
+        try { return JSON.parse(schedule.snapshot_json || "{}"); } catch (_) { return {}; }
+      })();
+      const fullMonthlyCredits = Number(schedSnapshot.monthlyCredits || monthlyCredits);
       const periodEndIso = new Date(addCalendarMonths(startMs, 1, anchorDay)).toISOString();
+      const subSnapshot = {
+        version: "v2",
+        planId: schedule.plan_id,
+        planName: plan?.name || schedule.plan_id,
+        cycle: schedule.cycle,
+        monthlyCredits: fullMonthlyCredits,
+        initialCredits: monthlyCredits,
+        pricingBasisFen: schedule.amount_fen,
+        actualPaidTotalFen: schedule.amount_fen,
+        anchorDay,
+        serviceStart: schedule.start_at,
+        serviceEnd: schedule.end_at,
+      };
+      const subSnapshotJson = JSON.stringify(subSnapshot);
 
       const subResult = db.prepare(`
         INSERT INTO subscriptions (
           user_id, plan_id, cycle, status, service_start, service_end,
           anchor_day, current_period_start, current_period_end,
           current_period_grant, upgrade_cumulative_increment,
-          pricing_basis_fen, actual_paid_total_fen, created_at, updated_at
-        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+          pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at
+        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `).run(
         schedule.user_id,
         schedule.plan_id,
@@ -549,6 +719,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         monthlyCredits,
         schedule.amount_fen,
         schedule.amount_fen,
+        subSnapshotJson,
         nowIso,
         nowIso
       );

@@ -603,6 +603,7 @@ test("F9: Multi-process concurrent advanceSubscriptionLifecycles on real SQLite 
 
   // Verify in DB that exactly one lot of 400 was created
   const checkConn = new Database(tempDb);
+  checkConn.exec("PRAGMA busy_timeout = 10000;");
   const lots = checkConn.prepare("SELECT * FROM credit_lots WHERE grant_id = 201").all();
   assert.equal(lots.length, 1);
   assert.equal(lots[0].initial_credits, 400);
@@ -672,6 +673,7 @@ test("Section XI: Multi-process concurrent plan order creation for same user enf
 
   await new Promise((r) => setTimeout(r, 100));
   const checkConn = new Database(tempDb);
+  checkConn.exec("PRAGMA busy_timeout = 10000;");
   const count = checkConn.prepare("SELECT COUNT(*) AS count FROM payment_orders").get().count;
   assert.equal(count, 1);
   checkConn.close();

@@ -315,6 +315,7 @@ function initializeDatabaseSchema() {
       error TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      task_key TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (request_id, user_id, brand_id, bucket_key),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
@@ -348,6 +349,7 @@ function initializeDatabaseSchema() {
       created_at TEXT NOT NULL,
       completed_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
+      task_key TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (request_id, user_id, kind),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL
@@ -614,6 +616,7 @@ function ensureSchemaUpgrades() {
       error TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      task_key TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (request_id, user_id, brand_id, bucket_key),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE,
@@ -647,6 +650,7 @@ function ensureSchemaUpgrades() {
       created_at TEXT NOT NULL,
       completed_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
+      task_key TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (request_id, user_id, kind),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (credit_event_id) REFERENCES credit_events(id) ON DELETE SET NULL

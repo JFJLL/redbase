@@ -1,0 +1,12 @@
+✔ trend analysis freezes credits, saves and charges atomically, and replays idempotently (14.3556ms)
+✔ failed reserved trend analysis keeps credits unchanged (5.4346ms)
+✔ active bucket reservations block alternate request IDs and protect frozen credits (7.598ms)
+✔ active trend work remains reserved for the full bounded generation window (5.5933ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 207.3806

@@ -388,6 +388,40 @@ function testV17TableReconstructionAndExpiryNormalization() {
   console.log("✔ V17 物理主键重建与到期防重规范化演练通过");
 }
 
+function testV18ReservationIdentityAndSubscriptionSnapshot() {
+  console.log("\n--- [演练场景 8] V18 任务身份规范对齐与订阅快照回填演练 ---");
+  const conn = require("../src/server/db/connection").openDatabase();
+  const { VERSIONED_MIGRATIONS } = require("../src/server/db/migrations");
+
+  // Verify task_key column in trend_analysis_requests and excellent_remix_billing_requests
+  const trendCols = conn.prepare("PRAGMA table_info(trend_analysis_requests)").all().map((c) => c.name);
+  if (!trendCols.includes("task_key")) throw new Error("trend_analysis_requests 缺少 task_key 字段");
+
+  const excCols = conn.prepare("PRAGMA table_info(excellent_remix_billing_requests)").all().map((c) => c.name);
+  if (!excCols.includes("task_key")) throw new Error("excellent_remix_billing_requests 缺少 task_key 字段");
+
+  // Verify V18 migration aligns old trend keys
+  const uid = 9088;
+  const reqId = "req_rehearse_v18";
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V18User', '13990880001', 'h', 'customer', 0, 1, '2026-01-01')").run(uid);
+  const { insertBrand } = require("../src/server/db/repositories/brand-repository");
+  const brand = insertBrand({ ownerUserId: uid, name: "Brand88", industry: "Tech", audience: "All", description: "", product: "", goal: "", knowledgeBase: "", logo: "", assetTags: [], profileType: "corporate", contentPillars: [], personaStyle: "", createdAt: "2026-01-01" });
+  const brandId = brand.id;
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (90881, ?, 'topup', '永久积分', 10, 9, 1, 0, '2026-01-01', NULL, 'active', '2026-01-01', '2026-01-01')").run(uid);
+  conn.prepare("INSERT OR REPLACE INTO trend_analysis_requests (request_id, user_id, brand_id, bucket_key, status, credit_cost, created_at, updated_at, task_key) VALUES (?, ?, ?, 'bkey88', 'reserved', 1, '2026-01-01', '2026-01-01', '')").run(reqId, uid, brandId);
+  conn.prepare("INSERT OR REPLACE INTO task_credit_reservations (id, task_key, task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at) VALUES (90882, ?, ?, ?, 'trend_analysis', 90881, 1, 'reserved', '2026-01-01', '2026-01-01')").run(`trend_analysis:${uid}:${reqId}`, reqId, uid);
+
+  const v18 = VERSIONED_MIGRATIONS.find((m) => m.version === 18);
+  v18.apply();
+
+  const updatedRes = conn.prepare("SELECT task_key FROM task_credit_reservations WHERE id = 90882").get();
+  if (updatedRes.task_key !== `trend_analysis:${uid}:${brandId}:bkey88:${reqId}`) {
+    throw new Error(`V18 未将旧键更新为规范格式，当前: ${updatedRes.task_key}`);
+  }
+
+  console.log("✔ V18 任务身份规范对齐与订阅快照回填演练通过");
+}
+
 function runRehearsal() {
   console.log("=== 开始执行 RedBase 套餐与积分 V2 数据迁移与审计修复完整演练 ===");
   testFreshDatabase();
@@ -396,6 +430,7 @@ function runRehearsal() {
   testInFlightAndScheduleReconciliation();
   testV13CycleOnlyNoLegacyDuplication();
   testV17TableReconstructionAndExpiryNormalization();
+  testV18ReservationIdentityAndSubscriptionSnapshot();
   console.log("\n=== RedBase 套餐与积分 V2 数据迁移隔离演练全部 100% 通过 ===");
 }
 
