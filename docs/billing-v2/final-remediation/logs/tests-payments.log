@@ -1,0 +1,63 @@
+﻿[alipay] precreate failed {
+  outTradeNo: 'rb_1792385745332_461c659006c4d0',
+  error: '当前调用IP不在可信名单中'
+}
+[alipay] notify processing failed {
+  outTradeNo: 'rb_1792385745356_892bd84e021e16',
+  error: 'UNIQUE constraint failed: payment_orders.trade_no'
+}
+✔ recharge plans require login and expose configured plans (3.9052ms)
+✔ P6: recharge plans are hidden when alipay is disabled (0.9883ms)
+[alipay] paid-on-close identity mismatch { outTradeNo: 'rb_1792385745418_dbe0322ed8bd61' }
+[alipay] paid-on-close identity mismatch { outTradeNo: 'rb_1792385745420_fb51a1bc0e2ae7' }
+[reconcile] provider identity mismatch {
+  outTradeNo: 'rb_1792385745423_e5dc1ef4a103e8',
+  actualOutTradeNo: 'redbase_different_order',
+  appIdMatched: true,
+  sellerIdMatched: true
+}
+[alipay] active order check returned an unsafe outcome { outTradeNo: 'rb_1792385745423_e5dc1ef4a103e8', outcome: 'failed' }
+[reconcile] amount mismatch {
+  outTradeNo: 'rb_1792385745428_8876aea1e94da3',
+  expected: '0.01',
+  actual: '9.99'
+}
+[alipay] active order check returned an unsafe outcome { outTradeNo: 'rb_1792385745428_8876aea1e94da3', outcome: 'failed' }
+✔ P6: recharge plans are hidden when the payment gateway is unavailable (0.8692ms)
+[alipay] active order check returned an unsafe outcome { outTradeNo: 'rb_1792385745431_bf50058fabb902', outcome: 'unknown' }
+✔ P6: recharge plans stay visible when alipay is enabled and configured (1.3331ms)
+✔ create order is idempotent and rejects unconfigured plans (7.5294ms)
+✔ precreate failure preserves the PC pay link and returns a clear QR fallback (2.5214ms)
+✔ rollback mode blocks new orders but keeps notify processing (6.7127ms)
+✔ notify rejects bad signature, wrong merchant, wrong amount and unknown orders (6.3933ms)
+✔ valid notify pays the order and credits exactly once (5.3328ms)
+✔ a second order cannot reuse an existing trade_no (7.1298ms)
+✔ synchronous return never credits and late payment is allowed after expiry (4.7101ms)
+✔ twenty concurrent notifications credit only once without 500s (10.5588ms)
+✔ orders are scoped to the owner and close/paid transitions are guarded (9.6902ms)
+✔ P0: a closed order must never silently accept a later provider payment (3.6428ms)
+✔ P0: closing an already paid provider order settles it instead of closing (3.943ms)
+✔ P0: closing without a gateway refuses locally instead of silently closing (2.5914ms)
+✔ a provider-missing trade closes locally only after a confirming query (5.1504ms)
+✔ a missing-trade close remains pending when the confirmation query finds a live trade (2.8414ms)
+✔ a missing-trade close does not locally close an already closed provider trade (3.0683ms)
+✔ fake settle page settles through the same notify path (4.058ms)
+✔ owned pending orders can refresh their pay link and actively reconcile payment status (6.8361ms)
+✔ P0: paid-on-close rejects missing identity or a wrong amount (5.1903ms)
+✔ active reconciliation rejects a same-amount response for a different order (4.5316ms)
+✔ active reconciliation reports provider amount and status anomalies (5.3989ms)
+✔ processAlipayNotify returns failure for unknown trade status (0.2709ms)
+✔ creates a WeChat Pay order with native QR code and records provider=wxpay (1.967ms)
+✔ WeChat Pay notification settles order, credits user, and produces idempotency across duplicates (5.81ms)
+✔ WeChat Pay active check reconciles pending order and fake settle works (10.2503ms)
+✔ an expired order that was actually paid is settled by reconciliation (6.1781ms)
+✔ an expired unpaid order is marked expired and stays reconcilable (5.1308ms)
+✔ a closed order that was actually paid is flagged for audit, never silently dropped (2.792ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 349.4904

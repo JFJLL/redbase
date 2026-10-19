@@ -186,7 +186,16 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
         const remainingServiceRatio = serviceRemainingMs / serviceTotalMs;
         const remainingPeriodRatio = periodTotalMs > 0 ? (periodRemainingMs / periodTotalMs) : 0;
 
-        const oldFullTermPrice = activeSub.pricing_basis_fen || getPriceFen(oldPlan, cycle);
+        const subSnapshot = (() => {
+          try { return JSON.parse(activeSub.snapshot_json || "{}"); } catch (_) { return {}; }
+        })();
+        const oldPurchasedCredits = Number(
+          subSnapshot.monthlyCredits ||
+          subSnapshot.planCredits ||
+          oldPlan.credits
+        );
+
+        const oldFullTermPrice = activeSub.pricing_basis_fen || subSnapshot.fullTermPriceFen || getPriceFen(oldPlan, cycle);
         const targetFullTermPrice = getPriceFen(plan, cycle);
         const priceDiff = targetFullTermPrice - oldFullTermPrice;
 
@@ -199,7 +208,7 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
           throw new Error("剩余时间不足以生成有效升级补款，请等待到期后重新开通");
         }
 
-        const quotaDiff = plan.credits - oldPlan.credits;
+        const quotaDiff = plan.credits - oldPurchasedCredits;
         const exactIncrement = quotaDiff * remainingPeriodRatio;
         const previousCumExact = Number(activeSub.upgrade_cumulative_exact || 0);
         const previousIssued = Number(activeSub.upgrade_cumulative_increment || 0);

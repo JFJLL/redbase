@@ -10,6 +10,8 @@ const {
   reserveCreditsForTask,
   settleCreditsForTask,
   releaseCreditsForTask,
+  buildCanonicalTaskKey,
+  getUserWalletBalances,
 } = require("../../billing/credit-ledger");
 const { getNowIso, getNowTimestamp } = require("../../billing/period-utils");
 const {
@@ -38,13 +40,18 @@ function expireStaleReservations(userId, nowMs = getNowTimestamp()) {
   const cutoff = new Date(nowMs - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
   const nowIso = getNowIso();
   const stale = db.prepare(`
-    SELECT request_id FROM trend_analysis_requests
+    SELECT request_id, brand_id, bucket_key FROM trend_analysis_requests
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
   `).all(Number(userId), cutoff);
   for (const row of stale) {
+    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: row.request_id, brandId: row.brand_id, bucketKey: row.bucket_key });
     releaseCreditsForTask({
       userId,
+      taskKey: canonicalTaskKey,
       taskId: row.request_id,
+      taskType: "trend_analysis",
+      brandId: row.brand_id,
+      bucketKey: row.bucket_key,
       nowIso,
     }, db);
   }
@@ -92,35 +99,40 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
         creditEvent: null,
       };
     }
-    const user = findUserById(userId);
-    const reserved = Number(db.prepare(`
-      SELECT COALESCE(SUM(credit_cost), 0) AS total
-      FROM trend_analysis_requests
-      WHERE user_id = ? AND status = 'reserved'
-    `).get(Number(userId))?.total || 0);
-    // Excellent remix billing reservations also freeze balance; both sides must see each other.
-    const excellentCutoff = new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-    const excellentReserved = Number(db.prepare(`
-      SELECT COALESCE(SUM(credit_cost), 0) AS total
-      FROM excellent_remix_billing_requests
-      WHERE user_id = ? AND status = 'reserved' AND created_at >= ?
-    `).get(Number(userId), excellentCutoff)?.total || 0);
     const cost = Math.max(0, Number(creditCost || 0));
-    if (!user || Number(user.credits || 0) - reserved - excellentReserved < cost) {
-      return { status: "insufficient", user, reservedCredits: reserved + excellentReserved };
+    const user = findUserById(userId);
+    const wallet = getUserWalletBalances(userId, nowMs, db);
+    const unmigratedTrend = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM trend_analysis_requests r
+      WHERE r.user_id = ? AND r.status = 'reserved'
+        AND NOT EXISTS (SELECT 1 FROM task_credit_reservations t WHERE t.user_id = r.user_id AND t.task_id = r.request_id AND t.status = 'reserved')
+    `).get(Number(userId))?.total || 0);
+
+    const unmigratedExcellent = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM excellent_remix_billing_requests r
+      WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+        AND NOT EXISTS (SELECT 1 FROM task_credit_reservations t WHERE t.user_id = r.user_id AND t.task_id LIKE '%' || r.request_id AND t.status = 'reserved')
+    `).get(Number(userId), new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString())?.total || 0);
+
+    const effectiveAvailable = wallet.totalAvailable - unmigratedTrend - unmigratedExcellent;
+    if (effectiveAvailable < cost) {
+      return { status: "insufficient", user: findUserById(userId), reservedCredits: unmigratedTrend + unmigratedExcellent };
     }
+
+    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: normalizedRequestId, brandId, bucketKey });
     if (cost > 0) {
-      try {
-        reserveCreditsForTask({
-          userId: Number(userId),
-          taskId: normalizedRequestId,
-          taskType: "trend_analysis",
-          amount: cost,
-          nowIso: timestamp,
-        }, db);
-      } catch (err) {
-        return { status: "insufficient", user, reservedCredits: reserved + excellentReserved };
-      }
+      reserveCreditsForTask({
+        userId: Number(userId),
+        taskKey: canonicalTaskKey,
+        taskId: normalizedRequestId,
+        taskType: "trend_analysis",
+        brandId,
+        bucketKey,
+        amount: cost,
+        nowIso: timestamp,
+      }, db);
     }
     db.prepare(`
       INSERT INTO trend_analysis_requests (
@@ -142,7 +154,7 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
       existing: false,
       request: findTrendAnalysisRequest({ requestId: normalizedRequestId, userId, brandId, bucketKey }),
       user,
-      reservedCredits: reserved + cost,
+      reservedCredits: cost,
     };
   });
 }
@@ -168,6 +180,7 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
     const timestamp = getNowIso();
     const cost = Number(request.credit_cost || 0);
     let creditEvent = null;
+    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: requestId, brandId, bucketKey });
     if (cost > 0) {
       creditEvent = insertCreditEvent({
         ...(event || {}),
@@ -178,17 +191,27 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
       });
       const settled = settleCreditsForTask({
         userId,
+        taskKey: canonicalTaskKey,
         taskId: requestId,
+        taskType: "trend_analysis",
+        brandId,
+        bucketKey,
         creditEventId: creditEvent.id,
         nowIso: timestamp,
       }, db);
       if (!settled || settled.length === 0) {
-        spendCreditsFromLots({
-          userId,
-          amount: cost,
-          creditEventId: creditEvent.id,
-          nowIso: timestamp,
-        }, db);
+        const hasResRecord = db.prepare(`SELECT 1 FROM task_credit_reservations WHERE task_key = ?`).get(canonicalTaskKey);
+        if (!hasResRecord) {
+          spendCreditsFromLots({
+            userId,
+            amount: cost,
+            creditEventId: creditEvent.id,
+            nowIso: timestamp,
+          }, db);
+          syncUserCreditsCache(userId, db);
+        } else {
+          throw new Error("任务预占记录异常或归属不符，拒绝直接补扣");
+        }
       }
       syncUserCreditsCache(userId, db);
     }
@@ -213,9 +236,14 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
 function failTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, error }) {
   return runTransaction(() => {
     const timestamp = getNowIso();
+    const canonicalTaskKey = buildCanonicalTaskKey({ userId, taskType: "trend_analysis", taskId: requestId, brandId, bucketKey });
     releaseCreditsForTask({
       userId,
+      taskKey: canonicalTaskKey,
       taskId: requestId,
+      taskType: "trend_analysis",
+      brandId,
+      bucketKey,
       nowIso: timestamp,
     }, db);
     syncUserCreditsCache(userId, db);

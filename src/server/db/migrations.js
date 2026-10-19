@@ -814,6 +814,46 @@ const VERSIONED_MIGRATIONS = [
       } catch (_) {}
     },
   },
+  {
+    version: 16,
+    name: "billing-v2-remediation",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS account_plan_order_locks (
+          user_id INTEGER PRIMARY KEY,
+          out_trade_no TEXT NOT NULL,
+          plan_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (out_trade_no) REFERENCES payment_orders(out_trade_no) ON DELETE CASCADE
+        );
+      `);
+
+      const resCols = db.prepare("PRAGMA table_info(task_credit_reservations)").all().map((c) => c.name);
+      if (resCols.length > 0 && !resCols.includes("task_key")) {
+        db.exec("ALTER TABLE task_credit_reservations ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+        db.exec("UPDATE task_credit_reservations SET task_key = task_type || ':' || user_id || ':' || task_id WHERE task_key = ''");
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
+      `);
+
+      try {
+        db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_lots_grant
+          ON credit_lots(grant_id) WHERE grant_id IS NOT NULL;
+        `);
+      } catch (_) {}
+
+      try {
+        db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_lots_order_source
+          ON credit_lots(order_id, source_type)
+          WHERE order_id IS NOT NULL AND grant_id IS NULL AND source_type = 'topup';
+        `);
+      } catch (_) {}
+    },
+  },
 ];
 
 function getAppliedMigrationVersions() {

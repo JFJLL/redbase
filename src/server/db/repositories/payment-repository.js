@@ -162,11 +162,32 @@ function insertPaymentOrder({
   nowIso,
   expiresAtIso,
   quote = null,
+  acquireLock = false,
 }) {
   const snapshot = buildCanonicalOrderSnapshot(quote, plan);
   const snapshotJson = JSON.stringify(snapshot);
   const planCredits = snapshot.kind === "topup" ? snapshot.topupCredits : snapshot.monthlyCredits;
   const issuedNow = snapshot.issuedNow;
+
+  if (snapshot.kind === "plan" && acquireLock) {
+    const existingLock = db.prepare(`
+      SELECT l.*, o.status AS order_status, o.fulfillment_status
+      FROM account_plan_order_locks l
+      JOIN payment_orders o ON o.out_trade_no = l.out_trade_no
+      WHERE l.user_id = ?
+    `).get(Number(userId));
+
+    if (existingLock) {
+      const isPending = existingLock.order_status === "created" || existingLock.order_status === "pending" ||
+        (existingLock.order_status === "paid" && (existingLock.fulfillment_status === "unfulfilled" || existingLock.fulfillment_status === "processing"));
+      if (isPending && existingLock.out_trade_no !== outTradeNo) {
+        throw Object.assign(new Error("当前账户已有进行中的套餐变更订单，请先完成或取消原订单"), { code: "PLAN_ORDER_CONFLICT" });
+      }
+      if (!isPending) {
+        db.prepare(`DELETE FROM account_plan_order_locks WHERE user_id = ?`).run(Number(userId));
+      }
+    }
+  }
 
   const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
   if (orderCols.includes("snapshot_json") && orderCols.includes("anchor_day")) {
@@ -232,6 +253,21 @@ function insertPaymentOrder({
       String(snapshot.periodEndAt),
     );
   }
+
+  if (snapshot.kind === "plan" && acquireLock) {
+    try {
+      db.prepare(`
+        INSERT INTO account_plan_order_locks (user_id, out_trade_no, plan_id, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(Number(userId), String(outTradeNo), String(plan.id), String(nowIso));
+    } catch (err) {
+      if (err.message && err.message.includes("UNIQUE constraint failed")) {
+        throw Object.assign(new Error("当前账户已有进行中的套餐变更订单，请先完成或取消原订单"), { code: "PLAN_ORDER_CONFLICT" });
+      }
+      throw err;
+    }
+  }
+
   const order = findPaymentOrderByOutTradeNo(outTradeNo);
   try {
     const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
@@ -338,81 +374,13 @@ function findOpenPaymentOrdersForReconcile({ limit = 100 }) {
   `).all(Number(limit || 100)).map(mapPaymentOrderRow);
 }
 
-function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
+function fulfillPaidOrderSafely({ outTradeNo, nowIso }, db = getDbProxy()) {
   return runTransaction(() => {
     const order = findPaymentOrderByOutTradeNo(outTradeNo);
-    if (!order) {
-      throw Object.assign(new Error("订单不存在"), { code: "PAYMENT_ORDER_NOT_FOUND" });
-    }
-    if (order.status === "paid") {
-      if (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") {
-        const isWx = String(order.provider || "").toLowerCase() === "wxpay";
-        const isV2 = Boolean(order.quoteId || isV2Plan(order.planId) || isV2Topup(order.planId));
-        let assignedCreditEventId = null;
-        if (isV2) {
-          const fulfillResult = fulfillPaymentOrder(order, new Date(nowIso || order.paidAt || Date.now()).getTime(), db);
-          if (fulfillResult.status === "fulfilled") {
-            let creditDelta = order.planCredits;
-            let actionType = isWx ? "wxpay_recharge" : "alipay_recharge";
-            let actionLabel = isWx ? "微信支付充值" : "支付宝充值";
-            let summary = `${order.planName}到账`;
-
-            if (order.orderKind === "topup") {
-              creditDelta = order.planCredits;
-              actionType = "topup_purchase";
-              actionLabel = "积分加油包购买";
-              summary = `购买${order.planName}到账 ${order.planCredits} 积分`;
-            } else if (order.orderAction === "upgrade") {
-              creditDelta = order.issuedNow;
-              actionType = "upgrade_grant";
-              actionLabel = "套餐升级补发";
-              summary = `升级至${order.planName}补发 ${order.issuedNow} 积分`;
-            } else if (order.orderAction === "activate") {
-              creditDelta = order.planCredits;
-              actionType = "cycle_first_grant";
-              actionLabel = "套餐首期积分";
-              summary = `开通${order.planName}首期发放 ${order.planCredits} 积分`;
-            }
-
-            if (creditDelta > 0) {
-              assignedCreditEventId = allocateCounter("nextCreditEventId", 1);
-              db.prepare(`
-                INSERT INTO credit_events (
-                  id, user_id, action_type, action_label, credit_delta, credit_cost,
-                  created_at, summary, payload_json
-                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
-              `).run(
-                assignedCreditEventId,
-                Number(order.userId),
-                actionType,
-                actionLabel,
-                Number(creditDelta),
-                String(nowIso || order.paidAt || new Date().toISOString()),
-                summary,
-                JSON.stringify({
-                  outTradeNo: order.outTradeNo,
-                  planId: order.planId,
-                  provider: order.provider,
-                  orderKind: order.orderKind,
-                  orderAction: order.orderAction,
-                  issuedNow: order.issuedNow,
-                }),
-              );
-            }
-          }
-        }
-        return { order: findPaymentOrderByOutTradeNo(outTradeNo), alreadyPaid: true, recovered: true };
-      }
-      return { order, alreadyPaid: true };
-    }
-    const updated = db.prepare(`
-      UPDATE payment_orders
-      SET status = 'paid', trade_no = ?, paid_at = ?, updated_at = ?,
-          last_notified_at = ?, notify_count = notify_count + 1
-      WHERE out_trade_no = ? AND status IN ('created', 'pending', 'expired')
-    `).run(String(tradeNo || ""), String(nowIso), String(nowIso), String(nowIso), String(outTradeNo || ""));
-    if (updated.changes === 0) {
-      return { order: findPaymentOrderByOutTradeNo(outTradeNo), alreadyPaid: true };
+    if (!order) return null;
+    if (order.status !== "paid") return order;
+    if (order.fulfillmentStatus === "fulfilled" || order.fulfillmentStatus === "scheduled") {
+      return order;
     }
 
     const isWx = String(order.provider || "").toLowerCase() === "wxpay";
@@ -420,7 +388,8 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
     let assignedCreditEventId = null;
 
     if (isV2) {
-      const fulfillResult = fulfillPaymentOrder(order, new Date(nowIso).getTime(), db);
+      const paymentTimestamp = order.paidAt ? new Date(order.paidAt).getTime() : new Date(nowIso).getTime();
+      const fulfillResult = fulfillPaymentOrder(order, paymentTimestamp, db);
       if (fulfillResult.status === "fulfilled") {
         let creditDelta = order.planCredits;
         let actionType = isWx ? "wxpay_recharge" : "alipay_recharge";
@@ -457,7 +426,7 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
             actionType,
             actionLabel,
             Number(creditDelta),
-            String(nowIso),
+            String(nowIso || order.paidAt || new Date().toISOString()),
             summary,
             JSON.stringify({
               outTradeNo: order.outTradeNo,
@@ -469,6 +438,34 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
             }),
           );
         }
+
+        try {
+          db.prepare(`DELETE FROM account_plan_order_locks WHERE out_trade_no = ?`).run(order.outTradeNo);
+        } catch (_) {}
+
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'fulfilled', fulfilled_at = ?,
+              credit_event_id = ?, updated_at = ?
+          WHERE out_trade_no = ?
+        `).run(String(nowIso), assignedCreditEventId, String(nowIso), order.outTradeNo);
+
+        syncUserCreditsCache(order.userId, db);
+      } else if (fulfillResult.status === "scheduled") {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'scheduled', fulfilled_at = ?, updated_at = ?
+          WHERE out_trade_no = ?
+        `).run(String(nowIso), String(nowIso), order.outTradeNo);
+      } else if (fulfillResult.status === "audit_required") {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'audit_required',
+              audit_reason = ?,
+              audit_at = ?,
+              updated_at = ?
+          WHERE out_trade_no = ?
+        `).run(String(fulfillResult.reason || "履约冲突"), String(nowIso), String(nowIso), order.outTradeNo);
       }
     } else {
       migrateLegacyUserCredits(order.userId, db);
@@ -509,31 +506,74 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
           provider: order.provider,
         }),
       );
-    }
 
-    syncUserCreditsCache(order.userId, db);
-    if (assignedCreditEventId) {
+      syncUserCreditsCache(order.userId, db);
       db.prepare(`
         UPDATE payment_orders SET credit_event_id = ?
         WHERE out_trade_no = ? AND credit_event_id IS NULL
       `).run(assignedCreditEventId, String(outTradeNo || ""));
     }
+
+    return findPaymentOrderByOutTradeNo(outTradeNo);
+  });
+}
+
+function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
+  let confirmResult;
+  runTransaction(() => {
+    const order = findPaymentOrderByOutTradeNo(outTradeNo);
+    if (!order) {
+      throw Object.assign(new Error("订单不存在"), { code: "PAYMENT_ORDER_NOT_FOUND" });
+    }
+    if (order.status === "paid") {
+      db.prepare(`
+        UPDATE payment_orders
+        SET updated_at = ?, last_notified_at = ?, notify_count = notify_count + 1
+        WHERE out_trade_no = ?
+      `).run(String(nowIso), String(nowIso), String(outTradeNo || ""));
+      confirmResult = { order, alreadyPaid: true };
+      return;
+    }
+    const updated = db.prepare(`
+      UPDATE payment_orders
+      SET status = 'paid', trade_no = ?, paid_at = ?,
+          fulfillment_status = CASE WHEN fulfillment_status = 'fulfilled' THEN 'fulfilled' ELSE 'unfulfilled' END,
+          updated_at = ?, last_notified_at = ?, notify_count = notify_count + 1
+      WHERE out_trade_no = ? AND status IN ('created', 'pending', 'expired')
+    `).run(String(tradeNo || ""), String(nowIso), String(nowIso), String(nowIso), String(outTradeNo || ""));
+
+    const currentOrder = findPaymentOrderByOutTradeNo(outTradeNo);
     try {
-      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);
+      const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(currentOrder.userId);
       recordPaymentPaid({
-        orderId: order.id,
-        userId: order.userId,
+        orderId: currentOrder.id,
+        userId: currentOrder.userId,
         accountType: userRow?.account_type || "customer",
-        amountFen: order.amountFen,
-        planId: order.planId,
-        planName: order.planName,
-        planCredits: order.planCredits,
-        provider: order.provider,
+        amountFen: currentOrder.amountFen,
+        planId: currentOrder.planId,
+        planName: currentOrder.planName,
+        planCredits: currentOrder.planCredits,
+        provider: currentOrder.provider,
         paidAt: String(nowIso),
       });
     } catch (_) {}
-    return { order: findPaymentOrderByOutTradeNo(outTradeNo), alreadyPaid: false };
+
+    confirmResult = { order: currentOrder, alreadyPaid: updated.changes === 0 };
   });
+
+  let finalOrder = confirmResult.order;
+  try {
+    const fulfilled = fulfillPaidOrderSafely({ outTradeNo, nowIso }, db);
+    if (fulfilled) finalOrder = fulfilled;
+  } catch (err) {
+    console.warn("[settlePaidPaymentOrder] fulfillment failed, order remains paid in unfulfilled status", {
+      outTradeNo,
+      error: err.message,
+    });
+    finalOrder = findPaymentOrderByOutTradeNo(outTradeNo);
+  }
+
+  return { order: finalOrder, alreadyPaid: confirmResult.alreadyPaid };
 }
 
 function closePaymentOrder({ userId, outTradeNo, nowIso }) {
@@ -543,6 +583,9 @@ function closePaymentOrder({ userId, outTradeNo, nowIso }) {
     WHERE user_id = ? AND out_trade_no = ? AND status IN ('created', 'pending', 'expired')
   `).run(String(nowIso), Number(userId), String(outTradeNo || ""));
   if (result.changes === 0) return null;
+  try {
+    db.prepare(`DELETE FROM account_plan_order_locks WHERE out_trade_no = ?`).run(String(outTradeNo));
+  } catch (_) {}
   const order = findPaymentOrderByOutTradeNo(outTradeNo);
   try {
     const userRow = db.prepare("SELECT account_type FROM users WHERE id = ?").get(order.userId);

@@ -632,6 +632,7 @@ test("E6: multi-process concurrency on file-backed SQLite database", async () =>
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS task_credit_reservations (
+      task_key TEXT NOT NULL DEFAULT '',
       task_id TEXT NOT NULL,
       user_id INTEGER NOT NULL,
       task_type TEXT NOT NULL,
@@ -640,7 +641,7 @@ test("E6: multi-process concurrency on file-backed SQLite database", async () =>
       status TEXT NOT NULL DEFAULT 'reserved',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY (task_id, lot_id)
+      PRIMARY KEY (task_key, lot_id)
     );
   `);
 
@@ -650,6 +651,7 @@ test("E6: multi-process concurrency on file-backed SQLite database", async () =>
   const futureIso = "2030-01-01T00:00:00.000Z";
   fileConn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (1, 'ConcUser', '13977770001', 'h', 'customer', 15, 1, ?)").run(nowIso);
   fileConn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (701, 1, 'cycle', '本期积分', 15, 15, 0, 0, ?, ?, 'active', ?, ?)").run(pastIso, futureIso, nowIso, nowIso);
+  fileConn.close();
 
   // Spawn 2 child workers waiting at barrier
   const workerScript = path.join(__dirname, "helpers", "concurrency-worker.cjs");

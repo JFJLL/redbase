@@ -60,58 +60,62 @@ function rescanExpiredLots(userId, nowMs = getNowTimestamp(), db = getDbProxy())
     SELECT id, remaining_credits, reserved_credits, source_type, source_label
     FROM credit_lots
     WHERE user_id = ?
-      AND status = 'active'
+      AND (status = 'active' OR (status = 'expired' AND remaining_credits > 0))
       AND expires_at IS NOT NULL
       AND expires_at <= ?
   `).all(uid, nowIso);
 
   for (const lot of expiredLots) {
-    if (lot.reserved_credits <= 0) {
-      db.prepare(`UPDATE credit_lots SET status = 'expired', updated_at = ? WHERE id = ?`)
-        .run(nowIso, lot.id);
+    transaction(() => {
+      if (lot.reserved_credits <= 0) {
+        const toExpire = lot.remaining_credits;
+        db.prepare(`UPDATE credit_lots SET remaining_credits = 0, status = 'expired', updated_at = ? WHERE id = ?`)
+          .run(nowIso, lot.id);
 
-      if (lot.remaining_credits > 0) {
-        insertLedgerCreditEvent(db, {
-          userId: uid,
-          actionType: "cycle_expire",
-          actionLabel: "周期积分到期",
-          creditDelta: -lot.remaining_credits,
-          creditCost: 0,
-          createdAt: nowIso,
-          summary: `周期积分到期失效 ${lot.remaining_credits} 积分`,
-          payload: {
-            lotId: lot.id,
-            sourceType: lot.source_type,
-            expiredCredits: lot.remaining_credits,
-          },
-        });
-      }
-    } else {
-      const unreserved = Math.max(0, lot.remaining_credits - lot.reserved_credits);
-      if (unreserved > 0) {
-        db.prepare(`
-          UPDATE credit_lots
-          SET remaining_credits = reserved_credits, updated_at = ?
-          WHERE id = ?
-        `).run(nowIso, lot.id);
+        if (toExpire > 0) {
+          insertLedgerCreditEvent(db, {
+            userId: uid,
+            actionType: "cycle_expire",
+            actionLabel: "周期积分到期",
+            creditDelta: -toExpire,
+            creditCost: 0,
+            createdAt: nowIso,
+            summary: `周期积分到期失效 ${toExpire} 积分`,
+            payload: {
+              lotId: lot.id,
+              sourceType: lot.source_type,
+              expiredCredits: toExpire,
+              reason: "full_cycle_expired",
+            },
+          });
+        }
+      } else {
+        const unreserved = Math.max(0, lot.remaining_credits - lot.reserved_credits);
+        if (unreserved > 0) {
+          db.prepare(`
+            UPDATE credit_lots
+            SET remaining_credits = reserved_credits, updated_at = ?
+            WHERE id = ?
+          `).run(nowIso, lot.id);
 
-        insertLedgerCreditEvent(db, {
-          userId: uid,
-          actionType: "cycle_expire",
-          actionLabel: "周期积分到期",
-          creditDelta: -unreserved,
-          creditCost: 0,
-          createdAt: nowIso,
-          summary: `周期积分到期失效 ${unreserved} 积分（预占保留 ${lot.reserved_credits} 积分）`,
-          payload: {
-            lotId: lot.id,
-            sourceType: lot.source_type,
-            expiredCredits: unreserved,
-            reservedCredits: lot.reserved_credits,
-          },
-        });
+          insertLedgerCreditEvent(db, {
+            userId: uid,
+            actionType: "cycle_expire",
+            actionLabel: "周期积分到期",
+            creditDelta: -unreserved,
+            creditCost: 0,
+            createdAt: nowIso,
+            summary: `周期积分未预占部分到期失效 ${unreserved} 积分`,
+            payload: {
+              lotId: lot.id,
+              sourceType: lot.source_type,
+              expiredCredits: unreserved,
+              reason: "unreserved_cycle_expired",
+            },
+          });
+        }
       }
-    }
+    })();
   }
 
   syncUserCreditsCache(uid, db);
@@ -379,26 +383,31 @@ function settleReservedCreditsFromLots({
 function releaseReservedCreditsFromLots({
   userId,
   reservations,
+  taskKey = "",
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
   const uid = Number(userId);
 
   for (const res of reservations) {
-    const lot = db.prepare(`SELECT * FROM credit_lots WHERE id = ?`).get(res.lotId);
+    const lot = db.prepare(`SELECT * FROM credit_lots WHERE id = ? AND user_id = ?`).get(res.lotId, uid);
     if (!lot) continue;
 
     const releaseAmount = Math.min(lot.reserved_credits, res.reservedCredits);
+    if (releaseAmount <= 0) continue;
+
     const nextReserved = Math.max(0, lot.reserved_credits - releaseAmount);
-    const isExpired = lot.expires_at && lot.expires_at <= nowIso;
-    const nextStatus = lot.remaining_credits === 0 ? "exhausted" : isExpired && nextReserved === 0 ? "expired" : "active";
+    const isExpired = Boolean(lot.expires_at && lot.expires_at <= nowIso);
 
-    db.prepare(`
-      UPDATE credit_lots
-      SET reserved_credits = ?, status = ?, updated_at = ?
-      WHERE id = ?
-    `).run(nextReserved, nextStatus, nowIso, lot.id);
+    if (isExpired) {
+      const nextRemaining = Math.max(0, lot.remaining_credits - releaseAmount);
+      const nextStatus = nextRemaining === 0 ? "exhausted" : nextReserved === 0 ? "expired" : "active";
 
-    if (isExpired && releaseAmount > 0) {
+      db.prepare(`
+        UPDATE credit_lots
+        SET reserved_credits = ?, remaining_credits = ?, status = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextReserved, nextRemaining, nextStatus, nowIso, lot.id);
+
       insertLedgerCreditEvent(db, {
         userId: uid,
         actionType: "cycle_expire",
@@ -411,8 +420,17 @@ function releaseReservedCreditsFromLots({
           lotId: lot.id,
           sourceType: lot.source_type,
           expiredCredits: releaseAmount,
+          taskKey: String(taskKey || ""),
+          reason: "task_release_expired",
         },
       });
+    } else {
+      const nextStatus = lot.remaining_credits === 0 ? "exhausted" : "active";
+      db.prepare(`
+        UPDATE credit_lots
+        SET reserved_credits = ?, status = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextReserved, nextStatus, nowIso, lot.id);
     }
   }
 
@@ -479,9 +497,23 @@ function migrateAllLegacyUsers(db = getDbProxy()) {
   return { migratedCount, migratedCreditsTotal };
 }
 
+function buildCanonicalTaskKey({ userId, taskType = "task", taskId, brandId, bucketKey, taskKey }) {
+  if (taskKey) return String(taskKey);
+  const uid = Number(userId);
+  const type = String(taskType);
+  const tid = String(taskId);
+  if (type === "trend_analysis" || brandId !== undefined || bucketKey !== undefined) {
+    const bId = brandId !== undefined ? String(brandId) : "";
+    const bKey = bucketKey !== undefined ? String(bucketKey) : "";
+    return `trend_analysis:${uid}:${bId}:${bKey}:${tid}`;
+  }
+  return `${type}:${uid}:${tid}`;
+}
+
 function ensureTaskReservationTable(db = getDbProxy()) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_credit_reservations (
+      task_key TEXT NOT NULL,
       task_id TEXT NOT NULL,
       user_id INTEGER NOT NULL,
       task_type TEXT NOT NULL,
@@ -490,17 +522,27 @@ function ensureTaskReservationTable(db = getDbProxy()) {
       status TEXT NOT NULL DEFAULT 'reserved',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY (task_id, lot_id)
+      PRIMARY KEY (task_key, lot_id)
     );
     CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
     CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
   `);
+  const cols = db.prepare("PRAGMA table_info(task_credit_reservations)").all().map((c) => c.name);
+  if (!cols.includes("task_key")) {
+    db.exec("ALTER TABLE task_credit_reservations ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+    db.exec("UPDATE task_credit_reservations SET task_key = task_type || ':' || user_id || ':' || task_id WHERE task_key = ''");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status)");
+  }
 }
 
 function reserveCreditsForTask({
   userId,
   taskId,
   taskType = "task",
+  taskKey,
+  brandId,
+  bucketKey,
   amount,
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
@@ -508,28 +550,37 @@ function reserveCreditsForTask({
   const uid = Number(userId);
   const cost = Number(amount);
   if (!Number.isSafeInteger(cost) || cost <= 0) return [];
+  const canonicalKey = buildCanonicalTaskKey({ userId: uid, taskType, taskId, brandId, bucketKey, taskKey });
 
   const existing = db.prepare(`
-    SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, status, user_id, task_type
     FROM task_credit_reservations
-    WHERE task_id = ? AND status = 'reserved'
-  `).all(String(taskId));
+    WHERE task_key = ?
+  `).all(canonicalKey);
   if (existing && existing.length > 0) {
-    return existing;
+    const isAllReserved = existing.every((r) => r.status === "reserved");
+    if (isAllReserved) {
+      const totalReserved = existing.reduce((sum, r) => sum + r.reservedCredits, 0);
+      if (totalReserved === cost && Number(existing[0].user_id) === uid && existing[0].task_type === taskType) {
+        return existing.map((r) => ({ lotId: r.lotId, reservedCredits: r.reservedCredits }));
+      }
+      throw Object.assign(new Error("任务预占参数冲突：同一任务已存在不同金额或类型的预占"), { code: "RESERVATION_CONFLICT" });
+    }
+    const hasSettled = existing.some((r) => r.status === "settled");
+    if (hasSettled) {
+      throw Object.assign(new Error("任务预占已处于终态，不能重新预占"), { code: "RESERVATION_TERMINAL" });
+    }
+    db.prepare(`DELETE FROM task_credit_reservations WHERE task_key = ? AND status = 'released'`).run(canonicalKey);
   }
 
   const reservations = reserveCreditsFromLots({ userId: uid, amount: cost, nowIso }, db);
   const insertStmt = db.prepare(`
     INSERT INTO task_credit_reservations (
-      task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?)
-    ON CONFLICT(task_id, lot_id) DO UPDATE SET
-      reserved_credits = excluded.reserved_credits,
-      status = 'reserved',
-      updated_at = excluded.updated_at
+      task_key, user_id, task_type, task_id, lot_id, reserved_credits, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
   `);
   for (const r of reservations) {
-    insertStmt.run(String(taskId), uid, taskType, r.lotId, r.reservedCredits, nowIso, nowIso);
+    insertStmt.run(canonicalKey, uid, taskType, String(taskId), r.lotId, r.reservedCredits, nowIso, nowIso);
   }
   return reservations;
 }
@@ -537,19 +588,50 @@ function reserveCreditsForTask({
 function settleCreditsForTask({
   userId,
   taskId,
+  taskType = "task",
+  taskKey,
+  brandId,
+  bucketKey,
   creditEventId,
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
   ensureTaskReservationTable(db);
   const uid = Number(userId);
-  const reservedRows = db.prepare(`
-    SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+  const canonicalKey = buildCanonicalTaskKey({ userId: uid, taskType, taskId, brandId, bucketKey, taskKey });
+  let reservedRows = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
     FROM task_credit_reservations
-    WHERE task_id = ? AND status = 'reserved'
-  `).all(String(taskId));
+    WHERE task_key = ? AND status = 'reserved'
+  `).all(canonicalKey);
 
   if (!reservedRows || reservedRows.length === 0) {
+    reservedRows = db.prepare(`
+      SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
+      FROM task_credit_reservations
+      WHERE user_id = ? AND task_id = ? AND status = 'reserved'
+    `).all(uid, String(taskId));
+  }
+
+  if (!reservedRows || reservedRows.length === 0) {
+    const alreadySettled = db.prepare(`
+      SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+      FROM task_credit_reservations
+      WHERE (task_key = ? OR (user_id = ? AND task_id = ?)) AND status = 'settled'
+    `).all(canonicalKey, uid, String(taskId));
+    if (alreadySettled && alreadySettled.length > 0) {
+      return alreadySettled;
+    }
     return [];
+  }
+
+  for (const row of reservedRows) {
+    if (Number(row.user_id) !== uid) {
+      throw Object.assign(new Error("预占记录归属与结算用户不匹配"), { code: "RESERVATION_USER_MISMATCH" });
+    }
+    const lot = db.prepare(`SELECT user_id FROM credit_lots WHERE id = ?`).get(row.lotId);
+    if (!lot || Number(lot.user_id) !== uid) {
+      throw Object.assign(new Error("预占关联批次不属于当前用户"), { code: "LOT_USER_MISMATCH" });
+    }
   }
 
   const allocations = settleReservedCreditsFromLots({
@@ -562,8 +644,8 @@ function settleCreditsForTask({
   db.prepare(`
     UPDATE task_credit_reservations
     SET status = 'settled', updated_at = ?
-    WHERE task_id = ? AND status = 'reserved'
-  `).run(nowIso, String(taskId));
+    WHERE (task_key = ? OR (user_id = ? AND task_id = ?)) AND status = 'reserved'
+  `).run(nowIso, canonicalKey, uid, String(taskId));
 
   return allocations;
 }
@@ -571,31 +653,55 @@ function settleCreditsForTask({
 function releaseCreditsForTask({
   userId,
   taskId,
+  taskType = "task",
+  taskKey,
+  brandId,
+  bucketKey,
   nowIso = getNowIso(),
 }, db = getDbProxy()) {
   ensureTaskReservationTable(db);
   const uid = Number(userId);
-  const reservedRows = db.prepare(`
-    SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+  const canonicalKey = buildCanonicalTaskKey({ userId: uid, taskType, taskId, brandId, bucketKey, taskKey });
+  let reservedRows = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
     FROM task_credit_reservations
-    WHERE task_id = ? AND status = 'reserved'
-  `).all(String(taskId));
+    WHERE task_key = ? AND status = 'reserved'
+  `).all(canonicalKey);
+
+  if (!reservedRows || reservedRows.length === 0) {
+    reservedRows = db.prepare(`
+      SELECT lot_id AS lotId, reserved_credits AS reservedCredits, user_id
+      FROM task_credit_reservations
+      WHERE user_id = ? AND task_id = ? AND status = 'reserved'
+    `).all(uid, String(taskId));
+  }
 
   if (!reservedRows || reservedRows.length === 0) {
     return;
   }
 
+  for (const row of reservedRows) {
+    if (Number(row.user_id) !== uid) {
+      throw Object.assign(new Error("预占记录归属与释放用户不匹配"), { code: "RESERVATION_USER_MISMATCH" });
+    }
+    const lot = db.prepare(`SELECT user_id FROM credit_lots WHERE id = ?`).get(row.lotId);
+    if (!lot || Number(lot.user_id) !== uid) {
+      throw Object.assign(new Error("预占关联批次不属于当前用户"), { code: "LOT_USER_MISMATCH" });
+    }
+  }
+
   releaseReservedCreditsFromLots({
     userId: uid,
     reservations: reservedRows,
+    taskKey: canonicalKey,
     nowIso,
   }, db);
 
   db.prepare(`
     UPDATE task_credit_reservations
     SET status = 'released', updated_at = ?
-    WHERE task_id = ? AND status = 'reserved'
-  `).run(nowIso, String(taskId));
+    WHERE (task_key = ? OR (user_id = ? AND task_id = ?)) AND status = 'reserved'
+  `).run(nowIso, canonicalKey, uid, String(taskId));
 }
 
 module.exports = {
@@ -611,6 +717,7 @@ module.exports = {
   reserveCreditsForTask,
   settleCreditsForTask,
   releaseCreditsForTask,
+  buildCanonicalTaskKey,
   ensureTaskReservationTable,
   migrateLegacyUserCredits,
   migrateAllLegacyUsers,

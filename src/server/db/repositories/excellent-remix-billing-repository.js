@@ -85,6 +85,7 @@ function expireStaleExcellentBillingReservations(userId, nowMs) {
     releaseCreditsForTask({
       userId,
       taskId: `${row.kind}_${row.request_id}`,
+      taskType: `excellent_${row.kind}`,
       nowIso: new Date(nowMs).toISOString(),
     }, db);
   }
@@ -357,17 +358,10 @@ function settleExcellentBillingRequest({
       const settled = settleCreditsForTask({
         userId,
         taskId: `${kind}_${requestId}`,
+        taskType: `excellent_${kind}`,
         creditEventId: creditEvent.id,
         nowIso: now.toISOString(),
       }, db);
-      if (!settled || settled.length === 0) {
-        spendCreditsFromLots({
-          userId,
-          amount: cost,
-          creditEventId: creditEvent.id,
-          nowIso: now.toISOString(),
-        }, db);
-      }
       syncUserCreditsCache(userId, db);
     } else {
       releaseCreditsForTask({
@@ -437,6 +431,7 @@ function failExcellentBillingRequest({
     releaseCreditsForTask({
       userId,
       taskId: `${kind}_${requestId}`,
+      taskType: `excellent_${kind}`,
       nowIso: timestamp,
     }, db);
     syncUserCreditsCache(userId, db);

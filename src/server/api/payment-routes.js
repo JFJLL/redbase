@@ -654,6 +654,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
           nowIso,
           expiresAtIso,
           quote: consumedQuote,
+          acquireLock: true,
         });
         } else {
           const outTradeNo = createOutTradeNo();
@@ -668,6 +669,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
             nowIso,
             expiresAtIso,
             quote: null,
+            acquireLock: true,
           });
         }
       })();
@@ -835,6 +837,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
           nowIso,
           expiresAtIso,
           quote: consumedQuote,
+          acquireLock: true,
         });
         } else {
           const outTradeNo = createOutTradeNo();
@@ -849,6 +852,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
             nowIso,
             expiresAtIso,
             quote: null,
+            acquireLock: true,
           });
         }
       })();

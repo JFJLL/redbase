@@ -242,8 +242,9 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         return { status: "audit_required", reason: "用户已有有效订阅，不能重复开通" };
       }
 
-      const startMs = order.paid_at ? new Date(order.paid_at).getTime() : nowMs;
-      const anchorDay = order.anchor_day || toShanghaiDate(startMs).getUTCDate();
+      const paidAtRaw = order.paidAt || order.paid_at;
+      const startMs = paidAtRaw ? new Date(paidAtRaw).getTime() : nowMs;
+      const anchorDay = order.anchorDay || order.anchor_day || toShanghaiDate(startMs).getUTCDate();
       const serviceStartIso = new Date(startMs).toISOString();
       const isAnnual = cycle === "annual";
       const serviceEndIso = new Date(addCalendarMonths(startMs, isAnnual ? 12 : 1, anchorDay)).toISOString();
@@ -497,6 +498,22 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
 
   for (const schedule of dueSchedules) {
     transaction(() => {
+      const claim = db.prepare(`
+        UPDATE subscription_schedules
+        SET status = 'activating', updated_at = ?
+        WHERE id = ? AND status = 'scheduled'
+      `).run(nowIso, schedule.id);
+      if (claim.changes === 0) return;
+
+      const existingSub = db.prepare(`
+        SELECT id FROM subscriptions
+        WHERE user_id = ? AND service_start = ? AND status = 'active'
+      `).get(schedule.user_id, schedule.start_at);
+      if (existingSub) {
+        db.prepare(`UPDATE subscription_schedules SET status = 'activated', updated_at = ? WHERE id = ?`).run(nowIso, schedule.id);
+        return;
+      }
+
       // Supersede previous active sub if ended
       db.prepare(`
         UPDATE subscriptions
@@ -623,6 +640,13 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
 
   for (const grant of dueGrants) {
     transaction(() => {
+      const claim = db.prepare(`
+        UPDATE subscription_grants
+        SET status = 'granting', updated_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).run(nowIso, grant.id);
+      if (claim.changes === 0) return;
+
       if (grant.period_end <= nowIso) {
         // Missed month during downtime: record accounting without resurrecting expired credits
         db.prepare(`
@@ -630,6 +654,14 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
           SET status = 'expired', updated_at = ?
           WHERE id = ?
         `).run(nowIso, grant.id);
+        return;
+      }
+
+      const existingLot = db.prepare(`
+        SELECT id FROM credit_lots WHERE grant_id = ?
+      `).get(grant.id);
+      if (existingLot) {
+        db.prepare(`UPDATE subscription_grants SET status = 'granted', credit_lot_id = ?, updated_at = ? WHERE id = ?`).run(existingLot.id, nowIso, grant.id);
         return;
       }
 
