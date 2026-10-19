@@ -289,6 +289,8 @@ function testInFlightAndScheduleReconciliation() {
   // User with in-flight reservation
   const uid = 8001;
   const nowIso = new Date().toISOString();
+  conn.prepare("DELETE FROM credit_lots WHERE id = 881").run();
+  conn.prepare("DELETE FROM users WHERE id = ?").run(uid);
   conn.prepare("INSERT INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'InFlight', '13980010001', 'h', 'customer', 50, 1, ?)").run(uid, nowIso);
   conn.prepare("INSERT INTO credit_lots (id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (881, ?, 'cycle', '本期积分', 50, 50, 20, 0, ?, ?, 'active', ?, ?)").run(uid, nowIso, new Date(Date.now() + 86400000).toISOString(), nowIso, nowIso);
 
@@ -311,12 +313,51 @@ function testInFlightAndScheduleReconciliation() {
   console.log("✔ 在途预占隔离结算与钱包读取对账成功");
 }
 
+function testV13CycleOnlyNoLegacyDuplication() {
+  console.log("\n--- [演练场景 6] V13 仅有 cycle 批次账户升级验证（N1 硬断言） ---");
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+
+  // Setup exact V13 schema
+  const { initializeDatabaseSchema } = require("../src/server/db/schema");
+  const { applyVersionedMigrations } = require("../src/server/db/migrations");
+  const { getUserWalletBalances, rescanExpiredLots } = require("../src/server/billing/credit-ledger");
+
+  // User 9001 with 400 credits and only cycle lot
+  const uid = 9001;
+  const startIso = "2026-10-01T06:00:00.000Z";
+  const expIso = "2026-11-01T06:00:00.000Z";
+  const nowIso = "2026-10-16T06:00:00.000Z";
+  const afterExpMs = Date.parse("2026-11-02T06:00:00.000Z");
+
+  const conn = require("../src/server/db/connection").openDatabase();
+  conn.prepare("DELETE FROM credit_lots WHERE user_id = ?").run(uid);
+  conn.prepare("DELETE FROM users WHERE id = ?").run(uid);
+
+  conn.prepare("INSERT INTO users (id, name, phone, password, account_type, credits, created_at) VALUES (?, 'V13CycleOnly', '13990010001', 'h', 'customer', 400, ?)").run(uid, startIso);
+  conn.prepare("INSERT INTO credit_lots (id, user_id, source_type, source_label, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (90011, ?, 'cycle', '本期积分', 400, 400, 0, 0, ?, ?, 'active', ?, ?)").run(uid, startIso, expIso, startIso, startIso);
+
+  // Apply migration / wallet query
+  const balanceBefore = getUserWalletBalances(uid, Date.parse(nowIso), conn);
+  if (balanceBefore.totalAvailable !== 400) throw new Error(`V13 升级前可用额度异常: ${balanceBefore.totalAvailable}`);
+  if (balanceBefore.permanentBalance !== 0) throw new Error(`V13 升级前永久额度异常: ${balanceBefore.permanentBalance}`);
+
+  // Check after expiry
+  rescanExpiredLots(uid, afterExpMs, conn);
+  const balanceAfter = getUserWalletBalances(uid, afterExpMs, conn);
+  if (balanceAfter.totalAvailable !== 0) throw new Error(`V13 周期到期后可用额度应为 0，实际: ${balanceAfter.totalAvailable}`);
+  if (balanceAfter.permanentBalance !== 0) throw new Error(`V13 周期到期后永久额度应为 0，实际: ${balanceAfter.permanentBalance}`);
+
+  console.log("✔ V13 纯 cycle 批次账户升级演练通过：无重复开账，到期安全归零");
+}
+
 function runRehearsal() {
   console.log("=== 开始执行 RedBase 套餐与积分 V2 数据迁移与审计修复完整演练 ===");
   testFreshDatabase();
   testLegacyDatabaseUpgrade();
   testV13DatabaseIncrementalUpgrade();
   testInFlightAndScheduleReconciliation();
+  testV13CycleOnlyNoLegacyDuplication();
   console.log("\n=== RedBase 套餐与积分 V2 数据迁移隔离演练全部 100% 通过 ===");
 }
 

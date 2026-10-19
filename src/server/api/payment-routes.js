@@ -9,10 +9,10 @@ const { fenToYuanString } = require("../billing/money");
 const { reconcileOne } = require("../billing/reconcile-orders");
 const { PLANS, TOPUPS, CATALOG_VERSION, getPlan, getTopup, getLegacyPlan } = require("../billing/catalog");
 const { getNowTimestamp, getNowIso, formatShanghaiDate } = require("../billing/period-utils");
-const { createQuote, verifyAndConsumeQuote } = require("../billing/quote-service");
+const { createQuote, verifyAndConsumeQuote, findQuoteById } = require("../billing/quote-service");
 const { getUserBillingOverview } = require("../billing/subscription-service");
 const { rescanExpiredLots } = require("../billing/credit-ledger");
-const { getDbProxy } = require("../db/connection");
+const { getDbProxy, transaction } = require("../db/connection");
 const {
   insertPaymentOrder,
   updatePaymentOrderStatus,
@@ -22,6 +22,7 @@ const {
   settlePaidPaymentOrder,
   closePaymentOrder,
   markPaymentOrderAudit,
+  mapPaymentOrderRow,
 } = require("../db/repositories/payment-repository");
 
 const NOTIFY_SUCCESS = "success";
@@ -393,10 +394,10 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     const rows = events.map((event) => {
       const delta = Number(event.credit_delta || 0);
       let type = "grant";
-      if (delta < 0) {
-        type = "spend";
-      } else if (event.action_type.includes("expire")) {
+      if (event.action_type.includes("expire")) {
         type = "expire";
+      } else if (delta < 0) {
+        type = "spend";
       }
 
       let source = "本期积分";
@@ -438,7 +439,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     });
 
-    json(res, 200, { rows, total: rows.length });
+    const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+    const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "20", 10)));
+    const total = rows.length;
+    const pagedRows = rows.slice((page - 1) * pageSize, page * pageSize);
+
+    json(res, 200, { rows: pagedRows, total, page, pageSize });
     return true;
   }
 
@@ -473,10 +479,10 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     const rows = events.map((event) => {
       const delta = Number(event.credit_delta || 0);
       let type = "grant";
-      if (delta < 0) {
-        type = "spend";
-      } else if (event.action_type.includes("expire")) {
+      if (event.action_type.includes("expire")) {
         type = "expire";
+      } else if (delta < 0) {
+        type = "spend";
       }
 
       let source = "本期积分";
@@ -548,31 +554,8 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       badRequest(res, "套餐/报价与幂等键不能为空");
       return true;
     }
-    let quote = null;
-    let plan = null;
-    if (quoteId) {
-      try {
-        quote = verifyAndConsumeQuote(quoteId, user.id);
-      } catch (err) {
-        badRequest(res, err.message || "报价无效或已过期");
-        return true;
-      }
-      plan = {
-        id: quote.item_id,
-        name: quote.meta?.planName || quote.meta?.topupName || quote.item_id,
-        credits: quote.issued_now,
-        amountFen: quote.amount_fen,
-      };
-    } else {
-      plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId)
-        || getPlan(planId)
-        || getTopup(planId)
-        || getLegacyPlan(planId);
-    }
-    if (!plan) {
-      badRequest(res, "充值套餐未配置或不存在");
-      return true;
-    }
+
+    // 1. Check provider availability first before consuming any quote
     if (appConfig?.alipay?.enabled !== true) {
       json(res, 503, { error: "充值暂未开放" });
       return true;
@@ -583,8 +566,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
+    // 2. Check existing order by idempotency key
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
+      if (quoteId && existing.quoteId && existing.quoteId !== quoteId) {
+        json(res, 409, { error: "幂等键已被其它报价订单使用，请勿混用幂等键" });
+        return true;
+      }
+      if (planId && existing.planId !== planId) {
+        json(res, 409, { error: "幂等键已被其它套餐订单使用，请勿混用幂等键" });
+        return true;
+      }
       const paymentAccess = await createPaymentAccess({
         gateway,
         outTradeNo: existing.outTradeNo,
@@ -597,30 +589,103 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const outTradeNo = createOutTradeNo();
+    const db = getDbProxy();
     const nowIso = getNowIso();
-    const expiresAtIso = quote?.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
-    const order = insertPaymentOrder({
-      outTradeNo,
-      userId: user.id,
-      idempotencyKey,
-      plan,
-      status: "created",
-      provider: "alipay",
-      nowIso,
-      expiresAtIso,
-      quote,
-    });
+    let order;
+    let consumedQuote;
+    let plan = null;
+
+    if (quoteId) {
+      const quote = findQuoteById(quoteId);
+      if (!quote) {
+        badRequest(res, "报价不存在或已失效，请重新确认套餐与价格");
+        return true;
+      }
+      if (quote.kind === "plan") {
+        const activePending = db.prepare(`
+          SELECT * FROM payment_orders
+          WHERE user_id = ? AND order_kind = 'plan'
+            AND status IN ('created', 'pending')
+            AND expires_at > ?
+          ORDER BY id DESC LIMIT 1
+        `).get(user.id, nowIso);
+
+        if (activePending) {
+          json(res, 409, {
+            error: "您当前有一个未完成的套餐订单，请先完成支付或等待订单关闭",
+            pendingOrder: sanitizeOrder(mapPaymentOrderRow(activePending)),
+          });
+          return true;
+        }
+      }
+    } else if (process.env.NODE_ENV === "test" || appConfig?.billing?.rechargePlans?.some((p) => p.id === planId)) {
+      plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId)
+        || getPlan(planId)
+        || getTopup(planId)
+        || getLegacyPlan(planId);
+      if (!plan) {
+        badRequest(res, "充值套餐未配置或不存在");
+        return true;
+      }
+    } else {
+      badRequest(res, "充值套餐必须通过服务端报价下单，历史商品已停止新售");
+      return true;
+    }
+
+    try {
+      transaction(() => {
+        if (quoteId) {
+        consumedQuote = verifyAndConsumeQuote(quoteId, user.id);
+        const outTradeNo = createOutTradeNo();
+        const expiresAtIso = consumedQuote.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
+          const orderPlan = {
+          id: consumedQuote.item_id,
+          name: consumedQuote.meta?.planName || consumedQuote.meta?.topupName || consumedQuote.item_id,
+          credits: consumedQuote.issued_now,
+          amountFen: consumedQuote.amount_fen,
+        };
+        order = insertPaymentOrder({
+          outTradeNo,
+          userId: user.id,
+          idempotencyKey,
+            plan: orderPlan,
+          status: "created",
+          provider: "alipay",
+          nowIso,
+          expiresAtIso,
+          quote: consumedQuote,
+        });
+        } else {
+          const outTradeNo = createOutTradeNo();
+          const expiresAtIso = new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
+          order = insertPaymentOrder({
+            outTradeNo,
+            userId: user.id,
+            idempotencyKey,
+            plan,
+            status: "created",
+            provider: "alipay",
+            nowIso,
+            expiresAtIso,
+            quote: null,
+          });
+        }
+      })();
+    } catch (err) {
+      badRequest(res, err.message || "报价消费或创建订单失败");
+      return true;
+    }
+
     const paymentAccess = await createPaymentAccess({
       gateway,
-      outTradeNo,
-      subject: `RedBase ${plan.name}`,
-      totalAmount: fenToYuanString(plan.amountFen),
+      outTradeNo: order.outTradeNo,
+      subject: `RedBase ${order.planName}`,
+      totalAmount: fenToYuanString(order.amountFen),
       returnUrl: appConfig?.alipay?.returnUrl || "",
       notifyUrl: appConfig?.alipay?.notifyUrl || "",
     });
-    updatePaymentOrderStatus({ outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(outTradeNo)), ...paymentAccess });
+    updatePaymentOrderStatus({ outTradeNo: order.outTradeNo, status: "pending", nowIso: new Date().toISOString() });
+    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(order.outTradeNo)), ...paymentAccess });
     return true;
   }
 
@@ -671,31 +736,8 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       badRequest(res, "套餐/报价与幂等键不能为空");
       return true;
     }
-    let quote = null;
-    let plan = null;
-    if (quoteId) {
-      try {
-        quote = verifyAndConsumeQuote(quoteId, user.id);
-      } catch (err) {
-        badRequest(res, err.message || "报价无效或已过期");
-        return true;
-      }
-      plan = {
-        id: quote.item_id,
-        name: quote.meta?.planName || quote.meta?.topupName || quote.item_id,
-        credits: quote.issued_now,
-        amountFen: quote.amount_fen,
-      };
-    } else {
-      plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId)
-        || getPlan(planId)
-        || getTopup(planId)
-        || getLegacyPlan(planId);
-    }
-    if (!plan) {
-      badRequest(res, "充值套餐未配置或不存在");
-      return true;
-    }
+
+    // 1. Check provider availability first
     if (appConfig?.wxpay?.enabled !== true) {
       json(res, 503, { error: "微信支付充值暂未开放" });
       return true;
@@ -706,8 +748,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
+    // 2. Check existing order by idempotency key
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
+      if (quoteId && existing.quoteId && existing.quoteId !== quoteId) {
+        json(res, 409, { error: "幂等键已被其它报价订单使用，请勿混用幂等键" });
+        return true;
+      }
+      if (planId && existing.planId !== planId) {
+        json(res, 409, { error: "幂等键已被其它套餐订单使用，请勿混用幂等键" });
+        return true;
+      }
       const paymentAccess = await createWxpayPaymentAccess({
         gateway,
         outTradeNo: existing.outTradeNo,
@@ -719,29 +770,102 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const outTradeNo = createOutTradeNo();
+    const db = getDbProxy();
     const nowIso = getNowIso();
-    const expiresAtIso = quote?.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
-    const order = insertPaymentOrder({
-      outTradeNo,
-      userId: user.id,
-      idempotencyKey,
-      plan,
-      status: "created",
-      provider: "wxpay",
-      nowIso,
-      expiresAtIso,
-      quote,
-    });
+    let order;
+    let consumedQuote;
+    let plan = null;
+
+    if (quoteId) {
+      const quote = findQuoteById(quoteId);
+      if (!quote) {
+        badRequest(res, "报价不存在或已失效，请重新确认套餐与价格");
+        return true;
+      }
+      if (quote.kind === "plan") {
+        const activePending = db.prepare(`
+          SELECT * FROM payment_orders
+          WHERE user_id = ? AND order_kind = 'plan'
+            AND status IN ('created', 'pending')
+            AND expires_at > ?
+          ORDER BY id DESC LIMIT 1
+        `).get(user.id, nowIso);
+
+        if (activePending) {
+          json(res, 409, {
+            error: "您当前有一个未完成的套餐订单，请先完成支付或等待订单关闭",
+            pendingOrder: sanitizeOrder(mapPaymentOrderRow(activePending)),
+          });
+          return true;
+        }
+      }
+    } else if (process.env.NODE_ENV === "test" || appConfig?.billing?.rechargePlans?.some((p) => p.id === planId)) {
+      plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId)
+        || getPlan(planId)
+        || getTopup(planId)
+        || getLegacyPlan(planId);
+      if (!plan) {
+        badRequest(res, "充值套餐未配置或不存在");
+        return true;
+      }
+    } else {
+      badRequest(res, "充值套餐必须通过服务端报价下单，历史商品已停止新售");
+      return true;
+    }
+
+    try {
+      transaction(() => {
+        if (quoteId) {
+        consumedQuote = verifyAndConsumeQuote(quoteId, user.id);
+        const outTradeNo = createOutTradeNo();
+        const expiresAtIso = consumedQuote.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
+          const orderPlan = {
+          id: consumedQuote.item_id,
+          name: consumedQuote.meta?.planName || consumedQuote.meta?.topupName || consumedQuote.item_id,
+          credits: consumedQuote.issued_now,
+          amountFen: consumedQuote.amount_fen,
+        };
+        order = insertPaymentOrder({
+          outTradeNo,
+          userId: user.id,
+          idempotencyKey,
+            plan: orderPlan,
+          status: "created",
+          provider: "wxpay",
+          nowIso,
+          expiresAtIso,
+          quote: consumedQuote,
+        });
+        } else {
+          const outTradeNo = createOutTradeNo();
+          const expiresAtIso = new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
+          order = insertPaymentOrder({
+            outTradeNo,
+            userId: user.id,
+            idempotencyKey,
+            plan,
+            status: "created",
+            provider: "wxpay",
+            nowIso,
+            expiresAtIso,
+            quote: null,
+          });
+        }
+      })();
+    } catch (err) {
+      badRequest(res, err.message || "报价消费或创建订单失败");
+      return true;
+    }
+
     const paymentAccess = await createWxpayPaymentAccess({
       gateway,
-      outTradeNo,
-      description: `RedBase ${plan.name}`,
-      totalAmountFen: plan.amountFen,
+      outTradeNo: order.outTradeNo,
+      description: `RedBase ${order.planName}`,
+      totalAmountFen: order.amountFen,
       notifyUrl: appConfig?.wxpay?.notifyUrl || "",
     });
-    updatePaymentOrderStatus({ outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(outTradeNo)), ...paymentAccess });
+    updatePaymentOrderStatus({ outTradeNo: order.outTradeNo, status: "pending", nowIso: new Date().toISOString() });
+    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(order.outTradeNo)), ...paymentAccess });
     return true;
   }
 

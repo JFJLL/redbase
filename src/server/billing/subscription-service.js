@@ -13,6 +13,7 @@ const {
   getUserWalletBalances,
   createCreditLot,
   rescanExpiredLots,
+  insertLedgerCreditEvent,
 } = require("./credit-ledger");
 
 function findActiveSubscription(userId, nowMs = getNowTimestamp(), db = getDbProxy()) {
@@ -199,7 +200,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
   return transaction(() => {
     if (kind === "topup") {
       const topup = getTopup(planId);
-      const credits = Number(order.plan_credits || order.planCredits || topup?.credits || 0);
+      const credits = Number(order.snapshot?.topupCredits || order.plan_credits || order.planCredits || topup?.credits || 0);
       createCreditLot({
         userId: uid,
         sourceType: "topup",
@@ -249,7 +250,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       const periodEndIso = new Date(addCalendarMonths(startMs, 1, anchorDay)).toISOString();
 
       // Use purchased quota snapshot (R7)
-      const initialCredits = Number(order.plan_credits || order.planCredits || order.issued_now || order.issuedNow || plan.credits || 0);
+      const initialCredits = Number(order.snapshot?.issuedNow ?? order.snapshot?.monthlyCredits ?? order.plan_credits ?? order.planCredits ?? plan.credits ?? 0);
 
       const subResult = db.prepare(`
         INSERT INTO subscriptions (
@@ -289,6 +290,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       }, db);
 
       if (isAnnual) {
+        const futureMonthlyCredits = Number(order.snapshot?.monthlyCredits || plan.credits);
         for (let i = 1; i <= 12; i++) {
           const pStartMs = addCalendarMonths(startMs, i - 1, anchorDay);
           const pEndMs = addCalendarMonths(startMs, i, anchorDay);
@@ -307,7 +309,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
             i,
             pStartIso,
             pEndIso,
-            initialCredits,
+            isFirst ? initialCredits : futureMonthlyCredits,
             isFirst ? "granted" : "pending",
             isFirst ? nowIso : null,
             isFirst ? lotId : null,
@@ -328,8 +330,8 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
 
     if (action === "upgrade") {
       const activeSub = findActiveSubscription(uid, nowMs, db);
-      const expectedSubId = order.quote?.subscription_id || order.payload?.quote?.subscription_id;
-      const expectedPlanId = order.quote?.original_plan_id || order.payload?.quote?.original_plan_id;
+      const expectedSubId = order.snapshot?.originalSubscriptionId || order.snapshot?.subscription_id || order.quote?.subscription_id;
+      const expectedPlanId = order.snapshot?.originalPlanId || order.snapshot?.original_plan_id || order.quote?.original_plan_id;
 
       if (!activeSub || (expectedSubId && activeSub.id !== expectedSubId) || (expectedPlanId && activeSub.plan_id !== expectedPlanId)) {
         db.prepare(`
@@ -340,11 +342,11 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         return { status: "audit_required", reason: "原订阅已发生变更或已失效，升级无法自动应用" };
       }
 
-      const issuedNow = Number(order.issued_now || order.issuedNow || 0);
+      const issuedNow = Number(order.snapshot?.issuedNow ?? order.issued_now ?? order.issuedNow ?? 0);
       const nextBasis = getPriceFen(plan, activeSub.cycle);
       const paidAdd = Number(order.amount_fen || order.amountFen || 0);
-      const cumExact = Number(order.quote?.meta?.cumExact || (Number(activeSub.upgrade_cumulative_exact || 0) + (Number(order.quote?.meta?.exactIncrement || 0))));
-      const cumCeil = Number(order.quote?.meta?.cumCeil || (Number(activeSub.upgrade_cumulative_increment || 0) + issuedNow));
+      const cumExact = Number(order.snapshot?.cumExact ?? order.quote?.meta?.cumExact ?? (Number(activeSub.upgrade_cumulative_exact || 0) + Number(order.snapshot?.exactIncrement || 0)));
+      const cumCeil = Number(order.snapshot?.cumCeil ?? order.quote?.meta?.cumCeil ?? (Number(activeSub.upgrade_cumulative_increment || 0) + issuedNow));
 
       const subCols = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
       if (subCols.includes("upgrade_cumulative_exact")) {
@@ -404,7 +406,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       }
 
       if (activeSub.cycle === "annual") {
-        const targetMonthlyCredits = Number(order.plan_credits || order.planCredits || plan.credits);
+        const targetMonthlyCredits = Number(order.snapshot?.targetMonthlyCredits || order.snapshot?.monthlyCredits || plan.credits);
         db.prepare(`
           UPDATE subscription_grants
           SET credits = ?, updated_at = ?
@@ -427,7 +429,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
 
       const activeSub = findActiveSubscription(uid, nowMs, db);
       const anchorDay = activeSub?.anchor_day || toShanghaiDate(new Date(startIso).getTime()).getUTCDate();
-      const monthlyCredits = Number(order.plan_credits || order.planCredits || plan.credits);
+      const monthlyCredits = Number(order.snapshot?.monthlyCredits || order.snapshot?.meta?.planCredits || order.plan_credits || order.planCredits || 400);
 
       const schedCols = db.prepare("PRAGMA table_info(subscription_schedules)").all().map((c) => c.name);
       if (schedCols.includes("anchor_day")) {
@@ -547,6 +549,23 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         nowIso,
       }, db);
 
+      insertLedgerCreditEvent(db, {
+        userId: schedule.user_id,
+        actionType: "cycle_grant",
+        actionLabel: "续费套餐首期积分",
+        creditDelta: monthlyCredits,
+        creditCost: 0,
+        createdAt: nowIso,
+        summary: `开通${plan?.name || schedule.plan_id}发放 ${monthlyCredits} 积分`,
+        payload: {
+          subscriptionId,
+          scheduleId: schedule.id,
+          orderId: schedule.order_id,
+          lotId,
+          credits: monthlyCredits,
+        },
+      });
+
       if (isAnnual) {
         for (let i = 1; i <= 12; i++) {
           const pStartMs = addCalendarMonths(startMs, i - 1, anchorDay);
@@ -657,6 +676,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
             current_period_end = ?,
             current_period_grant = ?,
             upgrade_cumulative_increment = 0,
+            upgrade_cumulative_exact = 0,
             updated_at = ?
         WHERE id = ?
       `).run(grant.period_start, grant.period_end, grant.credits, nowIso, grant.subscription_id);

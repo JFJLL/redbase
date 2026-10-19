@@ -36,6 +36,7 @@ function insertLedgerCreditEvent(db, {
 
 function syncUserCreditsCache(userId, db = getDbProxy()) {
   const uid = Number(userId);
+  migrateLegacyUserCredits(uid, db);
   const nowIso = getNowIso();
   const row = db.prepare(`
     SELECT COALESCE(SUM(remaining_credits - reserved_credits), 0) AS available
@@ -82,6 +83,31 @@ function rescanExpiredLots(userId, nowMs = getNowTimestamp(), db = getDbProxy())
             lotId: lot.id,
             sourceType: lot.source_type,
             expiredCredits: lot.remaining_credits,
+          },
+        });
+      }
+    } else {
+      const unreserved = Math.max(0, lot.remaining_credits - lot.reserved_credits);
+      if (unreserved > 0) {
+        db.prepare(`
+          UPDATE credit_lots
+          SET remaining_credits = reserved_credits, updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, lot.id);
+
+        insertLedgerCreditEvent(db, {
+          userId: uid,
+          actionType: "cycle_expire",
+          actionLabel: "周期积分到期",
+          creditDelta: -unreserved,
+          creditCost: 0,
+          createdAt: nowIso,
+          summary: `周期积分到期失效 ${unreserved} 积分（预占保留 ${lot.reserved_credits} 积分）`,
+          payload: {
+            lotId: lot.id,
+            sourceType: lot.source_type,
+            expiredCredits: unreserved,
+            reservedCredits: lot.reserved_credits,
           },
         });
       }
@@ -401,10 +427,12 @@ function migrateLegacyUserCredits(userId, db = getDbProxy()) {
   if (!user) return 0;
   if (user.legacy_credits_migrated === 1) return 0;
 
-  const legacyLot = db.prepare(`
-    SELECT id FROM credit_lots WHERE user_id = ? AND source_type = 'legacy' LIMIT 1
+  const lotStats = db.prepare(`
+    SELECT COUNT(*) AS total_lots,
+           SUM(CASE WHEN source_type = 'legacy' THEN 1 ELSE 0 END) AS legacy_lots
+    FROM credit_lots WHERE user_id = ?
   `).get(uid);
-  if (legacyLot) {
+  if (lotStats && lotStats.total_lots > 0) {
     db.prepare(`UPDATE users SET legacy_credits_migrated = 1 WHERE id = ?`).run(uid);
     return 0;
   }
@@ -451,6 +479,125 @@ function migrateAllLegacyUsers(db = getDbProxy()) {
   return { migratedCount, migratedCreditsTotal };
 }
 
+function ensureTaskReservationTable(db = getDbProxy()) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_credit_reservations (
+      task_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      task_type TEXT NOT NULL,
+      lot_id INTEGER NOT NULL,
+      reserved_credits INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'reserved',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (task_id, lot_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+  `);
+}
+
+function reserveCreditsForTask({
+  userId,
+  taskId,
+  taskType = "task",
+  amount,
+  nowIso = getNowIso(),
+}, db = getDbProxy()) {
+  ensureTaskReservationTable(db);
+  const uid = Number(userId);
+  const cost = Number(amount);
+  if (!Number.isSafeInteger(cost) || cost <= 0) return [];
+
+  const existing = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+    FROM task_credit_reservations
+    WHERE task_id = ? AND status = 'reserved'
+  `).all(String(taskId));
+  if (existing && existing.length > 0) {
+    return existing;
+  }
+
+  const reservations = reserveCreditsFromLots({ userId: uid, amount: cost, nowIso }, db);
+  const insertStmt = db.prepare(`
+    INSERT INTO task_credit_reservations (
+      task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?)
+    ON CONFLICT(task_id, lot_id) DO UPDATE SET
+      reserved_credits = excluded.reserved_credits,
+      status = 'reserved',
+      updated_at = excluded.updated_at
+  `);
+  for (const r of reservations) {
+    insertStmt.run(String(taskId), uid, taskType, r.lotId, r.reservedCredits, nowIso, nowIso);
+  }
+  return reservations;
+}
+
+function settleCreditsForTask({
+  userId,
+  taskId,
+  creditEventId,
+  nowIso = getNowIso(),
+}, db = getDbProxy()) {
+  ensureTaskReservationTable(db);
+  const uid = Number(userId);
+  const reservedRows = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+    FROM task_credit_reservations
+    WHERE task_id = ? AND status = 'reserved'
+  `).all(String(taskId));
+
+  if (!reservedRows || reservedRows.length === 0) {
+    return [];
+  }
+
+  const allocations = settleReservedCreditsFromLots({
+    userId: uid,
+    creditEventId,
+    reservations: reservedRows,
+    nowIso,
+  }, db);
+
+  db.prepare(`
+    UPDATE task_credit_reservations
+    SET status = 'settled', updated_at = ?
+    WHERE task_id = ? AND status = 'reserved'
+  `).run(nowIso, String(taskId));
+
+  return allocations;
+}
+
+function releaseCreditsForTask({
+  userId,
+  taskId,
+  nowIso = getNowIso(),
+}, db = getDbProxy()) {
+  ensureTaskReservationTable(db);
+  const uid = Number(userId);
+  const reservedRows = db.prepare(`
+    SELECT lot_id AS lotId, reserved_credits AS reservedCredits
+    FROM task_credit_reservations
+    WHERE task_id = ? AND status = 'reserved'
+  `).all(String(taskId));
+
+  if (!reservedRows || reservedRows.length === 0) {
+    return;
+  }
+
+  releaseReservedCreditsFromLots({
+    userId: uid,
+    reservations: reservedRows,
+    nowIso,
+  }, db);
+
+  db.prepare(`
+    UPDATE task_credit_reservations
+    SET status = 'released', updated_at = ?
+    WHERE task_id = ? AND status = 'reserved'
+  `).run(nowIso, String(taskId));
+}
+
 module.exports = {
   syncUserCreditsCache,
   rescanExpiredLots,
@@ -461,6 +608,10 @@ module.exports = {
   reserveCreditsFromLots,
   settleReservedCreditsFromLots,
   releaseReservedCreditsFromLots,
+  reserveCreditsForTask,
+  settleCreditsForTask,
+  releaseCreditsForTask,
+  ensureTaskReservationTable,
   migrateLegacyUserCredits,
   migrateAllLegacyUsers,
   insertLedgerCreditEvent,

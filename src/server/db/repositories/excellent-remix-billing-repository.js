@@ -7,7 +7,14 @@ const {
 } = require("./core-repository");
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
-const { spendCreditsFromLots, syncUserCreditsCache, migrateLegacyUserCredits } = require("../../billing/credit-ledger");
+const {
+  spendCreditsFromLots,
+  syncUserCreditsCache,
+  migrateLegacyUserCredits,
+  reserveCreditsForTask,
+  settleCreditsForTask,
+  releaseCreditsForTask,
+} = require("../../billing/credit-ledger");
 const {
   recordExcellentDirectionCompleted,
   recordExcellentDirectionFailed,
@@ -70,11 +77,23 @@ function findExcellentBillingRequest({ requestId, userId, kind }) {
 
 function expireStaleExcellentBillingReservations(userId, nowMs) {
   const cutoff = new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
+  const stale = db.prepare(`
+    SELECT request_id, kind FROM excellent_remix_billing_requests
+    WHERE user_id = ? AND status = 'reserved' AND created_at < ?
+  `).all(Number(userId), cutoff);
+  for (const row of stale) {
+    releaseCreditsForTask({
+      userId,
+      taskId: `${row.kind}_${row.request_id}`,
+      nowIso: new Date(nowMs).toISOString(),
+    }, db);
+  }
   db.prepare(`
     UPDATE excellent_remix_billing_requests
     SET status = 'failed', error = 'reservation expired', updated_at = ?
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
   `).run(new Date(nowMs).toISOString(), Number(userId), cutoff);
+  syncUserCreditsCache(userId, db);
 }
 
 /** Successful non-cache model generations inside the rolling 5-minute window. */
@@ -230,6 +249,19 @@ function reserveExcellentBillingRequest({
     }
 
     const timestamp = now.toISOString();
+    if (cost > 0) {
+      try {
+        reserveCreditsForTask({
+          userId: Number(userId),
+          taskId: `${kind}_${normalizedRequestId}`,
+          taskType: `excellent_${kind}`,
+          amount: cost,
+          nowIso: timestamp,
+        }, db);
+      } catch (err) {
+        return { status: "insufficient", user, requiredCredits: cost, reservedCredits: sumReservedExcellentBillingCredits(userId) };
+      }
+    }
     const counted = kind === EXCELLENT_BILLING_KIND_DIRECTION ? 1 : 0;
     db.prepare(`
       INSERT INTO excellent_remix_billing_requests (
@@ -303,6 +335,16 @@ function settleExcellentBillingRequest({
 
     const isModelResult = resultSource === "model";
     const cost = isModelResult ? Number(request.credit_cost || 0) : 0;
+    const user = findUserById(userId);
+    if (cost > 0 && Number(user?.credits || 0) < cost) {
+      db.prepare(`
+        UPDATE excellent_remix_billing_requests
+        SET status = 'failed', error = 'insufficient credits at settle', updated_at = ?
+        WHERE request_id = ? AND user_id = ? AND kind = ?
+      `).run(now.toISOString(), String(requestId), Number(userId), String(kind));
+      return { insufficientAtSettle: true };
+    }
+
     let creditEvent = null;
     if (cost > 0) {
       creditEvent = insertCreditEvent({
@@ -312,22 +354,28 @@ function settleExcellentBillingRequest({
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, billingKind: kind },
       });
-      try {
+      const settled = settleCreditsForTask({
+        userId,
+        taskId: `${kind}_${requestId}`,
+        creditEventId: creditEvent.id,
+        nowIso: now.toISOString(),
+      }, db);
+      if (!settled || settled.length === 0) {
         spendCreditsFromLots({
           userId,
           amount: cost,
           creditEventId: creditEvent.id,
           nowIso: now.toISOString(),
         }, db);
-        syncUserCreditsCache(userId, db);
-      } catch (err) {
-        db.prepare(`
-          UPDATE excellent_remix_billing_requests
-          SET status = 'failed', error = 'insufficient credits at settle', updated_at = ?
-          WHERE request_id = ? AND user_id = ? AND kind = ?
-        `).run(now.toISOString(), String(requestId), Number(userId), String(kind));
-        return { insufficientAtSettle: true };
       }
+      syncUserCreditsCache(userId, db);
+    } else {
+      releaseCreditsForTask({
+        userId,
+        taskId: `${kind}_${requestId}`,
+        nowIso: now.toISOString(),
+      }, db);
+      syncUserCreditsCache(userId, db);
     }
 
     const timestamp = now.toISOString();
@@ -386,6 +434,12 @@ function failExcellentBillingRequest({
 }) {
   return runTransaction(() => {
     const timestamp = now.toISOString();
+    releaseCreditsForTask({
+      userId,
+      taskId: `${kind}_${requestId}`,
+      nowIso: timestamp,
+    }, db);
+    syncUserCreditsCache(userId, db);
     const errorText = String(error || "excellent billing request failed").slice(0, 500);
     db.prepare(`
       UPDATE excellent_remix_billing_requests

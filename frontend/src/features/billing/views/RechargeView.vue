@@ -248,8 +248,10 @@ async function submitPayment(): Promise<void> {
   submittingOrder.value = true;
   checkoutErrorMessage.value = "";
   try {
-    const idem = `rb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const res = await createOrderWithQuote(selectedProvider.value, currentQuote.value.quoteId, idem);
+    const quote = currentQuote.value;
+    const idem = (quote as any).idempotencyKey || `rb_quote_${quote.quoteId}_${selectedProvider.value}`;
+    (quote as any).idempotencyKey = idem;
+    const res = await createOrderWithQuote(selectedProvider.value, quote.quoteId, idem);
     activeOrderResponse.value = res;
 
     // Generate QR code
@@ -283,19 +285,22 @@ function startOrderPolling(outTradeNo: string): void {
     try {
       const res = await checkPaymentStatus(outTradeNo, selectedProvider.value);
       if (res.order.status === "paid") {
+        if (res.order.fulfillmentStatus === "audit_required") {
+          toast("支付已收到，订单已进入人工核查流程，请查看详情。");
+        } else if (res.order.fulfillmentStatus === "scheduled") {
+          toast("支付成功！新套餐已预约，将于当前服务结束后生效。");
+        } else if (res.order.fulfillmentStatus === "unfulfilled" || res.order.fulfillmentStatus === "processing") {
+          toast("已支付，权益处理中，请稍候...");
+          return;
+        } else {
+          toast("支付成功，权益已自动入账！");
+        }
         stopOrderPolling();
         paymentSuccess.value = true;
         if (activeOrderResponse.value) {
           activeOrderResponse.value.order = res.order;
         }
         await refreshAllData();
-        if (res.order.fulfillmentStatus === "audit_required") {
-          toast("支付已收到，订单已进入人工核查流程，请查看详情。");
-        } else if (res.order.fulfillmentStatus === "scheduled") {
-          toast("支付成功！新套餐已预约，将于当前服务结束后生效。");
-        } else {
-          toast("支付成功，权益已自动入账！");
-        }
       } else if (res.order.status === "closed" || res.order.status === "expired" || res.order.status === "failed") {
         stopOrderPolling();
         checkoutErrorMessage.value = `订单状态：${res.order.status}`;

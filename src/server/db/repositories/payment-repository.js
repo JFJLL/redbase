@@ -4,7 +4,7 @@ const { getDbProxy } = require("../connection");
 const { allocateCounter, runTransaction } = require("./core-repository");
 const { fulfillPaymentOrder } = require("../../billing/subscription-service");
 const { createCreditLot, syncUserCreditsCache, migrateLegacyUserCredits } = require("../../billing/credit-ledger");
-const { isV2Plan, isV2Topup } = require("../../billing/catalog");
+const { CATALOG_VERSION, PLANS, TOPUPS, getPlan, getTopup, getPriceFen, isV2Plan, isV2Topup } = require("../../billing/catalog");
 const {
   recordPaymentOrderCreated,
   recordPaymentPaid,
@@ -24,6 +24,7 @@ const PAYMENT_COLUMNS = `
 
 function mapPaymentOrderRow(row) {
   if (!row) return null;
+  const snapshot = safeParseObject(row.snapshot_json);
   return {
     id: row.id,
     outTradeNo: row.out_trade_no,
@@ -56,7 +57,8 @@ function mapPaymentOrderRow(row) {
     serviceStart: row.service_start || "",
     serviceEnd: row.service_end || "",
     periodEnd: row.period_end || "",
-    snapshot: safeParseObject(row.snapshot_json),
+    snapshot,
+    quote: snapshot,
     anchorDay: Number(row.anchor_day || 0),
   };
 }
@@ -70,6 +72,86 @@ function safeParseObject(text) {
   }
 }
 
+function buildCanonicalOrderSnapshot(quote, plan, extra = {}) {
+  const isV2 = Boolean(quote?.quoteId || quote?.id || isV2Plan(plan?.id) || isV2Topup(plan?.id));
+  const kind = quote?.kind || (isV2Topup(plan?.id) ? "topup" : isV2Plan(plan?.id) ? "plan" : "legacy");
+  const action = quote?.action || (isV2Topup(plan?.id) ? "topup" : isV2Plan(plan?.id) ? "activate" : "legacy");
+  const itemId = quote?.item_id || quote?.itemId || plan?.id || "";
+  const itemName = quote?.meta?.planName || quote?.meta?.topupName || quote?.itemName || plan?.name || itemId;
+  const cycle = quote?.cycle || (kind === "plan" ? "monthly" : null);
+
+  const amountFen = Number(quote?.amount_fen !== undefined ? quote.amount_fen : quote?.amountFen !== undefined ? quote.amountFen : plan?.amountFen || 0);
+
+  let pricingBasisFen = amountFen;
+  if (kind === "plan") {
+    const fullPlan = getPlan(itemId);
+    pricingBasisFen = Number(quote?.meta?.pricingBasisFen || (fullPlan ? getPriceFen(fullPlan, cycle) : amountFen));
+  }
+
+  let monthlyCredits = 0;
+  if (kind === "plan") {
+    const fullPlan = getPlan(itemId);
+    monthlyCredits = Number(quote?.meta?.planCredits || fullPlan?.credits || (action === "activate" ? (quote?.issued_now ?? quote?.issuedNow) : 0) || plan?.credits || 0);
+  } else {
+    monthlyCredits = Number(quote?.issued_now ?? quote?.issuedNow ?? plan?.credits ?? 0);
+  }
+
+  const issuedNow = Number(quote?.issued_now !== undefined ? quote.issued_now : quote?.issuedNow !== undefined ? quote.issuedNow : (kind === "plan" && action === "activate" ? monthlyCredits : (plan?.credits || 0)));
+  const topupCredits = kind === "topup" ? Number(quote?.issued_now ?? quote?.issuedNow ?? quote?.meta?.credits ?? plan?.credits ?? 0) : Number(plan?.credits || 0);
+
+  const anchorDay = Number(quote?.anchor_day || quote?.meta?.anchorDay || extra.anchorDay || 0);
+  const startAt = quote?.start_at || quote?.startAt || "";
+  const endAt = quote?.end_at || quote?.endAt || "";
+  const periodEndAt = quote?.period_end_at || quote?.periodEndAt || "";
+  const scheduled = Boolean(quote?.scheduled);
+
+  const originalSubscriptionId = quote?.subscription_id || quote?.meta?.upgradeDetails?.subscriptionId || null;
+  const originalPlanId = quote?.original_plan_id || quote?.meta?.upgradeDetails?.oldPlanId || quote?.meta?.previous?.planId || "";
+  const originalCycle = quote?.meta?.upgradeDetails?.oldCycle || quote?.meta?.previous?.cycle || "";
+  const originalServiceEnd = quote?.original_service_end || quote?.meta?.upgradeDetails?.serviceEnd || quote?.meta?.previous?.serviceEnd || "";
+  const subscriptionVersion = quote?.subscription_version || quote?.meta?.upgradeDetails?.subscriptionVersion || "";
+
+  const exactIncrement = Number(quote?.meta?.exactIncrement || quote?.meta?.upgradeDetails?.exactIncrement || 0);
+  const previousCumExact = Number(quote?.meta?.previousCumExact || quote?.meta?.upgradeDetails?.previousCumExact || 0);
+  const cumExact = Number(quote?.meta?.cumExact || quote?.meta?.upgradeDetails?.cumExact || 0);
+  const cumCeil = Number(quote?.meta?.cumCeil || quote?.meta?.upgradeDetails?.cumCeil || 0);
+  const previousIssued = Number(quote?.meta?.previousIssued || quote?.meta?.upgradeDetails?.previousIssued || 0);
+  const targetMonthlyCredits = kind === "plan" ? Number(quote?.meta?.upgradeDetails?.targetMonthlyCredits || monthlyCredits) : 0;
+
+  return {
+    version: 2,
+    catalogVersion: quote?.catalog_version || CATALOG_VERSION,
+    kind,
+    action,
+    itemId,
+    itemName,
+    cycle,
+    amountFen,
+    pricingBasisFen,
+    monthlyCredits,
+    issuedNow,
+    topupCredits,
+    anchorDay,
+    startAt,
+    endAt,
+    periodEndAt,
+    scheduled,
+    originalSubscriptionId,
+    originalPlanId,
+    originalCycle,
+    originalServiceEnd,
+    subscriptionVersion,
+    exactIncrement,
+    previousCumExact,
+    cumExact,
+    cumCeil,
+    previousIssued,
+    targetMonthlyCredits,
+    quoteId: quote?.quoteId || quote?.id || "",
+    meta: quote?.meta || {},
+  };
+}
+
 function insertPaymentOrder({
   outTradeNo,
   userId,
@@ -81,18 +163,10 @@ function insertPaymentOrder({
   expiresAtIso,
   quote = null,
 }) {
-  const quoteId = quote?.quoteId || quote?.id || "";
-  const isV2 = Boolean(quoteId || isV2Plan(plan.id) || isV2Topup(plan.id));
-  const cycle = quote?.cycle || (isV2 ? "monthly" : "");
-  const orderKind = quote?.kind || (isV2Topup(plan.id) ? "topup" : isV2Plan(plan.id) ? "plan" : "legacy");
-  const orderAction = quote?.action || (isV2Topup(plan.id) ? "topup" : isV2Plan(plan.id) ? "activate" : "legacy");
-  const issuedNow = Number(quote?.issuedNow || (isV2Plan(plan.id) ? plan.credits : 0));
-  const serviceStart = quote?.startAt || quote?.start_at || "";
-  const serviceEnd = quote?.endAt || quote?.end_at || "";
-  const periodEnd = quote?.periodEndAt || quote?.period_end_at || "";
-
-  const snapshotJson = JSON.stringify(quote || plan || {});
-  const anchorDay = quote?.meta?.anchorDay || quote?.anchor_day || 0;
+  const snapshot = buildCanonicalOrderSnapshot(quote, plan);
+  const snapshotJson = JSON.stringify(snapshot);
+  const planCredits = snapshot.kind === "topup" ? snapshot.topupCredits : snapshot.monthlyCredits;
+  const issuedNow = snapshot.issuedNow;
 
   const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
   if (orderCols.includes("snapshot_json") && orderCols.includes("anchor_day")) {
@@ -107,25 +181,25 @@ function insertPaymentOrder({
       String(outTradeNo || ""),
       Number(userId),
       String(idempotencyKey || ""),
-      String(plan.id || ""),
-      String(plan.name || ""),
-      Number(plan.credits || 0),
-      Number(plan.amountFen || 0),
+      String(snapshot.itemId || plan.id || ""),
+      String(snapshot.itemName || plan.name || ""),
+      planCredits,
+      snapshot.amountFen,
       String(status || "created"),
       String(provider || "alipay"),
       String(nowIso),
       String(nowIso),
       String(expiresAtIso),
-      String(quoteId),
-      String(cycle),
-      String(orderKind),
-      String(orderAction),
+      String(snapshot.quoteId),
+      String(snapshot.cycle || ""),
+      String(snapshot.kind),
+      String(snapshot.action),
       issuedNow,
-      String(serviceStart),
-      String(serviceEnd),
-      String(periodEnd),
+      String(snapshot.startAt),
+      String(snapshot.endAt),
+      String(snapshot.periodEndAt),
       snapshotJson,
-      anchorDay
+      snapshot.anchorDay
     );
   } else {
     db.prepare(`
@@ -139,23 +213,23 @@ function insertPaymentOrder({
       String(outTradeNo || ""),
       Number(userId),
       String(idempotencyKey || ""),
-      String(plan.id || ""),
-      String(plan.name || ""),
-      Number(plan.credits || 0),
-      Number(plan.amountFen || 0),
+      String(snapshot.itemId || plan.id || ""),
+      String(snapshot.itemName || plan.name || ""),
+      planCredits,
+      snapshot.amountFen,
       String(status || "created"),
       String(provider || "alipay"),
       String(nowIso),
       String(nowIso),
       String(expiresAtIso),
-      String(quoteId),
-      String(cycle),
-      String(orderKind),
-      String(orderAction),
+      String(snapshot.quoteId),
+      String(snapshot.cycle || ""),
+      String(snapshot.kind),
+      String(snapshot.action),
       issuedNow,
-      String(serviceStart),
-      String(serviceEnd),
-      String(periodEnd),
+      String(snapshot.startAt),
+      String(snapshot.endAt),
+      String(snapshot.periodEndAt),
     );
   }
   const order = findPaymentOrderByOutTradeNo(outTradeNo);
@@ -257,7 +331,8 @@ function findPendingPaymentOrders({ limit = 100 }) {
 function findOpenPaymentOrdersForReconcile({ limit = 100 }) {
   return db.prepare(`
     SELECT ${PAYMENT_COLUMNS} FROM payment_orders
-    WHERE status IN ('created', 'pending', 'expired', 'closed')
+    WHERE (status IN ('created', 'pending', 'expired', 'closed')
+       OR (status = 'paid' AND fulfillment_status IN ('unfulfilled', 'processing')))
       AND audit_reason = ''
     ORDER BY id ASC LIMIT ?
   `).all(Number(limit || 100)).map(mapPaymentOrderRow);
@@ -270,6 +345,64 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
       throw Object.assign(new Error("订单不存在"), { code: "PAYMENT_ORDER_NOT_FOUND" });
     }
     if (order.status === "paid") {
+      if (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") {
+        const isWx = String(order.provider || "").toLowerCase() === "wxpay";
+        const isV2 = Boolean(order.quoteId || isV2Plan(order.planId) || isV2Topup(order.planId));
+        let assignedCreditEventId = null;
+        if (isV2) {
+          const fulfillResult = fulfillPaymentOrder(order, new Date(nowIso || order.paidAt || Date.now()).getTime(), db);
+          if (fulfillResult.status === "fulfilled") {
+            let creditDelta = order.planCredits;
+            let actionType = isWx ? "wxpay_recharge" : "alipay_recharge";
+            let actionLabel = isWx ? "微信支付充值" : "支付宝充值";
+            let summary = `${order.planName}到账`;
+
+            if (order.orderKind === "topup") {
+              creditDelta = order.planCredits;
+              actionType = "topup_purchase";
+              actionLabel = "积分加油包购买";
+              summary = `购买${order.planName}到账 ${order.planCredits} 积分`;
+            } else if (order.orderAction === "upgrade") {
+              creditDelta = order.issuedNow;
+              actionType = "upgrade_grant";
+              actionLabel = "套餐升级补发";
+              summary = `升级至${order.planName}补发 ${order.issuedNow} 积分`;
+            } else if (order.orderAction === "activate") {
+              creditDelta = order.planCredits;
+              actionType = "cycle_first_grant";
+              actionLabel = "套餐首期积分";
+              summary = `开通${order.planName}首期发放 ${order.planCredits} 积分`;
+            }
+
+            if (creditDelta > 0) {
+              assignedCreditEventId = allocateCounter("nextCreditEventId", 1);
+              db.prepare(`
+                INSERT INTO credit_events (
+                  id, user_id, action_type, action_label, credit_delta, credit_cost,
+                  created_at, summary, payload_json
+                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+              `).run(
+                assignedCreditEventId,
+                Number(order.userId),
+                actionType,
+                actionLabel,
+                Number(creditDelta),
+                String(nowIso || order.paidAt || new Date().toISOString()),
+                summary,
+                JSON.stringify({
+                  outTradeNo: order.outTradeNo,
+                  planId: order.planId,
+                  provider: order.provider,
+                  orderKind: order.orderKind,
+                  orderAction: order.orderAction,
+                  issuedNow: order.issuedNow,
+                }),
+              );
+            }
+          }
+        }
+        return { order: findPaymentOrderByOutTradeNo(outTradeNo), alreadyPaid: true, recovered: true };
+      }
       return { order, alreadyPaid: true };
     }
     const updated = db.prepare(`
@@ -339,16 +472,18 @@ function settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso }) {
       }
     } else {
       migrateLegacyUserCredits(order.userId, db);
-      createCreditLot({
-        userId: Number(order.userId),
-        sourceType: "legacy",
-        sourceLabel: "历史保留积分",
-        orderId: order.id,
-        credits: Number(order.planCredits),
-        startsAt: nowIso,
-        expiresAt: null,
-        nowIso,
-      }, db);
+      if (Number(order.planCredits) > 0) {
+        createCreditLot({
+          userId: Number(order.userId),
+          sourceType: "legacy",
+          sourceLabel: "历史保留积分",
+          orderId: order.id,
+          credits: Number(order.planCredits),
+          startsAt: nowIso,
+          expiresAt: null,
+          nowIso,
+        }, db);
+      }
       db.prepare("UPDATE payment_orders SET fulfillment_status = 'fulfilled', fulfilled_at = ? WHERE id = ?")
         .run(nowIso, order.id);
 

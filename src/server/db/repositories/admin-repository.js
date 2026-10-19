@@ -43,8 +43,8 @@ function insertCreditEvent(input) {
   `).run(
     id,
     Number(input.userId),
-    input.actionType,
-    input.actionLabel,
+    input.actionType || "unknown",
+    input.actionLabel || input.actionType || "积分操作",
     Number(input.creditDelta || 0),
     Number(input.creditCost || 0),
     input.createdAt || new Date().toISOString(),
@@ -202,7 +202,7 @@ function readAdminOverviewStats() {
       (SELECT COUNT(*) FROM users) AS user_count,
       (SELECT COUNT(*) FROM brands) AS brand_count,
       (SELECT COUNT(*) FROM generations) AS generation_count,
-      (SELECT COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) FROM credit_events) AS total_consumed_tokens,
+      (SELECT COALESCE(SUM(CASE WHEN credit_delta < 0 AND action_type NOT LIKE '%expire%' THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) FROM credit_events) AS total_consumed_tokens,
       (SELECT COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) FROM credit_events) AS total_granted_tokens,
       (SELECT COALESCE(SUM(credits), 0) FROM users) AS current_credits_total
   `).get();
@@ -231,7 +231,7 @@ function listAdminUserMetrics(limit = ADMIN_OVERVIEW_LIMITS.users) {
     credit_totals AS (
       SELECT
         user_id,
-        COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) AS consumed_tokens,
+        COALESCE(SUM(CASE WHEN credit_delta < 0 AND action_type NOT LIKE '%expire%' THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) AS consumed_tokens,
         COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) AS granted_tokens,
         MAX(created_at) AS last_credit_at
       FROM credit_events

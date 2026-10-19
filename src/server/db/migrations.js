@@ -699,7 +699,7 @@ const VERSIONED_MIGRATIONS = [
       const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
       if (!userCols.includes("legacy_credits_migrated")) {
         db.exec("ALTER TABLE users ADD COLUMN legacy_credits_migrated INTEGER NOT NULL DEFAULT 0");
-        db.exec("UPDATE users SET legacy_credits_migrated = 1 WHERE id IN (SELECT DISTINCT user_id FROM credit_lots WHERE source_type = 'legacy')");
+        db.exec("UPDATE users SET legacy_credits_migrated = 1 WHERE id IN (SELECT DISTINCT user_id FROM credit_lots)");
       }
 
       const scheduleCols = db.prepare("PRAGMA table_info(subscription_schedules)").all().map((c) => c.name);
@@ -746,8 +746,72 @@ const VERSIONED_MIGRATIONS = [
         db.exec("ALTER TABLE billing_quotes ADD COLUMN subscription_version TEXT NOT NULL DEFAULT ''");
       }
 
-      db.exec("UPDATE subscriptions SET status = 'superseded', updated_at = datetime('now') WHERE status = 'active' AND id NOT IN (SELECT MAX(id) FROM subscriptions WHERE status = 'active' GROUP BY user_id);");
-      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique_active ON subscriptions(user_id) WHERE status = 'active';");
+      const activeDupes = db.prepare(`
+        SELECT user_id, COUNT(*) AS count
+        FROM subscriptions
+        WHERE status = 'active'
+        GROUP BY user_id
+        HAVING count > 1
+      `).all();
+      if (activeDupes.length > 0) {
+        db.prepare(`
+          UPDATE subscriptions
+          SET status = 'superseded', updated_at = datetime('now')
+          WHERE status = 'active' AND service_end <= datetime('now')
+        `).run();
+      }
+      try {
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique_active ON subscriptions(user_id) WHERE status = 'active';");
+      } catch (idxErr) {
+        console.warn("[migration 14 audit] 用户存在未到期的重复生效订阅，需人工核对处置，暂缓创建唯一索引", idxErr?.message);
+      }
+    },
+  },
+  {
+    version: 15,
+    name: "billing-v2-closeout",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_credit_reservations (
+          task_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          task_type TEXT NOT NULL,
+          lot_id INTEGER NOT NULL,
+          reserved_credits INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'reserved',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (task_id, lot_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+        CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+      `);
+
+      const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+      if (!userCols.includes("legacy_credits_migrated")) {
+        db.exec("ALTER TABLE users ADD COLUMN legacy_credits_migrated INTEGER NOT NULL DEFAULT 0");
+      }
+      db.exec("UPDATE users SET legacy_credits_migrated = 1 WHERE id IN (SELECT DISTINCT user_id FROM credit_lots)");
+
+      const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
+      if (!orderCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+      if (!orderCols.includes("anchor_day")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!orderCols.includes("audit_reason")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_reason TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("audit_at")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_at TEXT NOT NULL DEFAULT ''");
+      }
+
+      try {
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique_active ON subscriptions(user_id) WHERE status = 'active';");
+      } catch (_) {}
     },
   },
 ];

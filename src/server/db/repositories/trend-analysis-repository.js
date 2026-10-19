@@ -3,7 +3,15 @@ const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS,
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
 const { findBrandByOwner, upsertBrandFull } = require("./brand-repository");
-const { spendCreditsFromLots, syncUserCreditsCache, migrateLegacyUserCredits } = require("../../billing/credit-ledger");
+const {
+  spendCreditsFromLots,
+  syncUserCreditsCache,
+  migrateLegacyUserCredits,
+  reserveCreditsForTask,
+  settleCreditsForTask,
+  releaseCreditsForTask,
+} = require("../../billing/credit-ledger");
+const { getNowIso, getNowTimestamp } = require("../../billing/period-utils");
 const {
   recordTrendAnalysisStarted,
   recordTrendAnalysisCompleted,
@@ -26,20 +34,34 @@ function findTrendAnalysisRequest({ requestId, userId, brandId, bucketKey }) {
   `).get(String(requestId), Number(userId), Number(brandId), String(bucketKey));
 }
 
-function expireStaleReservations(userId, nowMs) {
+function expireStaleReservations(userId, nowMs = getNowTimestamp()) {
   const cutoff = new Date(nowMs - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
+  const nowIso = getNowIso();
+  const stale = db.prepare(`
+    SELECT request_id FROM trend_analysis_requests
+    WHERE user_id = ? AND status = 'reserved' AND created_at < ?
+  `).all(Number(userId), cutoff);
+  for (const row of stale) {
+    releaseCreditsForTask({
+      userId,
+      taskId: row.request_id,
+      nowIso,
+    }, db);
+  }
   db.prepare(`
     UPDATE trend_analysis_requests
     SET status = 'failed', error = 'reservation expired', updated_at = ?
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
-  `).run(new Date(nowMs).toISOString(), Number(userId), cutoff);
+  `).run(nowIso, Number(userId), cutoff);
+  syncUserCreditsCache(userId, db);
 }
 
-function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, creditCost, now = new Date() }) {
+function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, creditCost, now }) {
   return runTransaction(() => {
     const normalizedRequestId = normalizeRequestId(requestId);
     if (!normalizedRequestId) return { status: "invalid" };
-    const nowMs = now.getTime();
+    const nowMs = now ? now.getTime() : getNowTimestamp();
+    const timestamp = now ? now.toISOString() : getNowIso();
     expireStaleReservations(userId, nowMs);
     const existing = findTrendAnalysisRequest({ requestId: normalizedRequestId, userId, brandId, bucketKey });
     if (existing) {
@@ -87,7 +109,19 @@ function reserveTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, cr
     if (!user || Number(user.credits || 0) - reserved - excellentReserved < cost) {
       return { status: "insufficient", user, reservedCredits: reserved + excellentReserved };
     }
-    const timestamp = now.toISOString();
+    if (cost > 0) {
+      try {
+        reserveCreditsForTask({
+          userId: Number(userId),
+          taskId: normalizedRequestId,
+          taskType: "trend_analysis",
+          amount: cost,
+          nowIso: timestamp,
+        }, db);
+      } catch (err) {
+        return { status: "insufficient", user, reservedCredits: reserved + excellentReserved };
+      }
+    }
     db.prepare(`
       INSERT INTO trend_analysis_requests (
         request_id, user_id, brand_id, bucket_key, status, credit_cost,
@@ -131,7 +165,7 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
     if (!currentBrand) throw new Error("品牌不存在或已被删除。");
     const nextBrand = buildBrand(currentBrand);
     const savedBrand = upsertBrandFull(nextBrand);
-    const timestamp = new Date().toISOString();
+    const timestamp = getNowIso();
     const cost = Number(request.credit_cost || 0);
     let creditEvent = null;
     if (cost > 0) {
@@ -142,19 +176,27 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, bucketKey, analysisId },
       });
-      spendCreditsFromLots({
+      const settled = settleCreditsForTask({
         userId,
-        amount: cost,
+        taskId: requestId,
         creditEventId: creditEvent.id,
         nowIso: timestamp,
       }, db);
+      if (!settled || settled.length === 0) {
+        spendCreditsFromLots({
+          userId,
+          amount: cost,
+          creditEventId: creditEvent.id,
+          nowIso: timestamp,
+        }, db);
+      }
       syncUserCreditsCache(userId, db);
     }
     db.prepare(`
       UPDATE trend_analysis_requests
       SET status = 'completed', analysis_id = ?, credit_event_id = ?, error = '', updated_at = ?
       WHERE request_id = ? AND user_id = ? AND brand_id = ? AND bucket_key = ?
-    `).run(Number(analysisId), creditEvent ? Number(creditEvent.id) : null, timestamp, requestId, Number(userId), Number(brandId), String(bucketKey));
+    `).run(analysisId ? Number(analysisId) : null, creditEvent ? Number(creditEvent.id) : null, timestamp, requestId, Number(userId), Number(brandId), String(bucketKey));
     try {
       recordTrendAnalysisCompleted({
         requestId,
@@ -170,7 +212,13 @@ function completeTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, a
 
 function failTrendAnalysisRequest({ requestId, userId, brandId, bucketKey, error }) {
   return runTransaction(() => {
-    const timestamp = new Date().toISOString();
+    const timestamp = getNowIso();
+    releaseCreditsForTask({
+      userId,
+      taskId: requestId,
+      nowIso: timestamp,
+    }, db);
+    syncUserCreditsCache(userId, db);
     db.prepare(`
       UPDATE trend_analysis_requests
       SET status = 'failed', error = ?, updated_at = ?
