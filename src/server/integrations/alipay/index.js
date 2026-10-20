@@ -57,7 +57,7 @@ function isAlipayTradeNotExistError(error) {
     responseData.sub_msg,
     responseData.msg,
   ].map((value) => String(value || "")).join(" ");
-  return /ACQ\.TRADE_NOT_EXIST|TRADE_NOT_EXIST|ACQ\.TRADE_HAS_CLOSE|ACQ\.TRADE_STATUS_ERROR|交易不存在|交易已关闭/i.test(details);
+  return /ACQ\.TRADE_NOT_EXIST|TRADE_NOT_EXIST|ACQ\.TRADE_HAS_CLOSE|交易不存在|交易已关闭/i.test(details);
 }
 
 function alipayTradeNotExistError(error) {

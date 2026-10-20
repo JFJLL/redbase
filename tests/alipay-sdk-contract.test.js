@@ -247,3 +247,24 @@ test("P3: an expired order paid in the real camelCase SDK shape is settled by re
     1,
   );
 });
+
+
+test("closeTrade rejects ACQ.TRADE_STATUS_ERROR without classifying as trade-not-exist", async () => {
+  const provider = makeRealProvider();
+  provider.sdk = {
+    curl: async () => ({
+      data: { code: "40004", sub_code: "ACQ.TRADE_STATUS_ERROR", sub_msg: "交易状态不合法" },
+      responseHttpStatus: 200,
+      traceId: "trace-status-error",
+    }),
+  };
+
+  await assert.rejects(
+    () => provider.closeTrade("redbase_status_error_close"),
+    (error) => {
+      assert.notEqual(error?.code, "ALIPAY_TRADE_NOT_EXIST");
+      assert.match(error.message, /关闭订单失败：交易状态不合法/);
+      return true;
+    },
+  );
+});

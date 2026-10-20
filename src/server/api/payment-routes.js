@@ -6,7 +6,7 @@ const { requireSqlAuth } = require("./sql-auth");
 const { getAlipayProvider, isAlipayTradeNotExistError } = require("../integrations/alipay");
 const { getWxpayProvider } = require("../integrations/wxpay");
 const { fenToYuanString } = require("../billing/money");
-const { reconcileOne } = require("../billing/reconcile-orders");
+const { reconcileOne, safeReconcileAndCloseOrder } = require("../billing/reconcile-orders");
 const { PLANS, TOPUPS, CATALOG_VERSION, getPlan, getTopup, getLegacyPlan } = require("../billing/catalog");
 const { getNowTimestamp, getNowIso, formatShanghaiDate, normalizeProviderPaidAt } = require("../billing/period-utils");
 const { createQuote, verifyAndConsumeQuote, findQuoteById } = require("../billing/quote-service");
@@ -16,11 +16,14 @@ const { getDbProxy, transaction } = require("../db/connection");
 const {
   insertPaymentOrder,
   updatePaymentOrderStatus,
+  transitionPaymentOrderCreatedToPending,
   findPaymentOrderByOutTradeNo,
   findPaymentOrderByUserAndIdempotency,
   findPaymentOrdersByUser,
   settlePaidPaymentOrder,
+  fulfillPaidOrderSafely,
   closePaymentOrder,
+  markPaymentOrderExpired,
   markPaymentOrderAudit,
   mapPaymentOrderRow,
 } = require("../db/repositories/payment-repository");
@@ -28,6 +31,91 @@ const {
 const NOTIFY_SUCCESS = "success";
 const NOTIFY_FAILURE = "failure";
 const ORDER_EXPIRY_MS = 30 * 60 * 1000;
+
+function checkAndRefreshOrderPayable(order, nowIso = getNowIso()) {
+  if (!order) return { payable: false, order: null };
+  let current = order;
+  if (
+    (current.status === "created" || current.status === "pending") &&
+    current.expiresAt &&
+    current.expiresAt <= nowIso
+  ) {
+    markPaymentOrderExpired({ outTradeNo: current.outTradeNo, nowIso });
+    current = findPaymentOrderByOutTradeNo(current.outTradeNo) || current;
+  }
+  const isPayable = (current.status === "created" || current.status === "pending") &&
+    (!current.expiresAt || current.expiresAt > nowIso);
+  return { payable: isPayable, order: current };
+}
+
+async function issuePaymentAccessSafely({
+  order,
+  gateway,
+  provider,
+  subject,
+  appConfig,
+  isNewOrder = false,
+  res,
+  scope,
+  successStatusCode = 200,
+}) {
+  const nowIso = getNowIso();
+  const preCheck = checkAndRefreshOrderPayable(order, nowIso);
+  if (!preCheck.payable) {
+    scope.json(res, 200, { order: sanitizeOrder(preCheck.order) });
+    return true;
+  }
+
+  let paymentAccess;
+  if (provider === "wxpay") {
+    paymentAccess = await createWxpayPaymentAccess({
+      gateway,
+      outTradeNo: order.outTradeNo,
+      description: subject,
+      totalAmountFen: order.amountFen,
+      notifyUrl: appConfig?.wxpay?.notifyUrl || "",
+    });
+  } else {
+    paymentAccess = await createPaymentAccess({
+      gateway,
+      outTradeNo: order.outTradeNo,
+      subject,
+      totalAmount: fenToYuanString(order.amountFen),
+      returnUrl: appConfig?.alipay?.returnUrl || "",
+      notifyUrl: appConfig?.alipay?.notifyUrl || "",
+    });
+  }
+
+  if (isNewOrder) {
+    transitionPaymentOrderCreatedToPending({
+      outTradeNo: order.outTradeNo,
+      nowIso: getNowIso(),
+    });
+  }
+
+  const postNowIso = getNowIso();
+  const postCheck = checkAndRefreshOrderPayable(findPaymentOrderByOutTradeNo(order.outTradeNo), postNowIso);
+
+  if (!postCheck.payable) {
+    scope.json(res, 200, { order: sanitizeOrder(postCheck.order) });
+    return true;
+  }
+
+  scope.json(res, successStatusCode, { order: sanitizeOrder(postCheck.order), ...paymentAccess });
+  return true;
+}
+
+const inFlightReconcileOrders = new Set();
+const reconcileAttemptCache = new Map();
+const RECONCILE_RETRY_INTERVAL_MS = 60 * 1000;
+const LIST_RECONCILE_LIMIT = 3;
+const LIST_RECONCILE_TIMEOUT_MS = 1500;
+
+function _resetReconcileCacheForTest() {
+  inFlightReconcileOrders.clear();
+  reconcileAttemptCache.clear();
+}
+
 
 function createOutTradeNo() {
   return `rb_${Date.now()}_${crypto.randomBytes(7).toString("hex")}`;
@@ -571,6 +659,10 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     // 2. Check existing order by idempotency key
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
+      if (existing.provider && existing.provider !== "alipay") {
+        badRequest(res, "该幂等键已被其他支付渠道的订单使用，不能跨渠道重用");
+        return true;
+      }
       if (quoteId && existing.quoteId && existing.quoteId !== quoteId) {
         json(res, 409, { error: "幂等键已被其它报价订单使用，请勿混用幂等键" });
         return true;
@@ -579,16 +671,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         json(res, 409, { error: "幂等键已被其它套餐订单使用，请勿混用幂等键" });
         return true;
       }
-      const paymentAccess = await createPaymentAccess({
+      return await issuePaymentAccessSafely({
+        order: existing,
         gateway,
-        outTradeNo: existing.outTradeNo,
+        provider: "alipay",
         subject: `RedBase ${existing.planName}`,
-        totalAmount: fenToYuanString(existing.amountFen),
-        returnUrl: appConfig?.alipay?.returnUrl || "",
-        notifyUrl: appConfig?.alipay?.notifyUrl || "",
+        appConfig,
+        isNewOrder: false,
+        res,
+        scope,
+        successStatusCode: 200,
       });
-      json(res, 200, { order: sanitizeOrder(existing), ...paymentAccess });
-      return true;
     }
 
     const db = getDbProxy();
@@ -604,7 +697,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         return true;
       }
       if (quote.kind === "plan") {
-        const activePending = db.prepare(`
+        let activePending = db.prepare(`
           SELECT * FROM payment_orders
           WHERE user_id = ? AND order_kind = 'plan'
             AND (
@@ -613,6 +706,37 @@ async function handlePaymentRoutes(context, req, res, pathname) {
             )
           ORDER BY id DESC LIMIT 1
         `).get(user.id);
+
+        if (activePending) {
+          const isStale = (activePending.status === "expired" || activePending.expires_at <= nowIso)
+            && ["created", "pending", "expired"].includes(activePending.status);
+          if (isStale) {
+            const staleOrder = mapPaymentOrderRow(activePending);
+            const orderProvider = staleOrder.provider || "alipay";
+            const targetGateway = orderProvider === "wxpay"
+              ? getWxpayProvider(appConfig)
+              : getAlipayProvider(appConfig);
+            if (targetGateway) {
+              try {
+                await safeReconcileAndCloseOrder(staleOrder, targetGateway, { nowIso, user });
+              } catch (err) {
+                console.warn("[alipay:createOrder] auto-reconcile stale order failed", {
+                  outTradeNo: staleOrder.outTradeNo,
+                  error: err?.message || err,
+                });
+              }
+            }
+            activePending = db.prepare(`
+              SELECT * FROM payment_orders
+              WHERE user_id = ? AND order_kind = 'plan'
+                AND (
+                  status IN ('created', 'pending', 'expired')
+                  OR (status = 'paid' AND (fulfillment_status IN ('unfulfilled', 'processing', 'scheduled', 'audit_required') OR audit_reason <> ''))
+                )
+              ORDER BY id DESC LIMIT 1
+            `).get(user.id);
+          }
+        }
 
         if (activePending) {
           json(res, 409, {
@@ -663,17 +787,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const paymentAccess = await createPaymentAccess({
+    return await issuePaymentAccessSafely({
+      order,
       gateway,
-      outTradeNo: order.outTradeNo,
+      provider: "alipay",
       subject: `RedBase ${order.planName}`,
-      totalAmount: fenToYuanString(order.amountFen),
-      returnUrl: appConfig?.alipay?.returnUrl || "",
-      notifyUrl: appConfig?.alipay?.notifyUrl || "",
+      appConfig,
+      isNewOrder: true,
+      res,
+      scope,
+      successStatusCode: 201,
     });
-    updatePaymentOrderStatus({ outTradeNo: order.outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(order.outTradeNo)), ...paymentAccess });
-    return true;
   }
 
   if (req.method === "GET" && pathname === "/api/payments/alipay/return") {
@@ -738,6 +862,10 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     // 2. Check existing order by idempotency key
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
+      if (existing.provider && existing.provider !== "wxpay") {
+        badRequest(res, "该幂等键已被其他支付渠道的订单使用，不能跨渠道重用");
+        return true;
+      }
       if (quoteId && existing.quoteId && existing.quoteId !== quoteId) {
         json(res, 409, { error: "幂等键已被其它报价订单使用，请勿混用幂等键" });
         return true;
@@ -746,15 +874,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         json(res, 409, { error: "幂等键已被其它套餐订单使用，请勿混用幂等键" });
         return true;
       }
-      const paymentAccess = await createWxpayPaymentAccess({
+      return await issuePaymentAccessSafely({
+        order: existing,
         gateway,
-        outTradeNo: existing.outTradeNo,
-        description: `RedBase ${existing.planName}`,
-        totalAmountFen: existing.amountFen,
-        notifyUrl: appConfig?.wxpay?.notifyUrl || "",
+        provider: "wxpay",
+        subject: `RedBase ${existing.planName}`,
+        appConfig,
+        isNewOrder: false,
+        res,
+        scope,
+        successStatusCode: 200,
       });
-      json(res, 200, { order: sanitizeOrder(existing), ...paymentAccess });
-      return true;
     }
 
     const db = getDbProxy();
@@ -770,7 +900,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         return true;
       }
       if (quote.kind === "plan") {
-        const activePending = db.prepare(`
+        let activePending = db.prepare(`
           SELECT * FROM payment_orders
           WHERE user_id = ? AND order_kind = 'plan'
             AND (
@@ -779,6 +909,37 @@ async function handlePaymentRoutes(context, req, res, pathname) {
             )
           ORDER BY id DESC LIMIT 1
         `).get(user.id);
+
+        if (activePending) {
+          const isStale = (activePending.status === "expired" || activePending.expires_at <= nowIso)
+            && ["created", "pending", "expired"].includes(activePending.status);
+          if (isStale) {
+            const staleOrder = mapPaymentOrderRow(activePending);
+            const orderProvider = staleOrder.provider || "alipay";
+            const targetGateway = orderProvider === "wxpay"
+              ? getWxpayProvider(appConfig)
+              : getAlipayProvider(appConfig);
+            if (targetGateway) {
+              try {
+                await safeReconcileAndCloseOrder(staleOrder, targetGateway, { nowIso, user });
+              } catch (err) {
+                console.warn("[alipay:createOrder] auto-reconcile stale order failed", {
+                  outTradeNo: staleOrder.outTradeNo,
+                  error: err?.message || err,
+                });
+              }
+            }
+            activePending = db.prepare(`
+              SELECT * FROM payment_orders
+              WHERE user_id = ? AND order_kind = 'plan'
+                AND (
+                  status IN ('created', 'pending', 'expired')
+                  OR (status = 'paid' AND (fulfillment_status IN ('unfulfilled', 'processing', 'scheduled', 'audit_required') OR audit_reason <> ''))
+                )
+              ORDER BY id DESC LIMIT 1
+            `).get(user.id);
+          }
+        }
 
         if (activePending) {
           json(res, 409, {
@@ -829,16 +990,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const paymentAccess = await createWxpayPaymentAccess({
+    return await issuePaymentAccessSafely({
+      order,
       gateway,
-      outTradeNo: order.outTradeNo,
-      description: `RedBase ${order.planName}`,
-      totalAmountFen: order.amountFen,
-      notifyUrl: appConfig?.wxpay?.notifyUrl || "",
+      provider: "wxpay",
+      subject: `RedBase ${order.planName}`,
+      appConfig,
+      isNewOrder: true,
+      res,
+      scope,
+      successStatusCode: 201,
     });
-    updatePaymentOrderStatus({ outTradeNo: order.outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(order.outTradeNo)), ...paymentAccess });
-    return true;
   }
 
   if (req.method === "POST" && pathname === "/api/payments/wxpay/notify") {
@@ -870,6 +1032,76 @@ async function handlePaymentRoutes(context, req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/payments/orders") {
     const user = requireSqlAuth(req, res, scope);
     if (!user) return true;
+    const nowIso = getNowIso();
+    const db = getDbProxy();
+
+    // 1. Fast local sweep: mark locally expired orders using repository method to record audit facts
+    const expiredLocally = db.prepare(`
+      SELECT out_trade_no FROM payment_orders
+      WHERE user_id = ? AND status IN ('created', 'pending') AND expires_at <= ?
+    `).all(Number(user.id), nowIso);
+
+    for (const row of expiredLocally) {
+      markPaymentOrderExpired({ outTradeNo: row.out_trade_no, nowIso });
+    }
+
+    // 2. Select candidates for provider reconciliation (最多3条按最近尝试排序)
+    const candidates = db.prepare(`
+      SELECT * FROM payment_orders
+      WHERE user_id = ?
+        AND (
+          status = 'expired'
+          OR (status IN ('created', 'pending') AND expires_at <= ?)
+        )
+      ORDER BY id ASC
+    `).all(Number(user.id), nowIso).map(mapPaymentOrderRow);
+
+    const nowMs = Date.now();
+    const eligible = [];
+    for (const cand of candidates) {
+      if (inFlightReconcileOrders.has(cand.outTradeNo)) continue;
+      const lastAttempt = reconcileAttemptCache.get(cand.outTradeNo) || 0;
+      if (nowMs - lastAttempt < RECONCILE_RETRY_INTERVAL_MS) continue;
+      eligible.push({ cand, lastAttempt });
+    }
+
+    eligible.sort((a, b) => a.lastAttempt - b.lastAttempt || a.cand.id - b.cand.id);
+    const toReconcile = eligible.slice(0, LIST_RECONCILE_LIMIT).map((e) => e.cand);
+
+    if (toReconcile.length > 0) {
+      for (const cand of toReconcile) {
+        inFlightReconcileOrders.add(cand.outTradeNo);
+        reconcileAttemptCache.set(cand.outTradeNo, nowMs);
+      }
+
+      const reconcileTask = Promise.allSettled(
+        toReconcile.map(async (cand) => {
+          try {
+            const providerName = cand.provider || "alipay";
+            const gateway = providerName === "wxpay"
+              ? getWxpayProvider(appConfig)
+              : getAlipayProvider(appConfig);
+            if (gateway) {
+              const closeRes = await safeReconcileAndCloseOrder(cand, gateway, { nowIso, user });
+              if (closeRes?.status === "closed" || closeRes?.status === "paid") {
+                reconcileAttemptCache.delete(cand.outTradeNo);
+              }
+            }
+          } catch (_) {
+          } finally {
+            inFlightReconcileOrders.delete(cand.outTradeNo);
+          }
+        })
+      );
+
+      let timerId;
+      const timeoutPromise = new Promise((resolve) => {
+        timerId = setTimeout(resolve, LIST_RECONCILE_TIMEOUT_MS);
+      });
+      await Promise.race([reconcileTask, timeoutPromise]);
+      clearTimeout(timerId);
+    }
+
     json(res, 200, { orders: findPaymentOrdersByUser(user.id).map(sanitizeOrder) });
     return true;
   }
@@ -896,7 +1128,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 404, { error: "订单不存在" });
       return true;
     }
-    if (!isOrderPayable(order)) {
+    if (order.provider && order.provider !== "alipay") {
+      badRequest(res, "订单支付渠道不匹配");
+      return true;
+    }
+    const preCheck = checkAndRefreshOrderPayable(order, getNowIso());
+    if (!preCheck.payable) {
       badRequest(res, "当前订单不能继续支付");
       return true;
     }
@@ -905,16 +1142,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 503, { error: "充值服务未配置" });
       return true;
     }
-    const paymentAccess = await createPaymentAccess({
+    return await issuePaymentAccessSafely({
+      order: preCheck.order,
       gateway,
-      outTradeNo: order.outTradeNo,
+      provider: "alipay",
       subject: `RedBase ${order.planName}`,
-      totalAmount: fenToYuanString(order.amountFen),
-      returnUrl: appConfig?.alipay?.returnUrl || "",
-      notifyUrl: appConfig?.alipay?.notifyUrl || "",
+      appConfig,
+      isNewOrder: false,
+      res,
+      scope,
+      successStatusCode: 200,
     });
-    json(res, 200, { order: sanitizeOrder(order), ...paymentAccess });
-    return true;
   }
 
   if (req.method === "POST" && pathname.startsWith("/api/payments/alipay/orders/") && pathname.endsWith("/check")) {
@@ -926,7 +1164,25 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 404, { error: "订单不存在" });
       return true;
     }
-    if (isOrderPayable(order)) {
+    if (order.provider && order.provider !== "alipay") {
+      badRequest(res, "订单支付渠道不匹配");
+      return true;
+    }
+    if (
+      order.status === "paid" &&
+      (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") &&
+      !order.auditReason &&
+      order.fulfillmentStatus !== "audit_required"
+    ) {
+      try {
+        fulfillPaidOrderSafely({ outTradeNo: order.outTradeNo, nowIso: getNowIso() });
+      } catch (err) {
+        console.warn("[alipay:check] retry fulfillment failed", { outTradeNo: order.outTradeNo, error: err?.message || err });
+      }
+      order = findPaymentOrderByOutTradeNo(outTradeNo) || order;
+    }
+    const isReconcilableAlipay = order.status === "created" || order.status === "pending" || order.status === "expired";
+    if (isReconcilableAlipay) {
       const gateway = getAlipayProvider(appConfig);
       if (!gateway) {
         json(res, 503, { error: "充值服务未配置" });
@@ -964,6 +1220,10 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 404, { error: "订单不存在" });
       return true;
     }
+    if (existing.provider && existing.provider !== "alipay") {
+      badRequest(res, "订单支付渠道不匹配");
+      return true;
+    }
     if (existing.status === "paid") {
       badRequest(res, "订单已支付，不能关闭");
       return true;
@@ -973,89 +1233,25 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 503, { error: "充值服务未配置，暂时无法关闭订单" });
       return true;
     }
-    let closeResult;
-    try {
-      closeResult = await gateway.closeTrade(outTradeNo);
-    } catch (error) {
-      let queryResult;
-      try {
-        queryResult = await gateway.queryOrder(outTradeNo);
-      } catch (queryError) {
-        console.warn("[alipay] close confirmation query failed", {
-          outTradeNo,
-          error: String(queryError?.message || queryError),
-        });
-      }
-      if (queryResult?.notFound === true || (!queryResult && isAlipayTradeNotExistError(error))) {
-        const nowIso = new Date().toISOString();
-        const closed = closePaymentOrder({ userId: user.id, outTradeNo, nowIso });
-        const finalOrder = closed || findPaymentOrderByOutTradeNo(outTradeNo);
-        json(res, 200, { order: sanitizeOrder(finalOrder), providerTradeNotFound: true });
+    const nowIso = getNowIso();
+    const result = await safeReconcileAndCloseOrder(existing, gateway, { nowIso, user });
+    if (!result.ok) {
+      if (result.code === "TRADE_WAIT_BUYER_PAY") {
+        json(res, 409, { error: "支付宝交易状态已变化，请刷新后重试", order: sanitizeOrder(result.order) });
         return true;
       }
-      const tradeStatus = String(queryResult?.data?.trade_status || "");
-      if (tradeStatus === "TRADE_SUCCESS" || tradeStatus === "TRADE_FINISHED") {
-        let outcome;
-        try {
-          outcome = await reconcileOne(existing, gateway, {
-            nowIso: new Date().toISOString(),
-            queryResult,
-          });
-        } catch (reconcileError) {
-          console.warn("[alipay] close missing-trade reconciliation failed", {
-            outTradeNo,
-            error: String(reconcileError?.message || reconcileError),
-          });
-          json(res, 502, { error: "关闭订单前确认支付状态失败，请稍后重试" });
-          return true;
-        }
-        const currentOrder = findPaymentOrderByOutTradeNo(outTradeNo);
-        if (outcome === "paid") {
-          json(res, 200, { order: sanitizeOrder(currentOrder), reconciledOnClose: true });
-          return true;
-        }
+      if (result.code === "IDENTITY_MISMATCH" || result.code === "AMOUNT_MISMATCH" || result.code === "AUDIT_REQUIRED") {
         json(res, 502, { error: "订单支付状态异常，请稍后重试或联系客服" });
         return true;
       }
-      if (tradeStatus === "WAIT_BUYER_PAY" || tradeStatus === "TRADE_CLOSED") {
-        const currentOrder = findPaymentOrderByOutTradeNo(outTradeNo);
-        json(res, 409, { error: "支付宝交易状态已变化，请刷新后重试", order: sanitizeOrder(currentOrder) });
-        return true;
-      }
-      // If trade was never created on Alipay or provider is unreachable, close locally
-      const nowIso = new Date().toISOString();
-      const closed = closePaymentOrder({ userId: user.id, outTradeNo, nowIso });
-      const finalOrder = closed || findPaymentOrderByOutTradeNo(outTradeNo);
-      json(res, 200, { order: sanitizeOrder(finalOrder), providerClosed: false });
+      json(res, 502, { error: result.message || "关闭订单前确认支付状态失败，请稍后重试" });
       return true;
     }
-    if (closeResult?.alreadyPaid) {
-      const identityMismatch =
-        String(closeResult.outTradeNo || "") !== String(outTradeNo) ||
-        !closeResult.tradeNo ||
-        String(closeResult.totalAmount || "") !== fenToYuanString(existing.amountFen) ||
-        (closeResult.appId && gateway.appId && String(closeResult.appId) !== String(gateway.appId)) ||
-        (closeResult.sellerId && gateway.sellerId && String(closeResult.sellerId) !== String(gateway.sellerId));
-      if (identityMismatch) {
-        console.warn("[alipay] paid-on-close identity mismatch", { outTradeNo });
-        json(res, 502, { error: "订单支付状态异常，请稍后重试或联系客服" });
-        return true;
-      }
-      const nowIso = new Date().toISOString();
-      const providerPaidAt = normalizeProviderPaidAt(closeResult.paidAt || closeResult.gmt_payment || closeResult.send_pay_date);
-      const settled = settlePaidPaymentOrder({
-        outTradeNo,
-        tradeNo: String(closeResult.tradeNo),
-        nowIso,
-        providerPaidAt,
-      });
-      json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
-      return true;
-    }
-    const nowIso = new Date().toISOString();
-    const closed = closePaymentOrder({ userId: user.id, outTradeNo, nowIso });
-    const finalOrder = closed || findPaymentOrderByOutTradeNo(outTradeNo);
-    json(res, 200, { order: sanitizeOrder(finalOrder) });
+    const responsePayload = { order: sanitizeOrder(result.order) };
+    if (result.paidOnClose) responsePayload.paidOnClose = true;
+    if (result.reconciledOnClose) responsePayload.reconciledOnClose = true;
+    if (result.providerTradeNotFound) responsePayload.providerTradeNotFound = true;
+    json(res, 200, responsePayload);
     return true;
   }
 
@@ -1104,7 +1300,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 404, { error: "订单不存在" });
       return true;
     }
-    if (!isOrderPayable(order)) {
+    if (order.provider && order.provider !== "wxpay") {
+      badRequest(res, "订单支付渠道不匹配");
+      return true;
+    }
+    const preCheck = checkAndRefreshOrderPayable(order, getNowIso());
+    if (!preCheck.payable) {
       badRequest(res, "当前订单不能继续支付");
       return true;
     }
@@ -1113,15 +1314,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 503, { error: "微信支付服务未配置" });
       return true;
     }
-    const paymentAccess = await createWxpayPaymentAccess({
+    return await issuePaymentAccessSafely({
+      order: preCheck.order,
       gateway,
-      outTradeNo: order.outTradeNo,
-      description: `RedBase ${order.planName}`,
-      totalAmountFen: order.amountFen,
-      notifyUrl: appConfig?.wxpay?.notifyUrl || "",
+      provider: "wxpay",
+      subject: `RedBase ${order.planName}`,
+      appConfig,
+      isNewOrder: false,
+      res,
+      scope,
+      successStatusCode: 200,
     });
-    json(res, 200, { order: sanitizeOrder(order), ...paymentAccess });
-    return true;
   }
 
   if (req.method === "POST" && pathname.startsWith("/api/payments/wxpay/orders/") && pathname.endsWith("/check")) {
@@ -1133,7 +1336,25 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 404, { error: "订单不存在" });
       return true;
     }
-    if (isOrderPayable(order)) {
+    if (order.provider && order.provider !== "wxpay") {
+      badRequest(res, "订单支付渠道不匹配");
+      return true;
+    }
+    if (
+      order.status === "paid" &&
+      (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") &&
+      !order.auditReason &&
+      order.fulfillmentStatus !== "audit_required"
+    ) {
+      try {
+        fulfillPaidOrderSafely({ outTradeNo: order.outTradeNo, nowIso: getNowIso() });
+      } catch (err) {
+        console.warn("[wxpay:check] retry fulfillment failed", { outTradeNo: order.outTradeNo, error: err?.message || err });
+      }
+      order = findPaymentOrderByOutTradeNo(outTradeNo) || order;
+    }
+    const isReconcilableWxpay = order.status === "created" || order.status === "pending" || order.status === "expired";
+    if (isReconcilableWxpay) {
       const gateway = getWxpayProvider(appConfig);
       if (!gateway) {
         json(res, 503, { error: "微信支付服务未配置" });
@@ -1169,6 +1390,10 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 404, { error: "订单不存在" });
       return true;
     }
+    if (existing.provider && existing.provider !== "wxpay") {
+      badRequest(res, "订单支付渠道不匹配");
+      return true;
+    }
     if (existing.status === "paid") {
       badRequest(res, "订单已支付，不能关闭");
       return true;
@@ -1178,53 +1403,25 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       json(res, 503, { error: "微信支付服务未配置，暂时无法关闭订单" });
       return true;
     }
-    let closeResult;
-    try {
-      closeResult = await gateway.closeTrade(outTradeNo);
-    } catch (error) {
-      let queryResult;
-      try {
-        queryResult = await gateway.queryOrder(outTradeNo);
-      } catch (queryError) {
-        console.warn("[wxpay] close confirmation query failed", {
-          outTradeNo,
-          error: String(queryError?.message || queryError),
-        });
-      }
-      if (queryResult?.data?.trade_status === "TRADE_SUCCESS") {
-        const nowIso = new Date().toISOString();
-        const providerPaidAt = normalizeProviderPaidAt(queryResult.data.success_time || queryResult.data.paid_at || queryResult.data.paidAt);
-        const settled = settlePaidPaymentOrder({
-          outTradeNo,
-          tradeNo: String(queryResult.data.trade_no || ""),
-          nowIso,
-          providerPaidAt,
-        });
-        json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
+    const nowIso = getNowIso();
+    const result = await safeReconcileAndCloseOrder(existing, gateway, { nowIso, user });
+    if (!result.ok) {
+      if (result.code === "TRADE_WAIT_BUYER_PAY") {
+        json(res, 409, { error: "微信支付交易状态已变化，请刷新后重试", order: sanitizeOrder(result.order) });
         return true;
       }
-      const nowIso = new Date().toISOString();
-      const closed = closePaymentOrder({ userId: user.id, outTradeNo, nowIso });
-      const finalOrder = closed || findPaymentOrderByOutTradeNo(outTradeNo);
-      json(res, 200, { order: sanitizeOrder(finalOrder) });
+      if (result.code === "IDENTITY_MISMATCH" || result.code === "AMOUNT_MISMATCH" || result.code === "AUDIT_REQUIRED") {
+        json(res, 502, { error: "订单支付状态异常，请稍后重试或联系客服" });
+        return true;
+      }
+      json(res, 502, { error: result.message || "关闭订单前确认支付状态失败，请稍后重试" });
       return true;
     }
-    if (closeResult?.alreadyPaid) {
-      const nowIso = new Date().toISOString();
-      const providerPaidAt = normalizeProviderPaidAt(closeResult.paidAt || closeResult.success_time);
-      const settled = settlePaidPaymentOrder({
-        outTradeNo,
-        tradeNo: String(closeResult.tradeNo),
-        nowIso,
-        providerPaidAt,
-      });
-      json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
-      return true;
-    }
-    const nowIso = new Date().toISOString();
-    const closed = closePaymentOrder({ userId: user.id, outTradeNo, nowIso });
-    const finalOrder = closed || findPaymentOrderByOutTradeNo(outTradeNo);
-    json(res, 200, { order: sanitizeOrder(finalOrder) });
+    const responsePayload = { order: sanitizeOrder(result.order) };
+    if (result.paidOnClose) responsePayload.paidOnClose = true;
+    if (result.reconciledOnClose) responsePayload.reconciledOnClose = true;
+    if (result.providerTradeNotFound) responsePayload.providerTradeNotFound = true;
+    json(res, 200, responsePayload);
     return true;
   }
 
@@ -1269,6 +1466,7 @@ async function handlePaymentRoutes(context, req, res, pathname) {
 
 module.exports = {
   handlePaymentRoutes,
+  _resetReconcileCacheForTest,
   processAlipayNotify,
   processWxpayNotify,
   parseFormUrlEncoded,
@@ -1276,6 +1474,9 @@ module.exports = {
   createOutTradeNo,
 };
 
-function isOrderPayable(order) {
-  return order?.status === "created" || order?.status === "pending";
+function isOrderPayable(order, nowIso = getNowIso()) {
+  if (!order) return false;
+  if (order.status !== "created" && order.status !== "pending") return false;
+  if (order.expiresAt && order.expiresAt <= nowIso) return false;
+  return true;
 }

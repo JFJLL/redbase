@@ -245,9 +245,17 @@ export function checkPaymentStatus(outTradeNo: string, provider: "alipay" | "wxp
   });
 }
 
-export function closeOrder(outTradeNo: string, provider: "alipay" | "wxpay" = "alipay"): Promise<{ order: PaymentOrder }> {
+export interface CloseOrderResponse {
+  order: PaymentOrder;
+  paidOnClose?: boolean;
+  providerClosed?: boolean;
+  providerTradeNotFound?: boolean;
+  reconciledOnClose?: boolean;
+}
+
+export function closeOrder(outTradeNo: string, provider: "alipay" | "wxpay" = "alipay"): Promise<CloseOrderResponse> {
   const providerSlug = provider === "wxpay" ? "wxpay" : "alipay";
-  return apiFetch<{ order: PaymentOrder }>(`/api/payments/${providerSlug}/orders/${encodeURIComponent(outTradeNo)}/close`, {
+  return apiFetch<CloseOrderResponse>(`/api/payments/${providerSlug}/orders/${encodeURIComponent(outTradeNo)}/close`, {
     method: "POST",
   });
 }
@@ -255,4 +263,81 @@ export function closeOrder(outTradeNo: string, provider: "alipay" | "wxpay" = "a
 export function fakeSettleUrl(outTradeNo: string, provider: "alipay" | "wxpay" = "alipay"): string {
   const providerSlug = provider === "wxpay" ? "wxpay" : "alipay";
   return `/api/payments/fake/${providerSlug}/settle?outTradeNo=${encodeURIComponent(outTradeNo)}`;
+}
+
+const LEGACY_PLAN_IDS = new Set(["business-monthly", "business-annual"]);
+
+export function isLegacyPlanOrder(order: PaymentOrder): boolean {
+  if (order.orderKind === "legacy") return true;
+  if (!order.quoteId && (LEGACY_PLAN_IDS.has(order.planId) || !order.cycle)) return true;
+  return false;
+}
+
+export function isOrderCancellable(order: PaymentOrder | null | undefined): boolean {
+  if (!order) return false;
+  return order.status === "created" || order.status === "pending" || order.status === "expired";
+}
+
+export function getOrderStatusText(order: PaymentOrder): string {
+  if (order.status === "paid") {
+    if (order.fulfillmentStatus === "audit_required") return "已支付 · 待核查";
+    if (order.fulfillmentStatus === "scheduled") return "已支付 · 待生效";
+    if (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") {
+      return "已支付 · 处理中";
+    }
+    return "已支付";
+  }
+  if (order.status === "created" || order.status === "pending") return "待支付";
+  if (order.status === "expired") return "已过期";
+  if (order.status === "closed") return "已取消";
+  if (order.status === "failed") return "支付失败";
+  return order.status || "待支付";
+}
+
+export function getOrderStatusClass(order: PaymentOrder): string {
+  if (order.status === "paid") {
+    if (order.fulfillmentStatus === "audit_required") return "status audit";
+    if (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") return "status pending";
+    return "status";
+  }
+  if (order.status === "created" || order.status === "pending") return "status pending";
+  if (order.status === "expired" || order.status === "closed") return "status closed";
+  if (order.status === "failed") return "status failed";
+  return "status";
+}
+
+export function formatOrderCredits(order: PaymentOrder): string {
+  const credits = order.planCredits || 0;
+  const formatted = credits.toLocaleString("zh-CN");
+  if (order.orderKind === "topup") {
+    return `${formatted} 永久积分`;
+  }
+  if (order.orderAction === "upgrade") {
+    const issued = Number(order.issuedNow || 0).toLocaleString("zh-CN");
+    return `本期补发 ${issued} 积分`;
+  }
+  if (isLegacyPlanOrder(order) || !order.cycle) {
+    return `${formatted} 积分`;
+  }
+  return `${formatted} 积分 / 月`;
+}
+
+export function formatOrderNote(order: PaymentOrder): string {
+  if (order.status === "closed") return "未发放";
+  if (order.status === "failed") return "支付失败";
+  if (order.status !== "paid") return "未支付";
+
+  if (order.fulfillmentStatus === "audit_required") return "已支付 · 待核查";
+  if (order.fulfillmentStatus === "unfulfilled" || order.fulfillmentStatus === "processing") {
+    return "已支付 · 处理中";
+  }
+  if (order.orderKind === "topup") return "一次到账 · 不过期";
+  if (isLegacyPlanOrder(order) || !order.cycle) return "一次到账";
+  if (order.fulfillmentStatus === "scheduled") return "服务衔接 · 到期后生效";
+  if (order.orderAction === "upgrade") {
+    const issued = Number(order.issuedNow || 0).toLocaleString("zh-CN");
+    return `已补发 ${issued} 积分 · 原到期日不变`;
+  }
+  if (order.cycle === "annual") return "按月发放 · 共 12 期";
+  return "首期已发放";
 }

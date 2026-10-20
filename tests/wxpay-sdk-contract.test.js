@@ -19,7 +19,7 @@ const {
   createWxpayProvider,
   getWxpayProvider,
 } = require("../src/server/integrations/wxpay");
-const { reconcileOrders } = require("../src/server/billing/reconcile-orders");
+const { reconcileOrders, reconcileOne } = require("../src/server/billing/reconcile-orders");
 const { insertUser, findUserByPhone } = require("../src/server/db/repositories/auth-repository");
 const { insertPaymentOrder, findPaymentOrderByOutTradeNo } = require("../src/server/db/repositories/payment-repository");
 
@@ -280,4 +280,55 @@ test("WeChat Pay orders are reconciled and credited appropriately by reconcileOr
   assert.equal(settledOrder.provider, "wxpay");
   assert.equal(settledOrder.tradeNo, "WX_TRANS_RECONCILE_PAID");
   assert.equal(Number(findUserByPhone("13900000018").credits), creditsBefore + 1000);
+});
+
+
+test("RealWxpayProvider queryOrder rejects generic 404 without ORDER_NOT_EXIST code", async () => {
+  const provider = makeRealWxProvider();
+  provider.request = async () => ({
+    status: 404,
+    ok: false,
+    data: { message: "Resource not found on gateway" },
+  });
+
+  await assert.rejects(
+    () => provider.queryOrder("redbase_wx_generic_404"),
+    /微信支付查询订单失败：Resource not found on gateway/,
+  );
+});
+
+test("WeChat Pay query with mismatched appid fails identity check and is not settled", async () => {
+  insertPaymentOrder({
+    outTradeNo: "redbase_wx_wrong_appid",
+    userId: 2,
+    idempotencyKey: "wx-wrong-appid",
+    plan: { id: "business-monthly", name: "单月版", credits: 1000, amountFen: 350000 },
+    status: "pending",
+    provider: "wxpay",
+    nowIso: "2026-08-14T00:00:00.000Z",
+    expiresAtIso: "2026-08-14T01:00:00.000Z",
+  });
+
+  const provider = makeRealWxProvider();
+  provider.request = async () => ({
+    status: 200,
+    ok: true,
+    data: {
+      out_trade_no: "redbase_wx_wrong_appid",
+      transaction_id: "WX_TRANS_WRONG_APPID",
+      trade_state: "SUCCESS",
+      amount: { total: 350000 },
+      mchid: "1600000001",
+      appid: "wx_DIFFERENT_APP_ID", // Wrong appid!
+    },
+  });
+
+  const order = findPaymentOrderByOutTradeNo("redbase_wx_wrong_appid");
+  const outcome = await reconcileOne(order, provider, {
+    nowIso: "2026-08-14T12:00:00.000Z",
+  });
+
+  assert.equal(outcome, "failed");
+  const stored = findPaymentOrderByOutTradeNo("redbase_wx_wrong_appid");
+  assert.equal(stored.status, "pending", "Order must not settle on mismatched appid");
 });

@@ -575,7 +575,7 @@ test("a missing-trade close remains pending when the confirmation query finds a 
   }
 });
 
-test("a missing-trade close does not locally close an already closed provider trade", async () => {
+test("a missing-trade close safely closes locally when confirmation query confirms TRADE_CLOSED", async () => {
   const gateway = getAlipayProvider(appConfig);
   const orderRes = await createOrder("redbase_session=token-a", `idem-close-provider-closed-${Date.now()}`);
   const order = JSON.parse(orderRes.body).order;
@@ -593,8 +593,8 @@ test("a missing-trade close does not locally close an already closed provider tr
       cookie: "redbase_session=token-a",
       body: {},
     });
-    assert.equal(response.statusCode, 409);
-    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "pending");
+    assert.equal(response.statusCode, 200);
+    assert.equal(findPaymentOrderByOutTradeNo(order.outTradeNo).status, "closed");
   } finally {
     gateway.closeTrade = originalCloseTrade;
     gateway.queryOrder = originalQueryOrder;

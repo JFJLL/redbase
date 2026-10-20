@@ -416,8 +416,9 @@ class RealWxpayProvider {
     } catch (error) {
       throw error;
     }
-    if (res.status === 404 || res.data?.code === "ORDER_NOT_EXIST" || res.data?.code === "ORDERNOTEXIST") {
-      return { data: {}, notFound: true, responseHttpStatus: 404 };
+    const isOrderNotExist = res.data?.code === "ORDER_NOT_EXIST" || res.data?.code === "ORDERNOTEXIST";
+    if (isOrderNotExist) {
+      return { data: {}, notFound: true, responseHttpStatus: res.status || 404 };
     }
     if (!res.ok) {
       const msg = res.data?.message || res.data?.code || `HTTP ${res.status}`;

@@ -4,13 +4,20 @@ import { useRoute } from "vue-router";
 import QRCode from "qrcode";
 import {
   checkPaymentStatus,
+  closeOrder,
   createOrderWithQuote,
   fakeSettleUrl,
   fetchLedger,
+  fetchOrder,
   fetchOrders,
   fetchRechargePlans,
   fetchWalletOverview,
+  formatOrderCredits,
+  formatOrderNote,
   getLedgerExportUrl,
+  getOrderStatusClass,
+  getOrderStatusText,
+  isOrderCancellable,
   requestBillingQuote,
   type ActiveSubscription,
   type BillingOverview,
@@ -23,6 +30,7 @@ import {
   type ScheduledSubscription,
   type TopupPack,
 } from "../api";
+import type { ApiError } from "@/shared/api/client";
 
 const route = useRoute();
 
@@ -57,7 +65,12 @@ const submittingOrder = ref(false);
 const activeOrderResponse = ref<CreateOrderResponse | null>(null);
 const payQrCodeDataUrl = ref("");
 const paymentSuccess = ref(false);
+const paymentAuditRequired = ref(false);
+const paymentProcessing = ref(false);
 const checkoutErrorMessage = ref("");
+const conflictingOrder = ref<PaymentOrder | null>(null);
+const cancelInProgress = ref(false);
+const cancellingTradeNo = ref<string | null>(null);
 
 // Info Modals
 const rulesModalOpen = ref(false);
@@ -73,6 +86,8 @@ const toastVisible = ref(false);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Order Polling
+let checkoutSessionId = 0;
+let pollSessionId = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Computed
@@ -224,95 +239,221 @@ async function openTopupCheckout(topupId: string): Promise<void> {
 }
 
 async function startCheckout(kind: "plan" | "topup", itemId: string, cycle?: "monthly" | "annual"): Promise<void> {
+  const currentSession = ++checkoutSessionId;
+  stopOrderPolling();
   quoteLoading.value = true;
   checkoutErrorMessage.value = "";
+  conflictingOrder.value = null;
   acknowledgeChecked.value = false;
   paymentSuccess.value = false;
+  paymentAuditRequired.value = false;
+  paymentProcessing.value = false;
   activeOrderResponse.value = null;
   payQrCodeDataUrl.value = "";
   currentQuote.value = null;
+  submittingOrder.value = false;
   checkoutOpen.value = true;
 
   try {
     const res = await requestBillingQuote(kind, itemId, cycle);
+    if (checkoutSessionId !== currentSession) return;
     currentQuote.value = res.quote;
   } catch (err: any) {
+    if (checkoutSessionId !== currentSession) return;
+    const body = (err as ApiError)?.body as any;
+    if (body?.pendingOrder) {
+      conflictingOrder.value = body.pendingOrder as PaymentOrder;
+    }
     checkoutErrorMessage.value = err?.message || "获取套餐报价失败，请重试";
   } finally {
-    quoteLoading.value = false;
+    if (checkoutSessionId === currentSession) {
+      quoteLoading.value = false;
+    }
   }
 }
 
 async function submitPayment(): Promise<void> {
   if (!currentQuote.value || submittingOrder.value || !acknowledgeChecked.value) return;
+  const currentSession = checkoutSessionId;
   submittingOrder.value = true;
   checkoutErrorMessage.value = "";
+  conflictingOrder.value = null;
+  paymentAuditRequired.value = false;
+  paymentProcessing.value = false;
+  paymentSuccess.value = false;
+  const orderProvider = selectedProvider.value;
   try {
     const quote = currentQuote.value;
-    const idem = (quote as any).idempotencyKey || `rb_quote_${quote.quoteId}_${selectedProvider.value}`;
+    const idem = (quote as any).idempotencyKey || `rb_quote_${quote.quoteId}_${orderProvider}`;
     (quote as any).idempotencyKey = idem;
-    const res = await createOrderWithQuote(selectedProvider.value, quote.quoteId, idem);
+    const res = await createOrderWithQuote(orderProvider, quote.quoteId, idem);
+
+    if (checkoutSessionId !== currentSession) return;
+
+    // Backend contract: Idempotent hit may return 200 with paid/closed/expired order and empty payUrl/qrCode
+    if (res.order) {
+      const actualProvider = res.order.provider || orderProvider;
+      if (res.order.status === "paid") {
+        activeOrderResponse.value = res;
+        if (res.order.fulfillmentStatus === "audit_required") {
+          stopOrderPolling();
+          toast("订单待核查，请勿重复付款；可在订单记录查看进度或联系客服。");
+          paymentAuditRequired.value = true;
+          paymentSuccess.value = false;
+          paymentProcessing.value = false;
+          await refreshAllData();
+          return;
+        } else if (res.order.fulfillmentStatus === "scheduled") {
+          stopOrderPolling();
+          toast("支付成功！新套餐已预约，将于当前服务结束后生效。");
+          paymentSuccess.value = true;
+          paymentAuditRequired.value = false;
+          paymentProcessing.value = false;
+          await refreshAllData();
+          return;
+        } else if (res.order.fulfillmentStatus === "unfulfilled" || res.order.fulfillmentStatus === "processing") {
+          paymentProcessing.value = true;
+          paymentSuccess.value = false;
+          paymentAuditRequired.value = false;
+          toast("已支付，权益处理中，请稍候...");
+          startOrderPolling(res.order.outTradeNo, actualProvider);
+          return;
+        } else {
+          stopOrderPolling();
+          toast("支付成功，权益已自动入账！");
+          paymentSuccess.value = true;
+          paymentAuditRequired.value = false;
+          paymentProcessing.value = false;
+          await refreshAllData();
+          return;
+        }
+      }
+
+      if (res.order.status === "closed" || res.order.status === "expired" || res.order.status === "failed") {
+        activeOrderResponse.value = null;
+        payQrCodeDataUrl.value = "";
+        checkoutErrorMessage.value = `该订单状态为${getOrderStatusText(res.order)}，无法继续支付，请重新下单。`;
+        await refreshAllData();
+        return;
+      }
+    }
+
     activeOrderResponse.value = res;
 
     // Generate QR code
     const qrPayload = res.qrCode || res.payUrl;
     if (qrPayload) {
       try {
-        payQrCodeDataUrl.value = await QRCode.toDataURL(qrPayload, {
+        const qrUrl = await QRCode.toDataURL(qrPayload, {
           width: 200,
           margin: 1,
           color: { dark: "#120f10", light: "#ffffff" },
         });
+        if (checkoutSessionId !== currentSession) return;
+        payQrCodeDataUrl.value = qrUrl;
       } catch {
+        if (checkoutSessionId !== currentSession) return;
         payQrCodeDataUrl.value = "";
       }
+    } else {
+      payQrCodeDataUrl.value = "";
     }
 
     // Start polling status
-    startOrderPolling(res.order.outTradeNo);
+    if (res.order?.outTradeNo) {
+      startOrderPolling(res.order.outTradeNo, res.order.provider || orderProvider);
+    }
   } catch (err: any) {
+    if (checkoutSessionId !== currentSession) return;
+    activeOrderResponse.value = null;
+    payQrCodeDataUrl.value = "";
+    stopOrderPolling();
+
+    const body = (err as ApiError)?.body as any;
+    if (body?.pendingOrder) {
+      conflictingOrder.value = body.pendingOrder as PaymentOrder;
+    }
     checkoutErrorMessage.value = err?.message || "创建支付订单失败，请重试";
   } finally {
-    submittingOrder.value = false;
+    if (checkoutSessionId === currentSession) {
+      submittingOrder.value = false;
+    }
   }
 }
 
-function startOrderPolling(outTradeNo: string): void {
+function startOrderPolling(outTradeNo: string, provider: "alipay" | "wxpay"): void {
   stopOrderPolling();
+  const currentSession = pollSessionId;
   let pollCount = 0;
   pollTimer = setInterval(async () => {
     pollCount++;
+    if (pollCount > 100) {
+      if (pollSessionId === currentSession) {
+        stopOrderPolling();
+      }
+      return;
+    }
     try {
-      const res = await checkPaymentStatus(outTradeNo, selectedProvider.value);
+      const res = await checkPaymentStatus(outTradeNo, provider);
+      if (pollSessionId !== currentSession) return;
       if (res.order.status === "paid") {
         if (res.order.fulfillmentStatus === "audit_required") {
-          toast("支付已收到，订单已进入人工核查流程，请查看详情。");
+          stopOrderPolling();
+          toast("订单待核查，请勿重复付款；可在订单记录查看进度或联系客服。");
+          paymentAuditRequired.value = true;
+          paymentSuccess.value = false;
+          paymentProcessing.value = false;
+          if (activeOrderResponse.value) {
+            activeOrderResponse.value.order = res.order;
+          }
+          await refreshAllData();
+          return;
         } else if (res.order.fulfillmentStatus === "scheduled") {
+          stopOrderPolling();
           toast("支付成功！新套餐已预约，将于当前服务结束后生效。");
+          paymentSuccess.value = true;
+          paymentAuditRequired.value = false;
+          paymentProcessing.value = false;
+          if (activeOrderResponse.value) {
+            activeOrderResponse.value.order = res.order;
+          }
+          await refreshAllData();
+          return;
         } else if (res.order.fulfillmentStatus === "unfulfilled" || res.order.fulfillmentStatus === "processing") {
+          paymentProcessing.value = true;
+          paymentSuccess.value = false;
+          paymentAuditRequired.value = false;
           toast("已支付，权益处理中，请稍候...");
+          if (activeOrderResponse.value) {
+            activeOrderResponse.value.order = res.order;
+          }
           return;
         } else {
+          stopOrderPolling();
           toast("支付成功，权益已自动入账！");
+          paymentSuccess.value = true;
+          paymentAuditRequired.value = false;
+          paymentProcessing.value = false;
+          if (activeOrderResponse.value) {
+            activeOrderResponse.value.order = res.order;
+          }
+          await refreshAllData();
+          return;
         }
-        stopOrderPolling();
-        paymentSuccess.value = true;
-        if (activeOrderResponse.value) {
-          activeOrderResponse.value.order = res.order;
-        }
-        await refreshAllData();
       } else if (res.order.status === "closed" || res.order.status === "expired" || res.order.status === "failed") {
         stopOrderPolling();
-        checkoutErrorMessage.value = `订单状态：${res.order.status}`;
+        activeOrderResponse.value = null;
+        paymentProcessing.value = false;
+        checkoutErrorMessage.value = `订单状态：${getOrderStatusText(res.order)}`;
       }
     } catch {
       // silent poll catch
     }
-    if (pollCount > 100) stopOrderPolling();
   }, 2500);
 }
 
 function stopOrderPolling(): void {
+  pollSessionId++;
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -320,11 +461,113 @@ function stopOrderPolling(): void {
 }
 
 function closeCheckoutDialog(): void {
+  checkoutSessionId++;
   stopOrderPolling();
   checkoutOpen.value = false;
   currentQuote.value = null;
   activeOrderResponse.value = null;
   paymentSuccess.value = false;
+  paymentAuditRequired.value = false;
+  paymentProcessing.value = false;
+  checkoutErrorMessage.value = "";
+  conflictingOrder.value = null;
+  submittingOrder.value = false;
+  quoteLoading.value = false;
+}
+
+function openConflictingOrderDetail(): void {
+  const conflict = conflictingOrder.value;
+  closeCheckoutDialog();
+  if (conflict) {
+    if (!orders.value.some((o) => o.outTradeNo === conflict.outTradeNo)) {
+      orders.value.unshift(conflict);
+    }
+    selectedOrder.value = conflict;
+    orderDetailModalOpen.value = true;
+  }
+  selectTab("orders");
+}
+
+async function handleCancelOrder(order: PaymentOrder): Promise<void> {
+  if (!order || !isOrderCancellable(order) || cancelInProgress.value) {
+    return;
+  }
+  cancelInProgress.value = true;
+  cancellingTradeNo.value = order.outTradeNo;
+  try {
+    const res = await closeOrder(order.outTradeNo, order.provider || "alipay");
+    const authoritativeOrder = res.order;
+    ordersLoadSessionId++;
+
+    // Update in orders list
+    const idx = orders.value.findIndex((o) => o.outTradeNo === authoritativeOrder.outTradeNo);
+    if (idx !== -1) {
+      orders.value[idx] = authoritativeOrder;
+    } else {
+      orders.value.unshift(authoritativeOrder);
+    }
+
+    // Update selectedOrder if open
+    if (selectedOrder.value?.outTradeNo === authoritativeOrder.outTradeNo) {
+      selectedOrder.value = authoritativeOrder;
+    }
+
+    if (authoritativeOrder.status === "paid") {
+      // Channel was actually paid!
+      currentQuote.value = null;
+      await refreshAllData();
+      if (authoritativeOrder.fulfillmentStatus === "audit_required") {
+        toast("订单待核查，请勿重复付款；可在订单记录查看进度或联系客服。");
+      } else if (authoritativeOrder.fulfillmentStatus === "scheduled") {
+        toast("渠道已确认支付，新套餐已预约，将于当前服务结束后生效。");
+      } else if (authoritativeOrder.fulfillmentStatus === "unfulfilled" || authoritativeOrder.fulfillmentStatus === "processing") {
+        toast("渠道已确认支付，权益处理中，请稍候...");
+      } else {
+        toast("支付渠道已付款，权益已到账。");
+      }
+    } else if (authoritativeOrder.status === "closed") {
+      toast("订单已取消。");
+      currentQuote.value = null;
+      refreshAllData();
+    } else {
+      toast(`订单当前状态：${getOrderStatusText(authoritativeOrder)}`);
+    }
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    const isAlreadyPaid = (err as ApiError)?.status === 400 && (msg.includes("已支付") || msg.includes("paid"));
+    if (isAlreadyPaid) {
+      try {
+        const refreshed = await fetchOrder(order.outTradeNo);
+        if (refreshed?.order) {
+          const authoritativeOrder = refreshed.order;
+          ordersLoadSessionId++;
+          const idx = orders.value.findIndex((o) => o.outTradeNo === authoritativeOrder.outTradeNo);
+          if (idx !== -1) orders.value[idx] = authoritativeOrder;
+          if (selectedOrder.value?.outTradeNo === authoritativeOrder.outTradeNo) {
+            selectedOrder.value = authoritativeOrder;
+          }
+          currentQuote.value = null;
+          await refreshAllData();
+          if (authoritativeOrder.fulfillmentStatus === "audit_required") {
+            toast("订单待核查，请勿重复付款；可在订单记录查看进度或联系客服。");
+          } else if (authoritativeOrder.fulfillmentStatus === "scheduled") {
+            toast("渠道已确认支付，新套餐已预约，将于当前服务结束后生效。");
+          } else if (authoritativeOrder.fulfillmentStatus === "unfulfilled" || authoritativeOrder.fulfillmentStatus === "processing") {
+            toast("渠道已确认支付，权益处理中，请稍候...");
+          } else {
+            toast("支付渠道已付款，权益已到账。");
+          }
+          return;
+        }
+      } catch {
+        // fallback
+      }
+    }
+    toast(err?.message || "取消订单失败，请稍后重试");
+  } finally {
+    cancelInProgress.value = false;
+    cancellingTradeNo.value = null;
+  }
 }
 
 function viewOrderDetail(order: PaymentOrder): void {
@@ -350,15 +593,25 @@ async function loadLedger(): Promise<void> {
   }
 }
 
+let ordersLoadSessionId = 0;
+
 async function loadOrders(): Promise<void> {
+  const currentSession = ++ordersLoadSessionId;
   loadingOrders.value = true;
   try {
     const res = await fetchOrders();
+    if (ordersLoadSessionId !== currentSession) return;
     orders.value = res.orders;
+    if (selectedOrder.value) {
+      const match = res.orders.find((o) => o.outTradeNo === selectedOrder.value?.outTradeNo);
+      if (match) selectedOrder.value = match;
+    }
   } catch (err) {
     console.error("Failed to load orders:", err);
   } finally {
-    loadingOrders.value = false;
+    if (ordersLoadSessionId === currentSession) {
+      loadingOrders.value = false;
+    }
   }
 }
 
@@ -971,27 +1224,28 @@ function onLedgerSearchInput(e: Event): void {
                     ¥{{ o.amountYuan || formatYuan(o.amountFen) }}
                   </td>
                   <td>
-                    <span>
-                      {{ o.orderKind === 'topup' ? `${formatNumber(o.planCredits)} 永久积分` : o.orderAction === 'upgrade' ? `本期补发 ${formatNumber(o.issuedNow)} 积分` : `${formatNumber(o.planCredits)} 积分 / 月` }}
-                    </span>
-                    <small>
-                      {{ o.status === 'closed' ? '未发放' :
-                         o.status !== 'paid' ? '未支付' :
-                         o.fulfillmentStatus === 'audit_required' ? '已支付 · 待核查' :
-                         o.orderKind === 'topup' ? '一次到账 · 不过期' :
-                         o.fulfillmentStatus === 'scheduled' ? '服务衔接 · 到期后生效' :
-                         o.orderAction === 'upgrade' ? `已补发 ${formatNumber(o.issuedNow || 0)} 积分 · 原到期日不变` :
-                         o.cycle === 'annual' ? '按月发放 · 共 12 期' : '首期已发放' }}
-                    </small>
+                    <span>{{ formatOrderCredits(o) }}</span>
+                    <small>{{ formatOrderNote(o) }}</small>
                   </td>
                   <td>{{ o.provider === 'wxpay' ? '微信支付' : '支付宝' }}</td>
                   <td>
-                    <span class="status" :class="{ closed: o.status === 'closed' || o.status === 'expired' }">
-                      {{ o.status === 'paid' ? '已支付' : o.status === 'closed' ? '已取消' : o.status === 'expired' ? '已过期' : '待支付' }}
+                    <span :class="getOrderStatusClass(o)">
+                      {{ getOrderStatusText(o) }}
                     </span>
                   </td>
                   <td>
-                    <button type="button" class="text-button" @click="viewOrderDetail(o)">查看详情</button>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <button type="button" class="text-button" @click="viewOrderDetail(o)">查看详情</button>
+                      <button
+                        v-if="isOrderCancellable(o)"
+                        type="button"
+                        class="text-button danger"
+                        :disabled="cancelInProgress"
+                        @click="handleCancelOrder(o)"
+                      >
+                        {{ cancellingTradeNo === o.outTradeNo ? '取消中…' : '取消' }}
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 <tr v-if="orders.length === 0">
@@ -1082,7 +1336,55 @@ function onLedgerSearchInput(e: Event): void {
             <svg class="ico"><use href="#i-info"/></svg>
             <span>{{ checkoutErrorMessage }}</span>
           </div>
-          <button type="button" class="button" style="width:100%;margin-top:16px" @click="closeCheckoutDialog">返回</button>
+          <div v-if="conflictingOrder" style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
+            <button type="button" class="button primary" style="width:100%" @click="openConflictingOrderDetail">
+              查看进行中订单并处理
+            </button>
+            <button type="button" class="button" style="width:100%" @click="closeCheckoutDialog">
+              返回
+            </button>
+          </div>
+          <button v-else type="button" class="button" style="width:100%;margin-top:16px" @click="closeCheckoutDialog">返回</button>
+        </div>
+
+        <!-- Audit Required View -->
+        <div v-else-if="paymentAuditRequired" class="dialog-body success-body">
+          <div class="success-circle" style="background:#fffbe6;color:#d48806">
+            <svg class="ico"><use href="#i-clock"/></svg>
+          </div>
+          <h3>支付已收到 · 待人工核查</h3>
+          <p>
+            系统已收到您的付款信息，订单进入人工核查流程。<br>
+            订单待核查，请勿重复付款；可在订单记录查看进度或联系客服。
+          </p>
+          <div class="success-actions" style="margin-top:16px">
+            <button type="button" class="button primary" @click="closeCheckoutDialog(); selectTab('orders')">
+              查看订单记录
+            </button>
+            <button type="button" class="button" @click="closeCheckoutDialog">
+              完成
+            </button>
+          </div>
+        </div>
+
+        <!-- Processing View -->
+        <div v-else-if="paymentProcessing" class="dialog-body success-body">
+          <div class="success-circle" style="background:#e6f7ff;color:#1890ff">
+            <svg class="ico"><use href="#i-refresh"/></svg>
+          </div>
+          <h3>支付已确认 · 权益处理中</h3>
+          <p>
+            已确认收到付款，正在为您配置套餐权益，请稍候…<br>
+            您也可关闭窗口，在“订单记录”中随时查看生效状态。
+          </p>
+          <div class="success-actions" style="margin-top:16px">
+            <button type="button" class="button primary" @click="closeCheckoutDialog(); selectTab('orders')">
+              查看订单记录
+            </button>
+            <button type="button" class="button" @click="closeCheckoutDialog">
+              完成
+            </button>
+          </div>
         </div>
 
         <!-- Payment Success View -->
@@ -1229,7 +1531,7 @@ function onLedgerSearchInput(e: Event): void {
         </div>
 
         <!-- Dialog Footer -->
-        <div v-if="currentQuote && !paymentSuccess" class="checkout-footer">
+        <div v-if="currentQuote && !paymentSuccess && !paymentAuditRequired && !paymentProcessing && !checkoutErrorMessage" class="checkout-footer">
           <div class="total-row">
             <span>
               {{ currentQuote.action === 'upgrade' ? '本次升级补款' : '本次应付' }}
@@ -1465,17 +1767,33 @@ function onLedgerSearchInput(e: Event): void {
           <div class="checkout-product">
             <div>
               <h3>{{ selectedOrder.planName }}</h3>
-              <p>{{ selectedOrder.orderAction === 'upgrade' ? '升级差价订单' : selectedOrder.fulfillmentStatus === 'scheduled' ? '已购买，等待生效' : '已支付' }}</p>
+              <p :class="getOrderStatusClass(selectedOrder)" style="display:inline-block;margin-top:4px">
+                {{ getOrderStatusText(selectedOrder) }}
+              </p>
             </div>
             <strong class="checkout-price num"><small>¥</small>{{ selectedOrder.amountYuan || formatYuan(selectedOrder.amountFen) }}</strong>
           </div>
           <div class="order-detail-list">
             <div><span>订单号</span><b style="font-size:10px">{{ selectedOrder.outTradeNo }}</b></div>
+            <div><span>订单状态</span><b :class="getOrderStatusClass(selectedOrder)">{{ getOrderStatusText(selectedOrder) }}</b></div>
             <div><span>创建时间</span><b>{{ formatTime(selectedOrder.createdAt) }}</b></div>
+            <div v-if="selectedOrder.paidAt"><span>支付时间</span><b>{{ formatTime(selectedOrder.paidAt) }}</b></div>
             <div><span>支付方式</span><b>{{ selectedOrder.provider === 'wxpay' ? '微信支付' : '支付宝' }}</b></div>
-            <div><span>额度</span><b>{{ selectedOrder.orderKind === 'topup' ? `${formatNumber(selectedOrder.planCredits)} 永久积分` : selectedOrder.orderAction === 'upgrade' ? `本期补发 ${formatNumber(selectedOrder.issuedNow)} 积分` : `${formatNumber(selectedOrder.planCredits)} 积分 / 月` }}</b></div>
+            <div><span>额度</span><b>{{ formatOrderCredits(selectedOrder) }}</b></div>
+            <div><span>权益说明</span><b>{{ formatOrderNote(selectedOrder) }}</b></div>
             <div v-if="selectedOrder.serviceStart"><span>服务开始</span><b>{{ formatTime(selectedOrder.serviceStart) }}</b></div>
             <div v-if="selectedOrder.serviceEnd"><span>服务结束</span><b>{{ formatTime(selectedOrder.serviceEnd) }}</b></div>
+          </div>
+          <div v-if="isOrderCancellable(selectedOrder)" class="order-detail-actions" style="margin-top:20px;display:flex;justify-content:flex-end;gap:10px;">
+            <button
+              type="button"
+              class="button danger"
+              :disabled="cancelInProgress"
+              @click="handleCancelOrder(selectedOrder)"
+            >
+              <svg v-if="cancellingTradeNo === selectedOrder.outTradeNo" class="ico sm"><use href="#i-refresh"/></svg>
+              {{ cancellingTradeNo === selectedOrder.outTradeNo ? '正在取消…' : '取消订单' }}
+            </button>
           </div>
         </div>
       </div>
@@ -2259,6 +2577,34 @@ td small {
 .status.closed {
   background: #f4efeb;
   color: #8c786d;
+}
+.status.pending {
+  background: #fff7e6;
+  color: #d46b08;
+}
+.status.failed {
+  background: #fff1f0;
+  color: #cf1322;
+}
+.status.audit {
+  background: #fffbe6;
+  color: #d48806;
+}
+.text-button.danger {
+  color: #cf1322;
+}
+.text-button.danger:hover {
+  color: #a8071a;
+  text-decoration: underline;
+}
+.button.danger {
+  border-color: #ffccc7;
+  background: #fff2f0;
+  color: #cf1322;
+}
+.button.danger:hover {
+  border-color: #ffa39e;
+  background: #ffe1dd;
 }
 .table-empty {
   text-align: center;

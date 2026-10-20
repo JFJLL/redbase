@@ -377,6 +377,16 @@ function insertPaymentOrder({
   return order;
 }
 
+
+function transitionPaymentOrderCreatedToPending({ outTradeNo, nowIso }) {
+  const result = db.prepare(`
+    UPDATE payment_orders
+    SET status = 'pending', updated_at = ?
+    WHERE out_trade_no = ? AND status = 'created'
+  `).run(String(nowIso), String(outTradeNo || ""));
+  return result.changes > 0;
+}
+
 function updatePaymentOrderStatus({ outTradeNo, status, nowIso, extra = {} }) {
   const allowed = ["created", "pending", "paid", "closed", "expired", "failed"];
   if (!allowed.includes(String(status || ""))) throw new Error(`未知订单状态：${status}`);
@@ -470,7 +480,12 @@ function fulfillPaidOrderSafely({ outTradeNo, nowIso }, db = getDbProxy()) {
     const order = findPaymentOrderByOutTradeNo(outTradeNo);
     if (!order) return null;
     if (order.status !== "paid") return order;
-    if (order.fulfillmentStatus === "fulfilled" || order.fulfillmentStatus === "scheduled") {
+    if (
+      order.fulfillmentStatus === "fulfilled" ||
+      order.fulfillmentStatus === "scheduled" ||
+      order.fulfillmentStatus === "audit_required" ||
+      Boolean(order.auditReason)
+    ) {
       return order;
     }
 
@@ -805,4 +820,5 @@ module.exports = {
   closePaymentOrder,
   markPaymentOrderExpired,
   markPaymentOrderAudit,
+  transitionPaymentOrderCreatedToPending,
 };
