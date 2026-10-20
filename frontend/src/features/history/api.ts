@@ -8,7 +8,7 @@ import type { VideoScript } from "@/features/generation/api";
 export const HISTORY_TYPE_LABELS = new Map<string, string>([
   ["moments", "朋友圈图文"],
   ["wechat", "公众号长图"],
-  ["xhsCarousel", "小红书组图"],
+  ["xhsCarousel", "媒体组图"],
   ["videoScript", "视频脚本"],
   ["videoProject", "AI 视频"],
   ["styleImage", "一键风格化"],

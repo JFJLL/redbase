@@ -158,7 +158,7 @@ function slideStatus(slide: {
 function actionLabel(action: IdeaGenerationAction): string {
   if (action === "moments") return "朋友圈图";
   if (action === "wechat") return "公众号长图";
-  if (action === "xhsCarousel") return "小红书组图";
+  if (action === "xhsCarousel") return "媒体组图";
   return "风格化图";
 }
 
@@ -327,10 +327,10 @@ function onEdited(): void {
         <ImageEditPanel v-if="editOpenFor === 'styleImage'" :target="editTarget" @edited="onEdited" />
       </div>
 
-      <!-- 小红书组图 -->
+      <!-- 媒体组图 -->
       <div v-if="genKind === 'xhsCarousel' && carousel.pack" class="gen-result" data-test="xhs-result">
         <div class="carousel-head">
-          <h3>{{ carousel.pack.title || "小红书组图" }}</h3>
+          <h3>{{ carousel.pack.title || "媒体组图" }}</h3>
           <button
             type="button"
             class="secondary-btn"
@@ -629,7 +629,7 @@ function onEdited(): void {
   gap: 14px;
 }
 
-/* 小红书组图沿用旧版的宽屏画布，避免固定左栏挤压右侧文案。 */
+/* 媒体组图沿用旧版的宽屏画布，避免固定左栏挤压右侧文案。 */
 .idea-generation-panel--xhs {
   width: min(1180px, 100%);
   max-height: calc(100vh - 56px);

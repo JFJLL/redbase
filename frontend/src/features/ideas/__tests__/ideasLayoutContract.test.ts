@@ -63,7 +63,7 @@ describe("ideas card layout contract", () => {
       expect(card.find('[data-test="idea-assets-incomplete"]').exists()).toBe(false);
       expect(card.text()).not.toContain("缺少完整内容资产");
       expect(card.text()).not.toContain("朋友圈标题：");
-      expect(card.text()).not.toContain("小红书文案：");
+      expect(card.text()).not.toContain("社交媒体文案：");
     }
   });
 
@@ -78,7 +78,7 @@ describe("ideas card layout contract", () => {
     expect(buttons.map((button) => button.text())).toEqual([
       "一键朋友圈图1 积分",
       "一键公众号长图1 积分",
-      "一键小红书组图4 积分",
+      "一键媒体组图4 积分",
       "一键生成脚本1 积分",
     ]);
   });
@@ -93,6 +93,6 @@ describe("ideas card layout contract", () => {
     expect(IdeasViewSource).not.toContain("首次生成时自动补齐");
     expect(IdeasViewSource).not.toContain('data-test="idea-assets-incomplete"');
     expect(IdeasViewSource).not.toContain("朋友圈标题：");
-    expect(IdeasViewSource).not.toContain("小红书文案：");
+    expect(IdeasViewSource).not.toContain("社交媒体文案：");
   });
 });

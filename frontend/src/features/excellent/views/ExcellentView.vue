@@ -94,7 +94,7 @@ const auth = useAuthStore();
 const scope = useAbortScope();
 
 const BOARDS: Array<{ value: ExcellentBoard; label: string }> = [
-  { value: "xhs_hot", label: "小红书热门" },
+  { value: "xhs_hot", label: "媒体热门" },
   { value: "ecommerce_hot", label: "电商热门" },
   { value: "xingtu", label: "巨量星图" },
 ];
@@ -286,7 +286,7 @@ function formatCompactMetric(value: unknown): string {
 
 function boardLabel(board: ExcellentBoard): string {
   if (board === "xingtu") return "巨量星图";
-  return board === "ecommerce_hot" ? "电商热门" : "小红书热门";
+  return board === "ecommerce_hot" ? "电商热门" : "媒体热门";
 }
 
 /** Explicit refresh with the draft filters snapshot (the only Pgy path). */
@@ -1274,7 +1274,7 @@ async function submitRemix() {
     if (previewResult.user) auth.user = previewResult.user;
     const previewPack = previewResult.carouselPack;
     if (!previewPack || !Array.isArray(previewPack.slides)) {
-      throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
+      throw new Error("AI 没有返回可用的媒体组图方案，请稍后重试。");
     }
     const carouselGroupId = String(previewResult.carouselGroupId || previewPack.carouselGroupId || "");
     if (!carouselGroupId) {
@@ -1314,7 +1314,7 @@ async function submitRemix() {
         signal,
       );
       if (result.user) auth.user = result.user;
-      if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
+      if (!result.slideJob?.jobId) throw new Error("媒体组图任务创建失败");
       slideJobIds.push(result.slideJob.jobId);
       slidePolls.push(
         pollImageJob(result.slideJob.jobId, {
@@ -1376,7 +1376,7 @@ onUnmounted(() => {
         </span>
         <div class="excellent-title-copy">
           <h1 class="panel-title">优秀内容</h1>
-          <p class="panel-subtitle">浏览小红书、电商和巨量星图优秀内容；图文可仿写，视频可基于官方文稿学习结构与节奏。</p>
+          <p class="panel-subtitle">浏览社交媒体、电商和巨量星图优秀内容；图文可仿写，视频可基于官方文稿学习结构与节奏。</p>
         </div>
       </div>
     </header>
@@ -1819,7 +1819,7 @@ onUnmounted(() => {
           <div class="remix-header-copy">
             <div class="remix-header-kicker"><span aria-hidden="true">✦</span> 优秀内容实验室</div>
             <h3>参考优秀内容，生成品牌原创图文</h3>
-            <p class="remix-subtitle">提取表达方法，融入内容方向与品牌信息，生成 4 页可继续创作的小红书组图。</p>
+            <p class="remix-subtitle">提取表达方法，融入内容方向与品牌信息，生成 4 页可继续创作的媒体组图。</p>
             <div class="remix-header-meta">
               <span>4 页原创组图</span>
               <span>不复制原图与原品牌</span>

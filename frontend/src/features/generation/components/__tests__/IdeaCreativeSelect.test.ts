@@ -7,7 +7,7 @@ describe("IdeaCreativeSelect", () => {
   it("keeps options collapsed by default and shows the selected label", () => {
     const wrapper = mount(IdeaCreativeSelect, {
       props: {
-        label: "小红书视觉路线",
+        label: "社交媒体视觉路线",
         modelValue: "auto",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "creative-style",
@@ -23,7 +23,7 @@ describe("IdeaCreativeSelect", () => {
   it("opens a branded menu and emits the selected value", async () => {
     const wrapper = mount(IdeaCreativeSelect, {
       props: {
-        label: "小红书视觉路线",
+        label: "社交媒体视觉路线",
         modelValue: "auto",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "creative-style",
@@ -48,7 +48,7 @@ describe("IdeaCreativeSelect", () => {
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "creative-template",
         disabled: true,
-        disabledMessage: "已选择小红书组图视觉路线，其他两项不可同时生效。",
+        disabledMessage: "已选择媒体组图视觉路线，其他两项不可同时生效。",
       },
     });
 
@@ -67,7 +67,7 @@ describe("IdeaCreativeSelect", () => {
     const wrapper = mount(IdeaCreativeSelect, {
       attachTo: document.body,
       props: {
-        label: "小红书视觉路线",
+        label: "社交媒体视觉路线",
         modelValue: "auto",
         options: XHS_CREATIVE_STYLE_OPTIONS,
         testId: "creative-style",

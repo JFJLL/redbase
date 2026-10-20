@@ -109,9 +109,9 @@ export const LANDING_HTML = `
                     <div class="generation-preview">
                       <div class="generation-brief"><b>内容目标</b><p>建立价格价值感，并降低用户选择难度。</p></div>
                       <div class="generation-pages">
-                        <img src="/assets/landing-generated-xhs-01.webp" alt="小红书组图选择理由页" loading="lazy" />
-                        <img src="/assets/landing-generated-xhs-02.webp" alt="小红书组图用户问题页" loading="lazy" />
-                        <img src="/assets/landing-generated-xhs-03.webp" alt="小红书组图价值证明页" loading="lazy" />
+                        <img src="/assets/landing-generated-xhs-01.webp" alt="媒体组图选择理由页" loading="lazy" />
+                        <img src="/assets/landing-generated-xhs-02.webp" alt="媒体组图用户问题页" loading="lazy" />
+                        <img src="/assets/landing-generated-xhs-03.webp" alt="媒体组图价值证明页" loading="lazy" />
                       </div>
                     </div>
                   </div>
@@ -180,7 +180,7 @@ export const LANDING_HTML = `
             </article>
             <article class="capability-card">
               <span class="capability-icon">优</span><h3>优秀内容</h3>
-              <p>浏览小红书热门与电商热门内容，查看多图详情，并将优秀表达方式转化为原创内容方向。</p>
+              <p>浏览媒体热门与电商热门内容，查看多图详情，并将优秀表达方式转化为原创内容方向。</p>
               <div class="card-media"><img src="/assets/landing-capability-excellent.webp" alt="优秀内容参考库界面示例" loading="lazy" /></div>
             </article>
             <article class="capability-card">
@@ -191,13 +191,13 @@ export const LANDING_HTML = `
             <article class="capability-card">
               <span class="capability-icon">图</span><h3>多类型内容生成</h3>
               <p>从选题继续生成适合不同渠道和用途的图文内容。</p>
-              <div class="format-list"><span>小红书组图<small>3:4 多页</small></span><span>朋友圈图文<small>单页</small></span><span>公众号长图<small>长版面</small></span></div>
+              <div class="format-list"><span>媒体组图<small>3:4 多页</small></span><span>朋友圈图文<small>单页</small></span><span>公众号长图<small>长版面</small></span></div>
             </article>
             <article class="capability-card history-card">
               <span class="capability-icon">历</span><h3>历史生成：让每一次产出都能继续被使用</h3>
               <p>生成结果统一进入历史记录，支持按品牌与类型查看、预览和下载，减少重复生产。</p>
               <div class="history-preview">
-                <img src="/assets/landing-history-thumb-01.webp" alt="历史资产中的小红书组图" loading="lazy" /><img src="/assets/landing-history-thumb-02.webp" alt="历史资产中的产品推广图文" loading="lazy" /><img src="/assets/landing-history-thumb-03.webp" alt="历史资产中的公众号长图" loading="lazy" />
+                <img src="/assets/landing-history-thumb-01.webp" alt="历史资产中的媒体组图" loading="lazy" /><img src="/assets/landing-history-thumb-02.webp" alt="历史资产中的产品推广图文" loading="lazy" /><img src="/assets/landing-history-thumb-03.webp" alt="历史资产中的公众号长图" loading="lazy" />
               </div>
             </article>
           </div>
@@ -216,12 +216,12 @@ export const LANDING_HTML = `
             <div class="workflow-panel"><header><h4>机会判断示例</h4><span>品牌适配优先</span></header><div class="evidence-list"><div><i>趋</i><p><b>真实体验型内容持续增长</b><small>讨论热度与高阅读内容同时出现</small></p><em>高匹配</em></div><div><i>人</i><p><b>目标人群正处于选择阶段</b><small>需要清单、横测与决策标准</small></p><em>可执行</em></div><div><i>品</i><p><b>品牌具备可被证明的具体价值</b><small>适合用体验细节代替抽象卖点</small></p><em>值得做</em></div></div></div>
           </div>
           <div class="workflow-step reverse landing-reveal">
-            <div class="workflow-copy"><span class="eyebrow">02 · Learn</span><h3>从优秀内容中提取可以学习的表达方式</h3><p>查看热门内容的图文结构、标题切口和视觉表达，再结合自己的品牌方向做原创融合。</p><ul><li>小红书热门与电商热门两个内容板块</li><li>支持多图详情查看与内容结构学习</li><li>支持一键仿图文与选题方向融合</li></ul></div>
+            <div class="workflow-copy"><span class="eyebrow">02 · Learn</span><h3>从优秀内容中提取可以学习的表达方式</h3><p>查看热门内容的图文结构、标题切口和视觉表达，再结合自己的品牌方向做原创融合。</p><ul><li>媒体热门与电商热门两个内容板块</li><li>支持多图详情查看与内容结构学习</li><li>支持一键仿图文与选题方向融合</li></ul></div>
             <div class="workflow-panel learning-panel"><img src="/assets/landing-learning-example.webp" alt="拆解优秀内容表达方式的学习示例" loading="lazy" /><div><h4>重点学习内容解决问题的方式</h4><p>将原内容拆成“问题切入—真实场景—证据说明—行动结论”，再替换为品牌自己的信息与素材。</p><div><span>问题型封面</span><span>真实场景</span><span>证据细节</span><span>清晰结论</span></div></div></div>
           </div>
           <div class="workflow-step landing-reveal">
             <div class="workflow-copy"><span class="eyebrow">03 · Make</span><h3>从一个内容方向，继续生成可发布、可复用的图文资产</h3><p>选题确定后，可以继续加入产品图、品牌 Logo 和风格参考，生成不同渠道的内容形式，并进入历史资产。</p><ul><li>根据内容选择视觉路线与画面比例</li><li>支持产品图、Logo 与风格参考</li><li>生成结果自动进入历史生成记录</li></ul></div>
-            <div class="workflow-panel output-panel"><header><h4>小红书组图示例</h4><span>3:4 多页内容</span></header><div><img src="/assets/landing-generated-xhs-01.webp" alt="小红书组图选择理由页" loading="lazy" /><img src="/assets/landing-generated-xhs-02.webp" alt="小红书组图用户问题页" loading="lazy" /><img src="/assets/landing-generated-xhs-03.webp" alt="小红书组图价值证明页" loading="lazy" /></div></div>
+            <div class="workflow-panel output-panel"><header><h4>媒体组图示例</h4><span>3:4 多页内容</span></header><div><img src="/assets/landing-generated-xhs-01.webp" alt="媒体组图选择理由页" loading="lazy" /><img src="/assets/landing-generated-xhs-02.webp" alt="媒体组图用户问题页" loading="lazy" /><img src="/assets/landing-generated-xhs-03.webp" alt="媒体组图价值证明页" loading="lazy" /></div></div>
           </div>
         </div>
       </section>
@@ -237,7 +237,7 @@ export const LANDING_HTML = `
         <div class="container">
           <div class="commercial-section-head center landing-reveal"><span class="eyebrow">Outputs</span><h2>从内容建议继续走到图文生产</h2><p>根据发布渠道和内容用途，生成不同尺寸与结构的图文资产。</p></div>
           <div class="outputs-grid landing-reveal">
-            <article><div><img src="/assets/landing-output-xhs.webp" alt="小红书多页产品内容展示" loading="lazy" /></div><h3>小红书组图</h3><p>多页内容结构，适合观点、清单、教程和产品沟通。</p></article>
+            <article><div><img src="/assets/landing-output-xhs.webp" alt="社交媒体多页产品内容展示" loading="lazy" /></div><h3>媒体组图</h3><p>多页内容结构，适合观点、清单、教程和产品沟通。</p></article>
             <article><div><img src="/assets/landing-output-moments.webp" alt="朋友圈单页图文展示" loading="lazy" /></div><h3>朋友圈图文</h3><p>单页图文表达，适合私域分享与重点信息传播。</p></article>
             <article><div><img src="/assets/landing-output-longform.webp" alt="公众号长图内容展示" loading="lazy" /></div><h3>公众号长图</h3><p>长版面内容结构，适合深度文章、教程与报告。</p></article>
           </div>
@@ -263,7 +263,7 @@ export const LANDING_HTML = `
             <article class="open"><button class="faq-question" type="button" aria-expanded="true">RedBase 适合哪些用户？<span>＋</span></button><div class="faq-answer"><p>适合品牌方、代理公司、内容策略与运营团队，也适合需要长期稳定输出内容的个人 IP。品牌档案和个人 IP 档案会为后续内容任务持续提供上下文。</p></div></article>
             <article><button class="faq-question" type="button" aria-expanded="false">生成的选题和图片可以继续调整吗？<span>＋</span></button><div class="faq-answer"><p>可以。选题可以通过补充提示词继续调整，图片生成前也可以选择产品图、Logo、画面比例和视觉路线；生成完成后可在历史记录中查看和下载。</p></div></article>
             <article><button class="faq-question" type="button" aria-expanded="false">为什么建议先创建品牌档案？<span>＋</span></button><div class="faq-answer"><p>品牌档案是趋势判断、内容选题和图文生成的长期上下文。建立后，后续任务会持续使用同一套品牌定位、产品与目标人群信息。</p></div></article>
-            <article><button class="faq-question" type="button" aria-expanded="false">优秀内容板块可以做什么？<span>＋</span></button><div class="faq-answer"><p>可以查看小红书热门与电商热门内容、浏览多图详情，并基于优秀内容进行一键仿图文，或与现有内容选题做融合生成。</p></div></article>
+            <article><button class="faq-question" type="button" aria-expanded="false">优秀内容板块可以做什么？<span>＋</span></button><div class="faq-answer"><p>可以查看媒体热门与电商热门内容、浏览多图详情，并基于优秀内容进行一键仿图文，或与现有内容选题做融合生成。</p></div></article>
             <article><button class="faq-question" type="button" aria-expanded="false">历史生成的图片保存多久？<span>＋</span></button><div class="faq-answer"><p>历史生成图片当前保存七天，请及时下载；生成记录中的标题、文案等信息仍可在历史生成中查看。</p></div></article>
           </div>
         </div>

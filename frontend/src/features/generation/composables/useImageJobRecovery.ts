@@ -86,7 +86,7 @@ export interface ImageJobRecoveryService {
 const TYPE_LABELS: Record<string, string> = {
   moments: "朋友圈图",
   wechat: "公众号长图",
-  xhsCarouselSlide: "小红书组图",
+  xhsCarouselSlide: "媒体组图",
   styleImage: "风格化图",
   imageEdit: "改图",
 };
@@ -204,7 +204,7 @@ function createImageJobRecoveryService(): ImageJobRecoveryService {
         ideaIndex: job.ideaIndex ?? null,
         creditEventId: job.creditEventId ?? null,
         aspectRatio: job.aspectRatio || "",
-        title: job.carouselTitle || job.publishTitle || "小红书组图",
+        title: job.carouselTitle || job.publishTitle || "媒体组图",
         publishTitle: job.publishTitle || "",
         publishCaption: job.publishCaption || "",
         caption: job.caption || "",

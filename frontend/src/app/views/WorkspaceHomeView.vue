@@ -21,7 +21,7 @@ const entries = [
   {
     name: "ideas",
     title: "内容选题",
-    desc: "把品牌资产和热点趋势结合起来，生成可执行的小红书内容方向。",
+    desc: "把品牌资产和热点趋势结合起来，生成可执行的社交媒体内容方向。",
     action: "去看选题",
   },
 ] as const;
@@ -30,7 +30,7 @@ const entries = [
 <template>
   <section class="home-panel">
     <h1 class="home-title">RedBase</h1>
-    <p class="home-subtitle">围绕品牌资产、个人 IP、热点分析和内容选题打造一站式小红书运营工作台。</p>
+    <p class="home-subtitle">围绕品牌资产、个人 IP、热点分析和内容选题打造一站式社交媒体运营工作台。</p>
     <div class="home-grid">
       <article v-for="entry in entries" :key="entry.name" class="home-card">
         <h2 class="home-card-title">{{ entry.title }}</h2>

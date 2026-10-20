@@ -295,7 +295,7 @@ async function handleSubmit(): Promise<void> {
             v-model="form.goal"
             name="goal"
             rows="4"
-            :placeholder="isPersonal ? '例如建立专业影响力、积累精准粉丝、获得咨询线索' : '描述小红书账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等'"
+            :placeholder="isPersonal ? '例如建立专业影响力、积累精准粉丝、获得咨询线索' : '描述社交媒体账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等'"
             required
           ></textarea>
         </label>
