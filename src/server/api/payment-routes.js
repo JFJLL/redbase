@@ -7,6 +7,12 @@ const { getAlipayProvider, isAlipayTradeNotExistError } = require("../integratio
 const { getWxpayProvider } = require("../integrations/wxpay");
 const { fenToYuanString } = require("../billing/money");
 const { reconcileOne } = require("../billing/reconcile-orders");
+const { PLANS, TOPUPS, CATALOG_VERSION, getPlan, getTopup, getLegacyPlan } = require("../billing/catalog");
+const { getNowTimestamp, getNowIso, formatShanghaiDate, normalizeProviderPaidAt } = require("../billing/period-utils");
+const { createQuote, verifyAndConsumeQuote, findQuoteById } = require("../billing/quote-service");
+const { getUserBillingOverview } = require("../billing/subscription-service");
+const { rescanExpiredLots } = require("../billing/credit-ledger");
+const { getDbProxy, transaction } = require("../db/connection");
 const {
   insertPaymentOrder,
   updatePaymentOrderStatus,
@@ -16,6 +22,7 @@ const {
   settlePaidPaymentOrder,
   closePaymentOrder,
   markPaymentOrderAudit,
+  mapPaymentOrderRow,
 } = require("../db/repositories/payment-repository");
 
 const NOTIFY_SUCCESS = "success";
@@ -34,12 +41,23 @@ function sanitizeOrder(order) {
     planId: order.planId,
     planName: order.planName,
     planCredits: order.planCredits,
+    amountFen: order.amountFen,
     amountYuan: fenToYuanString(order.amountFen),
     status: order.status,
     provider: order.provider || "alipay",
     createdAt: order.createdAt,
     expiresAt: order.expiresAt,
     paidAt: order.paidAt,
+    quoteId: order.quoteId || "",
+    fulfillmentStatus: order.fulfillmentStatus || "unfulfilled",
+    fulfilledAt: order.fulfilledAt || "",
+    cycle: order.cycle || "",
+    orderKind: order.orderKind || "plan",
+    orderAction: order.orderAction || "activate",
+    issuedNow: Number(order.issuedNow || 0),
+    serviceStart: order.serviceStart || "",
+    serviceEnd: order.serviceEnd || "",
+    periodEnd: order.periodEnd || "",
   };
 }
 
@@ -148,7 +166,8 @@ function processAlipayNotify({ params, appConfig, gateway, nowIso }) {
       });
       return { ok: false, reason: "order_closed_provider_paid" };
     }
-    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso });
+    const providerPaidAt = normalizeProviderPaidAt(params.gmt_payment || params.notify_time);
+    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso, providerPaidAt });
     if (settled.order.status !== "paid") {
       markPaymentOrderAudit({
         outTradeNo,
@@ -230,7 +249,8 @@ function processWxpayNotify({ headers, rawBody, appConfig, gateway, nowIso }) {
       });
       return { ok: false, reason: "order_closed_provider_paid" };
     }
-    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso });
+    const providerPaidAt = normalizeProviderPaidAt(decrypted.success_time);
+    const settled = settlePaidPaymentOrder({ outTradeNo, tradeNo, nowIso, providerPaidAt });
     if (settled.order.status !== "paid") {
       markPaymentOrderAudit({
         outTradeNo,
@@ -284,14 +304,34 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         (String(appConfig?.wxpay?.provider || "") === "fake" && wxpayEnabled)
       ) && process.env.NODE_ENV === "test",
     );
-    const plans = (appConfig?.billing?.rechargePlans || []).map((plan) => ({
-      id: plan.id,
-      name: plan.name,
-      credits: plan.credits,
-      amountYuan: fenToYuanString(plan.amountFen),
-    }));
+    const isTestOverride = process.env.NODE_ENV === "test" && (appConfig?.billing?.rechargePlans || []).length > 0;
+    const resolvedPlans = isTestOverride
+      ? (appConfig?.billing?.rechargePlans || []).map((plan) => ({
+          id: plan.id,
+          name: plan.name,
+          credits: plan.credits,
+          amountYuan: fenToYuanString(plan.amountFen),
+        }))
+      : PLANS.map((p) => ({
+        id: p.id,
+        name: p.name,
+        credits: p.credits,
+        amountYuan: fenToYuanString(p.monthlyFen),
+        monthlyFen: p.monthlyFen,
+        annualFen: p.annualFen,
+        label: p.label,
+        desc: p.desc,
+        icon: p.icon,
+        featured: p.featured,
+      }));
     json(res, 200, {
-      plans,
+      plans: resolvedPlans,
+      topups: TOPUPS,
+      v2Catalog: {
+        plans: PLANS,
+        topups: TOPUPS,
+        version: CATALOG_VERSION,
+      },
       fakeSettle,
       providers: {
         alipay: alipayEnabled,
@@ -301,21 +341,223 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     return true;
   }
 
+  if (req.method === "GET" && pathname === "/api/billing/wallet") {
+    const user = requireSqlAuth(req, res, scope);
+    if (!user) return true;
+    const overview = getUserBillingOverview(user.id);
+    json(res, 200, overview);
+    return true;
+  }
+
+  if (req.method === "POST" && pathname === "/api/billing/quote") {
+    const user = requireSqlAuth(req, res, scope);
+    if (!user) return true;
+    const payload = await collectBody(req);
+    const kind = String(payload?.kind || "plan").trim();
+    const itemId = String(payload?.itemId || "").trim();
+    const cycle = String(payload?.cycle || "monthly").trim();
+    try {
+      const quote = createQuote({ userId: user.id, kind, itemId, cycle });
+      json(res, 200, { quote });
+    } catch (err) {
+      badRequest(res, err.message || "报价生成失败");
+    }
+    return true;
+  }
+
+  if (req.method === "GET" && pathname === "/api/billing/ledger") {
+    const user = requireSqlAuth(req, res, scope);
+    if (!user) return true;
+    const url = new URL(req.url, "http://localhost");
+    const filter = url.searchParams.get("filter") || "all";
+    const query = (url.searchParams.get("query") || "").trim().toLowerCase();
+    const db = getDbProxy();
+    rescanExpiredLots(user.id);
+    const events = db.prepare(`
+      SELECT * FROM credit_events
+      WHERE user_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 300
+    `).all(user.id);
+
+    const allocations = db.prepare(`
+      SELECT a.*, l.source_type, l.source_label, l.expires_at
+      FROM credit_lot_allocations a
+      JOIN credit_lots l ON l.id = a.lot_id
+      WHERE a.user_id = ?
+    `).all(user.id);
+
+    const allocMap = new Map();
+    for (const a of allocations) {
+      if (!allocMap.has(a.credit_event_id)) allocMap.set(a.credit_event_id, []);
+      allocMap.get(a.credit_event_id).push(a);
+    }
+
+    const rows = events.map((event) => {
+      const delta = Number(event.credit_delta || 0);
+      let type = "grant";
+      if (event.action_type.includes("expire")) {
+        type = "expire";
+      } else if (delta < 0) {
+        type = "spend";
+      }
+
+      let source = "本期积分";
+      const allocs = allocMap.get(event.id);
+      if (allocs && allocs.length > 0) {
+        const hasPermanent = allocs.some((a) => a.expires_at === null);
+        const hasExpiring = allocs.some((a) => a.expires_at !== null);
+        if (hasPermanent && !hasExpiring) source = "永久积分";
+        else if (!hasPermanent && hasExpiring) source = "本期积分";
+        else source = "混合积分";
+      } else {
+        const action = event.action_type.toLowerCase();
+        if (action.includes("topup") || action.includes("legacy") || action.includes("admin")) {
+          source = "永久积分";
+        } else if (action.includes("upgrade") || action.includes("cycle")) {
+          source = "本期积分";
+        } else if (delta < 0) {
+          source = "本期积分";
+        } else {
+          source = "永久积分";
+        }
+      }
+
+      return {
+        id: event.id,
+        time: formatShanghaiDate(event.created_at),
+        label: event.action_label || event.summary,
+        delta,
+        source,
+        note: event.summary || "",
+        type,
+      };
+    }).filter((r) => {
+      if (filter !== "all" && r.type !== filter) return false;
+      if (query) {
+        const text = `${r.time} ${r.label} ${r.source} ${r.note}`.toLowerCase();
+        if (!text.includes(query)) return false;
+      }
+      return true;
+    });
+
+    const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+    const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "20", 10)));
+    const total = rows.length;
+    const pagedRows = rows.slice((page - 1) * pageSize, page * pageSize);
+
+    json(res, 200, { rows: pagedRows, total, page, pageSize });
+    return true;
+  }
+
+  if (req.method === "GET" && pathname === "/api/billing/ledger/export") {
+    const user = requireSqlAuth(req, res, scope);
+    if (!user) return true;
+    const url = new URL(req.url, "http://localhost");
+    const filter = url.searchParams.get("filter") || "all";
+    const query = (url.searchParams.get("query") || "").trim().toLowerCase();
+    const db = getDbProxy();
+    rescanExpiredLots(user.id);
+    const events = db.prepare(`
+      SELECT * FROM credit_events
+      WHERE user_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1000
+    `).all(user.id);
+
+    const allocations = db.prepare(`
+      SELECT a.*, l.source_type, l.source_label, l.expires_at
+      FROM credit_lot_allocations a
+      JOIN credit_lots l ON l.id = a.lot_id
+      WHERE a.user_id = ?
+    `).all(user.id);
+
+    const allocMap = new Map();
+    for (const a of allocations) {
+      if (!allocMap.has(a.credit_event_id)) allocMap.set(a.credit_event_id, []);
+      allocMap.get(a.credit_event_id).push(a);
+    }
+
+    const rows = events.map((event) => {
+      const delta = Number(event.credit_delta || 0);
+      let type = "grant";
+      if (event.action_type.includes("expire")) {
+        type = "expire";
+      } else if (delta < 0) {
+        type = "spend";
+      }
+
+      let source = "本期积分";
+      const allocs = allocMap.get(event.id);
+      if (allocs && allocs.length > 0) {
+        const hasPermanent = allocs.some((a) => a.expires_at === null);
+        const hasExpiring = allocs.some((a) => a.expires_at !== null);
+        if (hasPermanent && !hasExpiring) source = "永久积分";
+        else if (!hasPermanent && hasExpiring) source = "本期积分";
+        else source = "混合积分";
+      } else {
+        const action = event.action_type.toLowerCase();
+        if (action.includes("topup") || action.includes("legacy") || action.includes("admin")) {
+          source = "永久积分";
+        } else if (action.includes("upgrade") || action.includes("cycle")) {
+          source = "本期积分";
+        } else if (delta < 0) {
+          source = "本期积分";
+        } else {
+          source = "永久积分";
+        }
+      }
+
+      return {
+        time: formatShanghaiDate(event.created_at),
+        label: event.action_label || event.summary,
+        delta: `${delta > 0 ? "+" : ""}${delta}`,
+        source,
+        note: event.summary || "",
+        type,
+      };
+    }).filter((r) => {
+      if (filter !== "all" && r.type !== filter) return false;
+      if (query) {
+        const text = `${r.time} ${r.label} ${r.source} ${r.note}`.toLowerCase();
+        if (!text.includes(query)) return false;
+      }
+      return true;
+    });
+
+    const escapeCsv = (str) => {
+      let val = String(str ?? "");
+      if (/^[=+\-@\t\r]/.test(val)) {
+        val = "'" + val;
+      }
+      return `"${val.replace(/"/g, '""')}"`;
+    };
+
+    const header = ["时间", "操作", "积分变化", "积分来源", "说明"].map(escapeCsv).join(",");
+    const body = rows.map((r) => [r.time, r.label, r.delta, r.source, r.note].map(escapeCsv).join(",")).join("\r\n");
+    const csv = "\uFEFF" + header + "\r\n" + body;
+
+    res.writeHead(200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="RedBase-credits-ledger.csv"',
+    });
+    res.end(csv);
+    return true;
+  }
+
   if (req.method === "POST" && pathname === "/api/payments/alipay/orders") {
     const user = requireSqlAuth(req, res, scope);
     if (!user) return true;
     const payload = await collectBody(req);
+    const quoteId = String(payload?.quoteId || "").trim();
     const planId = String(payload?.planId || "").trim();
     const idempotencyKey = String(payload?.idempotencyKey || "").trim();
-    if (!planId || !idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
-      badRequest(res, "套餐与幂等键不能为空");
+    if ((!quoteId && !planId) || !idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+      badRequest(res, "套餐/报价与幂等键不能为空");
       return true;
     }
-    const plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId);
-    if (!plan) {
-      badRequest(res, "充值套餐未配置或不存在");
-      return true;
-    }
+
+    // 1. Check provider availability first before consuming any quote
     if (appConfig?.alipay?.enabled !== true) {
       json(res, 503, { error: "充值暂未开放" });
       return true;
@@ -326,8 +568,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
+    // 2. Check existing order by idempotency key
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
+      if (quoteId && existing.quoteId && existing.quoteId !== quoteId) {
+        json(res, 409, { error: "幂等键已被其它报价订单使用，请勿混用幂等键" });
+        return true;
+      }
+      if (planId && existing.planId !== planId) {
+        json(res, 409, { error: "幂等键已被其它套餐订单使用，请勿混用幂等键" });
+        return true;
+      }
       const paymentAccess = await createPaymentAccess({
         gateway,
         outTradeNo: existing.outTradeNo,
@@ -340,28 +591,88 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const outTradeNo = createOutTradeNo();
-    const nowIso = new Date().toISOString();
-    const expiresAtIso = new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
-    const order = insertPaymentOrder({
-      outTradeNo,
-      userId: user.id,
-      idempotencyKey,
-      plan,
-      status: "created",
-      nowIso,
-      expiresAtIso,
-    });
+    const db = getDbProxy();
+    const nowIso = getNowIso();
+    let order;
+    let consumedQuote;
+    let plan = null;
+
+    if (quoteId) {
+      const quote = findQuoteById(quoteId);
+      if (!quote) {
+        badRequest(res, "报价不存在或已失效，请重新确认套餐与价格");
+        return true;
+      }
+      if (quote.kind === "plan") {
+        const activePending = db.prepare(`
+          SELECT * FROM payment_orders
+          WHERE user_id = ? AND order_kind = 'plan'
+            AND (
+              status IN ('created', 'pending', 'expired')
+              OR (status = 'paid' AND (fulfillment_status IN ('unfulfilled', 'processing', 'scheduled', 'audit_required') OR audit_reason <> ''))
+            )
+          ORDER BY id DESC LIMIT 1
+        `).get(user.id);
+
+        if (activePending) {
+          json(res, 409, {
+            error: "当前账户已有进行中或待生效的套餐订单，请先完成、生效或取消原订单",
+            pendingOrder: sanitizeOrder(mapPaymentOrderRow(activePending)),
+          });
+          return true;
+        }
+      }
+    } else {
+      badRequest(res, "充值套餐必须通过服务端报价下单，历史商品已停止新售");
+      return true;
+    }
+
+    try {
+      transaction(() => {
+        consumedQuote = verifyAndConsumeQuote(quoteId, user.id);
+        const outTradeNo = createOutTradeNo();
+        const expiresAtIso = consumedQuote.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
+          const orderPlan = {
+          id: consumedQuote.item_id,
+          name: consumedQuote.meta?.planName || consumedQuote.meta?.topupName || consumedQuote.item_id,
+          credits: consumedQuote.issued_now,
+          amountFen: consumedQuote.amount_fen,
+        };
+        order = insertPaymentOrder({
+          outTradeNo,
+          userId: user.id,
+          idempotencyKey,
+            plan: orderPlan,
+          status: "created",
+          provider: "alipay",
+          nowIso,
+          expiresAtIso,
+          quote: consumedQuote,
+          acquireLock: true,
+        });
+      })();
+    } catch (err) {
+      if (err.code === "PLAN_ORDER_CONFLICT") {
+        json(res, 409, {
+          error: err.message,
+          pendingOrder: err.pendingOrder ? sanitizeOrder(err.pendingOrder) : null,
+        });
+        return true;
+      }
+      badRequest(res, err.message || "报价消费或创建订单失败");
+      return true;
+    }
+
     const paymentAccess = await createPaymentAccess({
       gateway,
-      outTradeNo,
-      subject: `RedBase ${plan.name}`,
-      totalAmount: fenToYuanString(plan.amountFen),
+      outTradeNo: order.outTradeNo,
+      subject: `RedBase ${order.planName}`,
+      totalAmount: fenToYuanString(order.amountFen),
       returnUrl: appConfig?.alipay?.returnUrl || "",
       notifyUrl: appConfig?.alipay?.notifyUrl || "",
     });
-    updatePaymentOrderStatus({ outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(outTradeNo)), ...paymentAccess });
+    updatePaymentOrderStatus({ outTradeNo: order.outTradeNo, status: "pending", nowIso: new Date().toISOString() });
+    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(order.outTradeNo)), ...paymentAccess });
     return true;
   }
 
@@ -405,17 +716,15 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     const user = requireSqlAuth(req, res, scope);
     if (!user) return true;
     const payload = await collectBody(req);
+    const quoteId = String(payload?.quoteId || "").trim();
     const planId = String(payload?.planId || "").trim();
     const idempotencyKey = String(payload?.idempotencyKey || "").trim();
-    if (!planId || !idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
-      badRequest(res, "套餐与幂等键不能为空");
+    if ((!quoteId && !planId) || !idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+      badRequest(res, "套餐/报价与幂等键不能为空");
       return true;
     }
-    const plan = (appConfig?.billing?.rechargePlans || []).find((item) => item.id === planId);
-    if (!plan) {
-      badRequest(res, "充值套餐未配置或不存在");
-      return true;
-    }
+
+    // 1. Check provider availability first
     if (appConfig?.wxpay?.enabled !== true) {
       json(res, 503, { error: "微信支付充值暂未开放" });
       return true;
@@ -426,8 +735,17 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
+    // 2. Check existing order by idempotency key
     const existing = findPaymentOrderByUserAndIdempotency(user.id, idempotencyKey);
     if (existing) {
+      if (quoteId && existing.quoteId && existing.quoteId !== quoteId) {
+        json(res, 409, { error: "幂等键已被其它报价订单使用，请勿混用幂等键" });
+        return true;
+      }
+      if (planId && existing.planId !== planId) {
+        json(res, 409, { error: "幂等键已被其它套餐订单使用，请勿混用幂等键" });
+        return true;
+      }
       const paymentAccess = await createWxpayPaymentAccess({
         gateway,
         outTradeNo: existing.outTradeNo,
@@ -439,28 +757,87 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       return true;
     }
 
-    const outTradeNo = createOutTradeNo();
-    const nowIso = new Date().toISOString();
-    const expiresAtIso = new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
-    const order = insertPaymentOrder({
-      outTradeNo,
-      userId: user.id,
-      idempotencyKey,
-      plan,
-      status: "created",
-      provider: "wxpay",
-      nowIso,
-      expiresAtIso,
-    });
+    const db = getDbProxy();
+    const nowIso = getNowIso();
+    let order;
+    let consumedQuote;
+    let plan = null;
+
+    if (quoteId) {
+      const quote = findQuoteById(quoteId);
+      if (!quote) {
+        badRequest(res, "报价不存在或已失效，请重新确认套餐与价格");
+        return true;
+      }
+      if (quote.kind === "plan") {
+        const activePending = db.prepare(`
+          SELECT * FROM payment_orders
+          WHERE user_id = ? AND order_kind = 'plan'
+            AND (
+              status IN ('created', 'pending', 'expired')
+              OR (status = 'paid' AND (fulfillment_status IN ('unfulfilled', 'processing', 'scheduled', 'audit_required') OR audit_reason <> ''))
+            )
+          ORDER BY id DESC LIMIT 1
+        `).get(user.id);
+
+        if (activePending) {
+          json(res, 409, {
+            error: "当前账户已有进行中或待生效的套餐订单，请先完成、生效或取消原订单",
+            pendingOrder: sanitizeOrder(mapPaymentOrderRow(activePending)),
+          });
+          return true;
+        }
+      }
+    } else {
+      badRequest(res, "充值套餐必须通过服务端报价下单，历史商品已停止新售");
+      return true;
+    }
+
+    try {
+      transaction(() => {
+        consumedQuote = verifyAndConsumeQuote(quoteId, user.id);
+        const outTradeNo = createOutTradeNo();
+        const expiresAtIso = consumedQuote.expires_at || new Date(Date.now() + ORDER_EXPIRY_MS).toISOString();
+          const orderPlan = {
+          id: consumedQuote.item_id,
+          name: consumedQuote.meta?.planName || consumedQuote.meta?.topupName || consumedQuote.item_id,
+          credits: consumedQuote.issued_now,
+          amountFen: consumedQuote.amount_fen,
+        };
+        order = insertPaymentOrder({
+          outTradeNo,
+          userId: user.id,
+          idempotencyKey,
+            plan: orderPlan,
+          status: "created",
+          provider: "wxpay",
+          nowIso,
+          expiresAtIso,
+          quote: consumedQuote,
+          acquireLock: true,
+        });
+      })();
+    } catch (err) {
+      if (err.code === "PLAN_ORDER_CONFLICT") {
+        json(res, 409, {
+          error: err.message,
+          pendingOrder: err.pendingOrder ? sanitizeOrder(err.pendingOrder) : null,
+        });
+        return true;
+      }
+      badRequest(res, err.message || "报价消费或创建订单失败");
+      return true;
+    }
+
     const paymentAccess = await createWxpayPaymentAccess({
       gateway,
-      outTradeNo,
-      description: `RedBase ${plan.name}`,
-      totalAmountFen: plan.amountFen,
+      outTradeNo: order.outTradeNo,
+      description: `RedBase ${order.planName}`,
+      totalAmountFen: order.amountFen,
       notifyUrl: appConfig?.wxpay?.notifyUrl || "",
     });
-    updatePaymentOrderStatus({ outTradeNo, status: "pending", nowIso: new Date().toISOString() });
-    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(outTradeNo)), ...paymentAccess });
+    updatePaymentOrderStatus({ outTradeNo: order.outTradeNo, status: "pending", nowIso: new Date().toISOString() });
+    json(res, 201, { order: sanitizeOrder(findPaymentOrderByOutTradeNo(order.outTradeNo)), ...paymentAccess });
     return true;
   }
 
@@ -665,10 +1042,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
         return true;
       }
       const nowIso = new Date().toISOString();
+      const providerPaidAt = normalizeProviderPaidAt(closeResult.paidAt || closeResult.gmt_payment || closeResult.send_pay_date);
       const settled = settlePaidPaymentOrder({
         outTradeNo,
         tradeNo: String(closeResult.tradeNo),
         nowIso,
+        providerPaidAt,
       });
       json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
       return true;
@@ -814,10 +1193,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
       }
       if (queryResult?.data?.trade_status === "TRADE_SUCCESS") {
         const nowIso = new Date().toISOString();
+        const providerPaidAt = normalizeProviderPaidAt(queryResult.data.success_time || queryResult.data.paid_at || queryResult.data.paidAt);
         const settled = settlePaidPaymentOrder({
           outTradeNo,
           tradeNo: String(queryResult.data.trade_no || ""),
           nowIso,
+          providerPaidAt,
         });
         json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
         return true;
@@ -830,10 +1211,12 @@ async function handlePaymentRoutes(context, req, res, pathname) {
     }
     if (closeResult?.alreadyPaid) {
       const nowIso = new Date().toISOString();
+      const providerPaidAt = normalizeProviderPaidAt(closeResult.paidAt || closeResult.success_time);
       const settled = settlePaidPaymentOrder({
         outTradeNo,
         tradeNo: String(closeResult.tradeNo),
         nowIso,
+        providerPaidAt,
       });
       json(res, 200, { order: sanitizeOrder(settled.order), paidOnClose: true });
       return true;

@@ -2,6 +2,14 @@ const { getDbProxy } = require("../connection");
 const { safeParseArray, safeParseObject } = require("../snapshot-utils");
 const { TREND_ANALYSIS_RESERVATION_TTL_MS, EXCELLENT_BILLING_RESERVATION_TTL_MS, allocateCounter, runTransaction } = require("./core-repository");
 const { findUserById, updateUserCredits } = require("./auth-repository");
+const {
+  spendCreditsFromLots,
+  createCreditLot,
+  syncUserCreditsCache,
+  migrateLegacyUserCredits,
+  getUserWalletBalances,
+  rescanExpiredLots,
+} = require("../../billing/credit-ledger");
 const { mapCreditEventRow, mapGenerationRow, mapUserRow } = require("./row-mappers");
 const {
   recordCreditConsumed,
@@ -35,8 +43,8 @@ function insertCreditEvent(input) {
   `).run(
     id,
     Number(input.userId),
-    input.actionType,
-    input.actionLabel,
+    input.actionType || "unknown",
+    input.actionLabel || input.actionType || "积分操作",
     Number(input.creditDelta || 0),
     Number(input.creditCost || 0),
     input.createdAt || new Date().toISOString(),
@@ -104,27 +112,41 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
     return { spent: false, user: findUserById(userId), creditEvent: null };
   }
 
+  migrateLegacyUserCredits(userId, db);
+  rescanExpiredLots(userId, Date.now(), db);
+  const nowIso = new Date().toISOString();
+
+  const wallet = getUserWalletBalances(userId, Date.now(), db);
   const reservationCutoff = new Date(Date.now() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
   const excellentReservationCutoff = new Date(Date.now() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-  const result = db.prepare(`
-    UPDATE users
-    SET credits = credits - ?
-    WHERE id = ?
-      AND credits - COALESCE((
-        SELECT SUM(credit_cost)
-        FROM trend_analysis_requests
-        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-      ), 0) - COALESCE((
-        SELECT SUM(credit_cost)
-        FROM excellent_remix_billing_requests
-        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-      ), 0) - COALESCE((
-        SELECT SUM(credit_cost)
-        FROM video_project_billing_requests
-        WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-      ), 0) >= ?
-  `).run(cost, Number(userId), reservationCutoff, excellentReservationCutoff, reservationCutoff, cost);
-  if (result.changes !== 1) {
+
+  const pendingReservations = Number(db.prepare(`
+    SELECT (
+      COALESCE((
+        SELECT SUM(r.credit_cost)
+        FROM trend_analysis_requests r
+        WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM task_credit_reservations t
+            WHERE t.task_key = r.task_key AND t.status = 'reserved'
+          )
+      ), 0) + COALESCE((
+        SELECT SUM(r.credit_cost)
+        FROM excellent_remix_billing_requests r
+        WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM task_credit_reservations t
+            WHERE t.task_key = r.task_key AND t.status = 'reserved'
+          )
+      ), 0) + COALESCE((
+        SELECT SUM(r.credit_cost)
+        FROM video_project_billing_requests r
+        WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+      ), 0)
+    ) AS total
+  `).get(Number(userId), reservationCutoff, Number(userId), excellentReservationCutoff, Number(userId), reservationCutoff)?.total || 0);
+
+  if (wallet.totalAvailable - pendingReservations < cost) {
     return { spent: false, user: findUserById(userId), creditEvent: null };
   }
 
@@ -134,6 +156,16 @@ function spendCreditsWithEventInTransaction({ userId, amount, event }) {
     creditDelta: -cost,
     creditCost: cost,
   });
+
+  // Atomic deduction from lots; if insufficient or error, throws and rolls back the transaction!
+  spendCreditsFromLots({
+    userId,
+    amount: cost,
+    creditEventId: creditEvent.id,
+    nowIso,
+  }, db);
+
+  syncUserCreditsCache(userId, db);
   return { spent: true, user: findUserById(userId), creditEvent };
 }
 
@@ -178,7 +210,7 @@ function readAdminOverviewStats() {
       (SELECT COUNT(*) FROM users) AS user_count,
       (SELECT COUNT(*) FROM brands) AS brand_count,
       (SELECT COUNT(*) FROM generations) AS generation_count,
-      (SELECT COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) FROM credit_events) AS total_consumed_tokens,
+      (SELECT COALESCE(SUM(CASE WHEN credit_delta < 0 AND action_type NOT LIKE '%expire%' THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) FROM credit_events) AS total_consumed_tokens,
       (SELECT COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) FROM credit_events) AS total_granted_tokens,
       (SELECT COALESCE(SUM(credits), 0) FROM users) AS current_credits_total
   `).get();
@@ -207,7 +239,7 @@ function listAdminUserMetrics(limit = ADMIN_OVERVIEW_LIMITS.users) {
     credit_totals AS (
       SELECT
         user_id,
-        COALESCE(SUM(CASE WHEN credit_delta < 0 THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) AS consumed_tokens,
+        COALESCE(SUM(CASE WHEN credit_delta < 0 AND action_type NOT LIKE '%expire%' THEN COALESCE(NULLIF(credit_cost, 0), ABS(credit_delta)) ELSE 0 END), 0) AS consumed_tokens,
         COALESCE(SUM(CASE WHEN credit_delta > 0 THEN credit_delta ELSE 0 END), 0) AS granted_tokens,
         MAX(created_at) AS last_credit_at
       FROM credit_events
@@ -413,7 +445,47 @@ function refundCreditEventIfNeededInTransaction({ creditEventId, userId, reason 
     return { refunded: false, originalEvent, refundEvent: null, user: null };
   }
 
-  updateUserCredits(user.id, Number(user.credits || 0) + refundAmount);
+  migrateLegacyUserCredits(user.id, db);
+  const nowIso = new Date().toISOString();
+  const allocations = db.prepare("SELECT * FROM credit_lot_allocations WHERE credit_event_id = ?").all(originalEvent.id);
+  if (allocations.length > 0) {
+    for (const alloc of allocations) {
+      const lot = db.prepare("SELECT * FROM credit_lots WHERE id = ?").get(alloc.lot_id);
+      if (lot && (lot.expires_at === null || lot.expires_at > nowIso)) {
+        db.prepare(`
+          UPDATE credit_lots
+          SET remaining_credits = remaining_credits + ?,
+              used_credits = MAX(0, used_credits - ?),
+              status = 'active',
+              updated_at = ?
+          WHERE id = ?
+        `).run(alloc.credits_used, alloc.credits_used, nowIso, lot.id);
+      } else {
+        const compExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+        createCreditLot({
+          userId: user.id,
+          sourceType: "compensation",
+          sourceLabel: "系统故障补偿",
+          credits: alloc.credits_used,
+          startsAt: nowIso,
+          expiresAt: compExpiresAt,
+          nowIso,
+        }, db);
+      }
+    }
+  } else {
+    const compExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+    createCreditLot({
+      userId: user.id,
+      sourceType: "compensation",
+      sourceLabel: "系统故障补偿",
+      credits: refundAmount,
+      startsAt: nowIso,
+      expiresAt: compExpiresAt,
+      nowIso,
+    }, db);
+  }
+  syncUserCreditsCache(user.id, db);
   const refundEvent = insertCreditEvent({
     userId: user.id,
     actionType: `${originalEvent.actionType}Refund`,
@@ -521,8 +593,28 @@ function addCredits({ targetUserId, amount, adminUser, note }) {
   return runTransaction(() => {
     const targetUser = findUserById(targetUserId);
     if (!targetUser) return null;
-    const nextCredits = Number(targetUser.credits || 0) + Number(amount || 0);
-    updateUserCredits(targetUser.id, nextCredits);
+    const numAmount = Number(amount || 0);
+    const nowIso = new Date().toISOString();
+    if (numAmount > 0) {
+      createCreditLot({
+        userId: targetUser.id,
+        sourceType: "grant",
+        sourceLabel: "管理员加额度",
+        credits: numAmount,
+        startsAt: nowIso,
+        expiresAt: null,
+        nowIso,
+      }, db);
+    } else if (numAmount < 0) {
+      migrateLegacyUserCredits(targetUser.id, db);
+      spendCreditsFromLots({
+        userId: targetUser.id,
+        amount: Math.abs(numAmount),
+        creditEventId: 0,
+        nowIso,
+      }, db);
+    }
+    syncUserCreditsCache(targetUser.id, db);
     const updatedUser = findUserById(targetUser.id);
     insertCreditEvent({
       userId: targetUser.id,

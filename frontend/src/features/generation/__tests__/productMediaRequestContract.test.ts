@@ -2,7 +2,7 @@
  * 发布前产品素材请求契约测试（真实入口：IdeasView + IdeaGenerationDialog）。
  *
  * 目标：
- * 1. 小红书组图 preview 只准备方案、complete 只归档，二者不携带 productImages；
+ * 1. 媒体组图 preview 只准备方案、complete 只归档，二者不携带 productImages；
  *    每个真实 slides/:index POST 必须携带内容选题外层选择的产品图 {id,name}。
  * 2. useProductImages=false 时，每个 slide POST 的 productImages 均为 []。
  * 3. 图库加载失败且开关开启时，0 preview、0 slide、0 扣费，action 票据保留。

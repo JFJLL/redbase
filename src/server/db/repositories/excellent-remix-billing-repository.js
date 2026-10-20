@@ -8,6 +8,15 @@ const {
 const { findUserById } = require("./auth-repository");
 const { insertCreditEvent, findCreditEventById } = require("./admin-repository");
 const {
+  spendCreditsFromLots,
+  syncUserCreditsCache,
+  migrateLegacyUserCredits,
+  reserveCreditsForTask,
+  settleCreditsForTask,
+  releaseCreditsForTask,
+  getUserWalletBalances,
+} = require("../../billing/credit-ledger");
+const {
   recordExcellentDirectionCompleted,
   recordExcellentDirectionFailed,
   recordExcellentFusionCompleted,
@@ -26,7 +35,7 @@ const EXCELLENT_BILLING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const BILLING_COLUMNS = `
   request_id, user_id, kind, input_signature, status, credit_cost, counted, cache_hit,
-  result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at
+  result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at, task_key
 `;
 
 function normalizeExcellentBillingRequestId(value) {
@@ -69,11 +78,26 @@ function findExcellentBillingRequest({ requestId, userId, kind }) {
 
 function expireStaleExcellentBillingReservations(userId, nowMs) {
   const cutoff = new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
+  const stale = db.prepare(`
+    SELECT request_id, kind, created_at, task_key FROM excellent_remix_billing_requests
+    WHERE user_id = ? AND status = 'reserved' AND created_at < ?
+  `).all(Number(userId), cutoff);
+  for (const row of stale) {
+    const taskKey = row.task_key || `excellent_${row.kind}:${userId}:${row.request_id}:${row.created_at}`;
+    releaseCreditsForTask({
+      userId,
+      taskKey,
+      taskId: `${row.kind}_${row.request_id}`,
+      taskType: `excellent_${row.kind}`,
+      nowIso: new Date(nowMs).toISOString(),
+    }, db);
+  }
   db.prepare(`
     UPDATE excellent_remix_billing_requests
     SET status = 'failed', error = 'reservation expired', updated_at = ?
     WHERE user_id = ? AND status = 'reserved' AND created_at < ?
   `).run(new Date(nowMs).toISOString(), Number(userId), cutoff);
+  syncUserCreditsCache(userId, db);
 }
 
 /** Successful non-cache model generations inside the rolling 5-minute window. */
@@ -221,25 +245,56 @@ function reserveExcellentBillingRequest({
 
     const user = findUserById(userId);
     if (!user) return { status: "invalid" };
-    if (cost > 0) {
-      const reserved = sumReservedExcellentBillingCredits(userId) + sumReservedTrendCredits(userId, nowMs);
-      if (Number(user.credits || 0) - reserved < cost) {
-        return { status: "insufficient", user, requiredCredits: cost, reservedCredits: reserved };
-      }
+    const wallet = getUserWalletBalances(userId, nowMs, db);
+    const unmigratedTrend = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM trend_analysis_requests r
+      WHERE r.user_id = ? AND r.status = 'reserved'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_credit_reservations t
+          WHERE t.task_key = r.task_key AND t.status = 'reserved'
+        )
+    `).get(Number(userId))?.total || 0);
+
+    const unmigratedExcellent = Number(db.prepare(`
+      SELECT COALESCE(SUM(credit_cost), 0) AS total
+      FROM excellent_remix_billing_requests r
+      WHERE r.user_id = ? AND r.status = 'reserved' AND r.created_at >= ?
+        AND NOT EXISTS (
+          SELECT 1 FROM task_credit_reservations t
+          WHERE t.task_key = r.task_key AND t.status = 'reserved'
+        )
+    `).get(Number(userId), new Date(nowMs - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString())?.total || 0);
+
+    const effectiveAvailable = wallet.totalAvailable - unmigratedTrend - unmigratedExcellent;
+    if (cost > 0 && effectiveAvailable < cost) {
+      return { status: "insufficient", user: findUserById(userId), requiredCredits: cost, reservedCredits: wallet.totalReserved + unmigratedTrend + unmigratedExcellent };
     }
 
     const timestamp = now.toISOString();
+    const taskKey = `excellent_${kind}:${userId}:${normalizedRequestId}:${timestamp}`;
+    if (cost > 0) {
+      reserveCreditsForTask({
+        userId: Number(userId),
+        taskKey,
+        taskId: `${kind}_${normalizedRequestId}`,
+        taskType: `excellent_${kind}`,
+        amount: cost,
+        nowIso: timestamp,
+      }, db);
+    }
     const counted = kind === EXCELLENT_BILLING_KIND_DIRECTION ? 1 : 0;
     db.prepare(`
       INSERT INTO excellent_remix_billing_requests (
         request_id, user_id, kind, input_signature, status, credit_cost, counted, cache_hit,
-        result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'reserved', ?, ?, 0, '', '', NULL, '', ?, '', ?)
+        result_source, result_json, credit_event_id, error, created_at, completed_at, updated_at, task_key
+      ) VALUES (?, ?, ?, ?, 'reserved', ?, ?, 0, '', '', NULL, '', ?, '', ?, ?)
       ON CONFLICT(request_id, user_id, kind) DO UPDATE SET
         status = 'reserved', input_signature = excluded.input_signature,
         credit_cost = excluded.credit_cost, counted = excluded.counted, cache_hit = 0,
         result_source = '', result_json = '', credit_event_id = NULL, error = '',
-        created_at = excluded.created_at, completed_at = '', updated_at = excluded.updated_at
+        created_at = excluded.created_at, completed_at = '', updated_at = excluded.updated_at,
+        task_key = excluded.task_key
     `).run(
       normalizedRequestId,
       Number(userId),
@@ -249,6 +304,7 @@ function reserveExcellentBillingRequest({
       counted,
       timestamp,
       timestamp,
+      taskKey,
     );
     return {
       status: "reserved",
@@ -277,7 +333,9 @@ function settleExcellentBillingRequest({
   event,
   now = new Date(),
 }) {
-  const outcome = runTransaction(() => {
+  let outcome;
+  try {
+    outcome = runTransaction(() => {
     const request = findExcellentBillingRequest({ requestId, userId, kind });
     if (!request) throw new Error("计费请求不存在或已过期，请重新生成。");
     if (
@@ -302,32 +360,12 @@ function settleExcellentBillingRequest({
 
     const isModelResult = resultSource === "model";
     const cost = isModelResult ? Number(request.credit_cost || 0) : 0;
+    const taskKey = request.task_key || (reservationToken
+      ? `excellent_${kind}:${userId}:${requestId}:${reservationToken}`
+      : `excellent_${kind}:${userId}:${requestId}`);
+
     let creditEvent = null;
     if (cost > 0) {
-      const trendCutoff = new Date(now.getTime() - TREND_ANALYSIS_RESERVATION_TTL_MS).toISOString();
-      const excellentCutoff = new Date(now.getTime() - EXCELLENT_BILLING_RESERVATION_TTL_MS).toISOString();
-      const spend = db.prepare(`
-        UPDATE users SET credits = credits - ?
-        WHERE id = ?
-          AND credits - COALESCE((
-            SELECT SUM(credit_cost) FROM excellent_remix_billing_requests
-            WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-              AND NOT (request_id = ? AND kind = ?)
-          ), 0) - COALESCE((
-            SELECT SUM(credit_cost) FROM trend_analysis_requests
-            WHERE user_id = users.id AND status = 'reserved' AND created_at >= ?
-          ), 0) >= ?
-      `).run(cost, Number(userId), excellentCutoff, String(requestId), String(kind), trendCutoff, cost);
-      if (spend.changes !== 1) {
-        // Mark failed inside this transaction, then report the error after commit
-        // so the status update is not rolled back by the throw.
-        db.prepare(`
-          UPDATE excellent_remix_billing_requests
-          SET status = 'failed', error = 'insufficient credits at settle', updated_at = ?
-          WHERE request_id = ? AND user_id = ? AND kind = ?
-        `).run(now.toISOString(), String(requestId), Number(userId), String(kind));
-        return { insufficientAtSettle: true };
-      }
       creditEvent = insertCreditEvent({
         ...(event || {}),
         userId,
@@ -335,6 +373,24 @@ function settleExcellentBillingRequest({
         creditCost: cost,
         payload: { ...(event?.payload || {}), requestId, billingKind: kind },
       });
+      settleCreditsForTask({
+        userId,
+        taskKey,
+        taskId: `${kind}_${requestId}`,
+        taskType: `excellent_${kind}`,
+        creditEventId: creditEvent.id,
+        nowIso: now.toISOString(),
+      }, db);
+      syncUserCreditsCache(userId, db);
+    } else {
+      releaseCreditsForTask({
+        userId,
+        taskKey,
+        taskId: `${kind}_${requestId}`,
+        taskType: `excellent_${kind}`,
+        nowIso: now.toISOString(),
+      }, db);
+      syncUserCreditsCache(userId, db);
     }
 
     const timestamp = now.toISOString();
@@ -372,11 +428,21 @@ function settleExcellentBillingRequest({
       windowCount: countDirectionSuccessesInWindow(userId, now.getTime()),
     };
   });
-  if (outcome && outcome.insufficientAtSettle) {
-    const error = new Error("积分余额已发生变化，本次结果未保存，请重新生成。");
-    error.code = "INSUFFICIENT_CREDITS";
-    error.statusCode = 402;
-    throw error;
+  } catch (err) {
+    if (err && err.code === "RESERVATION_NOT_FOUND") {
+      try {
+        db.prepare(`
+          UPDATE excellent_remix_billing_requests
+          SET status = 'failed', error = ?, updated_at = ?
+          WHERE request_id = ? AND user_id = ? AND kind = ? AND status = 'reserved'
+        `).run("积分余额已发生变化，未找到有效预占", now.toISOString(), String(requestId), Number(userId), String(kind));
+      } catch (_) {}
+      const mappedErr = new Error("积分余额已发生变化，本次结果未保存，请重新生成。");
+      mappedErr.code = "RESERVATION_NOT_FOUND";
+      mappedErr.statusCode = 402;
+      throw mappedErr;
+    }
+    throw err;
   }
   return outcome;
 }
@@ -393,19 +459,79 @@ function failExcellentBillingRequest({
 }) {
   return runTransaction(() => {
     const timestamp = now.toISOString();
+    const token = String(reservationToken || "").trim();
+    if (!token) {
+      const err = new Error("缺少有效的计费尝试令牌 (reservationToken)，无法释放预占。");
+      err.code = "STALE_BILLING_ATTEMPT";
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const request = findExcellentBillingRequest({ requestId, userId, kind });
+    if (!request) {
+      const err = new Error("计费请求不存在或已失效。");
+      err.code = "STALE_BILLING_ATTEMPT";
+      err.statusCode = 409;
+      throw err;
+    }
+
+    if (inputSignature && request.input_signature !== String(inputSignature)) {
+      const err = new Error("计费请求已被新的生成尝试替代，请重试。");
+      err.code = "STALE_BILLING_ATTEMPT";
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const attemptTaskKey = `excellent_${kind}:${userId}:${requestId}:${token}`;
+
+    if (request.created_at !== token) {
+      const oldRes = db.prepare(`
+        SELECT status FROM task_credit_reservations WHERE task_key = ?
+      `).all(attemptTaskKey);
+      if (oldRes && oldRes.length > 0) {
+        const hasReserved = oldRes.some((r) => r.status === "reserved");
+        if (hasReserved) {
+          releaseCreditsForTask({
+            userId,
+            taskKey: attemptTaskKey,
+            taskId: `${kind}_${requestId}`,
+            taskType: `excellent_${kind}`,
+            nowIso: timestamp,
+          }, db);
+          syncUserCreditsCache(userId, db);
+        }
+      }
+      return { status: "stale", ignored: true, attemptTaskKey };
+    }
+
+    if (request.status === "completed") {
+      return { status: "stale", ignored: true, attemptTaskKey };
+    }
+
+    if (request.status === "failed") {
+      return { status: "failed", replayed: true, attemptTaskKey };
+    }
+
+    releaseCreditsForTask({
+      userId,
+      taskKey: attemptTaskKey,
+      taskId: `${kind}_${requestId}`,
+      taskType: `excellent_${kind}`,
+      nowIso: timestamp,
+    }, db);
+    syncUserCreditsCache(userId, db);
     const errorText = String(error || "excellent billing request failed").slice(0, 500);
     db.prepare(`
       UPDATE excellent_remix_billing_requests
       SET status = 'failed', credit_cost = 0, counted = 0, error = ?, updated_at = ?
-      WHERE request_id = ? AND user_id = ? AND kind = ? AND input_signature = ? AND created_at = ? AND status = 'reserved'
+      WHERE request_id = ? AND user_id = ? AND kind = ? AND created_at = ? AND status = 'reserved'
     `).run(
       errorText,
       timestamp,
       String(requestId),
       Number(userId),
       String(kind),
-      String(inputSignature || ""),
-      String(reservationToken || ""),
+      token,
     );
     try {
       if (kind === EXCELLENT_BILLING_KIND_DIRECTION) {
@@ -414,6 +540,7 @@ function failExcellentBillingRequest({
         recordExcellentFusionFailed({ requestId, userId, error: errorText, failedAt: timestamp });
       }
     } catch (_) {}
+    return { status: "failed", attemptTaskKey };
   });
 }
 

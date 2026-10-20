@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia, type Pinia } from "pinia";
-import { createMemoryHistory, createRouter, type Router } from "vue-router";
+import { createMemoryHistory, createRouter } from "vue-router";
 import RechargeView from "../views/RechargeView.vue";
 
-function makeRouter(initialPath = "/billing"): Router {
+function makeRouter(initialPath = "/billing") {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: "/billing", name: "billing", component: RechargeView }],
@@ -26,28 +26,60 @@ function stubFetch(handlers: Record<string, FetchHandler>): ReturnType<typeof vi
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const key = `${init?.method || "GET"} ${String(input)}`;
     const handler = handlers[key];
-    if (!handler) throw new Error(`unexpected fetch: ${key}`);
+    if (!handler) {
+      const urlBase = String(input).split("?")[0];
+      const baseKey = `${init?.method || "GET"} ${urlBase}`;
+      if (handlers[baseKey]) return handlers[baseKey](init);
+      throw new Error(`unexpected fetch: ${key}`);
+    }
     return handler(init);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-const PLAN = { id: "p1", name: "测试套餐 10 积分", credits: 10, amountYuan: "0.01" };
-const PENDING_ORDER = {
-  id: 1,
-  outTradeNo: "redbase_order123",
-  planId: "p1",
-  planName: "测试套餐 10 积分",
-  planCredits: 10,
-  amountYuan: "0.01",
-  status: "pending",
-  createdAt: "2026-08-04T00:00:00.000Z",
-  expiresAt: "2026-08-04T00:30:00.000Z",
-  paidAt: "",
+const MOCK_WALLET = {
+  wallet: {
+    totalAvailable: 420,
+    periodBalance: 120,
+    permanentBalance: 300,
+    legacyBalance: 100,
+  },
+  subscription: {
+    id: 1,
+    planId: "pro",
+    planName: "专业版",
+    cycle: "monthly",
+    serviceStart: "2026-09-23T06:00:00.000Z",
+    serviceEnd: "2026-10-23T06:00:00.000Z",
+    currentPeriodStart: "2026-09-23T06:00:00.000Z",
+    currentPeriodEnd: "2026-10-23T06:00:00.000Z",
+    currentPeriodGrant: 400,
+    usedCredits: 280,
+    nextGrantAt: null,
+  },
+  scheduled: null,
+  scenario: "monthly",
+  planActions: {
+    light_monthly: { type: "downgrade", label: "更换套餐", note: "当前服务到期后生效" },
+    pro_monthly: { type: "renew", label: "续费套餐", note: "衔接当前服务，本期积分不重置" },
+    business_monthly: { type: "upgrade", label: "升级套餐", note: "补差价立即生效，原到期日不变" },
+  },
 };
 
-describe("RechargeView", () => {
+const MOCK_PLANS = [
+  { id: "light", name: "轻量版", label: "轻量创作", desc: "个人运营", monthlyFen: 29900, annualFen: 299000, credits: 100, featured: false, amountYuan: "299.00" },
+  { id: "pro", name: "专业版", label: "持续创作", desc: "持续运营", monthlyFen: 99900, annualFen: 999000, credits: 400, featured: true, amountYuan: "999.00" },
+  { id: "business", name: "业务版", label: "高频创作", desc: "多项目", monthlyFen: 299900, annualFen: 2999000, credits: 1500, featured: false, amountYuan: "2999.00" },
+];
+
+const MOCK_TOPUPS = [
+  { id: "fuel-small", name: "小额加油包", desc: "偶尔创作", credits: 25, amountFen: 9900 },
+  { id: "fuel-standard", name: "标准加油包", desc: "灵活补充", credits: 80, amountFen: 29900, featured: true },
+  { id: "fuel-large", name: "大额加油包", desc: "预留充足空间", credits: 300, amountFen: 99900 },
+];
+
+describe("RechargeView V2", () => {
   let pinia: Pinia;
 
   beforeEach(() => {
@@ -68,275 +100,195 @@ describe("RechargeView", () => {
     return { wrapper, router };
   }
 
-  it("hides the recharge surface when no plans are configured", async () => {
+  it("renders V2 header, breadcrumbs, and wallet balance breakdown", async () => {
     stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [], fakeSettle: false }),
+      "GET /api/billing/wallet": () => jsonResponse(200, MOCK_WALLET),
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: MOCK_PLANS, topups: MOCK_TOPUPS, fakeSettle: false }),
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
     });
     const { wrapper } = await mountView();
 
-    expect(wrapper.find("[data-test=recharge-empty]").exists()).toBe(true);
-    expect(wrapper.findAll("[data-test=recharge-plan]")).toHaveLength(0);
+    expect(wrapper.find(".page-title").text()).toBe("套餐与积分");
+    expect(wrapper.find("#total-balance").text()).toBe("420");
+    expect(wrapper.find("#period-balance").text()).toBe("120");
+    expect(wrapper.find("#permanent-balance").text()).toBe("300");
+    expect(wrapper.find("#wallet-plan-tag").text()).toBe("专业版 · 月付");
+    expect(wrapper.find(".subscription-status").text()).toContain("当前服务：专业版 · 月付");
   });
 
-  it("intercepts plan click with notice modal when user has an active pending order", async () => {
-    const closedOrder = { ...PENDING_ORDER, status: "closed" };
+  it("renders 3 V2 plan cards and toggles between monthly and annual payment cycles", async () => {
     stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
-      "POST /api/payments/alipay/orders/redbase_order123/close": () => jsonResponse(200, { order: closedOrder }),
-    });
-    const { wrapper } = await mountView();
-
-    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
-    await flushPromises();
-
-    expect(wrapper.find("[data-test=pending-order-modal]").exists()).toBe(true);
-    expect(wrapper.text()).toContain("您还有未完成的订单");
-
-    await wrapper.find("[data-test=modal-confirm-cancel]").trigger("click");
-    await flushPromises();
-
-    expect(wrapper.find("[data-test=pending-order-modal]").exists()).toBe(false);
-    expect(wrapper.find("[data-test=checkout-screen]").exists()).toBe(true);
-  });
-
-  it("creates an Alipay order and reveals the pay link plus fake settle actions in test mode", async () => {
-    const qrDataUrl = "data:image/png;base64,cXItY29kZQ==";
-    const qrcode = await import("qrcode");
-    vi.spyOn(qrcode.default, "toDataURL").mockImplementation(async () => qrDataUrl);
-    const fetchMock = stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: true }),
+      "GET /api/billing/wallet": () => jsonResponse(200, MOCK_WALLET),
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: MOCK_PLANS, topups: MOCK_TOPUPS, fakeSettle: false }),
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
-      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
-      "POST /api/payments/alipay/orders": () =>
-        jsonResponse(201, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
-      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
-        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/?out_trade_no=redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
-    });
-    const { wrapper, router } = await mountView();
-
-    expect(wrapper.findAll("[data-test=recharge-plan]")).toHaveLength(1);
-
-    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
-    await flushPromises();
-
-    expect(wrapper.find("[data-test=checkout-screen]").exists()).toBe(true);
-    await wrapper.find("[data-test=checkout-submit-btn]").trigger("click");
-    await flushPromises();
-
-    const createCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/payments/alipay/orders");
-    const body = JSON.parse(String((createCall![1] as RequestInit).body));
-    expect(body.planId).toBe("p1");
-    expect(String(body.idempotencyKey).length).toBeGreaterThanOrEqual(8);
-    expect(router.currentRoute.value.query.view).toBe("pay");
-    expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_order123");
-    expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe(
-      "https://pay.example/?out_trade_no=redbase_order123",
-    );
-    expect(wrapper.find("[data-test=payment-screen]").exists()).toBe(true);
-    await flushPromises();
-    expect(wrapper.find("[data-test=payment-qrcode]").attributes("src")).toBe(qrDataUrl);
-    expect(qrcode.default.toDataURL).toHaveBeenCalledWith("https://qr.alipay.test/redbase_order123", expect.any(Object));
-  });
-
-  it("renders the paid status for settled orders", async () => {
-    stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () =>
-        jsonResponse(200, { orders: [{ ...PENDING_ORDER, status: "paid", paidAt: "2026-08-04T00:01:00.000Z" }] }),
     });
     const { wrapper } = await mountView();
 
-    expect(wrapper.find("[data-test=payment-order] .status-dot").text()).toBe("已支付");
-    expect(wrapper.findAll("[data-test=fake-settle-link]")).toHaveLength(0);
+    const cards = wrapper.findAll(".plan-card");
+    expect(cards).toHaveLength(3);
+    expect(cards[0].find("h3").text()).toBe("轻量版");
+    expect(cards[1].find("h3").text()).toBe("专业版");
+    expect(cards[2].find("h3").text()).toBe("业务版");
+
+    expect(cards[0].find(".price-number").text()).toBe("299");
+    expect(cards[1].find(".price-number").text()).toBe("999");
+    expect(cards[2].find(".price-number").text()).toBe("2,999");
+
+    const cycleButtons = wrapper.findAll(".cycle-button");
+    await cycleButtons[1].trigger("click");
+    await flushPromises();
+
+    expect(cards[0].find(".price-number").text()).toBe("2,990");
+    expect(cards[1].find(".price-number").text()).toBe("9,990");
+    expect(cards[2].find(".price-number").text()).toBe("29,990");
   });
 
-  it("updates a list row immediately after cancelling a pending order", async () => {
-    const closedOrder = { ...PENDING_ORDER, status: "closed" };
+  it("renders 3 permanent booster packs on the topups tab", async () => {
     stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
-      "POST /api/payments/alipay/orders/redbase_order123/close": () => jsonResponse(200, { order: closedOrder }),
+      "GET /api/billing/wallet": () => jsonResponse(200, MOCK_WALLET),
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: MOCK_PLANS, topups: MOCK_TOPUPS, fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
     });
     const { wrapper } = await mountView();
-    await wrapper.find(".text-action--muted").trigger("click");
+
+    const tabs = wrapper.findAll(".tab");
+    await tabs[1].trigger("click");
     await flushPromises();
-    expect(wrapper.find("[data-test=payment-order] .status-dot").text()).toBe("已关闭");
-    expect(wrapper.find(".text-action--muted").exists()).toBe(false);
+
+    const topupCards = wrapper.findAll(".topup-card");
+    expect(topupCards).toHaveLength(3);
+    expect(topupCards[0].find("h3").text()).toBe("小额加油包");
+    expect(topupCards[0].find(".topup-credit-hero strong").text()).toBe("25");
+    expect(topupCards[1].find("h3").text()).toBe("标准加油包");
+    expect(topupCards[1].find(".topup-credit-hero strong").text()).toBe("80");
+    expect(topupCards[2].find("h3").text()).toBe("大额加油包");
+    expect(topupCards[2].find(".topup-credit-hero strong").text()).toBe("300");
   });
 
-  it("keeps concurrent cancellation results isolated per order", async () => {
-    const secondOrder = { ...PENDING_ORDER, id: 2, outTradeNo: "redbase_order456", planName: "套餐二" };
-    const closedFirst = { ...PENDING_ORDER, status: "closed" };
-    const closedSecond = { ...secondOrder, status: "closed" };
-    let resolveFirst: ((response: Response) => void) | undefined;
-    let resolveSecond: ((response: Response) => void) | undefined;
-    const firstClose = new Promise<Response>((resolve) => { resolveFirst = resolve; });
-    const secondClose = new Promise<Response>((resolve) => { resolveSecond = resolve; });
+  it("opens rules, balance breakdown, and change rules modals", async () => {
     stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER, secondOrder] }),
-      "POST /api/payments/alipay/orders/redbase_order123/close": () => firstClose as unknown as Response,
-      "POST /api/payments/alipay/orders/redbase_order456/close": () => secondClose as unknown as Response,
+      "GET /api/billing/wallet": () => jsonResponse(200, MOCK_WALLET),
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: MOCK_PLANS, topups: MOCK_TOPUPS, fakeSettle: false }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
     });
     const { wrapper } = await mountView();
-    const cancelButtons = wrapper.findAll(".text-action--muted");
 
-    await cancelButtons[0].trigger("click");
-    await cancelButtons[1].trigger("click");
-    expect(wrapper.text()).toContain("取消中...");
+    await wrapper.find(".button-rules").trigger("click");
+    expect(wrapper.text()).toContain("积分消耗规则");
+    await wrapper.find(".close-button").trigger("click");
 
-    resolveSecond?.(jsonResponse(200, { order: closedSecond }));
-    await flushPromises();
-    resolveFirst?.(jsonResponse(200, { order: closedFirst }));
-    await flushPromises();
+    await wrapper.find(".wallet-total .text-button").trigger("click");
+    expect(wrapper.text()).toContain("我的积分账户");
+    expect(wrapper.text()).toContain("历史保留积分");
+    await wrapper.find(".close-button").trigger("click");
 
-    const rows = wrapper.findAll("[data-test=payment-order]");
-    expect(rows[0].find(".status-dot").text()).toBe("已关闭");
-    expect(rows[1].find(".status-dot").text()).toBe("已关闭");
+    await wrapper.find(".subscription-status .text-button").trigger("click");
+    expect(wrapper.text()).toContain("套餐如何续费、升级或更换？");
   });
 
-  it("shows concurrent cancellation errors beside their own orders", async () => {
-    const secondOrder = { ...PENDING_ORDER, id: 2, outTradeNo: "redbase_order456", planName: "套餐二" };
-    stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER, secondOrder] }),
-      "POST /api/payments/alipay/orders/redbase_order123/close": () => jsonResponse(502, { error: "订单一关闭失败" }),
-      "POST /api/payments/alipay/orders/redbase_order456/close": () => jsonResponse(502, { error: "订单二关闭失败" }),
-    });
-    const { wrapper } = await mountView();
-    const cancelButtons = wrapper.findAll(".text-action--muted");
-
-    await Promise.all([cancelButtons[0].trigger("click"), cancelButtons[1].trigger("click")]);
-    await flushPromises();
-
-    const rows = wrapper.findAll("[data-test=payment-order]");
-    expect(rows[0].find("[role=alert]").text()).toBe("订单一关闭失败");
-    expect(rows[1].find("[role=alert]").text()).toBe("订单二关闭失败");
-  });
-
-  it("checks provider status from the payment screen and renders the paid detail state", async () => {
-    const paidOrder = { ...PENDING_ORDER, status: "paid", paidAt: "2026-08-04T00:01:00.000Z" };
-    let currentOrder = PENDING_ORDER;
-    stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
-      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: currentOrder }),
-      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
-        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
-      "POST /api/payments/alipay/orders/redbase_order123/check": () => {
-        currentOrder = paidOrder;
-        return jsonResponse(200, { order: paidOrder });
+  it("loads quote and performs payment checkout flow with acknowledge guard", async () => {
+    const mockQuote = {
+      quoteId: "quot_test_123",
+      kind: "plan",
+      itemId: "business",
+      itemName: "业务版",
+      action: "upgrade",
+      cycle: "monthly",
+      amountFen: 46667,
+      issuedNow: 257,
+      startAt: "2026-10-16T06:00:00.000Z",
+      endAt: "2026-10-23T06:00:00.000Z",
+      periodEndAt: "2026-10-23T06:00:00.000Z",
+      scheduled: false,
+      meta: {
+        planCredits: 1500,
+        upgradeDetails: {
+          oldPlanName: "专业版",
+          oldFullTermPrice: 99900,
+          targetFullTermPrice: 299900,
+          serviceDaysLeft: 7,
+          serviceDaysTotal: 30,
+          periodDaysLeft: 7,
+          periodDaysTotal: 30,
+        },
       },
-    });
+      expiresAt: "2026-10-16T06:15:00.000Z",
+    };
 
-    const { wrapper, router } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
-    expect(wrapper.find("[data-test=payment-screen]").exists()).toBe(true);
-
-    await wrapper.find("[data-test=check-payment-status]").trigger("click");
-    await flushPromises();
-
-    expect(router.currentRoute.value.query.view).toBe("detail");
-    expect(wrapper.find("[data-test=paid-order-detail]").exists()).toBe(true);
-  });
-
-  it("shows the PC payment fallback when Alipay precreate is unavailable", async () => {
     stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
+      "GET /api/billing/wallet": () => jsonResponse(200, MOCK_WALLET),
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: MOCK_PLANS, topups: MOCK_TOPUPS, fakeSettle: true }),
       "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
-      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
-      "POST /api/payments/alipay/orders": () => jsonResponse(201, {
-        order: PENDING_ORDER,
-        payUrl: "https://pay.example/redbase_order123",
-        qrCode: "",
-        qrCodeError: "支付宝扫码支付暂不可用，请点击“打开支付宝付款”完成支付。",
-      }),
+      "POST /api/billing/quote": () => jsonResponse(200, { quote: mockQuote }),
+      "POST /api/payments/alipay/orders": () =>
+        jsonResponse(201, {
+          order: {
+            id: 99,
+            outTradeNo: "rb_test_out_001",
+            planId: "business",
+            planName: "业务版",
+            planCredits: 1500,
+            amountYuan: "466.67",
+            status: "created",
+          },
+          payUrl: "https://openapi.alipay.com/gateway.do?trade_no=test",
+          qrCode: "https://qr.alipay.com/test",
+        }),
     });
     const { wrapper } = await mountView();
 
-    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
-    await flushPromises();
-    await wrapper.find("[data-test=checkout-submit-btn]").trigger("click");
+    const cards = wrapper.findAll(".plan-card");
+    await cards[2].find(".plan-cta").trigger("click");
     await flushPromises();
 
-    expect(wrapper.find("[data-test=payment-qrcode]").exists()).toBe(false);
-    expect(wrapper.find(".payment-qr-error").text()).toContain("扫码支付暂不可用");
-    expect(wrapper.find("[data-test=alipay-pay-link]").attributes("href")).toBe("https://pay.example/redbase_order123");
+    expect(wrapper.find("#checkout-title").text()).toBe("确认升级套餐");
+    expect(wrapper.find(".checkout-price").text()).toContain("466.67");
+    expect(wrapper.text()).toContain("+257 积分");
+
+    const payButton = wrapper.find(".payment-button");
+    expect((payButton.element as HTMLButtonElement).disabled).toBe(true);
+
+    const checkbox = wrapper.find('.acknowledge input[type="checkbox"]');
+    await checkbox.setValue(true);
+    await flushPromises();
+    expect((payButton.element as HTMLButtonElement).disabled).toBe(false);
+
+    await payButton.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".qr-payment-area").exists()).toBe(true);
+    expect(wrapper.text()).toContain("请使用支付宝扫码完成付款");
   });
 
-  it("clears payment errors after returning to the recharge center", async () => {
+  it("loads and displays filtered ledger and orders tab", async () => {
+    const mockLedger = [
+      { id: 1, time: "2026.10.16 10:28", label: "小红书标准组图", delta: -4, source: "本期积分", note: "4 张", type: "spend" },
+      { id: 2, time: "2026.10.01 09:20", label: "大额加油包到账", delta: 300, source: "永久积分", note: "不设到期日", type: "grant" },
+    ];
+    const mockOrders = [
+      { id: 1, outTradeNo: "rb_ord_001", planName: "标准加油包", planCredits: 80, amountYuan: "299.00", status: "paid", provider: "alipay", orderKind: "topup" },
+    ];
+
     stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [PENDING_ORDER] }),
-      "GET /api/payments/orders/redbase_order123": () => jsonResponse(200, { order: PENDING_ORDER }),
-      "POST /api/payments/alipay/orders/redbase_order123/pay-link": () =>
-        jsonResponse(200, { order: PENDING_ORDER, payUrl: "https://pay.example/redbase_order123", qrCode: "https://qr.alipay.test/redbase_order123" }),
-      "POST /api/payments/alipay/orders/redbase_order123/check": () =>
-        jsonResponse(502, { error: "支付状态查询失败，请稍后重试" }),
+      "GET /api/billing/wallet": () => jsonResponse(200, MOCK_WALLET),
+      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: MOCK_PLANS, topups: MOCK_TOPUPS, fakeSettle: false }),
+      "GET /api/billing/ledger": () => jsonResponse(200, { rows: mockLedger, total: 2 }),
+      "GET /api/payments/orders": () => jsonResponse(200, { orders: mockOrders }),
     });
-    const { wrapper } = await mountView("/billing?view=pay&outTradeNo=redbase_order123");
-    await wrapper.find("[data-test=check-payment-status]").trigger("click");
-    await flushPromises();
-    expect(wrapper.find("[role=alert]").exists()).toBe(true);
-    await wrapper.find(".billing-back").trigger("click");
-    await flushPromises();
-    expect(wrapper.find("[role=alert]").exists()).toBe(false);
-  });
+    const { wrapper } = await mountView();
 
-  it("highlights the business plan selected from the account center", async () => {
-    const monthlyPlan = {
-      id: "business-monthly",
-      name: "单月版",
-      credits: 1000,
-      amountYuan: "3500.00",
-    };
-    stubFetch({
-      "GET /api/billing/recharge-plans": () => jsonResponse(200, { plans: [PLAN, monthlyPlan], fakeSettle: false }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
-    });
-
-    const { wrapper, router } = await mountView("/billing?plan=business-monthly");
-    const selected = wrapper.find('[data-plan-id="business-monthly"]');
-
-    expect(selected.classes()).toContain("billing-plan-card--selected");
-    expect(selected.find("[data-test=selected-plan-label]").text()).toBe("推荐选择");
-
-    await router.push("/billing?plan=p1");
-    await flushPromises();
-    expect(wrapper.find('[data-plan-id="p1"]').classes()).toContain("billing-plan-card--selected");
-    expect(wrapper.find('[data-plan-id="business-monthly"]').classes()).not.toContain("billing-plan-card--selected");
-  });
-
-  it("supports selecting WeChat Pay on the checkout view and renders green WeChat payment screen", async () => {
-    const wxOrder = { ...PENDING_ORDER, outTradeNo: "redbase_wx123", provider: "wxpay" as const };
-    const fetchMock = stubFetch({
-      "GET /api/billing/recharge-plans": () =>
-        jsonResponse(200, { plans: [PLAN], fakeSettle: true, providers: { alipay: true, wxpay: true } }),
-      "GET /api/payments/orders": () => jsonResponse(200, { orders: [] }),
-      "POST /api/payments/wxpay/orders": () =>
-        jsonResponse(201, { order: wxOrder, payUrl: "", qrCode: "weixin://wxpay/bizpayurl?pr=fake123" }),
-      "GET /api/payments/orders/redbase_wx123": () => jsonResponse(200, { order: wxOrder }),
-      "POST /api/payments/wxpay/orders/redbase_wx123/pay-link": () =>
-        jsonResponse(200, { order: wxOrder, payUrl: "", qrCode: "weixin://wxpay/bizpayurl?pr=fake123" }),
-    });
-    const { wrapper, router } = await mountView();
-
-    await wrapper.find("[data-test=recharge-plan] button").trigger("click");
+    const tabs = wrapper.findAll(".tab");
+    await tabs[2].trigger("click");
     await flushPromises();
 
-    expect(wrapper.find("[data-test=checkout-screen]").exists()).toBe(true);
-    expect(wrapper.find("[data-test=payment-method-selector]").exists()).toBe(true);
+    expect(wrapper.find(".table-scroll table").text()).toContain("小红书标准组图");
+    expect(wrapper.find(".table-scroll table").text()).toContain("大额加油包到账");
 
-    await wrapper.find('[data-provider="wxpay"]').trigger("click");
-    await wrapper.find("[data-test=checkout-submit-btn]").trigger("click");
+    await tabs[3].trigger("click");
     await flushPromises();
 
-    const createCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/payments/wxpay/orders");
-    expect(createCall).toBeTruthy();
-    expect(router.currentRoute.value.query.outTradeNo).toBe("redbase_wx123");
-    expect(wrapper.text()).toContain("微信支付");
-    expect(wrapper.find(".payment-brandbar--wxpay").exists()).toBe(true);
-    expect(wrapper.find("[data-test=alipay-pay-link]").exists()).toBe(false);
+    expect(wrapper.find(".table-scroll table").text()).toContain("标准加油包");
+    expect(wrapper.find(".table-scroll table").text()).toContain("rb_ord_001");
+    expect(wrapper.find(".status").text()).toBe("已支付");
   });
 });

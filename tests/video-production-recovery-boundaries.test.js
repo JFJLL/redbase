@@ -1132,13 +1132,19 @@ test("29.F: Concurrency guard: scheduler and manual retry-result share single wo
   addUser(ownerUserId, 200);
 
   let providerGetStatusCalls = 0;
+  let notifyProviderEntered;
+  const providerEnteredPromise = new Promise((resolve) => { notifyProviderEntered = resolve; });
+  let releaseBarrier;
+  const barrierPromise = new Promise((resolve) => { releaseBarrier = resolve; });
+
   const provider = {
     provider: "fake",
     getAllowedHosts: () => ["provider.example"],
     async submitClip() { return { taskId: "task-conc" }; },
     async getTaskStatus() {
       providerGetStatusCalls += 1;
-      await new Promise((r) => setTimeout(r, 20));
+      notifyProviderEntered();
+      await barrierPromise;
       return { status: "completed", videoBuffer: MP4_BUFFER };
     },
   };
@@ -1162,13 +1168,31 @@ test("29.F: Concurrency guard: scheduler and manual retry-result share single wo
 
   providerGetStatusCalls = 0;
   // Trigger pump and retry-result concurrently
-  await Promise.all([
-    service.retryClipResult(created.project.id, ownerUserId, 1, "conc-req-1"),
-    service.pump(),
+  const retryPromise = service.retryClipResult(created.project.id, ownerUserId, 1, "conc-req-1");
+  const pumpPromise = service.pump();
+
+  // Bounded await for provider worker entry to prove worker is actively in flight
+  await Promise.race([
+    providerEnteredPromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout waiting for provider worker entry")), 3000)),
   ]);
 
-  await new Promise((r) => setTimeout(r, 50));
-  const finalProject = service.getProject(created.project.id, ownerUserId);
+  // Assert single-worker exclusivity while the barrier is held
+  assert.equal(providerGetStatusCalls, 1, "provider worker must be entered exactly once while barrier is held");
+
+  // Release the barrier to let provider task status return
+  releaseBarrier();
+
+  await Promise.all([retryPromise, pumpPromise]);
+
+  // Bounded polling wait for asynchronous disk persistence to reach terminal completed state
+  const startWait = Date.now();
+  let finalProject = service.getProject(created.project.id, ownerUserId);
+  while (finalProject.status !== "completed" && Date.now() - startWait < 3000) {
+    await new Promise((r) => setTimeout(r, 10));
+    finalProject = service.getProject(created.project.id, ownerUserId);
+  }
+
   assert.equal(finalProject.status, "completed");
   assert.equal(providerGetStatusCalls, 1, "strictly 1 provider query/persist instance");
 });

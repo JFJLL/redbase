@@ -6,7 +6,7 @@ let dbProxy = null;
 
 function openDatabase() {
   if (!db) {
-    db = new Database(DB_FILE);
+    db = new Database(DB_FILE, { timeout: 5000 });
     db.pragma("foreign_keys = ON");
     db.pragma("journal_mode = WAL");
   }

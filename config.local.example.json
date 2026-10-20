@@ -177,20 +177,10 @@
     "fakeAllowed": false
   },
   "billing": {
-    "rechargePlans": [
-      {
-        "id": "business-monthly",
-        "name": "单月版",
-        "credits": 1000,
-        "amountYuan": "3500.00"
-      },
-      {
-        "id": "business-annual",
-        "name": "包年版",
-        "credits": 12000,
-        "amountYuan": "35000.00"
-      }
-    ]
+    "catalogVersion": "v2_20261016",
+    "timezone": "Asia/Shanghai",
+    "quoteTtlMs": 900000,
+    "compensationValidityDays": 7
   },
   "cors": {
     "origins": ["http://127.0.0.1:3013"],

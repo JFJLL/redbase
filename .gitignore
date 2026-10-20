@@ -23,6 +23,8 @@ redbase-model-cost-estimate.md
 docs/*
 !docs/admin-analytics-v1.md
 !docs/design-qa.md
+!docs/billing-v2/
+!docs/billing-v2/**
 artifacts/
 .worktrees/
 cert/

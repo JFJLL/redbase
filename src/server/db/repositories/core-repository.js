@@ -18,7 +18,20 @@ function setCounter(name, value) {
 }
 
 function allocateCounter(name, fallback = 1) {
-  const nextValue = getCounter(name, fallback);
+  let nextValue = getCounter(name, fallback);
+  if (name === "nextCreditEventId") {
+    try {
+      while (db.prepare("SELECT 1 FROM credit_events WHERE id = ?").get(nextValue)) {
+        nextValue++;
+      }
+    } catch (_) {}
+  } else if (name === "nextPaymentOrderId") {
+    try {
+      while (db.prepare("SELECT 1 FROM payment_orders WHERE id = ?").get(nextValue)) {
+        nextValue++;
+      }
+    } catch (_) {}
+  }
   setCounter(name, nextValue + 1);
   return nextValue;
 }

@@ -9,6 +9,7 @@ const { insertUser, findUserById } = require("../../src/server/db/repositories/a
 const { insertBrand } = require("../../src/server/db/repositories/brand-repository");
 const { trySpendCreditsWithEvent } = require("../../src/server/db/repositories/admin-repository");
 const { TREND_ANALYSIS_RESERVATION_TTL_MS } = require("../../src/server/db/repositories/core-repository");
+const { getUserWalletBalances, createCreditLot } = require("../../src/server/billing/credit-ledger");
 const {
   reserveTrendAnalysisRequest,
   completeTrendAnalysisRequest,
@@ -76,10 +77,18 @@ function makeBucket() {
 
 test("trend analysis freezes credits, saves and charges atomically, and replays idempotently", () => {
   const identity = { requestId: "trend-request-0001", userId: 71, brandId: 81, bucketKey: "traffic" };
+  const initialWallet = getUserWalletBalances(71);
+  assert.equal(initialWallet.totalAvailable, 1);
+  assert.equal(initialWallet.totalReserved, 0);
+  assert.equal(initialWallet.totalUsed, 0);
+
   const reserved = reserveTrendAnalysisRequest({ ...identity, creditCost: 1 });
   assert.equal(reserved.status, "reserved");
   assert.equal(reserved.existing, false);
-  assert.equal(findUserById(71).credits, 1, "reservation must not deduct credits");
+  const postResWallet = getUserWalletBalances(71);
+  assert.equal(postResWallet.totalAvailable, 0, "reservation freezes available balance");
+  assert.equal(postResWallet.totalReserved, 1, "reservation increases reserved credits");
+  assert.equal(postResWallet.totalUsed, 0);
 
   const duplicateInFlight = reserveTrendAnalysisRequest({ ...identity, creditCost: 1 });
   assert.equal(duplicateInFlight.status, "reserved");
@@ -118,6 +127,10 @@ test("trend analysis freezes credits, saves and charges atomically, and replays 
   assert.equal(completed.replayed, false);
   assert.equal(completed.user.credits, 0);
   assert.equal(completed.brand.trends[0].items.length, 10);
+  const completedWallet = getUserWalletBalances(71);
+  assert.equal(completedWallet.totalAvailable, 0);
+  assert.equal(completedWallet.totalReserved, 0);
+  assert.equal(completedWallet.totalUsed, 1);
 
   const replayed = completeTrendAnalysisRequest({
     ...identity,
@@ -133,11 +146,42 @@ test("trend analysis freezes credits, saves and charges atomically, and replays 
 });
 
 test("failed reserved trend analysis keeps credits unchanged", () => {
-  const identity = { requestId: "trend-request-0003", userId: 71, brandId: 81, bucketKey: "social" };
-  getDatabase().prepare("UPDATE users SET credits = 1 WHERE id = 71").run();
+  insertUser({
+    id: 74,
+    name: "Failed Trend Tester",
+    phone: "13910000074",
+    password: "hash",
+    accountType: "customer",
+    credits: 1,
+    createdAt: "2026-07-20T00:00:00.000Z",
+  });
+  insertBrand({
+    id: 84,
+    ownerUserId: 74,
+    name: "Failed Brand",
+    industry: "内容运营",
+    audience: "品牌运营人员",
+    description: "失败回滚测试品牌",
+    product: "内容运营服务",
+    goal: "测试失败释放",
+    knowledgeBase: "",
+    assetTags: [],
+  });
+  const identity = { requestId: "trend-request-0003", userId: 74, brandId: 84, bucketKey: "social" };
+  const w0 = getUserWalletBalances(74);
+  assert.equal(w0.totalAvailable, 1);
+  assert.equal(w0.totalReserved, 0);
+
   assert.equal(reserveTrendAnalysisRequest({ ...identity, creditCost: 1 }).status, "reserved");
+  const w1 = getUserWalletBalances(74);
+  assert.equal(w1.totalAvailable, 0);
+  assert.equal(w1.totalReserved, 1);
+
   failTrendAnalysisRequest({ ...identity, error: "provider timeout" });
-  assert.equal(findUserById(71).credits, 1);
+  const w2 = getUserWalletBalances(74);
+  assert.equal(w2.totalAvailable, 1);
+  assert.equal(w2.totalReserved, 0);
+  assert.equal(findUserById(74).credits, 1);
   assert.equal(reserveTrendAnalysisRequest({ ...identity, creditCost: 1 }).status, "failed");
 });
 
@@ -183,9 +227,15 @@ test("active bucket reservations block alternate request IDs and protect frozen 
     event: { actionType: "styleImage", actionLabel: "风格化图生成", summary: "must respect frozen trend credit" },
   });
   assert.equal(blockedSpend.spent, false);
-  assert.equal(findUserById(72).credits, 1);
+  const wBlocked = getUserWalletBalances(72);
+  assert.equal(wBlocked.totalAvailable, 0);
+  assert.equal(wBlocked.totalReserved, 1);
 
   failTrendAnalysisRequest({ ...firstIdentity, error: "cancelled fixture" });
+  const wReleased = getUserWalletBalances(72);
+  assert.equal(wReleased.totalAvailable, 1);
+  assert.equal(wReleased.totalReserved, 0);
+
   const releasedSpend = trySpendCreditsWithEvent({
     userId: 72,
     amount: 1,
@@ -193,6 +243,10 @@ test("active bucket reservations block alternate request IDs and protect frozen 
   });
   assert.equal(releasedSpend.spent, true);
   assert.equal(findUserById(72).credits, 0);
+  const wSpent = getUserWalletBalances(72);
+  assert.equal(wSpent.totalAvailable, 0);
+  assert.equal(wSpent.totalReserved, 0);
+  assert.equal(wSpent.totalUsed, 1);
 });
 
 test("active trend work remains reserved for the full bounded generation window", () => {

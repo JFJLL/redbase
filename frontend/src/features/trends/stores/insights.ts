@@ -190,7 +190,7 @@ export const useInsightsStore = defineStore("insights", {
       }
     },
 
-    /** 小红书内容类目（旧版 loadXhsCategories + applyXhsCategoryResult）。 */
+    /** 社交媒体内容类目（旧版 loadXhsCategories + applyXhsCategoryResult）。 */
     async loadXhsCategories(signal?: AbortSignal): Promise<void> {
       if (this.xhsCategoryStatus === "loading" || this.xhsCategoryStatus === "ready") return;
       this.xhsCategoryStatus = "loading";
@@ -208,7 +208,7 @@ export const useInsightsStore = defineStore("insights", {
         this.xhsCategories = [];
         this.xhsCategoryPath = "";
         this.xhsCategoryStatus = "error";
-        this.xhsCategoryError = String((error as { message?: unknown })?.message || "小红书内容类目暂时不可用");
+        this.xhsCategoryError = String((error as { message?: unknown })?.message || "社交媒体内容类目暂时不可用");
         throw error;
       }
     },

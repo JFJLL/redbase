@@ -583,7 +583,7 @@ function renderPayloadContent(item, payload) {
   const slides = Array.isArray(payload.slides) ? payload.slides : [];
   return `
     <section class="detail-block">
-      <h3>小红书组图内容</h3>
+      <h3>媒体组图内容</h3>
       <p><strong>发布标题：</strong>${escapeHtml(payload.publishTitle || "")}</p>
       <p><strong>发布文案：</strong>${escapeHtml(payload.publishCaption || "")}</p>
       <p><strong>组图说明：</strong>${escapeHtml(payload.caption || "")}</p>

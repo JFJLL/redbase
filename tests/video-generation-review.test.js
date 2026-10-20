@@ -433,10 +433,13 @@ test("video project refund totals are rebuilt from the ledger after a post-refun
   const service = makeService();
   const created = await createProject(service, { ownerUserId, requestId: "review-refund-ledger-reconcile", generationId: source.id });
   const chargedBalance = findUserById(ownerUserId).credits;
+  const projectRow = db.prepare("SELECT credit_event_id FROM video_projects WHERE id = ?").get(created.project.id);
+  assert.ok(Number(projectRow?.credit_event_id) > 0, "persisted project must have positive credit_event_id");
+  const reservationCreditEventId = Number(projectRow.credit_event_id);
   const refund = refundVideoCredits({
     userId: ownerUserId,
     amount: created.project.chargedCredits,
-    reservationCreditEventId: created.project.creditEventId,
+    reservationCreditEventId,
     refundRange: "1-1",
     reason: "fixture post-refund crash",
     generationId: created.project.generationId,

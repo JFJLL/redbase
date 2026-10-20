@@ -2,9 +2,155 @@ const { getDbProxy } = require("./connection");
 const { transaction } = require("./connection");
 const { loadAppConfig } = require("../config");
 const { isAdminUser } = require("../api/domain-utils");
+const {
+  reconstructSubscriptionSnapshot,
+  inspectSubscriptionSnapshot,
+  isSubscriptionSnapshotConsistent,
+} = require("../billing/snapshot-recovery");
 
 const db = getDbProxy();
 
+
+function ensureSubscriptionSnapshotAuditsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subscription_snapshot_audits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subscription_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      plan_id TEXT NOT NULL,
+      cycle TEXT NOT NULL,
+      migration_version INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      pre_snapshot_json TEXT NOT NULL DEFAULT '',
+      post_snapshot_json TEXT NOT NULL DEFAULT '',
+      pre_pricing_basis_fen INTEGER NOT NULL DEFAULT 0,
+      post_pricing_basis_fen INTEGER NOT NULL DEFAULT 0,
+      inspection_status TEXT NOT NULL,
+      inspection_reason TEXT NOT NULL DEFAULT '',
+      evidence_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sub_snapshot_audits_sub_ver
+      ON subscription_snapshot_audits(subscription_id, migration_version);
+  `);
+}
+
+function reconcileSubscriptionRow({ sub, migrationVersion, db, nowIso = new Date().toISOString() }) {
+  if (!sub || !sub.id) return { changed: false, action: "invalid" };
+  if (!db || typeof db.transaction !== "function") {
+    throw new Error("reconcileSubscriptionRow requires a database connection supporting transactions");
+  }
+
+  return db.transaction(() => {
+    // 1. Re-read row by id inside transaction to prevent stale overwrite
+    const currentSub = db.prepare("SELECT * FROM subscriptions WHERE id = ?").get(sub.id);
+    if (!currentSub) {
+      return { changed: false, action: "not_found" };
+    }
+
+    const inspection = inspectSubscriptionSnapshot(currentSub, db);
+    const preSnapJson = currentSub.snapshot_json || "";
+    const preBasis = Number(currentSub.pricing_basis_fen || 0);
+    let currentSnap = null;
+    try { currentSnap = JSON.parse(currentSub.snapshot_json || "{}"); } catch (_) {}
+
+    const recordAudit = (actionType, postSnapJson, postBasis, status, reason) => {
+      const existing = db.prepare(`
+        SELECT id, pre_snapshot_json, post_snapshot_json, pre_pricing_basis_fen, post_pricing_basis_fen
+        FROM subscription_snapshot_audits
+        WHERE subscription_id = ? AND migration_version = ? AND action_type = ?
+        ORDER BY id DESC LIMIT 1
+      `).get(currentSub.id, migrationVersion, actionType);
+
+      if (existing &&
+          existing.pre_snapshot_json === preSnapJson &&
+          existing.post_snapshot_json === postSnapJson &&
+          existing.pre_pricing_basis_fen === preBasis &&
+          existing.post_pricing_basis_fen === postBasis) {
+        return;
+      }
+
+      db.prepare(`
+        INSERT INTO subscription_snapshot_audits (
+          subscription_id, user_id, plan_id, cycle, migration_version,
+          action_type, pre_snapshot_json, post_snapshot_json,
+          pre_pricing_basis_fen, post_pricing_basis_fen,
+          inspection_status, inspection_reason, evidence_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        currentSub.id, currentSub.user_id, currentSub.plan_id, currentSub.cycle, migrationVersion,
+        actionType, preSnapJson, postSnapJson,
+        preBasis, postBasis,
+        status, reason || "",
+        JSON.stringify(inspection.evidence || {}), nowIso
+      );
+    };
+
+    if (inspection.status === "resolved" && inspection.snapshot) {
+      const expected = inspection.snapshot;
+      const consistency = isSubscriptionSnapshotConsistent(currentSub, expected, currentSnap);
+      const postSnapJson = JSON.stringify(expected);
+      const postBasis = expected.pricingBasisFen > 0 ? expected.pricingBasisFen : preBasis;
+
+      if (!consistency.isConsistent) {
+        recordAudit("repair", postSnapJson, postBasis, inspection.status, inspection.reason || consistency.mismatches.join("; "));
+        const result = db.prepare(`
+          UPDATE subscriptions
+          SET snapshot_json = ?, pricing_basis_fen = ?, updated_at = ?
+          WHERE id = ? AND updated_at = ?
+        `).run(postSnapJson, postBasis, nowIso, currentSub.id, currentSub.updated_at);
+        if (result.changes === 0) {
+          throw new Error(`订阅 #${currentSub.id} 在修复写入时发生并发冲突`);
+        }
+        return { changed: true, action: "repair" };
+      }
+      return { changed: false, action: "valid" };
+    }
+
+    if (inspection.status === "unresolved") {
+      if (!preSnapJson || preSnapJson === "{}" || preSnapJson === "") {
+        recordAudit("audit_required_unresolved", preSnapJson, preBasis, inspection.status,
+          "无有效开通来源且历史快照缺失或可能已被清空，记录审计待人工核查，不伪造数据");
+        return { changed: false, action: "audit_required_unresolved" };
+      }
+
+      const hasContradictoryPlan = currentSnap && currentSnap.planId && currentSnap.planId !== currentSub.plan_id;
+      if (hasContradictoryPlan) {
+        recordAudit("clear_contradictory", "", preBasis, inspection.status,
+          "快照套餐档位与订阅不一致且无法溯源");
+        const result = db.prepare("UPDATE subscriptions SET snapshot_json = '', updated_at = ? WHERE id = ? AND updated_at = ?")
+          .run(nowIso, currentSub.id, currentSub.updated_at);
+        if (result.changes === 0) {
+          throw new Error(`订阅 #${currentSub.id} 在清理冲突快照时发生并发冲突`);
+        }
+        return { changed: true, action: "clear_contradictory" };
+      }
+
+      recordAudit("preserve_unresolved", preSnapJson, preBasis, inspection.status,
+        "来源待核查，保留原始快照存证");
+      return { changed: false, action: "preserve_unresolved" };
+    }
+
+    if (inspection.status === "conflict") {
+      const hasContradictoryPlan = currentSnap && currentSnap.planId && currentSnap.planId !== currentSub.plan_id;
+      if (hasContradictoryPlan) {
+        recordAudit("clear_conflict", "", preBasis, inspection.status,
+          "权益链存在严重冲突且套餐不符");
+        const result = db.prepare("UPDATE subscriptions SET snapshot_json = '', updated_at = ? WHERE id = ? AND updated_at = ?")
+          .run(nowIso, currentSub.id, currentSub.updated_at);
+        if (result.changes === 0) {
+          throw new Error(`订阅 #${currentSub.id} 在清理冲突快照时发生并发冲突`);
+        }
+        return { changed: true, action: "clear_conflict" };
+      }
+      recordAudit("flag_conflict", preSnapJson, preBasis, inspection.status,
+        "权益链存在冲突，保留存证待人工核查");
+      return { changed: false, action: "flag_conflict" };
+    }
+
+    return { changed: false, action: "none" };
+  })();
+}
 const VERSIONED_MIGRATIONS = [
   {
     version: 1,
@@ -531,7 +677,595 @@ const VERSIONED_MIGRATIONS = [
       }
     },
   },
-];
+  {
+    version: 13,
+    name: "billing-v2-subscription-ledger",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS subscriptions (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          plan_id TEXT NOT NULL,
+          cycle TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          service_start TEXT NOT NULL,
+          service_end TEXT NOT NULL,
+          anchor_day INTEGER NOT NULL,
+          current_period_start TEXT NOT NULL,
+          current_period_end TEXT NOT NULL,
+          current_period_grant INTEGER NOT NULL,
+          upgrade_cumulative_increment INTEGER NOT NULL DEFAULT 0,
+          pricing_basis_fen INTEGER NOT NULL,
+          actual_paid_total_fen INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_status
+          ON subscriptions(user_id, status);
+
+        CREATE TABLE IF NOT EXISTS subscription_schedules (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          order_id INTEGER NOT NULL,
+          plan_id TEXT NOT NULL,
+          cycle TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'scheduled',
+          start_at TEXT NOT NULL,
+          end_at TEXT NOT NULL,
+          amount_fen INTEGER NOT NULL,
+          monthly_credits INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_schedules_unique_pending
+          ON subscription_schedules(user_id) WHERE status = 'scheduled';
+
+        CREATE TABLE IF NOT EXISTS subscription_grants (
+          id INTEGER PRIMARY KEY,
+          subscription_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          period_index INTEGER NOT NULL,
+          period_start TEXT NOT NULL,
+          period_end TEXT NOT NULL,
+          credits INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          granted_at TEXT,
+          credit_lot_id INTEGER,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_grants_unique
+          ON subscription_grants(subscription_id, period_index);
+
+        CREATE TABLE IF NOT EXISTS credit_lots (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          source_type TEXT NOT NULL,
+          source_label TEXT NOT NULL,
+          order_id INTEGER,
+          subscription_id INTEGER,
+          grant_id INTEGER,
+          initial_credits INTEGER NOT NULL,
+          remaining_credits INTEGER NOT NULL,
+          reserved_credits INTEGER NOT NULL DEFAULT 0,
+          used_credits INTEGER NOT NULL DEFAULT 0,
+          starts_at TEXT NOT NULL,
+          expires_at TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_credit_lots_user_status_exp
+          ON credit_lots(user_id, status, expires_at);
+        CREATE INDEX IF NOT EXISTS idx_credit_lots_user_active
+          ON credit_lots(user_id, status);
+
+        CREATE TABLE IF NOT EXISTS credit_lot_allocations (
+          id INTEGER PRIMARY KEY,
+          credit_event_id INTEGER NOT NULL,
+          lot_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          credits_used INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_lot_alloc_event
+          ON credit_lot_allocations(credit_event_id);
+        CREATE INDEX IF NOT EXISTS idx_lot_alloc_lot
+          ON credit_lot_allocations(lot_id);
+
+        CREATE TABLE IF NOT EXISTS billing_quotes (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          cycle TEXT,
+          catalog_version TEXT NOT NULL,
+          amount_fen INTEGER NOT NULL,
+          issued_now INTEGER NOT NULL,
+          start_at TEXT NOT NULL,
+          end_at TEXT,
+          period_end_at TEXT,
+          scheduled INTEGER NOT NULL DEFAULT 0,
+          meta_json TEXT NOT NULL DEFAULT '{}',
+          expires_at TEXT NOT NULL,
+          used_at TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_billing_quotes_user
+          ON billing_quotes(user_id, created_at);
+      `);
+
+      const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
+      if (!orderCols.includes("quote_id")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN quote_id TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("fulfilled_at")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN fulfilled_at TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("fulfillment_status")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN fulfillment_status TEXT NOT NULL DEFAULT 'unfulfilled'");
+        db.exec("UPDATE payment_orders SET fulfillment_status = 'fulfilled', fulfilled_at = paid_at WHERE status = 'paid'");
+      }
+      if (!orderCols.includes("cycle")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN cycle TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("order_kind")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN order_kind TEXT NOT NULL DEFAULT 'plan'");
+      }
+      if (!orderCols.includes("order_action")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN order_action TEXT NOT NULL DEFAULT 'activate'");
+      }
+      if (!orderCols.includes("issued_now")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN issued_now INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!orderCols.includes("service_start")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN service_start TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("service_end")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN service_end TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("period_end")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN period_end TEXT NOT NULL DEFAULT ''");
+      }
+    },
+  },
+  {
+    version: 14,
+    name: "billing-v2-remediation",
+    apply() {
+      const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+      if (!userCols.includes("legacy_credits_migrated")) {
+        db.exec("ALTER TABLE users ADD COLUMN legacy_credits_migrated INTEGER NOT NULL DEFAULT 0");
+        db.exec("UPDATE users SET legacy_credits_migrated = 1 WHERE id IN (SELECT DISTINCT user_id FROM credit_lots)");
+      }
+
+      const scheduleCols = db.prepare("PRAGMA table_info(subscription_schedules)").all().map((c) => c.name);
+      if (!scheduleCols.includes("anchor_day")) {
+        db.exec("ALTER TABLE subscription_schedules ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!scheduleCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE subscription_schedules ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+
+      const subCols = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
+      if (!subCols.includes("upgrade_cumulative_exact")) {
+        db.exec("ALTER TABLE subscriptions ADD COLUMN upgrade_cumulative_exact REAL NOT NULL DEFAULT 0");
+      }
+      if (!subCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE subscriptions ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+
+      const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
+      if (!orderCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+      if (!orderCols.includes("audit_reason")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_reason TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("audit_at")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_at TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("anchor_day")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0");
+      }
+
+      const quoteCols = db.prepare("PRAGMA table_info(billing_quotes)").all().map((c) => c.name);
+      if (!quoteCols.includes("subscription_id")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN subscription_id INTEGER");
+      }
+      if (!quoteCols.includes("original_plan_id")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN original_plan_id TEXT NOT NULL DEFAULT ''");
+      }
+      if (!quoteCols.includes("original_service_end")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN original_service_end TEXT NOT NULL DEFAULT ''");
+      }
+      if (!quoteCols.includes("subscription_version")) {
+        db.exec("ALTER TABLE billing_quotes ADD COLUMN subscription_version TEXT NOT NULL DEFAULT ''");
+      }
+
+      const activeDupes = db.prepare(`
+        SELECT user_id, COUNT(*) AS count
+        FROM subscriptions
+        WHERE status = 'active'
+        GROUP BY user_id
+        HAVING count > 1
+      `).all();
+      if (activeDupes.length > 0) {
+        db.prepare(`
+          UPDATE subscriptions
+          SET status = 'superseded', updated_at = datetime('now')
+          WHERE status = 'active' AND service_end <= datetime('now')
+        `).run();
+      }
+      try {
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique_active ON subscriptions(user_id) WHERE status = 'active';");
+      } catch (idxErr) {
+        console.warn("[migration 14 audit] 用户存在未到期的重复生效订阅，需人工核对处置，暂缓创建唯一索引", idxErr?.message);
+      }
+    },
+  },
+  {
+    version: 15,
+    name: "billing-v2-closeout",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_credit_reservations (
+          task_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          task_type TEXT NOT NULL,
+          lot_id INTEGER NOT NULL,
+          reserved_credits INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'reserved',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (task_id, lot_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+        CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+      `);
+
+      const userCols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+      if (!userCols.includes("legacy_credits_migrated")) {
+        db.exec("ALTER TABLE users ADD COLUMN legacy_credits_migrated INTEGER NOT NULL DEFAULT 0");
+      }
+      db.exec("UPDATE users SET legacy_credits_migrated = 1 WHERE id IN (SELECT DISTINCT user_id FROM credit_lots)");
+
+      const orderCols = db.prepare("PRAGMA table_info(payment_orders)").all().map((c) => c.name);
+      if (!orderCols.includes("snapshot_json")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT '{}'");
+      }
+      if (!orderCols.includes("anchor_day")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!orderCols.includes("audit_reason")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_reason TEXT NOT NULL DEFAULT ''");
+      }
+      if (!orderCols.includes("audit_at")) {
+        db.exec("ALTER TABLE payment_orders ADD COLUMN audit_at TEXT NOT NULL DEFAULT ''");
+      }
+
+      try {
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_unique_active ON subscriptions(user_id) WHERE status = 'active';");
+      } catch (_) {}
+    },
+  },
+  {
+    version: 16,
+    name: "billing-v2-remediation",
+    apply() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS account_plan_order_locks (
+          user_id INTEGER PRIMARY KEY,
+          out_trade_no TEXT NOT NULL,
+          plan_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (out_trade_no) REFERENCES payment_orders(out_trade_no) ON DELETE CASCADE
+        );
+      `);
+
+      const resCols = db.prepare("PRAGMA table_info(task_credit_reservations)").all().map((c) => c.name);
+      if (resCols.length > 0 && !resCols.includes("task_key")) {
+        db.exec("ALTER TABLE task_credit_reservations ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+        db.exec("UPDATE task_credit_reservations SET task_key = task_type || ':' || user_id || ':' || task_id WHERE task_key = ''");
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
+      `);
+
+      try {
+        db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_lots_grant
+          ON credit_lots(grant_id) WHERE grant_id IS NOT NULL;
+        `);
+      } catch (_) {}
+
+      try {
+        db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_lots_order_source
+          ON credit_lots(order_id, source_type)
+          WHERE order_id IS NOT NULL AND grant_id IS NULL AND source_type = 'topup';
+        `);
+      } catch (_) {}
+    },
+  },
+  {
+    version: 17,
+    name: "billing-v2-remaining-closeout",
+    apply() {
+      // Reconstruct task_credit_reservations table to fix the physical primary key.
+      // In SQLite, altering a table's primary key requires recreating the table.
+      // The physical primary key becomes 'id INTEGER PRIMARY KEY AUTOINCREMENT',
+      // and the business uniqueness constraint is UNIQUE (task_key, lot_id).
+      const hasOldTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_credit_reservations'").get();
+      if (hasOldTable) {
+        db.exec(`
+          CREATE TABLE task_credit_reservations_v17 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            task_type TEXT NOT NULL,
+            lot_id INTEGER NOT NULL,
+            reserved_credits INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
+          );
+        `);
+
+        const oldCols = db.prepare("PRAGMA table_info(task_credit_reservations)").all().map((c) => c.name);
+        const hasTaskKeyCol = oldCols.includes("task_key");
+        const oldRows = db.prepare("SELECT * FROM task_credit_reservations").all();
+        const insertStmt = db.prepare(`
+          INSERT INTO task_credit_reservations_v17 (
+            task_key, task_id, user_id, task_type, lot_id, reserved_credits, status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const row of oldRows) {
+          let canonicalKey = hasTaskKeyCol && row.task_key ? String(row.task_key).trim() : "";
+          if (!canonicalKey) {
+            if (row.task_type === "trend_analysis") {
+              try {
+                const req = db.prepare(`
+                  SELECT brand_id, bucket_key FROM trend_analysis_requests
+                  WHERE user_id = ? AND request_id = ?
+                `).all(row.user_id, row.task_id);
+                if (req && req.length === 1) {
+                  canonicalKey = `trend_analysis:${row.user_id}:${req[0].brand_id}:${req[0].bucket_key}:${row.task_id}`;
+                } else {
+                  canonicalKey = `trend_analysis:${row.user_id}:::${row.task_id}`;
+                }
+              } catch (_) {
+                canonicalKey = `trend_analysis:${row.user_id}:::${row.task_id}`;
+              }
+            } else if (String(row.task_type).startsWith("excellent_")) {
+              const kind = String(row.task_type).replace(/^excellent_/, "");
+              const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
+              canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}`;
+            } else {
+              canonicalKey = `${row.task_type}:${row.user_id}:${row.task_id}`;
+            }
+          }
+
+          insertStmt.run(
+            canonicalKey,
+            String(row.task_id),
+            Number(row.user_id),
+            String(row.task_type),
+            Number(row.lot_id),
+            Number(row.reserved_credits),
+            String(row.status || "reserved"),
+            String(row.created_at || new Date().toISOString()),
+            String(row.updated_at || new Date().toISOString())
+          );
+        }
+
+        db.exec(`
+          DROP TABLE task_credit_reservations;
+          ALTER TABLE task_credit_reservations_v17 RENAME TO task_credit_reservations;
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_task_res_key_lot ON task_credit_reservations(task_key, lot_id);
+          CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+        `);
+      } else {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS task_credit_reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            task_type TEXT NOT NULL,
+            lot_id INTEGER NOT NULL,
+            reserved_credits INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (lot_id) REFERENCES credit_lots(id) ON DELETE CASCADE
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_task_res_key_lot ON task_credit_reservations(task_key, lot_id);
+          CREATE INDEX IF NOT EXISTS idx_task_res_key_status ON task_credit_reservations(task_key, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_user_status ON task_credit_reservations(user_id, status);
+          CREATE INDEX IF NOT EXISTS idx_task_res_task ON task_credit_reservations(task_id);
+        `);
+      }
+    },
+  },
+  {
+    version: 18,
+    name: "billing-v2-reservation-identity-alignment",
+    apply() {
+      // 1. Ensure task_key column exists in trend_analysis_requests
+      const trendCols = db.prepare("PRAGMA table_info(trend_analysis_requests)").all().map((c) => c.name);
+      if (!trendCols.includes("task_key")) {
+        db.exec("ALTER TABLE trend_analysis_requests ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+      }
+      db.exec(`
+        UPDATE trend_analysis_requests
+        SET task_key = 'trend_analysis:' || user_id || ':' || brand_id || ':' || bucket_key || ':' || request_id
+        WHERE task_key = ''
+      `);
+
+      // 2. Ensure task_key column exists in excellent_remix_billing_requests
+      const hasExcTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='excellent_remix_billing_requests'").get();
+      if (hasExcTable) {
+        const excCols = db.prepare("PRAGMA table_info(excellent_remix_billing_requests)").all().map((c) => c.name);
+        if (!excCols.includes("task_key")) {
+          db.exec("ALTER TABLE excellent_remix_billing_requests ADD COLUMN task_key TEXT NOT NULL DEFAULT ''");
+        }
+        db.exec(`
+          UPDATE excellent_remix_billing_requests
+          SET task_key = 'excellent_' || kind || ':' || user_id || ':' || request_id || ':' || created_at
+          WHERE task_key = ''
+        `);
+      }
+
+      // 3. Align non-canonical keys in task_credit_reservations
+      const resRows = db.prepare("SELECT * FROM task_credit_reservations").all();
+      for (const row of resRows) {
+        if (row.task_type === "trend_analysis") {
+          const parts = String(row.task_key || "").split(":");
+          const isOldFormat = parts.length < 5 || parts[2] === "" || parts[3] === "";
+          if (isOldFormat) {
+            const reqs = db.prepare(`
+              SELECT brand_id, bucket_key, request_id, task_key FROM trend_analysis_requests
+              WHERE user_id = ? AND request_id = ?
+            `).all(row.user_id, row.task_id);
+            if (reqs && reqs.length === 1) {
+              const canonicalKey = `trend_analysis:${row.user_id}:${reqs[0].brand_id}:${reqs[0].bucket_key}:${row.task_id}`;
+              db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(canonicalKey, row.id);
+              db.prepare("UPDATE trend_analysis_requests SET task_key = ? WHERE user_id = ? AND request_id = ?").run(canonicalKey, row.user_id, row.task_id);
+            } else if (reqs && reqs.length > 1) {
+              db.prepare("UPDATE task_credit_reservations SET status = 'audit_required' WHERE id = ?").run(row.id);
+            }
+          }
+        } else if (String(row.task_type).startsWith("excellent_")) {
+          const kind = String(row.task_type).replace(/^excellent_/, "");
+          const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
+          const parts = String(row.task_key || "").split(":");
+          const isAlreadyCanonical = parts.length >= 4 && parts[0] === `excellent_${kind}` && parts[1] === String(row.user_id) && parts[2] === cleanTid && parts[3] !== "";
+          if (isAlreadyCanonical) {
+            continue;
+          }
+
+          let canonicalKey = "";
+          let req = null;
+          try {
+            req = db.prepare(`
+              SELECT request_id, created_at, task_key, status FROM excellent_remix_billing_requests
+              WHERE user_id = ? AND request_id = ? AND kind = ?
+            `).get(row.user_id, cleanTid, kind);
+          } catch (_) {}
+
+          if (row.status === "reserved" && req && req.status === "reserved" && req.created_at) {
+            canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${req.created_at}`;
+          } else {
+            canonicalKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${row.created_at}`;
+          }
+
+          const exists = db.prepare("SELECT 1 FROM task_credit_reservations WHERE task_key = ? AND lot_id = ? AND id != ?").get(canonicalKey, row.lot_id, row.id);
+          if (!exists) {
+            db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(canonicalKey, row.id);
+            if (req && req.status === "reserved" && (!req.task_key || req.task_key === "")) {
+              db.prepare("UPDATE excellent_remix_billing_requests SET task_key = ? WHERE user_id = ? AND request_id = ? AND kind = ?").run(canonicalKey, row.user_id, cleanTid, kind);
+            }
+          } else {
+            db.prepare("UPDATE task_credit_reservations SET status = 'audit_required' WHERE id = ?").run(row.id);
+          }
+        }
+      }
+
+      // 4. Backfill empty snapshot_json in subscriptions
+      ensureSubscriptionSnapshotAuditsTable(db);
+      const subs = db.prepare("SELECT * FROM subscriptions WHERE snapshot_json = '' OR snapshot_json = '{}'").all();
+      for (const sub of subs) {
+        reconcileSubscriptionRow({ sub, migrationVersion: 18, db });
+      }
+    },
+  },
+  {
+    version: 19,
+    name: "billing-v2-attempt-identity-and-snapshot-repair",
+    apply() {
+      // 1. Repair historical released/settled reservations where an earlier migration may have overwritten task_key
+      const badExcRows = db.prepare(`
+        SELECT r.id, r.user_id, r.task_id, r.task_type, r.task_key, r.created_at, r.lot_id, r.status
+        FROM task_credit_reservations r
+        WHERE r.status IN ('released', 'settled')
+          AND r.task_type LIKE 'excellent_%'
+      `).all();
+
+      for (const row of badExcRows) {
+        const kind = String(row.task_type).replace(/^excellent_/, "");
+        const cleanTid = String(row.task_id).startsWith(`${kind}_`) ? String(row.task_id).slice(kind.length + 1) : String(row.task_id);
+        const parts = String(row.task_key || "").split(":");
+        if (parts.length >= 4) {
+          const keyTimestamp = parts.slice(3).join(":");
+          let activeReq = null;
+          try {
+            activeReq = db.prepare(`
+              SELECT created_at FROM excellent_remix_billing_requests
+              WHERE user_id = ? AND request_id = ? AND kind = ? AND status = 'reserved'
+            `).get(row.user_id, cleanTid, kind);
+          } catch (_) {}
+          if (activeReq && activeReq.created_at === keyTimestamp && activeReq.created_at !== row.created_at) {
+            const restoredKey = `excellent_${kind}:${row.user_id}:${cleanTid}:${row.created_at}`;
+            const exists = db.prepare("SELECT 1 FROM task_credit_reservations WHERE task_key = ? AND lot_id = ? AND id != ?").get(restoredKey, row.lot_id, row.id);
+            if (!exists) {
+              db.prepare("UPDATE task_credit_reservations SET task_key = ? WHERE id = ?").run(restoredKey, row.id);
+            } else {
+              db.prepare("UPDATE task_credit_reservations SET status = 'audit_required' WHERE id = ?").run(row.id);
+            }
+          }
+        }
+      }
+
+      // 2. Audit and repair all subscriptions where bad snapshot was backfilled
+      ensureSubscriptionSnapshotAuditsTable(db);
+      const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+      for (const sub of allSubs) {
+        reconcileSubscriptionRow({ sub, migrationVersion: 19, db });
+      }
+    },
+  },
+  {
+    version: 20,
+    name: "billing-v2-snapshot-provenance-repair",
+    apply() {
+      ensureSubscriptionSnapshotAuditsTable(db);
+      const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+      for (const sub of allSubs) {
+        reconcileSubscriptionRow({ sub, migrationVersion: 20, db });
+      }
+    },
+  },
+  {
+    version: 21,
+    name: "billing-v2-reconcile-audits-and-unresolved-snapshots",
+    apply() {
+      ensureSubscriptionSnapshotAuditsTable(db);
+      const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+      for (const sub of allSubs) {
+        reconcileSubscriptionRow({ sub, migrationVersion: 21, db });
+      }
+    },
+  },];
 
 function getAppliedMigrationVersions() {
   db.exec(`
@@ -595,4 +1329,6 @@ module.exports = {
   migrateSchemaIfNeeded,
   VERSIONED_MIGRATIONS,
   applyVersionedMigrations,
+  ensureSubscriptionSnapshotAuditsTable,
+  reconcileSubscriptionRow,
 };

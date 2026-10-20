@@ -4,6 +4,7 @@
 // same atomic conditional update + unique constraints as the notify path.
 
 const { fenToYuanString } = require("./money");
+const { normalizeProviderPaidAt } = require("./period-utils");
 const {
   findOpenPaymentOrdersForReconcile,
   settlePaidPaymentOrder,
@@ -67,7 +68,8 @@ async function reconcileOne(order, gateway, options = {}) {
       return "audit";
     }
     if (dryRun) return "paid";
-    settlePaidPaymentOrder({ outTradeNo: order.outTradeNo, tradeNo: String(data.trade_no), nowIso });
+    const providerPaidAt = normalizeProviderPaidAt(data.send_pay_date || data.gmt_payment || data.success_time || data.paid_at || data.paidAt);
+    settlePaidPaymentOrder({ outTradeNo: order.outTradeNo, tradeNo: String(data.trade_no), nowIso, providerPaidAt });
     return "paid";
   }
   if (tradeStatus === "TRADE_CLOSED") {

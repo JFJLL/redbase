@@ -347,7 +347,7 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
       if (task.type === "moments") return "朋友圈图已生成并写入历史生成。";
       if (task.type === "wechat") return "公众号长图已生成并写入历史生成。";
       if (task.type === "styleImage") return "风格化图已生成并写入历史生成。";
-      if (task.type === "xhsCarousel") return "小红书组图已全部生成并写入历史生成。";
+      if (task.type === "xhsCarousel") return "媒体组图已全部生成并写入历史生成。";
     }
     return localStatus.value;
   });
@@ -591,13 +591,13 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
     }
   }
 
-  // —— c) 小红书组图 ——
+  // —— c) 媒体组图 ——
   async function generateXhsCarousel() {
     const genContext = currentContext();
     if (busy.value || !genContext) return;
     const aspectRatio = resolveAspectRatio(aspectRatioSelection.value, "xhsCarousel");
     const signal = scope.signalFor("xhs-carousel");
-    startGeneration("xhsCarousel", "任务已进入队列，正在准备小红书组图方案...");
+    startGeneration("xhsCarousel", "任务已进入队列，正在准备媒体组图方案...");
     localCarousel.value = { pack: null, creditEventId: null, generationId: null };
     carouselCompleted.value = false;
     try {
@@ -721,12 +721,12 @@ export function useIdeaGeneration(context: IdeaGenerationContext) {
       );
       applyUser(result.user);
       carouselCompleted.value = true;
-      localStatus.value = "小红书组图已全部生成并写入历史生成。";
+      localStatus.value = "媒体组图已全部生成并写入历史生成。";
       await afterGenerationSuccess();
     } catch (error) {
       if (isAbortError(error)) return;
       if (await handleUnauthorizedError(error)) return;
-      localError.value = `小红书组图写入历史失败：${(error as Error).message}`;
+      localError.value = `媒体组图写入历史失败：${(error as Error).message}`;
     }
   }
 

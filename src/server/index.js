@@ -91,6 +91,20 @@ async function start() {
     } catch (_) {}
   }
   try {
+    const { advanceSubscriptionLifecycles } = require("./billing/subscription-service");
+    const { migrateAllLegacyUsers } = require("./billing/credit-ledger");
+    migrateAllLegacyUsers();
+    advanceSubscriptionLifecycles();
+    const subTimer = setInterval(() => {
+      try {
+        advanceSubscriptionLifecycles();
+      } catch (_) {}
+    }, 60000);
+    subTimer.unref();
+  } catch (error) {
+    console.warn("[billing-v2] startup lifecycle scan failed", { error: error?.message });
+  }
+  try {
     const recoveredVideoScriptRequests = recoverStaleVideoScriptRequests();
     if (recoveredVideoScriptRequests.length) {
       console.log(`[video-script] recovered ${recoveredVideoScriptRequests.length} stale billing request(s)`);

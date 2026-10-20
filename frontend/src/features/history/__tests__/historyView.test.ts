@@ -47,12 +47,12 @@ const GENERATIONS = [
   {
     id: 2,
     type: "xhsCarousel",
-    cardTitle: "护肤小红书组图",
+    cardTitle: "护肤媒体组图",
     brandName: "品牌B",
     brandId: 8,
     trendTitle: "夏日护肤",
     ideaTitle: "晨间流程",
-    channelLabel: "小红书",
+    channelLabel: "社交媒体",
     createdAt: "2026-07-21T08:00:00.000Z",
     payload: {
       publishTitle: "晨间护肤这样做",
@@ -151,14 +151,14 @@ describe("HistoryView", () => {
     const cards = wrapper.findAll('[data-test="history-card"]');
     expect(cards).toHaveLength(3);
     expect(wrapper.text()).toContain("朋友圈图文");
-    expect(wrapper.text()).toContain("小红书组图");
+    expect(wrapper.text()).toContain("媒体组图");
     expect(wrapper.text()).toContain("视频脚本");
     expect(wrapper.text()).toContain("集中查看生成图片、组图与视频；完整发布文案在详情中查看。");
     expect(wrapper.text()).toContain("历史生成图片会保存 30 天，请及时下载。");
     expect(wrapper.find('img[src="/api/generated-images/1/file?sig=aaa"]').exists()).toBe(true);
     expect(wrapper.find('img[src="/api/generated-images/2/slides/0/file?sig=bbb"]').exists()).toBe(true);
     expect(cards[0].find('[data-test="history-card-title"]').text()).toBe("露营朋友圈图");
-    expect(cards[1].find('[data-test="history-card-title"]').text()).toBe("护肤小红书组图");
+    expect(cards[1].find('[data-test="history-card-title"]').text()).toBe("护肤媒体组图");
     expect(cards[1].text()).not.toContain("晨间护肤这样做");
     expect(cards[1].text()).not.toContain("收藏这套流程");
     expect(cards[0].text()).not.toContain("露营去咯");
@@ -699,10 +699,10 @@ describe("HistoryView detail workbench (restored legacy contract)", () => {
     {
       id: 2,
       type: "xhsCarousel",
-      cardTitle: "护肤小红书组图",
+      cardTitle: "护肤媒体组图",
       brandName: "品牌B",
       brandId: 8,
-      channelLabel: "小红书",
+      channelLabel: "社交媒体",
       ideaTitle: "晨间流程",
       createdAt: "2026-07-21T08:00:00.000Z",
       previewUrl: "/api/generated-images/2/0/file?sig=bbb",

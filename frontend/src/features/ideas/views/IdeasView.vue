@@ -4,7 +4,7 @@
 // bindIdeaPromptActions / data-idea-edit-form 提交逻辑。
 // 对照图4：选题上下文卡（绿点 + 标签组）、自定义补充提示词卡、桌面双列选题卡，
 // 每卡带品牌 Logo 开关 / 产品图参考 / 风格图参考 / 折叠创作设置，底部三个生图按钮
-// （一键朋友圈图 1积分、一键公众号长图 1积分、一键小红书组图 4积分）跳转生图任务页。
+// （一键朋友圈图 1积分、一键公众号长图 1积分、一键媒体组图 4积分）跳转生图任务页。
 // 生图动作与按钮一律携带 brandId/trendId/ideaIndex（+action）上下文，刷新/返回不丢。
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -292,7 +292,7 @@ function activeCreativeChannel(index: number): CreativeChannel | null {
 }
 
 function creativeChannelLabel(channel: CreativeChannel | null): string {
-  if (channel === "xhs") return "小红书组图 · 视觉路线";
+  if (channel === "xhs") return "媒体组图 · 视觉路线";
   if (channel === "wechat") return "公众号长图 · 版式模板";
   return "";
 }
@@ -704,7 +704,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
           <span class="panel-icon panel-icon-green">◌</span>
           <h1 class="panel-title">内容选题</h1>
         </div>
-        <p class="panel-subtitle">结合主体档案和热点趋势，生成更匹配品牌或个人 IP 的小红书内容</p>
+        <p class="panel-subtitle">结合主体档案和热点趋势，生成更匹配品牌或个人 IP 的社交媒体内容</p>
       </div>
     </header>
 
@@ -734,8 +734,8 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
           <p class="idea-copy">
             {{
               isPersonal
-                ? "内容选题不是只追热点，而是把个人定位、真实素材、目标读者和表达风格一起带入，生成符合本人经历与人设边界的小红书内容方向。"
-                : "内容选题不是只追热点，而是把品牌资产、产品卖点、目标受众和运营目标一起带入，生成真正适合该品牌的小红书内容方向。"
+                ? "内容选题不是只追热点，而是把个人定位、真实素材、目标读者和表达风格一起带入，生成符合本人经历与人设边界的社交媒体内容方向。"
+                : "内容选题不是只追热点，而是把品牌资产、产品卖点、目标受众和运营目标一起带入，生成真正适合该品牌的社交媒体内容方向。"
             }}
           </p>
           <p class="idea-copy"><strong>热点适配原因：</strong>{{ trend.reason }}</p>
@@ -950,7 +950,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                     <div class="idea-product-file" :class="{ 'has-file': Boolean(settingsFor(index).styleReference) }">
                       {{
                         settingsFor(index).styleReference
-                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于朋友圈、公众号长图和小红书组图的配色、光影、材质与版式参考，可与产品图同时使用`
+                          ? `${formatImageName(settingsFor(index).styleReference!.fileName, 46)}，约 ${formatFileSize(settingsFor(index).styleReference!.sizeBytes)}，用于朋友圈、公众号长图和媒体组图的配色、光影、材质与版式参考，可与产品图同时使用`
                           : "未选择参考图"
                       }}
                     </div>
@@ -1031,7 +1031,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                   </div>
                   <div class="idea-creative-grid">
                     <IdeaCreativeSelect
-                      label="小红书组图 · 视觉路线"
+                      label="媒体组图 · 视觉路线"
                       :model-value="settingsFor(index).visualStylePreset"
                       :options="XHS_CREATIVE_STYLE_OPTIONS"
                                             :test-id="`idea-creative-style-${index}`"
@@ -1060,7 +1060,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 
                   <div class="idea-creative-section-heading">
                     <strong>图片通用设置</strong>
-                    <small>统一影响朋友圈、公众号长图和小红书组图</small>
+                    <small>统一影响朋友圈、公众号长图和媒体组图</small>
                   </div>
                   <div class="idea-creative-general-grid">
                     <IdeaCreativeSelect
@@ -1100,7 +1100,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                       {{
                         settingsFor(index).aspectRatioSelection === "smart"
                           ? "按图片类型自动匹配（公众号 9:21，其余 3:4）"
-                          : "朋友圈、公众号长图和小红书组图使用统一比例"
+                          : "朋友圈、公众号长图和媒体组图使用统一比例"
                       }}
                     </small>
                   </div>
@@ -1132,7 +1132,7 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
                 :data-test="`idea-generate-xhs-${index}`"
                 @click="openGeneration(index, 'xhsCarousel')"
               >
-                <span>一键小红书组图</span>
+                <span>一键媒体组图</span>
                 <small>{{ xhsCarouselCost(index) }} 积分</small>
               </button>
               <button

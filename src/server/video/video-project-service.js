@@ -1611,6 +1611,7 @@ function createVideoProjectService(options = {}) {
       current.clips.push(candidate);
       groups.set(key, current);
     }
+    const auditPendingRefunds = [];
     for (const group of groups.values()) {
       const amount = group.clips.reduce((sum, candidate) => sum + Number(candidate.creditCost || 0), 0);
       if (!amount) continue;
@@ -1629,15 +1630,33 @@ function createVideoProjectService(options = {}) {
         projectId: fresh.id,
       });
       if (!result.refunded && !result.eventId) {
-        log.warn?.("[video-project] refund request did not produce an event", { projectId: fresh.id, reservationCreditEventId: group.eventId, refundRange: `${minIndex}-${maxIndex}` });
+        log.warn?.("[video-project] refund request did not produce an event", {
+          projectId: fresh.id,
+          reservationCreditEventId: group.eventId,
+          refundRange: `${minIndex}-${maxIndex}`,
+          code: result.code,
+          reason: result.reason,
+        });
+        if (result.auditRequired) {
+          auditPendingRefunds.push({
+            eventId: group.eventId,
+            range: `${minIndex}-${maxIndex}`,
+            amount,
+            code: result.code,
+            reason: result.reason,
+          });
+        }
       }
     }
     const nextStatus = keySuffix === "uncertain_submission" ? "uncertain" : keySuffix === "project_data_failed" ? "project_data_failed" : "partial_failed";
     const reconciled = reconcileProjectRefundedCredits(getProject(fresh.id), { snapshot: false }) || fresh;
+    const projectError = auditPendingRefunds.length > 0
+      ? `${reason} (退款待人工核对，请联系客服)`
+      : reason;
     const updated = updateProject(fresh.id, {
       refundedCredits: Number(reconciled.refundedCredits || 0),
       status: nextStatus,
-      error: reason,
+      error: projectError,
     });
     if (updated) {
       for (const candidate of updated.clips || []) {

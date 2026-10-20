@@ -131,7 +131,7 @@ const WECHAT_TEMPLATE_OPTIONS = Object.freeze([
 const HISTORY_TYPE_LABELS = new Map([
   ["moments", "朋友圈图文"],
   ["wechat", "公众号长图"],
-  ["xhsCarousel", "小红书组图"],
+  ["xhsCarousel", "媒体组图"],
   ["styleImage", "一键风格化"],
   ["imageEdit", "历史改图"],
   ["videoScript", "视频脚本"],
@@ -496,7 +496,7 @@ async function resumeXhsCarouselTask(task) {
   updateCurrentUser(completeResult.user);
   await refreshGenerationHistoryAfterGeneration();
   removePendingImageTask(task.id);
-  showToast("一个历史小红书组图任务已恢复完成。");
+  showToast("一个历史媒体组图任务已恢复完成。");
 }
 
 function bindSidebarControls() {
@@ -862,7 +862,7 @@ function bindBrandModal() {
     form.elements.description.placeholder = isPersonal ? "描述你的经历、专业身份、差异化定位与希望建立的认知" : "描述品牌定位、品牌故事、核心价值等";
     form.elements.product.placeholder = isPersonal ? "可选：描述课程、咨询或其他服务；没有可留空" : "描述主要产品/服务、卖点、使用场景等";
     form.elements.knowledgeBase.placeholder = isPersonal ? "补充履历、专业背景、内容边界和不能编造的信息。" : "补充品牌故事、成分说明、视觉风格、核心卖点、竞品差异、适用场景等，供内容生成和生图参考。";
-    form.elements.goal.placeholder = isPersonal ? "例如建立专业影响力、积累精准粉丝、获得咨询线索" : "描述小红书账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等";
+    form.elements.goal.placeholder = isPersonal ? "例如建立专业影响力、积累精准粉丝、获得咨询线索" : "描述社交媒体账号的运营目标，例如提升品牌知名度、增加销量、建立用户社区等";
     if (logoUploadText) logoUploadText.textContent = brand?.logo ? `更换${isPersonal ? "头像" : " Logo"}` : `选择${isPersonal ? "头像" : " Logo 图片"}`;
     setLogoPreview(brand);
     if (!brand) return;
@@ -1921,7 +1921,7 @@ function applyXhsCategoryResult(result) {
     state.xhsCategories = [];
     state.xhsCategoryPath = "";
     state.xhsCategoryStatus = "error";
-    state.xhsCategoryError = result.error.message || "小红书内容类目暂时不可用";
+    state.xhsCategoryError = result.error.message || "社交媒体内容类目暂时不可用";
     renderExcellentTaxonomyOptions();
     return;
   }
@@ -2080,7 +2080,7 @@ function getDefaultTrendBucket(key) {
 }
 
 const PERSONAL_TREND_BUCKET_DESCRIPTIONS = {
-  xhs: "从小红书站内高讨论、高收藏、高互动内容里筛选适合个人 IP 真诚参与的话题方向。",
+  xhs: "从社交媒体平台内高讨论、高收藏、高互动内容里筛选适合个人 IP 真诚参与的话题方向。",
   traffic: "从可核验的标题结构、叙事节奏、场景表达和互动设计中找到个人内容的传播机会。",
   news: "从近期新闻、行业动态和职业趋势中找到适合个人经验与观点切入的内容机会。",
   social: "从大众情绪、生活方式变化和公共讨论中找到适合个人经历与观点表达的切口。",
@@ -2280,7 +2280,7 @@ function switchTab(tab) {
     if (state.excellentContentBoard === "ecommerce_hot") {
       loadExcellentIndustryTaxonomy().catch(() => {});
     } else if (state.xhsCategoryStatus === "idle" || state.xhsCategoryStatus === "error") {
-      // Ensure content category options are available for 小红书热门.
+      // Ensure content category options are available for 媒体热门.
       loadXhsCategories().catch(() => {});
     }
     if (slice.status === "idle") {
@@ -2378,7 +2378,7 @@ function renderXhsCategorySelector() {
   if (state.xhsCategoryStatus === "loading") {
     status.textContent = "正在加载类目...";
   } else if (state.xhsCategoryStatus === "error") {
-    status.textContent = state.xhsCategoryError || "小红书内容类目暂时不可用";
+    status.textContent = state.xhsCategoryError || "社交媒体内容类目暂时不可用";
   } else if (state.xhsCategoryStatus === "empty") {
     status.textContent = "暂无可选类目";
   } else {
@@ -2799,8 +2799,8 @@ function renderIdeas() {
         <h3>${escapeHtml(brand.name)} × ${escapeHtml(trend.title)}</h3>
         <p class="idea-copy">${
           brand.profileType === "personal"
-            ? "内容选题不是只追热点，而是把个人定位、真实素材、目标读者和表达风格一起带入，生成符合本人经历与人设边界的小红书内容方向。"
-            : "内容选题不是只追热点，而是把品牌资产、产品卖点、目标受众和运营目标一起带入，生成真正适合该品牌的小红书内容方向。"
+            ? "内容选题不是只追热点，而是把个人定位、真实素材、目标读者和表达风格一起带入，生成符合本人经历与人设边界的社交媒体内容方向。"
+            : "内容选题不是只追热点，而是把品牌资产、产品卖点、目标受众和运营目标一起带入，生成真正适合该品牌的社交媒体内容方向。"
         }</p>
         <p class="idea-copy"><strong>热点适配原因：</strong>${escapeHtml(trend.reason)}</p>
         <p class="idea-copy"><strong>${brand.profileType === "personal" ? "补充背景资料" : "品牌资料库"}：</strong>${escapeHtml(brand.knowledgeBase || `当前未补充${brand.profileType === "personal" ? "背景资料" : "品牌资料库"}。`)}</p>
@@ -2832,7 +2832,7 @@ function renderIdeas() {
           <div class="idea-actions">
             <button class="primary-btn small-btn cost-button" data-generate-image="${index}" type="button"><span>一键朋友圈图</span><small>1 积分</small></button>
             <button class="secondary-btn cost-button" data-generate-wechat="${index}" type="button"><span>一键公众号长图</span><small>1 积分</small></button>
-            <button class="secondary-btn cost-button" data-generate-carousel="${index}" type="button"><span>一键小红书组图</span><small>4 积分</small></button>
+            <button class="secondary-btn cost-button" data-generate-carousel="${index}" type="button"><span>一键媒体组图</span><small>4 积分</small></button>
             <button class="secondary-btn cost-button" data-generate-style-image="${index}" type="button"><span>一键风格化图</span><small>1 积分</small></button>
           </div>
           <div class="idea-tag-list">
@@ -3127,7 +3127,7 @@ function hasCompleteIdeaContentAssets(idea) {
 function renderIdeaContentAssets(idea) {
   const assets = idea?.contentAssets || {};
   if (!hasCompleteIdeaContentAssets(idea)) {
-    return `<div class="idea-asset-preview is-incomplete">趋势和选题已生成。朋友圈、小红书和公众号的完整发布文案会在你首次生成对应内容时自动补齐。</div>`;
+    return `<div class="idea-asset-preview is-incomplete">趋势和选题已生成。朋友圈、社交媒体和公众号的完整发布文案会在你首次生成对应内容时自动补齐。</div>`;
   }
   const moments = assets.moments || {};
   const carousel = assets.xhsCarousel || {};
@@ -3135,8 +3135,8 @@ function renderIdeaContentAssets(idea) {
     <div class="idea-asset-preview">
       <div><strong>朋友圈标题：</strong>${escapeHtml(moments.title || "")}</div>
       <div><strong>朋友圈文案：</strong>${escapeHtml(moments.caption || "")}</div>
-      <div><strong>小红书标题：</strong>${escapeHtml(carousel.publishTitle || carousel.title || "")}</div>
-      <div><strong>小红书文案：</strong>${escapeHtml(carousel.publishCaption || carousel.caption || "")}</div>
+      <div><strong>社交媒体标题：</strong>${escapeHtml(carousel.publishTitle || carousel.title || "")}</div>
+      <div><strong>社交媒体文案：</strong>${escapeHtml(carousel.publishCaption || carousel.caption || "")}</div>
     </div>
   `;
 }
@@ -3240,7 +3240,7 @@ function renderIdeaCreativeSettings(ideaIndex) {
   const wechatOption = getCreativeOption(WECHAT_TEMPLATE_OPTIONS, wechatSelection);
     const isOpen = state.openCreativeSettingsKey === key;
   const lockedField = getIdeaCreativeSettingsLock(ideaIndex);
-  const lockLabel = lockedField === "xhs" ? "小红书视觉路线" : lockedField === "wechat" ? "公众号长图模板" : lockedField === "ratio" ? "图片比例" : "";
+  const lockLabel = lockedField === "xhs" ? "社交媒体视觉路线" : lockedField === "wechat" ? "公众号长图模板" : lockedField === "ratio" ? "图片比例" : "";
   const ratioLabel = selection === "smart" ? "智能比例" : selection;
 
   const options = ["smart", ...IMAGE_ASPECT_RATIOS];
@@ -3263,7 +3263,7 @@ function renderIdeaCreativeSettings(ideaIndex) {
                 ${renderCreativeOptionSelect({
                   ideaIndex,
                   field: "xhs",
-                  title: "小红书视觉路线",
+                  title: "社交媒体视觉路线",
                                     options: XHS_CREATIVE_STYLE_OPTIONS,
                   selectedValue: styleSelection,
                   disabled: Boolean(lockedField && lockedField !== "xhs"),
@@ -3301,7 +3301,7 @@ function renderIdeaCreativeSettings(ideaIndex) {
                     .join("")}
                 </div>
               </div>
-                            <p>${lockedField ? `已选择「${lockLabel}」，其他两项不会同时生效；将当前选项改回智能匹配/智能比例即可重新选择。` : "三项设置仅可选择一项：视觉路线仅影响小红书组图，长图模板仅影响公众号；智能比例会为公众号使用 9:21，其余图片使用 3:4。"}</p>
+                            <p>${lockedField ? `已选择「${lockLabel}」，其他两项不会同时生效；将当前选项改回智能匹配/智能比例即可重新选择。` : "三项设置仅可选择一项：视觉路线仅影响媒体组图，长图模板仅影响公众号；智能比例会为公众号使用 9:21，其余图片使用 3:4。"}</p>
 
             </div>`
           : ""
@@ -3688,7 +3688,7 @@ function renderGenerationHistory() {
 
   if (!visibleHistory.length) {
     const hasFilters = Object.values(state.generationHistoryFilters).some(Boolean);
-    root.innerHTML = `<article class="brand-card"><div class="brand-description">${hasFilters ? "没有找到符合筛选条件的历史生成记录。" : "你还没有任何生成记录。去内容选题页生成朋友圈图、公众号长图或小红书组图后，这里会自动沉淀下来。"}</div></article>`;
+    root.innerHTML = `<article class="brand-card"><div class="brand-description">${hasFilters ? "没有找到符合筛选条件的历史生成记录。" : "你还没有任何生成记录。去内容选题页生成朋友圈图、公众号长图或媒体组图后，这里会自动沉淀下来。"}</div></article>`;
     return;
   }
 
@@ -3833,7 +3833,7 @@ function isInternalXhsCopy(value) {
 
 function cleanXhsTitle(value) {
   return String(value || "")
-    .replace(/｜小红书组图方案/g, "")
+    .replace(/｜(?:\u5c0f\u7ea2\u4e66|媒体)组图方案/g, "")
     .replace(/：适合[^：。]*组图结构/g, "")
     .replace(/:适合[^:。]*组图结构/g, "")
     .trim();
@@ -3941,14 +3941,14 @@ function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
   const editHistory = Array.isArray(payload.editHistory) ? payload.editHistory : [];
   const imageResult = openAssetModal({
     kicker: "历史组图",
-    title: item.cardTitle || "小红书组图",
+    title: item.cardTitle || "媒体组图",
     description: "选择任意一张组图继续追加提示词改图，并保留每次改图记录。",
     loadingTitle: "正在打开历史组图...",
     loadingCopy: "正在整理组图图片和改图记录。",
   });
   imageResult.innerHTML = `
     <div class="asset-header-card">
-      <h3>${escapeHtml(item.cardTitle || "小红书组图")}</h3>
+      <h3>${escapeHtml(item.cardTitle || "媒体组图")}</h3>
       <p><strong>生成类型：</strong>${escapeHtml(item.channelLabel || "")}</p>
       <p><strong>来源选题：</strong>${escapeHtml(item.ideaTitle || "")}</p>
       ${renderHistoryDetailParagraph("发布标题", getDisplayXhsPublishTitle(item, payload))}
@@ -3969,10 +3969,10 @@ function openCarouselHistoryGeneration(item, selectedSlideIndex = 0) {
     </div>
     <div class="asset-grid">
       <div class="image-preview-card">
-        <img src="${authenticatedImageSrc(imageUrl)}" alt="${escapeHtml(selectedSlide.title || item.cardTitle || "小红书组图")}" />
+        <img src="${authenticatedImageSrc(imageUrl)}" alt="${escapeHtml(selectedSlide.title || item.cardTitle || "媒体组图")}" />
       </div>
       <div class="image-meta-card">
-        <h3>${escapeHtml(selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`)} · ${escapeHtml(selectedSlide.title || item.cardTitle || "小红书组图")}</h3>
+        <h3>${escapeHtml(selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`)} · ${escapeHtml(selectedSlide.title || item.cardTitle || "媒体组图")}</h3>
         ${renderImageEditPanel({
           imageUrl,
           title: `${selectedSlide.pageLabel || `第 ${safeIndex + 1} 张`} · ${selectedSlide.title || item.cardTitle || "改图结果"}`,
@@ -4276,8 +4276,8 @@ function enrichXhsCarouselSlides(pack) {
     ...slide,
     pageLabel: slide.pageLabel || `第 ${index + 1} 张`,
     visualDirection: slide.visualDirection || slide.title || `第 ${index + 1} 张视觉方向`,
-    style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
-    composition: slide.composition || `小红书组图${index + 1}/4，比例${pack.aspectRatio || "3:4"}，标题清晰，画面有连续组图统一性。`,
+    style: slide.style || "媒体组图封面页，清晰、真实、适合收藏",
+    composition: slide.composition || `媒体组图${index + 1}/4，比例${pack.aspectRatio || "3:4"}，标题清晰，画面有连续组图统一性。`,
     prompt: slide.prompt || "",
     isGenerating: false,
     error: "",
@@ -4425,12 +4425,12 @@ async function generateXhsCarouselForContext({
   if (!resolvedIdea) return;
 
   const imageResult = openAssetModal({
-    kicker: sourceCase ? "一键仿图文" : "AI 小红书组图",
-    title: sourceCase ? "优秀内容仿图文方案" : "小红书组图内容包",
+    kicker: sourceCase ? "一键仿图文" : "AI 媒体组图",
+    title: sourceCase ? "优秀内容仿图文方案" : "媒体组图内容包",
     description: sourceCase
       ? "基于参考笔记节奏生成 4 页原创组图，可继续单张或一键生图。"
       : "先检查每张图的视觉方向、风格和构图，再选择单张或一键生成四张图。",
-    loadingTitle: sourceCase ? "正在准备仿图文方案..." : "正在准备小红书组图方案...",
+    loadingTitle: sourceCase ? "正在准备仿图文方案..." : "正在准备媒体组图方案...",
     loadingCopy: sourceCase
       ? "正在基于参考案例与当前选题整理 4 页原创页面。"
       : "正在整理 4 张组图页面的视觉方向、风格和构图建议。",
@@ -4451,7 +4451,7 @@ async function generateXhsCarouselForContext({
     updateCurrentUser(previewResult.user);
     const previewPack = previewResult.carouselPack;
     if (!previewPack || !Array.isArray(previewPack.slides)) {
-      throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
+      throw new Error("AI 没有返回可用的媒体组图方案，请稍后重试。");
     }
     const pack = {
       ...previewPack,
@@ -4486,7 +4486,7 @@ async function generateXhsCarouselForContext({
         renderGenerationHistory();
       }
       flags.completed = true;
-      showToast(sourceCase ? "仿图文组图已全部生成并写入历史生成。" : "小红书组图已全部生成并写入历史生成。");
+      showToast(sourceCase ? "仿图文组图已全部生成并写入历史生成。" : "媒体组图已全部生成并写入历史生成。");
     };
 
     const getNextRunnableTaskIndex = () => {
@@ -4518,7 +4518,7 @@ async function generateXhsCarouselForContext({
             if (task.type === "generate") activeGenerateTaskCount -= 1;
             if (!taskQueue.length && activeTaskCount === 0) {
               flags.isGeneratingAll = false;
-              await completeIfReady().catch((error) => showToast(`小红书组图写入历史失败：${error.message}`));
+              await completeIfReady().catch((error) => showToast(`媒体组图写入历史失败：${error.message}`));
             }
             renderAndBind();
             pumpImageTaskQueue();
@@ -4564,7 +4564,7 @@ async function generateXhsCarouselForContext({
         );
         updateCurrentUser(result.user);
         flags.creditEventId = result.creditEventId || flags.creditEventId;
-        if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
+        if (!result.slideJob?.jobId) throw new Error("媒体组图任务创建失败");
         const imageConcept = await pollImageJob(result.slideJob.jobId);
         pack.slides[slideIndex] = {
           ...pack.slides[slideIndex],
@@ -6121,7 +6121,7 @@ async function generateExcellentRemixCarousel({
     title: "优秀内容仿图文方案",
     description: "基于参考方法 × 内容方向 × 品牌信息生成 4 页原创组图，可继续单张或一键生图。",
     loadingTitle: "正在准备仿图文方案...",
-    loadingCopy: "正在校验融合方案并进入现有小红书组图预览链路。",
+    loadingCopy: "正在校验融合方案并进入现有媒体组图预览链路。",
   });
 
   try {
@@ -6134,7 +6134,7 @@ async function generateExcellentRemixCarousel({
     updateCurrentUser(previewResult.user);
     const previewPack = previewResult.carouselPack;
     if (!previewPack || !Array.isArray(previewPack.slides)) {
-      throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
+      throw new Error("AI 没有返回可用的媒体组图方案，请稍后重试。");
     }
     const serverCarouselGroupId = previewResult.carouselGroupId || previewPack.carouselGroupId;
     if (!serverCarouselGroupId) {
@@ -6279,7 +6279,7 @@ async function generateExcellentRemixCarousel({
           }),
         );
         updateCurrentUser(result.user);
-        if (!result.slideJob?.jobId) throw new Error("小红书组图任务创建失败");
+        if (!result.slideJob?.jobId) throw new Error("媒体组图任务创建失败");
         slideJobs.set(slideIndex, {
           jobId: result.slideJob.jobId,
           creditEventId: result.creditEventId || null,

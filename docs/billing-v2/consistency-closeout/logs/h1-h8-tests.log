@@ -1,0 +1,18 @@
+✔ H1: User with 1 credit completes 1-credit fusion task without INSUFFICIENT_CREDITS (16.0237ms)
+✔ H2: User with 2 credits reserves two 1-credit tasks, third is rejected, first two settle (9.3146ms)
+✔ H3: DB error during reservation bubbles up, rolls back atomic state, leaves 10 credits (3.7074ms)
+✔ H4: User with 2 credits: excellent task reserves 1, trend task reserves 1 without double freeze (6.0305ms)
+✔ H5: Real V15 in-flight trend task, upgraded through V16, V17, V18, completes with exact ledger accounting (9.4389ms)
+✔ H6: Old in-flight task upgraded to V18 fails cleanly and releases reserved credits (6.8067ms)
+✔ H7: Purchasing Pro monthly preserves snapshot; catalog modification to 900 does not affect upgrade calculation (257, not 140) (10.3994ms)
+✔ H8: Annual upgrade paid before period 1 end, delayed fulfillment after period 2 started tops up deficit to 1500 and does not leak 401 (13.8279ms)
+✔ Conservation invariant across interleaved reservation, settlement, failure, and expiry (3.7789ms)
+✔ Multi-process concurrency: competing trend and excellent reservations on real disk SQLite enforce balance mutex (277.735ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 619.2637

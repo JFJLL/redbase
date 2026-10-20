@@ -16,7 +16,7 @@ import {
 } from "./excellent-remix-state.js";
 
 function boardLabel(board) {
-  return board === "ecommerce_hot" ? "电商热门" : "小红书热门";
+  return board === "ecommerce_hot" ? "电商热门" : "媒体热门";
 }
 
 export function renderAnalysisStatusHtml(state, { escapeHtml }) {

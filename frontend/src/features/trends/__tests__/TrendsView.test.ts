@@ -67,7 +67,7 @@ function twoBrandHandler(detailBrandId: number): FetchHandler {
   };
 }
 
-/** 基础接口：品牌摘要 + 品牌详情 + 小红书类目。 */
+/** 基础接口：品牌摘要 + 品牌详情 + 社交媒体类目。 */
 function baseHandler(detailItems = [makeTrend(501)]): FetchHandler {
   return (url, init) => {
     const method = String(init?.method || "GET");
@@ -115,7 +115,7 @@ describe("TrendsView", () => {
     expect(evidenceLink.text()).toContain("证据笔记：秋天的咖啡馆");
 
     // 历史分析列表渲染真实字段
-    expect(wrapper.find('[data-test="history-list"]').text()).toContain("红磨坊咖啡 - 小红书热点话题");
+    expect(wrapper.find('[data-test="history-list"]').text()).toContain("红磨坊咖啡 - 媒体热点话题");
     expect(wrapper.find('[data-test="history-list"]').text()).toContain("2026-07-20 10:00");
     const leftPanelHeight = wrapper.find<HTMLElement>(".trend-left-panel").element.style.height;
     const rightPanelHeight = wrapper.find<HTMLElement>('[data-test="trend-scroll-panel"]').element.style.height;
@@ -334,7 +334,7 @@ describe("TrendsView", () => {
   });
 
   it("resolves analysis bucket key correctly for both standard titles and legacy names", () => {
-    expect(getAnalysisBucketKey({ name: "小快克 - 小红书热点话题" })).toBe("xhs");
+    expect(getAnalysisBucketKey({ name: "小快克 - 媒体热点话题" })).toBe("xhs");
     expect(getAnalysisBucketKey({ name: "小快克 - 流量热点趋势" })).toBe("traffic");
     expect(getAnalysisBucketKey({ name: "小快克 - 新闻热点趋势" })).toBe("news");
     expect(getAnalysisBucketKey({ name: "小快克 - 赛道热点趋势" })).toBe("track");

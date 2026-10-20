@@ -1,0 +1,29 @@
+# RedBase 套餐与积分 V2：定向整改根因与验证矩阵 (R1–R11)
+
+本报告记录对审查提交 `79220ac` 审查报告中发现的 11 项业务断言缺陷（R1–R11）与 2 项基准断言（C1、C2）的根因定位、修复文件、回归测试与执行验证。
+
+---
+
+## 缺陷映射与整改矩阵
+
+| 编号 | 缺陷名称与现象 | 原代码路径 | 复现输入与条件 | 实际与预期对比 | 根因分析 | 修复文件 | 对应项目测试 | 验证结果 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **C1** | 标准单次升级算例基准 | `src/server/billing/quote-service.js` | 专业版月付 (¥999, 400分) 剩 7/30 天升业务版 (¥2999, 1500分) | 实际/预期均为: 补款 ¥466.67 (46667分)，补发 257 分，本期 120→377，永久 300，总可用 677 | 基准算例保持成立 | `quote-service.js` | `tests/credits/billing-v2-remediation.test.js` (C1) | **PASS** (46667, 257, 677) |
+| **C2** | 月末锚点日历保留基准 | `src/server/billing/period-utils.js` | 显式传入 anchorDay=31，1/31 在平年/闰年推导后续月份 | 实际/预期均为: 平年 2/28→3/31，闰年 2/29→3/31 | 基础日历计算工具正确 | `period-utils.js` | `tests/credits/billing-v2-remediation.test.js` (C2) | **PASS** (2026.02.28, 2026.03.31) |
+| **R1** | 趋势消费未入账本，读钱包恢复余额 | `src/server/db/repositories/trend-analysis-repository.js` | 100 永久积分，完成 1 分趋势任务后读取钱包 | **实际**: 消费后旧余额 99，读钱包恢复为 100，分配数为 0<br>**预期**: 余额保持 99，分配数为 1 | `completeTrendAnalysisRequest` 直接写 `UPDATE users SET credits = credits - ?`，未扣减批次亦未写入 `credit_lot_allocations`；读钱包重算有效批次将已消费积分复原 | `src/server/db/repositories/trend-analysis-repository.js` | `tests/credits/billing-v2-remediation.test.js` (R1) | **PASS** (消费后 99，读钱包仍 99，分配数 1) |
+| **R2** | 过期缓存伪成功，扣减异常被吞 | `src/server/db/repositories/admin-repository.js:107` | 缓存残留 10 分但批次已过期，发起 1 分扣费 | **实际**: 返回 `spent: true`，旧余额被减为 9，但有效批次为 0<br>**预期**: 返回 `spent: false`，回滚并不调用收费外部任务 | `spendCreditsWithEventInTransaction` 先扣旧余额再调批次扣减，且外层包裹 `catch (_) {}` 吞掉异常依然返回 `spent: true` | `src/server/db/repositories/admin-repository.js` | `tests/credits/billing-v2-remediation.test.js` (R2) | **PASS** (返回 spent:false, 余额未扣, 分配为 0) |
+| **R3** | 重复消费旧升级报价，多发积分 | `src/server/billing/quote-service.js`, `subscription-service.js` | 专业版生成 Q1 与 Q2 两份业务版升级报价，先执行 Q1 再执行 Q2 | **实际**: Q2 未被拦截，累计补发 514 分，总额变为 934<br>**预期**: Q2 消费时被拒绝，报错“原订阅已发生变更”，总额为 677 | 报价及履约未校验原订阅 ID、档位与版本更新时间戳；升级履约盲目取最新 active 订阅覆盖 | `src/server/billing/quote-service.js`, `src/server/billing/subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R3) | **PASS** (Q2 被拦截抛错，总余额锁定 677) |
+| **R4** | 重复初次开通报价生成多个有效订阅 | `src/server/billing/quote-service.js`, `subscription-service.js` | 未开通用户生成两份开通报价分别支付履约 | **实际**: 产生 2 个 active 订阅，首期积分变为 800<br>**预期**: 仅允许 1 个有效订阅，第二笔拦截并置为已付待核查 | 数据库未加 `idx_subscriptions_unique_active` 唯一约束；履约 activate 未校验用户是否已有生效订阅 | `src/server/db/migrations.js` (v14), `quote-service.js`, `subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R4) | **PASS** (第二份拒绝，有效订阅严格为 1) |
+| **R5** | 月末续费丢失 31 日原锚点 | `src/server/billing/subscription-service.js:430` | 1/31 开通，2/10 购买续费 (2/28 生效)，排期激活后查 3 月到期日 | **实际**: 3/28 积分提前到期，3/29 积分为 0<br>**预期**: 积分与服务一致在 3/31 到期，3/29 正常可用 | `subscription_schedules` 未持久化 `anchor_day`；激活时重新从 2/28 生效日提取锚点 28，导致 3 月截断在 28 日 | `src/server/db/migrations.js` (v14), `subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R5) | **PASS** (新周期到期 2026.03.31 14:00，3/29 仍可用) |
+| **R6** | 连续升级按次 ceil，多发积分 | `src/server/billing/quote-service.js:203` | 31 天周期剩 3 天，轻量(100)→专业(400)→业务(1500)连续升级 | **实际**: 补发 30 + 107 = 137 积分<br>**预期**: 按累计精确增量取整补发 30 + 106 = 136 积分 | 每次升级独立 `Math.ceil(quotaDiff * ratio)` 取整，未累计精确增量 `cumExact` 并用 `cumCeil - previousIssued` 计算当次增量 | `src/server/billing/quote-service.js`, `subscription-service.js`, `migrations.js` (v14) | `tests/credits/billing-v2-remediation.test.js` (R6) | **PASS** (补发 30+106=136，无多发) |
+| **R7** | 履约读取可变当前目录而非成交快照 | `src/server/billing/subscription-service.js` | 400 分专业版报价后，目录动态调高为 900 分再执行履约 | **实际**: 发放 900 积分，订单承诺被目录改写<br>**预期**: 严格按成交快照发放 400 积分 | 履约中直接读取 `getPlan(planId).credits`，未优先采用订单快照 `order.plan_credits` 或报价快照 | `src/server/billing/subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R7) | **PASS** (即便目录被改为 900，实发依然为 400) |
+| **R8** | 年付分期与积分失效未写可见流水 | `src/server/billing/subscription-service.js:507`, `credit-ledger.js:30` | 年付进入第二期，第二期发放且第一期积分到期失效 | **实际**: `credit_events` 新增 0 条，流水页面无记录<br>**预期**: 写入 `cycle_grant` 与 `cycle_expire` 可见流水 | 年付分期只插 `credit_lots` 未插 `credit_events`；`rescanExpiredLots` 仅修改批次状态未记到期流水 | `src/server/billing/credit-ledger.js`, `subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R8) | **PASS** (新增 cycle_grant +400, cycle_expire -400) |
+| **R9** | 排期激活后订单状态未同步更新 | `src/server/billing/subscription-service.js:500` | 预约续费自动激活后，查询排期与关联订单状态 | **实际**: schedule 变为 `activated`，订单仍标 `scheduled`<br>**预期**: schedule 为 `activated`，订单更新为 `fulfilled` | 激活事务中仅更新 `subscription_schedules`，未通过 `schedule.order_id` 同步 `payment_orders.fulfillment_status` | `src/server/billing/subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R9) | **PASS** (排期激活后 payment_orders.fulfillment_status 为 fulfilled) |
+| **R10** | 首笔入账覆盖尚未迁入的旧余额 | `src/server/billing/credit-ledger.js`, `admin-repository.js` | 旧余额 5、无批次用户直接购买 25 分加油包 | **实际**: 余额变为 25，5 分旧余额被丢失<br>**预期**: 余额变为 30 (5 历史保留 + 25 永久加油包) | `createCreditLot`、`spendCreditsFromLots` 未在首个操作同一事务内原子触发 `migrateLegacyUserCredits`，且原开账仅靠“已有任意 lot”判断迁移状态 | `src/server/billing/credit-ledger.js`, `db/migrations.js` (v14 legacy_credits_migrated) | `tests/credits/billing-v2-remediation.test.js` (R10) | **PASS** (总额 30, legacy 5, topup 25) |
+| **R11** | 年付“本期已使用”统计了全年 | `src/server/billing/subscription-service.js:125` | 年付首期用 280 分，第二期用 10 分，查看概览 | **实际**: 第二期概览显示“本期已使用 290”<br>**预期**: 本期已使用显示 10，累计使用显示 290 | `usedRow` 按 `subscription_id` 聚合了该订阅下全部 12 期批次的使用量，未按当前账期 `starts_at`/`expires_at` 进行作用域限定 | `src/server/billing/subscription-service.js` | `tests/credits/billing-v2-remediation.test.js` (R11) | **PASS** (本期已用 10, 累计已用 290, 本期剩余 390) |
+
+---
+
+## 结论
+
+上述 11 项审查缺陷与 2 项基准测试在项目生产代码中已彻底修复，并在真实环境（非桩代码）测试文件 `tests/credits/billing-v2-remediation.test.js` 中全量执行通过（17 项子测试，耗时 387ms，0 失败）。
