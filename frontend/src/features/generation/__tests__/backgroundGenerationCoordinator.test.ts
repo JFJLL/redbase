@@ -284,7 +284,7 @@ describe("Background Generation Coordinator & UX Contracts", () => {
     wrapper.unmount();
   });
 
-  it("3. 社交媒体单张转四张不重复提交：单张生成中点击一键四张，只补交剩余三张，已在生成的页面不重复请求", async () => {
+  it("3. 小红书单张转四张不重复提交：单张生成中点击一键四张，只补交剩余三张，已在生成的页面不重复请求", async () => {
     const slideRequests: number[] = [];
     const fetchMock = createMockFetch({
       "POST /api/brands/7/trends/501/ideas/0/xhs-carousel/slides/0": () => {
@@ -323,7 +323,7 @@ describe("Background Generation Coordinator & UX Contracts", () => {
     const wrapper = mount({ template: "<router-view />" }, { global: { plugins: [pinia, router] } });
     await flushPromises();
 
-    // 打开媒体组图
+    // 打开小红书组图
     await wrapper.find('[data-test="idea-generate-xhs-0"]').trigger("click");
     await flushPromises();
 

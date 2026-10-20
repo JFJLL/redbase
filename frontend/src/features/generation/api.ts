@@ -345,9 +345,9 @@ export function enrichXhsCarouselSlides(pack: CarouselPack): CarouselSlide[] {
     ...slide,
     pageLabel: slide.pageLabel || `第 ${index + 1} 张`,
     visualDirection: slide.visualDirection || slide.title || `第 ${index + 1} 张视觉方向`,
-    style: slide.style || "媒体组图封面页，清晰、真实、适合收藏",
+    style: slide.style || "小红书组图封面页，清晰、真实、适合收藏",
     composition:
-      slide.composition || `媒体组图${index + 1}/4，比例${pack.aspectRatio || "3:4"}，标题清晰，画面有连续组图统一性。`,
+      slide.composition || `小红书组图${index + 1}/4，比例${pack.aspectRatio || "3:4"}，标题清晰，画面有连续组图统一性。`,
     prompt: slide.prompt || "",
     isGenerating: false,
     error: "",

@@ -41,7 +41,7 @@ export function makeTrend(id: number, overrides: Partial<TrendItem> = {}): Trend
         id: "ev-1",
         title: "证据笔记：秋天的咖啡馆",
         url: "https://example.com/note/1",
-        source: "社交媒体",
+        source: "小红书",
         host: "xiaohongshu.com",
         publishedAt: "2026-07-20",
         snippet: "",
@@ -95,8 +95,8 @@ export function makeBrandDetail(items: TrendItem[], overrides: Partial<InsightsB
       ? [
           {
             key: "xhs",
-            title: "媒体热点话题",
-            description: "从社交媒体平台内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
+            title: "小红书热点话题",
+            description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
             items,
           },
         ]
@@ -104,7 +104,7 @@ export function makeBrandDetail(items: TrendItem[], overrides: Partial<InsightsB
     analyses: [
       {
         id: 9001,
-        name: "红磨坊咖啡 - 媒体热点话题",
+        name: "红磨坊咖啡 - 小红书热点话题",
         timestamp: "2026-07-20 10:00",
         trendSnapshot: [],
       },

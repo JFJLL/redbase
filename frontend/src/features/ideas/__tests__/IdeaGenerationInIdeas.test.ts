@@ -407,7 +407,7 @@ describe("内容选题内生成（一次性票据 + 素材门控 + 失败恢复�
   it.each([
     ["moments", "朋友圈图"],
     ["wechat", "公众号长图"],
-    ["xhsCarousel", "媒体组图"],
+    ["xhsCarousel", "小红书组图"],
     ["styleImage", "风格化图"],
   ] as const)(
     "图库加载失败（genKind 未初始化）时对话框仍正确显示动作名称 %s，不默认成朋友圈图",
@@ -436,7 +436,7 @@ describe("内容选题内生成（一次性票据 + 素材门控 + 失败恢复�
   it.each([
     ["moments", "朋友圈图"],
     ["wechat", "公众号长图"],
-    ["xhsCarousel", "媒体组图"],
+    ["xhsCarousel", "小红书组图"],
     ["styleImage", "风格化图"],
   ] as const)(
     "图库加载中（自动启动等待就绪）时对话框仍正确显示动作名称 %s",

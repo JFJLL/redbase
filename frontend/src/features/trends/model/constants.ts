@@ -10,13 +10,13 @@ export interface TrendBucketMeta {
 export const DEFAULT_TREND_BUCKETS: TrendBucketMeta[] = [
   {
     key: "xhs",
-    title: "媒体热点话题",
-    description: "从社交媒体平台内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
+    title: "小红书热点话题",
+    description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
   },
   {
     key: "traffic",
     title: "流量热点趋势",
-    description: "从社交媒体平台内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
+    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
   },
   {
     key: "news",
@@ -50,7 +50,7 @@ export const LEGACY_TREND_BUCKET_KEYS: Record<string, string> = {
 
 /** 个人 IP 档案下各维度的描述文案（旧版 PERSONAL_TREND_BUCKET_DESCRIPTIONS）。 */
 export const PERSONAL_TREND_BUCKET_DESCRIPTIONS: Record<string, string> = {
-  xhs: "从社交媒体平台内高讨论、高收藏、高互动内容里筛选适合个人 IP 真诚参与的话题方向。",
+  xhs: "从小红书站内高讨论、高收藏、高互动内容里筛选适合个人 IP 真诚参与的话题方向。",
   traffic: "从可核验的标题结构、叙事节奏、场景表达和互动设计中找到个人内容的传播机会。",
   news: "从近期新闻、行业动态和职业趋势中找到适合个人经验与观点切入的内容机会。",
   social: "从大众情绪、生活方式变化和公共讨论中找到适合个人经历与观点表达的切口。",

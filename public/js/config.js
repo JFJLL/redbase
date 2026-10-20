@@ -11,13 +11,13 @@ export const MAX_BRAND_PROFILE_CHARS = 5000;
 export const DEFAULT_TREND_BUCKETS = [
   {
     key: "xhs",
-    title: "媒体热点话题",
-    description: "从社交媒体平台内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
+    title: "小红书热点话题",
+    description: "从小红书站内高讨论、高收藏、高互动内容里筛选可被品牌借势的话题方向。",
   },
   {
     key: "traffic",
     title: "流量热点趋势",
-    description: "从社交媒体平台内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
+    description: "从小红书站内爆款形式、标题结构、场景表达和内容套路中找到流量机会。",
   },
   {
     key: "news",

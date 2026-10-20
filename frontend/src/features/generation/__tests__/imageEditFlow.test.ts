@@ -143,10 +143,10 @@ describe("HistoryView edit flow (ordinary image, carousel slide, edit history ch
     {
       id: 2,
       type: "xhsCarousel",
-      cardTitle: "护肤媒体组图",
+      cardTitle: "护肤小红书组图",
       brandName: "品牌B",
       brandId: 8,
-      channelLabel: "社交媒体",
+      channelLabel: "小红书",
       createdAt: "2026-07-21T08:00:00.000Z",
       previewUrl: "/api/generated-images/2/0/file?sig=bbb",
       payload: {
@@ -171,7 +171,7 @@ describe("HistoryView edit flow (ordinary image, carousel slide, edit history ch
       cardTitle: "部分恢复组图",
       brandName: "品牌C",
       brandId: 9,
-      channelLabel: "社交媒体",
+      channelLabel: "小红书",
       createdAt: "2026-07-22T08:00:00.000Z",
       previewUrl: "/api/generated-images/3/1/file?sig=p2",
       payload: {

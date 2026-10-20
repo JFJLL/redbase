@@ -79,7 +79,7 @@ describe("legacy workspace visual shell", () => {
     expect(wrapper.find(".user-phone").text()).toBe("13800000000");
     expect(wrapper.find(".user-credits").text()).toBe("6 积分");
     expect(wrapper.find(".home-title").text()).toBe("RedBase");
-    expect(wrapper.find(".home-subtitle").text()).toContain("一站式社交媒体运营工作台");
+    expect(wrapper.find(".home-subtitle").text()).toContain("一站式小红书运营工作台");
     expect(wrapper.findAll(".home-card")).toHaveLength(4);
   });
 

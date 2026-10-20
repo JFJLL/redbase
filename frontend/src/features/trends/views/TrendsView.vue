@@ -117,7 +117,7 @@ const categoryDisabled = computed(
 );
 const categoryStatusText = computed(() => {
   if (store.xhsCategoryStatus === "loading") return "正在加载类目...";
-  if (store.xhsCategoryStatus === "error") return store.xhsCategoryError || "社交媒体内容类目暂时不可用";
+  if (store.xhsCategoryStatus === "error") return store.xhsCategoryError || "小红书内容类目暂时不可用";
   if (store.xhsCategoryStatus === "empty") return "暂无可选类目";
   const selected = categoryOptions.value.find((item) => item.value === store.xhsCategoryPath);
   return selected ? `当前类目：${selected.label}` : "全部内容类目";
@@ -420,7 +420,7 @@ function goToIdeas(trend: TrendItem): void {
     <div class="trend-screen">
       <div class="trend-left-panel" :style="{ height: trendRightPanelMaxHeight || undefined }">
         <label v-if="isXhsMode" class="xhs-category-control">
-          <span>社交媒体内容类目</span>
+          <span>小红书内容类目</span>
           <select
             data-test="xhs-category-select"
             :value="store.xhsCategoryPath"

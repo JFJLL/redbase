@@ -4,7 +4,7 @@ export const FEATURE_LABELS: Record<string, string> = {
   excellent_fusion: "优秀内容融合",
   moments: "朋友圈",
   wechat_long_image: "公众号长图",
-  xhs_carousel: "媒体组图",
+  xhs_carousel: "小红书组图",
   style_image: "风格图",
   image_edit: "图片编辑",
   video_script: "视频脚本",

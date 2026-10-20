@@ -95,7 +95,7 @@ function channelLabelForType(type: GenerationTaskType): string {
     case "wechat":
       return "公众号长图";
     case "xhsCarousel":
-      return "媒体组图";
+      return "小红书组图";
     case "styleImage":
       return "风格化图";
     case "videoScript":
@@ -740,7 +740,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
       if (previewResult.user) auth.user = previewResult.user;
       const pack = previewResult.carouselPack;
       if (!pack || !Array.isArray(pack.slides)) {
-        throw new Error("AI 没有返回可用的媒体组图方案，请稍后重试。");
+        throw new Error("AI 没有返回可用的小红书组图方案，请稍后重试。");
       }
 
       const groupId = String(pack.carouselGroupId || `group_${params.brand.id}_${params.trend.id}_${params.ideaIndex}_${Date.now()}`);
@@ -770,14 +770,14 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         const createdTask: GenerationTaskItem = reactive({
           id: clientTaskId,
           type: "xhsCarousel",
-          channelLabel: "媒体组图",
+          channelLabel: "小红书组图",
           brandId: params.brand.id,
           trendId: params.trend.id,
           ideaIndex: params.ideaIndex,
           brandName: params.brand.name || "",
           trendTitle: params.trend.title || "",
           ideaTitle: params.idea.title || "",
-          cardTitle: String(pack.title || params.idea.title || "媒体组图"),
+          cardTitle: String(pack.title || params.idea.title || "小红书组图"),
           aspectRatio: params.aspectRatio,
           status: "idle",
           createdAt: Date.now(),
@@ -868,7 +868,7 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         if (result.user) auth.user = result.user;
         if (result.creditEventId) task.creditEventId = result.creditEventId;
         if (typeof result.carouselGroupId === "string") task.carouselGroupId = result.carouselGroupId;
-        if (!result.slideJob?.jobId) throw new Error("媒体组图单页任务创建失败");
+        if (!result.slideJob?.jobId) throw new Error("小红书组图单页任务创建失败");
 
         slide.jobId = result.slideJob.jobId;
         slide.status = "polling";
@@ -1065,14 +1065,14 @@ export const useGenerationTasksStore = defineStore("generationTasks", {
         task = {
           id: `xhs_${groupId}`,
           type: "xhsCarousel",
-          channelLabel: "媒体组图",
+          channelLabel: "小红书组图",
           brandId: job.brandId ?? null,
           trendId: job.trendId ?? null,
           ideaIndex: job.ideaIndex ?? null,
           brandName: "",
           trendTitle: "",
-          ideaTitle: String(job.carouselTitle || job.publishTitle || "媒体组图"),
-          cardTitle: String(job.carouselTitle || job.publishTitle || "媒体组图"),
+          ideaTitle: String(job.carouselTitle || job.publishTitle || "小红书组图"),
+          cardTitle: String(job.carouselTitle || job.publishTitle || "小红书组图"),
           aspectRatio: job.aspectRatio || "3:4",
           status: "polling",
           createdAt: job.createdAt || Date.now(),
