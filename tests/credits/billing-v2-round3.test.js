@@ -565,7 +565,7 @@ test("F9: Multi-process concurrent advanceSubscriptionLifecycles on real SQLite 
   const tempDb = path.join(os.tmpdir(), `f9_advance_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
   const barrierFile = path.join(os.tmpdir(), `f9_advance_${Date.now()}_${Math.random().toString(36).slice(2)}.barrier`);
 
-  const { DatabaseSync: Database } = require("node:sqlite");
+  const Database = require("better-sqlite3");
   const fileConn = new Database(tempDb);
   try {
     fileConn.pragma("journal_mode = WAL");
@@ -644,7 +644,7 @@ test("Section XI: Multi-process concurrent plan order creation for same user enf
   const tempDb = path.join(os.tmpdir(), `f11_mutex_${Date.now()}_${Math.random().toString(36).slice(2)}.db`);
   const barrierFile = path.join(os.tmpdir(), `f11_mutex_${Date.now()}_${Math.random().toString(36).slice(2)}.barrier`);
 
-  const { DatabaseSync: Database } = require("node:sqlite");
+  const Database = require("better-sqlite3");
   const fileConn = new Database(tempDb);
   try {
     fileConn.pragma("journal_mode = WAL");

@@ -567,8 +567,8 @@ test("Multi-process concurrent reservation and order mutex on real SQLite disk d
 
   const workerScript = path.join(tempDir, "worker.cjs");
   fs.writeFileSync(workerScript, `
-const { DatabaseSync } = require("node:sqlite");
-const db = new DatabaseSync(process.argv[2]);
+const Database = require(${JSON.stringify(require.resolve("better-sqlite3"))});
+const db = new Database(process.argv[2]);
 const uid = Number(process.argv[3]);
 const action = process.argv[4];
 
@@ -590,8 +590,8 @@ if (action === "reserve") {
   // Initialize DB in child process
   const initScript = path.join(tempDir, "init.cjs");
   fs.writeFileSync(initScript, `
-const { DatabaseSync } = require("node:sqlite");
-const db = new DatabaseSync(process.argv[2]);
+const Database = require(${JSON.stringify(require.resolve("better-sqlite3"))});
+const db = new Database(process.argv[2]);
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("CREATE TABLE credit_lots (id INTEGER PRIMARY KEY, user_id INTEGER, status TEXT, remaining_credits INTEGER, reserved_credits INTEGER);");
 db.prepare("INSERT INTO credit_lots VALUES (1, 9999, 'active', 15, 0)").run();
