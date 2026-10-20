@@ -253,6 +253,22 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       // Use purchased quota snapshot (R7)
       const initialCredits = Number(order.snapshot?.issuedNow ?? order.snapshot?.monthlyCredits ?? order.plan_credits ?? order.planCredits ?? plan.credits ?? 0);
       const monthlyCredits = Number(order.snapshot?.monthlyCredits || plan.credits || initialCredits);
+      const pricingBasisFen = Number(
+        order.snapshot?.pricingBasisFen ||
+        order.snapshot?.meta?.pricingBasisFen ||
+        order.snapshot?.meta?.targetFullTermPrice ||
+        order.amount_fen ||
+        order.amountFen ||
+        0
+      );
+      if (pricingBasisFen <= 0) {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'audit_required', audit_reason = '缺少权威历史计费基准，需人工核查', updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, orderId);
+        return { status: "audit_required", reason: "缺少权威历史计费基准，需人工核查" };
+      }
       const subSnapshot = {
         version: "v2",
         planId: plan.id,
@@ -260,7 +276,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         cycle,
         monthlyCredits,
         initialCredits,
-        pricingBasisFen: order.snapshot?.pricingBasisFen || order.amount_fen || order.amountFen,
+        pricingBasisFen,
         actualPaidTotalFen: order.amount_fen || order.amountFen,
         anchorDay,
         serviceStart: serviceStartIso,
@@ -285,7 +301,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         serviceStartIso,
         periodEndIso,
         initialCredits,
-        order.amount_fen || order.amountFen,
+        pricingBasisFen,
         order.amount_fen || order.amountFen,
         subSnapshotJson,
         nowIso,
@@ -374,10 +390,62 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
         return { status: "audit_required", reason: "原订阅已发生变更或已失效，升级无法自动应用" };
       }
 
-      const targetMonthlyCredits = Number(order.snapshot?.targetMonthlyCredits || order.snapshot?.monthlyCredits || plan.credits);
-      const nextBasis = getPriceFen(plan, activeSub.cycle);
       const paidAdd = Number(order.amount_fen || order.amountFen || 0);
       const issuedNow = Number(order.snapshot?.issuedNow ?? order.issued_now ?? order.issuedNow ?? 0);
+
+      const metaTargetPrice = Number(
+        order.snapshot?.meta?.targetFullTermPrice ||
+        order.snapshot?.meta?.upgradeDetails?.targetFullTermPrice ||
+        order.quote?.meta?.targetFullTermPrice ||
+        order.quote?.meta?.upgradeDetails?.targetFullTermPrice ||
+        order.snapshot?.meta?.pricingBasisFen ||
+        order.quote?.meta?.pricingBasisFen ||
+        0
+      );
+      const snapshotBasis = Number(order.snapshot?.pricingBasisFen || order.quote?.pricingBasisFen || 0);
+
+      let nextBasis = 0;
+      if (Number.isSafeInteger(metaTargetPrice) && metaTargetPrice > 0) {
+        nextBasis = metaTargetPrice;
+      } else if (Number.isSafeInteger(snapshotBasis) && snapshotBasis > 0) {
+        nextBasis = snapshotBasis;
+      } else {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'audit_required', audit_reason = '缺少权威历史计费基准，需人工核查', updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, orderId);
+        return { status: "audit_required", reason: "缺少权威历史计费基准，需人工核查" };
+      }
+
+      const metaTargetCredits = Number(
+        order.snapshot?.meta?.upgradeDetails?.targetMonthlyCredits ||
+        order.snapshot?.meta?.planCredits ||
+        order.quote?.meta?.upgradeDetails?.targetMonthlyCredits ||
+        order.quote?.meta?.planCredits ||
+        0
+      );
+      const snapshotCredits = Number(
+        order.snapshot?.targetMonthlyCredits ||
+        order.snapshot?.monthlyCredits ||
+        order.quote?.targetMonthlyCredits ||
+        order.quote?.monthlyCredits ||
+        0
+      );
+
+      let targetMonthlyCredits = 0;
+      if (Number.isSafeInteger(metaTargetCredits) && metaTargetCredits > 0) {
+        targetMonthlyCredits = metaTargetCredits;
+      } else if (Number.isSafeInteger(snapshotCredits) && snapshotCredits > 0) {
+        targetMonthlyCredits = snapshotCredits;
+      } else {
+        db.prepare(`
+          UPDATE payment_orders
+          SET fulfillment_status = 'audit_required', audit_reason = '缺少权威套餐配额快照，需人工核查', updated_at = ?
+          WHERE id = ?
+        `).run(nowIso, orderId);
+        return { status: "audit_required", reason: "缺少权威套餐配额快照，需人工核查" };
+      }
 
       const subPeriodStartMs = new Date(activeSub.current_period_start).getTime();
       const periodAdvanced = orderPeriodEndMs > 0 && (nowMs >= orderPeriodEndMs || subPeriodStartMs >= orderPeriodEndMs);
@@ -583,6 +651,22 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
       const activeSub = findActiveSubscription(uid, nowMs, db);
       const anchorDay = activeSub?.anchor_day || toShanghaiDate(new Date(startIso).getTime()).getUTCDate();
       const monthlyCredits = Number(order.snapshot?.monthlyCredits || order.snapshot?.meta?.planCredits || order.plan_credits || order.planCredits || 400);
+      const pricingBasisFen = Number(
+        order.snapshot?.pricingBasisFen ||
+        order.snapshot?.meta?.pricingBasisFen ||
+        order.snapshot?.meta?.targetFullTermPrice ||
+        order.amount_fen ||
+        order.amountFen ||
+        0
+      );
+      const schedSnapshot = {
+        planId: plan.id,
+        planName: plan.name,
+        cycle,
+        monthlyCredits,
+        pricingBasisFen,
+        amountFen: Number(order.amount_fen || order.amountFen || 0),
+      };
 
       const schedCols = db.prepare("PRAGMA table_info(subscription_schedules)").all().map((c) => c.name);
       if (schedCols.includes("anchor_day")) {
@@ -601,7 +685,7 @@ function fulfillPaymentOrder(order, nowMs = getNowTimestamp(), db = getDbProxy()
           order.amount_fen || order.amountFen,
           monthlyCredits,
           anchorDay,
-          JSON.stringify({ planId: plan.id, cycle, monthlyCredits }),
+          JSON.stringify(schedSnapshot),
           nowIso,
           nowIso
         );
@@ -685,6 +769,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
       })();
       const fullMonthlyCredits = Number(schedSnapshot.monthlyCredits || monthlyCredits);
       const periodEndIso = new Date(addCalendarMonths(startMs, 1, anchorDay)).toISOString();
+      const pricingBasisFen = Number(schedSnapshot.pricingBasisFen || schedule.amount_fen);
       const subSnapshot = {
         version: "v2",
         planId: schedule.plan_id,
@@ -692,7 +777,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         cycle: schedule.cycle,
         monthlyCredits: fullMonthlyCredits,
         initialCredits: monthlyCredits,
-        pricingBasisFen: schedule.amount_fen,
+        pricingBasisFen,
         actualPaidTotalFen: schedule.amount_fen,
         anchorDay,
         serviceStart: schedule.start_at,
@@ -717,7 +802,7 @@ function advanceSubscriptionLifecycles(nowMs = getNowTimestamp(), db = getDbProx
         schedule.start_at,
         periodEndIso,
         monthlyCredits,
-        schedule.amount_fen,
+        pricingBasisFen,
         schedule.amount_fen,
         subSnapshotJson,
         nowIso,

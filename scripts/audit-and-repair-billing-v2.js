@@ -6,7 +6,12 @@ const { formatShanghaiDate, getNowIso } = require("../src/server/billing/period-
 const {
   reconstructSubscriptionSnapshot,
   inspectSubscriptionSnapshot,
+  isSubscriptionSnapshotConsistent,
 } = require("../src/server/billing/snapshot-recovery");
+const {
+  ensureSubscriptionSnapshotAuditsTable,
+  reconcileSubscriptionRow,
+} = require("../src/server/db/migrations");
 
 function auditBillingDatabase(database = null, options = {}) {
   const db = database || openDatabase();
@@ -111,6 +116,9 @@ function auditBillingDatabase(database = null, options = {}) {
   console.log(`- 已过期但缺失 cycle_expire 流水批次数: ${lotsWithMissingEvents.length}`);
 
   // 5. Audit Subscription Snapshots (I4)
+  if (!dryRun) {
+    ensureSubscriptionSnapshotAuditsTable(db);
+  }
   const allSubs = db.prepare("SELECT * FROM subscriptions").all();
   const subscriptionSnapshotAudits = [];
   for (const sub of allSubs) {
@@ -135,23 +143,23 @@ function auditBillingDatabase(database = null, options = {}) {
 
     let conflictReason = "valid";
     let actionTaken = "none";
+
     if (inspection.status !== "resolved" || !expected) {
       conflictReason = inspection.reason || "无法唯一重建权益快照";
       actionTaken = "audit_required";
-      if (!dryRun && currentSnap && currentSnap.planId !== sub.plan_id) {
-        db.prepare("UPDATE subscriptions SET snapshot_json = '' WHERE id = ?").run(sub.id);
-      }
-    } else if (!currentSnap || !currentSnap.monthlyCredits) {
-      conflictReason = "快照缺失";
-      actionTaken = dryRun ? "需回填" : "已回填";
       if (!dryRun) {
-        db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+        const res = reconcileSubscriptionRow({ sub, migrationVersion: 0, db });
+        actionTaken = res.action;
       }
-    } else if (currentSnap.monthlyCredits !== expected.monthlyCredits || currentSnap.planId !== sub.plan_id) {
-      conflictReason = `快照权益与真实履约链不一致 (当前: ${currentSnap.monthlyCredits} 分 [${currentSnap.planId || ""}], 真实: ${expected.monthlyCredits} 分 [${expected.planId}])`;
-      actionTaken = dryRun ? "需修正" : "已修正";
-      if (!dryRun) {
-        db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
+    } else {
+      const consistency = isSubscriptionSnapshotConsistent(sub, expected, currentSnap);
+      if (!consistency.isConsistent) {
+        conflictReason = `快照权益与真实履约链不一致 (${consistency.mismatches.join("; ")})`;
+        actionTaken = dryRun ? "需修正" : "已修正";
+        if (!dryRun) {
+          const res = reconcileSubscriptionRow({ sub, migrationVersion: 0, db });
+          actionTaken = res.action;
+        }
       }
     }
 

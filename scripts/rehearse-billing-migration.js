@@ -568,6 +568,64 @@ function testV20SnapshotProvenanceRepair() {
   console.log("✔ V20 真实履约快照来源修复演练通过 (J1: 400分修复; J2: 待核查不覆盖; J3: 无来源不借用)");
 }
 
+function testV21ReconcileAuditsAndPricingDrift() {
+  console.log("\n--- [演练场景 11] V21 已有 V20 库基准漂移与存证审计演练 ---");
+  const conn = require("../src/server/db/connection").openDatabase();
+  const { VERSIONED_MIGRATIONS } = require("../src/server/db/migrations");
+  const { createQuote } = require("../src/server/billing/quote-service");
+  const { getPlan } = require("../src/server/billing/catalog");
+
+  // Setup user with drifted subscription pricing_basis_fen (e.g. catalog changed after purchase)
+  const uidV21 = 9301;
+  const subV21Id = 9301;
+  conn.prepare("INSERT OR REPLACE INTO users (id, name, phone, password, account_type, credits, legacy_credits_migrated, created_at) VALUES (?, 'V21User', '13993010001', 'h', 'customer', 0, 1, '2026-01-01')").run(uidV21);
+  conn.prepare("INSERT OR REPLACE INTO payment_orders (id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits, amount_fen, status, order_kind, order_action, cycle, fulfillment_status, snapshot_json, expires_at, created_at, updated_at) VALUES (93010, 'out_pro_9301', ?, 'idem_pro_9301', 'pro', '专业版', 400, 99900, 'paid', 'plan', 'activate', 'monthly', 'fulfilled', '{\"monthlyCredits\":400,\"planId\":\"pro\",\"cycle\":\"monthly\",\"pricingBasisFen\":99900}', '2026-02-01', '2026-01-01', '2026-01-01')").run(uidV21);
+  conn.prepare("INSERT OR REPLACE INTO credit_lots (id, user_id, source_type, source_label, order_id, subscription_id, initial_credits, remaining_credits, reserved_credits, used_credits, starts_at, expires_at, status, created_at, updated_at) VALUES (930101, ?, 'cycle', '本期积分', 93010, ?, 400, 400, 0, 0, '2026-01-01', '2026-02-01', 'active', '2026-01-01', '2026-01-01')").run(uidV21, subV21Id);
+
+  // Sub row in DB has drifted pricing_basis_fen = 199900 (simulating catalog drift / finding 2)
+  conn.prepare("INSERT OR REPLACE INTO subscriptions (id, user_id, plan_id, cycle, status, service_start, service_end, anchor_day, current_period_start, current_period_end, current_period_grant, upgrade_cumulative_increment, pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at) VALUES (?, ?, 'pro', 'monthly', 'active', '2026-01-01', '2026-02-01', 1, '2026-01-01', '2026-02-01', 400, 0, 199900, 99900, '{\"monthlyCredits\":400,\"planId\":\"pro\",\"pricingBasisFen\":199900}', '2026-01-01', '2026-01-01')").run(subV21Id, uidV21);
+
+  // Apply V21
+  const v21 = VERSIONED_MIGRATIONS.find((m) => m.version === 21);
+  v21.apply();
+
+  // Verify pricing_basis_fen reconciled to true purchased 99900
+  const subAfter = conn.prepare("SELECT pricing_basis_fen, snapshot_json FROM subscriptions WHERE id = ?").get(subV21Id);
+  if (subAfter.pricing_basis_fen !== 99900) {
+    throw new Error(`V21 未能将计费基准从漂移值修复为真实购买值 99900，当前: ${subAfter.pricing_basis_fen}`);
+  }
+  const snapAfter = JSON.parse(subAfter.snapshot_json);
+  if (snapAfter.pricingBasisFen !== 99900) {
+    throw new Error(`V21 快照未同步修复 pricingBasisFen: ${subAfter.snapshot_json}`);
+  }
+
+  // Verify audit row recorded preimage (199900) and postimage (99900)
+  const auditRow = conn.prepare("SELECT * FROM subscription_snapshot_audits WHERE subscription_id = ? AND migration_version = 21").get(subV21Id);
+  if (!auditRow || auditRow.pre_pricing_basis_fen !== 199900 || auditRow.post_pricing_basis_fen !== 99900) {
+    throw new Error(`V21 审计记录缺失或前置镜像错误: ${JSON.stringify(auditRow)}`);
+  }
+
+  // Verify subsequent quote to Business calculates diff from 99900
+  const nowMs = new Date("2026-01-15T00:00:00.000Z").getTime();
+  const quote = createQuote({ userId: uidV21, kind: "plan", itemId: "business", cycle: "monthly", nowMs });
+  const bizPrice = getPlan("business").monthlyFen;
+  const ratio = quote.meta.upgradeDetails.serviceRemainingMs / quote.meta.upgradeDetails.serviceTotalMs;
+  const expectedCharge = Math.round((bizPrice - 99900) * ratio);
+  if (quote.amountFen !== expectedCharge) {
+    throw new Error(`V21 修复后报价金额错误: 期望 ${expectedCharge}, 实际 ${quote.amountFen}`);
+  }
+
+  // Idempotency: re-running V21 apply has no side effects and doesn't duplicate audit
+  const auditCountBefore = conn.prepare("SELECT COUNT(*) AS c FROM subscription_snapshot_audits WHERE subscription_id = ? AND migration_version = 21").get(subV21Id).c;
+  v21.apply();
+  const auditCountAfter = conn.prepare("SELECT COUNT(*) AS c FROM subscription_snapshot_audits WHERE subscription_id = ? AND migration_version = 21").get(subV21Id).c;
+  if (auditCountBefore !== auditCountAfter) {
+    throw new Error(`V21 重复执行非幂等，增加了审计行: ${auditCountBefore} -> ${auditCountAfter}`);
+  }
+
+  console.log("✔ V21 已有 V20 库基准漂移与存证审计演练通过 (99900基准修复 + 审计前镜像 + 报价正确 + 幂等)");
+}
+
 function runRehearsal() {
   console.log("=== 开始执行 RedBase 套餐与积分 V2 数据迁移与审计修复完整演练 ===");
   testFreshDatabase();
@@ -579,6 +637,7 @@ function runRehearsal() {
   testV18ReservationIdentityAndSubscriptionSnapshot();
   testV19AttemptIdentityAndSnapshotRepair();
   testV20SnapshotProvenanceRepair();
+  testV21ReconcileAuditsAndPricingDrift();
   console.log("\n=== RedBase 套餐与积分 V2 数据迁移隔离演练全部 100% 通过 ===");
 }
 

@@ -75,41 +75,38 @@ test("V2 Standard Upgrade Example passes with exact precision", () => {
 
   setNowGetter(() => new Date(serviceStart));
 
-  // Active pro monthly subscription
-  const subResult = db.prepare(`
-    INSERT INTO subscriptions (
-      user_id, plan_id, cycle, status, service_start, service_end,
-      anchor_day, current_period_start, current_period_end,
-      current_period_grant, upgrade_cumulative_increment,
-      pricing_basis_fen, actual_paid_total_fen, created_at, updated_at
-    ) VALUES (?, ?, 'monthly', 'active', ?, ?, 23, ?, ?, 400, 0, 99900, 99900, ?, ?)
-  `).run(
+  // Establish active pro monthly subscription via actual persisted quote and order
+  const initQuote = createQuote({
     userId,
-    "pro",
-    new Date(serviceStart).toISOString(),
-    new Date(serviceEnd).toISOString(),
-    new Date(serviceStart).toISOString(),
-    new Date(serviceEnd).toISOString(),
-    new Date(serviceStart).toISOString(),
-    new Date(serviceStart).toISOString()
-  );
-  const subscriptionId = subResult.lastInsertRowid;
+    kind: "plan",
+    itemId: "pro",
+    cycle: "monthly",
+    nowMs: serviceStart,
+  });
+  const initOrder = insertPaymentOrder({
+    outTradeNo: "init_pro_upgrade_test_001",
+    userId,
+    idempotencyKey: "init_pro_upgrade_test_001",
+    plan: getPlan("pro"),
+    provider: "test",
+    quote: initQuote,
+    nowIso: new Date(serviceStart).toISOString(),
+    expiresAtIso: new Date(serviceStart + 900000).toISOString(),
+  });
+  settlePaidPaymentOrder({
+    outTradeNo: initOrder.outTradeNo,
+    tradeNo: "trade_" + initOrder.outTradeNo,
+    paidAt: new Date(serviceStart).toISOString(),
+    nowIso: new Date(serviceStart).toISOString(),
+  });
 
   // Period lot: started with 400, 280 used, 120 remaining
-  db.prepare(`
-    INSERT INTO credit_lots (
-      user_id, source_type, source_label, subscription_id,
-      initial_credits, remaining_credits, reserved_credits, used_credits,
-      starts_at, expires_at, status, created_at, updated_at
-    ) VALUES (?, 'cycle', '本期积分', ?, 400, 120, 0, 280, ?, ?, 'active', ?, ?)
-  `).run(
+  spendCreditsFromLots({
     userId,
-    subscriptionId,
-    new Date(serviceStart).toISOString(),
-    new Date(serviceEnd).toISOString(),
-    new Date(serviceStart).toISOString(),
-    new Date(serviceStart).toISOString()
-  );
+    amount: 280,
+    creditEventId: 9001,
+    nowIso: new Date(serviceStart).toISOString(),
+  }, db);
 
   // Permanent lot: 300 credits
   createCreditLot({
@@ -144,23 +141,24 @@ test("V2 Standard Upgrade Example passes with exact precision", () => {
   assert.equal(quote.endAt, new Date(serviceEnd).toISOString());
   assert.equal(quote.periodEndAt, new Date(serviceEnd).toISOString());
 
-  // Fulfill upgrade payment
+  // Fulfill upgrade payment via actual persisted payment order
   const outTradeNo = "rb_upgrade_test_001";
-  const order = {
-    id: 999,
-    userId,
+  insertPaymentOrder({
     outTradeNo,
-    planId: "business",
-    planCredits: 1500,
-    amountFen: quote.amountFen,
-    orderKind: "plan",
-    orderAction: "upgrade",
-    cycle: "monthly",
-    issuedNow: quote.issuedNow,
+    userId,
+    idempotencyKey: outTradeNo,
+    plan: getPlan("business"),
+    provider: "test",
+    quote,
+    nowIso: new Date(quoteTime).toISOString(),
+    expiresAtIso: new Date(quoteTime + 900000).toISOString(),
+  });
+  settlePaidPaymentOrder({
+    outTradeNo,
+    tradeNo: "trade_" + outTradeNo,
     paidAt: new Date(quoteTime).toISOString(),
-  };
-
-  fulfillPaymentOrder(order, quoteTime, db);
+    nowIso: new Date(quoteTime).toISOString(),
+  });
 
   const afterBalances = getUserWalletBalances(userId, quoteTime, db);
   assert.equal(afterBalances.periodBalance, 377);

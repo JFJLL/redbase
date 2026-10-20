@@ -465,29 +465,47 @@ test("F7: Upgrade quota uses purchased snapshot credits even if catalog credits 
   resetTestDb();
   createTestUser(1, 0);
 
-  // User bought Pro plan (400 credits) with 30 days period
-  const startIso = "2026-10-01T00:00:00.000Z";
-  const endIso = "2026-10-31T00:00:00.000Z";
+  // User bought Pro plan (400 credits) with 30 days period (June 1 to July 1)
+  const startIso = "2026-06-01T00:00:00.000Z";
+  const startMs = Date.parse(startIso);
   setTime(startIso);
 
-  db.prepare(`
-    INSERT INTO subscriptions (
-      user_id, plan_id, cycle, status, service_start, service_end,
-      anchor_day, current_period_start, current_period_end,
-      current_period_grant, upgrade_cumulative_increment,
-      pricing_basis_fen, actual_paid_total_fen, snapshot_json, created_at, updated_at
-    ) VALUES (1, 'pro', 'monthly', 'active', ?, ?, 1, ?, ?, 400, 0, 7900, 7900, ?, ?, ?)
-  `).run(startIso, endIso, startIso, endIso, JSON.stringify({ monthlyCredits: 400, planCredits: 400, planId: "pro", cycle: "monthly" }), startIso, startIso);
+  const initQuote = createQuote({ userId: 1, kind: "plan", itemId: "pro", cycle: "monthly", nowMs: startMs });
+  const initOrder = insertPaymentOrder({
+    outTradeNo: "ord_f7_init",
+    userId: 1,
+    idempotencyKey: "ord_f7_init",
+    plan: getPlan("pro"),
+    provider: "test",
+    quote: initQuote,
+    nowIso: startIso,
+    expiresAtIso: new Date(startMs + 900000).toISOString(),
+  });
+  settlePaidPaymentOrder({
+    outTradeNo: initOrder.outTradeNo,
+    tradeNo: "trade_" + initOrder.outTradeNo,
+    paidAt: startIso,
+    nowIso: startIso,
+  });
 
-  // Now 7 days remaining out of 30 days (Oct 24)
-  setTime("2026-10-24T00:00:00.000Z");
+  // Now 7 days remaining out of 30 days (June 24)
+  setTime("2026-06-24T00:00:00.000Z");
 
-  // Quote calculation for upgrade to business:
-  // quotaDiff must be 1500 - 400 = 1100, NOT 1500 - 900 = 600!
-  const q = createQuote({ userId: 1, kind: "plan", itemId: "business", cycle: "monthly", nowMs: mockNow });
+  // Simulate catalog credits change to 900 after purchase
+  const proPlan = getPlan("pro");
+  const originalCredits = proPlan.credits;
+  proPlan.credits = 900;
 
-  // ceil(1100 * 7 / 30) = ceil(256.6667) = 257!
-  assert.equal(q.issuedNow, 257);
+  try {
+    // Quote calculation for upgrade to business:
+    // quotaDiff must be 1500 - 400 = 1100, NOT 1500 - 900 = 600!
+    const q = createQuote({ userId: 1, kind: "plan", itemId: "business", cycle: "monthly", nowMs: mockNow });
+
+    // ceil(1100 * 7 / 30) = ceil(256.6667) = 257!
+    assert.equal(q.issuedNow, 257);
+  } finally {
+    proPlan.credits = originalCredits;
+  }
 });
 
 // =========================================================================

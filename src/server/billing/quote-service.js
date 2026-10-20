@@ -14,6 +14,7 @@ const {
   reconstructSubscriptionSnapshot,
   inspectSubscriptionSnapshot,
   safeUpdateSubscriptionSnapshot,
+  isSubscriptionSnapshotConsistent,
 } = require("./snapshot-recovery");
 
 const DEFAULT_QUOTE_TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -40,15 +41,6 @@ function getSubscriptionSnapshot(sub, db = getDbProxy()) {
     currentSnap = JSON.parse(sub.snapshot_json || "{}");
   } catch (_) {}
 
-  const catalogPlan = getPlan(sub.plan_id);
-  const isHealthySnapshot = Boolean(
-    currentSnap &&
-    Number(currentSnap.monthlyCredits) > 0 &&
-    currentSnap.planId === sub.plan_id &&
-    currentSnap.cycle === sub.cycle &&
-    (!catalogPlan || currentSnap.monthlyCredits === catalogPlan.credits)
-  );
-
   const inspection = inspectSubscriptionSnapshot(sub, db);
 
   if (inspection.status === "resolved" && inspection.snapshot) {
@@ -56,24 +48,20 @@ function getSubscriptionSnapshot(sub, db = getDbProxy()) {
     if (resolved.planId !== sub.plan_id) {
       return {};
     }
-    if (!isHealthySnapshot || currentSnap?.monthlyCredits !== resolved.monthlyCredits || currentSnap?.planId !== resolved.planId) {
-      try {
-        safeUpdateSubscriptionSnapshot(sub, resolved, db);
-      } catch (_) {}
+    const consistency = isSubscriptionSnapshotConsistent(sub, resolved, currentSnap);
+
+    if (!consistency.isConsistent) {
+      const ok = safeUpdateSubscriptionSnapshot(sub, resolved, db);
+      if (!ok) {
+        return { casFailed: true };
+      }
     }
     return resolved;
   }
 
-  // If inspection found conflict or unresolved:
-  // Never accept a snapshot whose planId conflicts with sub.plan_id!
-  if (currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id) {
-    return {};
-  }
-
-  if (isHealthySnapshot && inspection.status !== "conflict") {
-    return currentSnap;
-  }
-
+  // When inspection status is conflict or unresolved:
+  // Gate automatic dependent pricing when uncertain.
+  // Never rely on current catalog to call snapshot healthy!
   return {};
 }
 
@@ -236,6 +224,9 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
         const remainingPeriodRatio = periodTotalMs > 0 ? (periodRemainingMs / periodTotalMs) : 0;
 
         const subSnapshot = getSubscriptionSnapshot(activeSub, db);
+        if (subSnapshot.casFailed) {
+          throw new Error("原订阅状态已发生并发变更，无法生成有效升级报价，请重新获取报价");
+        }
         const oldPurchasedCredits = Number(
           subSnapshot.monthlyCredits ||
           subSnapshot.planCredits ||
@@ -245,7 +236,7 @@ function createQuote({ userId, kind, itemId, cycle = "monthly", nowMs = getNowTi
           throw new Error("当前订阅权益快照待核查，无法自动计算升级差额，请联系客服处理");
         }
 
-        const oldFullTermPrice = activeSub.pricing_basis_fen || subSnapshot.pricingBasisFen || subSnapshot.fullTermPriceFen || 0;
+        const oldFullTermPrice = Number(subSnapshot.pricingBasisFen || activeSub.pricing_basis_fen || subSnapshot.fullTermPriceFen || 0);
         if (!oldFullTermPrice) {
           throw new Error("当前订阅计费基准待核查，无法自动计算升级差额，请联系客服处理");
         }

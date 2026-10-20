@@ -94,59 +94,30 @@ function makeOrder(q, uid) {
   const id = ++nextOrderId;
   const outTradeNo = `rb_test_${Date.now()}_${id}`;
   const nowIso = new Date(mockNow).toISOString();
-  db.prepare(`
-    INSERT INTO payment_orders (
-      id, out_trade_no, user_id, idempotency_key, plan_id, plan_name, plan_credits,
-      amount_fen, status, provider, created_at, updated_at, expires_at,
-      quote_id, fulfillment_status, cycle, order_kind, order_action,
-      issued_now, service_start, service_end, period_end, anchor_day
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'created', 'alipay', ?, ?, ?, ?, 'unfulfilled', ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    outTradeNo,
-    uid,
-    `idemp_${id}`,
-    q.itemId,
-    q.itemName,
-    q.kind === "plan" ? (getPlan(q.itemId)?.credits || q.issuedNow) : q.issuedNow,
-    q.amountFen,
-    nowIso,
-    nowIso,
-    q.expiresAt,
-    q.quoteId,
-    q.cycle || "monthly",
-    q.kind,
-    q.action,
-    q.issuedNow,
-    q.startAt,
-    q.endAt || "",
-    q.periodEndAt || "",
-    q.meta?.anchorDay || 0
-  );
-  return {
-    id,
+  const placed = insertPaymentOrder({
     outTradeNo,
     userId: uid,
-    planId: q.itemId,
-    planCredits: q.issuedNow || q.meta?.planCredits || q.amountFen,
-    amountFen: q.amountFen,
-    cycle: q.cycle || "monthly",
-    orderKind: q.kind,
-    orderAction: q.action,
-    issuedNow: q.issuedNow,
-    serviceStart: q.startAt,
-    serviceEnd: q.endAt,
-    periodEnd: q.periodEndAt,
-    paidAt: nowIso,
+    idempotencyKey: `idemp_${id}`,
+    plan: q.kind === "plan" ? getPlan(q.itemId) : getTopup(q.itemId),
+    provider: "alipay",
     quote: q,
-  };
+    nowIso,
+    expiresAtIso: q.expiresAt,
+  });
+  return placed;
 }
 
 function buyQuote(q, uid) {
   verifyAndConsumeQuote(q.quoteId, uid, mockNow);
   const order = makeOrder(q, uid);
-  fulfillPaymentOrder(order, mockNow, db);
-  return order;
+  const nowIso = new Date(mockNow).toISOString();
+  const settled = settlePaidPaymentOrder({
+    outTradeNo: order.outTradeNo,
+    tradeNo: `trade_${order.outTradeNo}`,
+    paidAt: nowIso,
+    nowIso,
+  });
+  return settled.order;
 }
 
 test("C1 CONTROL: standard single upgrade remains 46667 fen / 257 credits / 677 available", () => {

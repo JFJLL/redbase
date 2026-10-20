@@ -86,13 +86,61 @@ function buildCanonicalOrderSnapshot(quote, plan, extra = {}) {
   let pricingBasisFen = amountFen;
   if (kind === "plan") {
     const fullPlan = getPlan(itemId);
-    pricingBasisFen = Number(quote?.meta?.pricingBasisFen || (fullPlan ? getPriceFen(fullPlan, cycle) : amountFen));
+    if (action === "upgrade") {
+      const targetFullTermPrice = Number(
+        quote?.meta?.targetFullTermPrice ||
+        quote?.meta?.upgradeDetails?.targetFullTermPrice ||
+        quote?.meta?.pricingBasisFen ||
+        extra.targetFullTermPrice ||
+        extra.pricingBasisFen ||
+        0
+      );
+      if (Number.isSafeInteger(targetFullTermPrice) && targetFullTermPrice > 0) {
+        pricingBasisFen = targetFullTermPrice;
+      } else {
+        pricingBasisFen = 0;
+      }
+    } else {
+      const quotedPrice = Number(
+        quote?.meta?.pricingBasisFen ||
+        quote?.meta?.targetFullTermPrice ||
+        (quote?.amount_fen !== undefined ? quote.amount_fen : quote?.amountFen !== undefined ? quote.amountFen : (extra.pricingBasisFen || 0))
+      );
+      if (Number.isSafeInteger(quotedPrice) && quotedPrice > 0) {
+        pricingBasisFen = quotedPrice;
+      } else if (fullPlan) {
+        pricingBasisFen = getPriceFen(fullPlan, cycle);
+      } else {
+        pricingBasisFen = amountFen;
+      }
+    }
   }
 
   let monthlyCredits = 0;
   if (kind === "plan") {
     const fullPlan = getPlan(itemId);
-    monthlyCredits = Number(quote?.meta?.planCredits || fullPlan?.credits || (action === "activate" ? (quote?.issued_now ?? quote?.issuedNow) : 0) || plan?.credits || 0);
+    if (action === "upgrade") {
+      const targetQuota = Number(
+        quote?.meta?.upgradeDetails?.targetMonthlyCredits ||
+        quote?.meta?.planCredits ||
+        extra.targetMonthlyCredits ||
+        0
+      );
+      if (Number.isSafeInteger(targetQuota) && targetQuota > 0) {
+        monthlyCredits = targetQuota;
+      } else {
+        monthlyCredits = 0;
+      }
+    } else {
+      const quota = Number(
+        quote?.meta?.planCredits ||
+        (action === "activate" ? (quote?.issued_now ?? quote?.issuedNow) : 0) ||
+        (fullPlan ? fullPlan.credits : 0) ||
+        plan?.credits ||
+        0
+      );
+      monthlyCredits = Number.isSafeInteger(quota) && quota > 0 ? quota : 0;
+    }
   } else {
     monthlyCredits = Number(quote?.issued_now ?? quote?.issuedNow ?? plan?.credits ?? 0);
   }

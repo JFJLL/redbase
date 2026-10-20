@@ -5,10 +5,152 @@ const { isAdminUser } = require("../api/domain-utils");
 const {
   reconstructSubscriptionSnapshot,
   inspectSubscriptionSnapshot,
+  isSubscriptionSnapshotConsistent,
 } = require("../billing/snapshot-recovery");
 
 const db = getDbProxy();
 
+
+function ensureSubscriptionSnapshotAuditsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subscription_snapshot_audits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subscription_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      plan_id TEXT NOT NULL,
+      cycle TEXT NOT NULL,
+      migration_version INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      pre_snapshot_json TEXT NOT NULL DEFAULT '',
+      post_snapshot_json TEXT NOT NULL DEFAULT '',
+      pre_pricing_basis_fen INTEGER NOT NULL DEFAULT 0,
+      post_pricing_basis_fen INTEGER NOT NULL DEFAULT 0,
+      inspection_status TEXT NOT NULL,
+      inspection_reason TEXT NOT NULL DEFAULT '',
+      evidence_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sub_snapshot_audits_sub_ver
+      ON subscription_snapshot_audits(subscription_id, migration_version);
+  `);
+}
+
+function reconcileSubscriptionRow({ sub, migrationVersion, db, nowIso = new Date().toISOString() }) {
+  if (!sub || !sub.id) return { changed: false, action: "invalid" };
+  if (!db || typeof db.transaction !== "function") {
+    throw new Error("reconcileSubscriptionRow requires a database connection supporting transactions");
+  }
+
+  return db.transaction(() => {
+    // 1. Re-read row by id inside transaction to prevent stale overwrite
+    const currentSub = db.prepare("SELECT * FROM subscriptions WHERE id = ?").get(sub.id);
+    if (!currentSub) {
+      return { changed: false, action: "not_found" };
+    }
+
+    const inspection = inspectSubscriptionSnapshot(currentSub, db);
+    const preSnapJson = currentSub.snapshot_json || "";
+    const preBasis = Number(currentSub.pricing_basis_fen || 0);
+    let currentSnap = null;
+    try { currentSnap = JSON.parse(currentSub.snapshot_json || "{}"); } catch (_) {}
+
+    const recordAudit = (actionType, postSnapJson, postBasis, status, reason) => {
+      const existing = db.prepare(`
+        SELECT id, pre_snapshot_json, post_snapshot_json, pre_pricing_basis_fen, post_pricing_basis_fen
+        FROM subscription_snapshot_audits
+        WHERE subscription_id = ? AND migration_version = ? AND action_type = ?
+        ORDER BY id DESC LIMIT 1
+      `).get(currentSub.id, migrationVersion, actionType);
+
+      if (existing &&
+          existing.pre_snapshot_json === preSnapJson &&
+          existing.post_snapshot_json === postSnapJson &&
+          existing.pre_pricing_basis_fen === preBasis &&
+          existing.post_pricing_basis_fen === postBasis) {
+        return;
+      }
+
+      db.prepare(`
+        INSERT INTO subscription_snapshot_audits (
+          subscription_id, user_id, plan_id, cycle, migration_version,
+          action_type, pre_snapshot_json, post_snapshot_json,
+          pre_pricing_basis_fen, post_pricing_basis_fen,
+          inspection_status, inspection_reason, evidence_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        currentSub.id, currentSub.user_id, currentSub.plan_id, currentSub.cycle, migrationVersion,
+        actionType, preSnapJson, postSnapJson,
+        preBasis, postBasis,
+        status, reason || "",
+        JSON.stringify(inspection.evidence || {}), nowIso
+      );
+    };
+
+    if (inspection.status === "resolved" && inspection.snapshot) {
+      const expected = inspection.snapshot;
+      const consistency = isSubscriptionSnapshotConsistent(currentSub, expected, currentSnap);
+      const postSnapJson = JSON.stringify(expected);
+      const postBasis = expected.pricingBasisFen > 0 ? expected.pricingBasisFen : preBasis;
+
+      if (!consistency.isConsistent) {
+        recordAudit("repair", postSnapJson, postBasis, inspection.status, inspection.reason || consistency.mismatches.join("; "));
+        const result = db.prepare(`
+          UPDATE subscriptions
+          SET snapshot_json = ?, pricing_basis_fen = ?, updated_at = ?
+          WHERE id = ? AND updated_at = ?
+        `).run(postSnapJson, postBasis, nowIso, currentSub.id, currentSub.updated_at);
+        if (result.changes === 0) {
+          throw new Error(`订阅 #${currentSub.id} 在修复写入时发生并发冲突`);
+        }
+        return { changed: true, action: "repair" };
+      }
+      return { changed: false, action: "valid" };
+    }
+
+    if (inspection.status === "unresolved") {
+      if (!preSnapJson || preSnapJson === "{}" || preSnapJson === "") {
+        recordAudit("audit_required_unresolved", preSnapJson, preBasis, inspection.status,
+          "无有效开通来源且历史快照缺失或可能已被清空，记录审计待人工核查，不伪造数据");
+        return { changed: false, action: "audit_required_unresolved" };
+      }
+
+      const hasContradictoryPlan = currentSnap && currentSnap.planId && currentSnap.planId !== currentSub.plan_id;
+      if (hasContradictoryPlan) {
+        recordAudit("clear_contradictory", "", preBasis, inspection.status,
+          "快照套餐档位与订阅不一致且无法溯源");
+        const result = db.prepare("UPDATE subscriptions SET snapshot_json = '', updated_at = ? WHERE id = ? AND updated_at = ?")
+          .run(nowIso, currentSub.id, currentSub.updated_at);
+        if (result.changes === 0) {
+          throw new Error(`订阅 #${currentSub.id} 在清理冲突快照时发生并发冲突`);
+        }
+        return { changed: true, action: "clear_contradictory" };
+      }
+
+      recordAudit("preserve_unresolved", preSnapJson, preBasis, inspection.status,
+        "来源待核查，保留原始快照存证");
+      return { changed: false, action: "preserve_unresolved" };
+    }
+
+    if (inspection.status === "conflict") {
+      const hasContradictoryPlan = currentSnap && currentSnap.planId && currentSnap.planId !== currentSub.plan_id;
+      if (hasContradictoryPlan) {
+        recordAudit("clear_conflict", "", preBasis, inspection.status,
+          "权益链存在严重冲突且套餐不符");
+        const result = db.prepare("UPDATE subscriptions SET snapshot_json = '', updated_at = ? WHERE id = ? AND updated_at = ?")
+          .run(nowIso, currentSub.id, currentSub.updated_at);
+        if (result.changes === 0) {
+          throw new Error(`订阅 #${currentSub.id} 在清理冲突快照时发生并发冲突`);
+        }
+        return { changed: true, action: "clear_conflict" };
+      }
+      recordAudit("flag_conflict", preSnapJson, preBasis, inspection.status,
+        "权益链存在冲突，保留存证待人工核查");
+      return { changed: false, action: "flag_conflict" };
+    }
+
+    return { changed: false, action: "none" };
+  })();
+}
 const VERSIONED_MIGRATIONS = [
   {
     version: 1,
@@ -1050,12 +1192,10 @@ const VERSIONED_MIGRATIONS = [
       }
 
       // 4. Backfill empty snapshot_json in subscriptions
+      ensureSubscriptionSnapshotAuditsTable(db);
       const subs = db.prepare("SELECT * FROM subscriptions WHERE snapshot_json = '' OR snapshot_json = '{}'").all();
       for (const sub of subs) {
-        const snapshot = reconstructSubscriptionSnapshot(sub, db);
-        if (snapshot) {
-          db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(snapshot), sub.id);
-        }
+        reconcileSubscriptionRow({ sub, migrationVersion: 18, db });
       }
     },
   },
@@ -1097,19 +1237,10 @@ const VERSIONED_MIGRATIONS = [
       }
 
       // 2. Audit and repair all subscriptions where bad snapshot was backfilled
+      ensureSubscriptionSnapshotAuditsTable(db);
       const allSubs = db.prepare("SELECT * FROM subscriptions").all();
       for (const sub of allSubs) {
-        let currentSnap = null;
-        try { currentSnap = JSON.parse(sub.snapshot_json || "{}"); } catch (_) {}
-        const expected = reconstructSubscriptionSnapshot(sub, db);
-        if (expected) {
-          const isMissing = !currentSnap || !currentSnap.monthlyCredits;
-          const isWrongCredits = currentSnap && currentSnap.monthlyCredits !== expected.monthlyCredits;
-          const isWrongPlan = currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id;
-          if (isMissing || isWrongCredits || isWrongPlan) {
-            db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
-          }
-        }
+        reconcileSubscriptionRow({ sub, migrationVersion: 19, db });
       }
     },
   },
@@ -1117,31 +1248,24 @@ const VERSIONED_MIGRATIONS = [
     version: 20,
     name: "billing-v2-snapshot-provenance-repair",
     apply() {
+      ensureSubscriptionSnapshotAuditsTable(db);
       const allSubs = db.prepare("SELECT * FROM subscriptions").all();
       for (const sub of allSubs) {
-        const inspection = inspectSubscriptionSnapshot(sub, db);
-        let currentSnap = null;
-        try { currentSnap = JSON.parse(sub.snapshot_json || "{}"); } catch (_) {}
-
-        if (inspection.status === "resolved" && inspection.snapshot) {
-          const expected = inspection.snapshot;
-          const isMissing = !currentSnap || !currentSnap.monthlyCredits;
-          const isWrongCredits = currentSnap && currentSnap.monthlyCredits !== expected.monthlyCredits;
-          const isWrongPlan = currentSnap && currentSnap.planId && currentSnap.planId !== sub.plan_id;
-          if (isMissing || isWrongCredits || isWrongPlan) {
-            db.prepare("UPDATE subscriptions SET snapshot_json = ? WHERE id = ?").run(JSON.stringify(expected), sub.id);
-          }
-        } else if (inspection.status === "unresolved" || inspection.status === "conflict") {
-          if (currentSnap && (currentSnap.planId !== sub.plan_id || inspection.status === "unresolved")) {
-            if (inspection.status === "unresolved") {
-              db.prepare("UPDATE subscriptions SET snapshot_json = '' WHERE id = ?").run(sub.id);
-            }
-          }
-        }
+        reconcileSubscriptionRow({ sub, migrationVersion: 20, db });
       }
     },
   },
-];
+  {
+    version: 21,
+    name: "billing-v2-reconcile-audits-and-unresolved-snapshots",
+    apply() {
+      ensureSubscriptionSnapshotAuditsTable(db);
+      const allSubs = db.prepare("SELECT * FROM subscriptions").all();
+      for (const sub of allSubs) {
+        reconcileSubscriptionRow({ sub, migrationVersion: 21, db });
+      }
+    },
+  },];
 
 function getAppliedMigrationVersions() {
   db.exec(`
@@ -1205,4 +1329,6 @@ module.exports = {
   migrateSchemaIfNeeded,
   VERSIONED_MIGRATIONS,
   applyVersionedMigrations,
+  ensureSubscriptionSnapshotAuditsTable,
+  reconcileSubscriptionRow,
 };
