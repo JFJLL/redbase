@@ -31,6 +31,31 @@ function renderLanding(root: HTMLElement): void {
 
 // Interactions ported from public/app.js bindLandingExperience().
 function bindLandingExperience(landingPage: HTMLElement): void {
+  const tickerData = [
+    { brand: "观夏 ToSummer", task: "一组 3:4 东方香氛种草图文" },
+    { brand: "蕉下 Beneunder", task: "一篇真实防晒衣多维度测评清单" },
+    { brand: "幼岚 Youlan", task: "一套儿童家居服生活方式组图" },
+    { brand: "未卡 VETRESKA", task: "一篇宠物居家用品痛点反转笔记" },
+  ];
+  let tickerIndex = 0;
+  const deliveryBrand = landingPage.querySelector<HTMLElement>("#deliveryBrand");
+  const deliveryTask = landingPage.querySelector<HTMLElement>("#deliveryTask");
+  if (deliveryBrand && deliveryTask) {
+    deliveryBrand.style.transition = "opacity 0.25s ease";
+    deliveryTask.style.transition = "opacity 0.25s ease";
+    window.setInterval(() => {
+      tickerIndex = (tickerIndex + 1) % tickerData.length;
+      deliveryBrand.style.opacity = "0";
+      deliveryTask.style.opacity = "0";
+      window.setTimeout(() => {
+        deliveryBrand.textContent = tickerData[tickerIndex].brand;
+        deliveryTask.textContent = tickerData[tickerIndex].task;
+        deliveryBrand.style.opacity = "1";
+        deliveryTask.style.opacity = "1";
+      }, 250);
+    }, 3600);
+  }
+
   const heroCopy: Record<string, [string, string]> = {
     trend: ["值得跟进的内容机会", "从趋势信号中筛选与品牌真正相关的方向"],
     excellent: ["可以学习的优秀内容", "查看热门内容并提取结构与表达方式"],
@@ -53,6 +78,38 @@ function bindLandingExperience(landingPage: HTMLElement): void {
       });
       if (heroPanelTitle) heroPanelTitle.textContent = heroCopy[selected]?.[0] || "";
       if (heroPanelSub) heroPanelSub.textContent = heroCopy[selected]?.[1] || "";
+    });
+  });
+
+  landingPage.querySelectorAll<HTMLElement>("[data-task-tab]").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const idx = tab.dataset.taskTab || "0";
+      landingPage.querySelectorAll<HTMLElement>("[data-task-tab]").forEach((item) => {
+        const active = item.dataset.taskTab === idx;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-selected", String(active));
+      });
+      landingPage.querySelectorAll<HTMLElement>("[data-task-card]").forEach((card) => {
+        card.classList.toggle("active", card.dataset.taskCard === idx);
+      });
+    });
+  });
+
+  landingPage.querySelectorAll<HTMLElement>("[data-cycle-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cycle = btn.dataset.cycleToggle || "monthly";
+      landingPage.querySelectorAll<HTMLElement>("[data-cycle-toggle]").forEach((b) => {
+        const active = b.dataset.cycleToggle === cycle;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-selected", String(active));
+      });
+      const isAnnual = cycle === "annual";
+      landingPage.querySelectorAll<HTMLElement>(".price-monthly").forEach((el) => {
+        el.hidden = isAnnual;
+      });
+      landingPage.querySelectorAll<HTMLElement>(".price-annual").forEach((el) => {
+        el.hidden = !isAnnual;
+      });
     });
   });
 

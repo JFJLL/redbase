@@ -40,6 +40,12 @@ export const LANDING_HTML = `
           <div class="hero-copy landing-reveal">
             <div class="commercial-badge"><span class="pulse"></span>品牌内容决策与生产工作台</div>
             <h1>让品牌每天都知道<br /><span>什么内容值得做</span></h1>
+            <div class="delivery-ticker" aria-label="RedBase Agent 任务交付状态">
+              <span class="delivery-label">Agent 交付中</span>
+              <span class="delivery-text">
+                为「<b id="deliveryBrand">观夏 ToSummer</b>」交付「<b id="deliveryTask">一组 3:4 东方香氛种草图文</b>」
+              </span>
+            </div>
             <p class="hero-lead">
               RedBase 将品牌档案、个人 IP、趋势证据、优秀内容、内容选题与 AI
               图文生产放进同一套工作流，帮助团队更顺畅地完成机会发现、方向判断和内容生成。
@@ -58,7 +64,7 @@ export const LANDING_HTML = `
           </div>
 
           <div class="product-stage landing-reveal" aria-label="RedBase 产品能力示例">
-            <div class="float-chip float-chip-top"><span>趋</span><div><b>8 个高匹配方向</b><small>趋势与品牌共同判断</small></div></div>
+            <div class="float-chip float-chip-top"><span class="chip-tag"><i class="chip-dot"></i>趋势信号</span><div><b>8 个高匹配方向</b><small>趋势与品牌共同判断</small></div></div>
             <div class="mock-window">
               <div class="mock-bar"><i></i><i></i><i></i><span><b>RedBase</b> · 产品示例界面</span></div>
               <div class="mock-body">
@@ -116,9 +122,26 @@ export const LANDING_HTML = `
                     </div>
                   </div>
                 </div>
+                <div class="mock-agent-panel" aria-label="RedBase 协同 Agent 状态">
+                  <div class="mock-agent-head">
+                    <span class="mock-agent-pill">AGENT · CONTENT OPS</span>
+                    <b>为 观夏 策划 3:4 种草组图</b>
+                    <p>自动化拆解爆款信号并生成成套小红书视觉资产</p>
+                  </div>
+                  <div class="mock-agent-steps">
+                    <div class="agent-step done"><i>✓</i><span>匹配东方香氛与居家生活方式趋势</span></div>
+                    <div class="agent-step done"><i>✓</i><span>拆解 10 篇高赞笔记视觉结构与痛点</span></div>
+                    <div class="agent-step done"><i>✓</i><span>输出 3 组差异化决策选题方案</span></div>
+                    <div class="agent-step done"><i>✓</i><span>生成 3:4 高清组图与小红书正文</span></div>
+                  </div>
+                  <div class="mock-agent-status"><span>3 页组图已交付</span><small>耗时 42 秒</small></div>
+                  <div class="mock-agent-input">
+                    <span>让 Agent 继续微调封面切口或补充横测...</span>
+                  </div>
+                </div>
               </div>
             </div>
-            <div class="float-chip float-chip-bottom"><span>图</span><div><b>已生成 3 页组图</b><small>进入历史生成资产</small></div></div>
+            <div class="float-chip float-chip-bottom"><span class="chip-tag success"><i class="chip-dot done"></i>生成交付</span><div><b>已生成 3 页组图</b><small>进入历史生成资产</small></div></div>
           </div>
         </div>
       </section>
@@ -126,10 +149,93 @@ export const LANDING_HTML = `
       <section class="capability-rail" aria-label="完整产品能力">
         <div class="rail-label">当前 RedBase 已形成的完整产品能力</div>
         <div class="rail-track">
-          <div><b>品</b>品牌档案</div><div><b>人</b>个人 IP</div><div><b>趋</b>趋势分析</div><div><b>选</b>内容选题</div>
-          <div><b>优</b>优秀内容</div><div><b>图</b>多类型图文生成</div><div><b>历</b>历史生成</div>
-          <div aria-hidden="true"><b>品</b>品牌档案</div><div aria-hidden="true"><b>人</b>个人 IP</div><div aria-hidden="true"><b>趋</b>趋势分析</div>
-          <div aria-hidden="true"><b>选</b>内容选题</div><div aria-hidden="true"><b>优</b>优秀内容</div><div aria-hidden="true"><b>图</b>多类型图文生成</div>
+          <div><span class="rail-dot"></span>品牌档案</div>
+          <div><span class="rail-dot"></span>个人 IP</div>
+          <div><span class="rail-dot"></span>趋势分析</div>
+          <div><span class="rail-dot"></span>内容选题</div>
+          <div><span class="rail-dot"></span>优秀内容</div>
+          <div><span class="rail-dot"></span>多类型图文生成</div>
+          <div><span class="rail-dot"></span>历史生成</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>品牌档案</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>个人 IP</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>趋势分析</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>内容选题</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>优秀内容</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>多类型图文生成</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>历史生成</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>品牌档案</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>个人 IP</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>趋势分析</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>内容选题</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>优秀内容</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>多类型图文生成</div>
+          <div aria-hidden="true"><span class="rail-dot"></span>历史生成</div>
+        </div>
+      </section>
+
+      <section class="task-showcase-section" aria-label="小红书任务直达">
+        <div class="container">
+          <div class="commercial-section-head center landing-reveal">
+            <span class="eyebrow">Task to Delivery</span>
+            <h2>选一个任务，直接拿到小红书爆款结果</h2>
+            <p>不用搭建复杂工作流。选择任务类型，输入品牌诉求，RedBase 自动完成专业级策划与图文交付。</p>
+          </div>
+          <div class="task-showcase-box landing-reveal">
+            <div class="task-pill-nav" role="tablist" aria-label="任务类型">
+              <button class="task-pill active" data-task-tab="0" type="button" role="tab" aria-selected="true">3:4 爆款仿图文</button>
+              <button class="task-pill" data-task-tab="1" type="button" role="tab" aria-selected="false">真实横测决策清单</button>
+              <button class="task-pill" data-task-tab="2" type="button" role="tab" aria-selected="false">生活方式场景组图</button>
+              <button class="task-pill" data-task-tab="3" type="button" role="tab" aria-selected="false">痛点场景反转种草</button>
+              <button class="task-pill" data-task-tab="4" type="button" role="tab" aria-selected="false">公众号深度长图</button>
+            </div>
+            <div class="task-stage-carousel">
+              <div class="task-card-arch">
+                <article class="task-cover-card active" data-task-card="0">
+                  <div class="task-card-media"><img src="/assets/landing-excellent-source-01.webp" alt="小红书爆款图文仿写示例" loading="lazy" /></div>
+                  <div class="task-card-info">
+                    <span class="task-card-tag">3:4 爆款仿写</span>
+                    <h4>东方香氛·居家生活方式组图</h4>
+                    <p>自动提取原笔记视觉切口与文案逻辑，融合品牌产品卖点。</p>
+                  </div>
+                </article>
+                <article class="task-cover-card" data-task-card="1">
+                  <div class="task-card-media"><img src="/assets/landing-excellent-source-02.webp" alt="产品对比与横测清单示例" loading="lazy" /></div>
+                  <div class="task-card-info">
+                    <span class="task-card-tag">决策清单</span>
+                    <h4>防晒衣·多维度参数真实避坑横测</h4>
+                    <p>提炼客观选购标准与使用卡点，生成高转化信任内容。</p>
+                  </div>
+                </article>
+                <article class="task-cover-card" data-task-card="2">
+                  <div class="task-card-media"><img src="/assets/landing-excellent-source-03.webp" alt="产品融入生活场景示例" loading="lazy" /></div>
+                  <div class="task-card-info">
+                    <span class="task-card-tag">生活场景</span>
+                    <h4>儿童家居服·一天真实日常记录</h4>
+                    <p>去广告感的生活语境拍摄构图，建立自然品牌认同。</p>
+                  </div>
+                </article>
+                <article class="task-cover-card" data-task-card="3">
+                  <div class="task-card-media"><img src="/assets/landing-output-xhs.webp" alt="小红书痛点反转多页组图" loading="lazy" /></div>
+                  <div class="task-card-info">
+                    <span class="task-card-tag">痛点种草</span>
+                    <h4>猫咪用品·踩坑5次后的选购标准</h4>
+                    <p>从用户困惑切入，反推产品核心价值与选购理由。</p>
+                  </div>
+                </article>
+                <article class="task-cover-card" data-task-card="4">
+                  <div class="task-card-media"><img src="/assets/landing-output-longform.webp" alt="公众号深度长图" loading="lazy" /></div>
+                  <div class="task-card-info">
+                    <span class="task-card-tag">深度长图</span>
+                    <h4>品牌白皮书与全景趋势指南</h4>
+                    <p>长图版面设计，适合高客单价决策与专业深度种草。</p>
+                  </div>
+                </article>
+              </div>
+            </div>
+            <div class="task-action-bar">
+              <button class="landing-btn landing-btn-primary" data-auth-open="register" type="button">开始你的第一个任务</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -157,7 +263,8 @@ export const LANDING_HTML = `
           </div>
           <div class="capability-grid landing-reveal">
             <article class="capability-card wide">
-              <span class="capability-icon">↗</span><h3>趋势分析：找到真正适合品牌的机会</h3>
+              <div class="card-kicker"><span class="kicker-idx">01</span><span>趋势洞察</span></div>
+              <h3>趋势分析：找到真正适合品牌的机会</h3>
               <p>从不同趋势维度和真实证据中筛选方向，同时说明热度变化和品牌跟进理由。</p>
               <div class="mini-trends">
                 <div><span>真实体验内容增长</span><i><em style="--width:92%"></em></i><b>92</b></div>
@@ -166,7 +273,8 @@ export const LANDING_HTML = `
               </div>
             </article>
             <article class="capability-card profile-card">
-              <span class="capability-icon">品</span><h3>品牌档案与个人 IP</h3>
+              <div class="card-kicker"><span class="kicker-idx">02</span><span>品牌与人设</span></div>
+              <h3>品牌档案与个人 IP</h3>
               <p>为不同内容主体建立长期可维护的上下文，让后续任务持续复用已有信息。</p>
               <div class="profile-switch">
                 <button class="active" data-profile="brand" type="button">品牌档案</button>
@@ -179,22 +287,26 @@ export const LANDING_HTML = `
               </div>
             </article>
             <article class="capability-card">
-              <span class="capability-icon">优</span><h3>优秀内容</h3>
+              <div class="card-kicker"><span class="kicker-idx">03</span><span>爆款参考</span></div>
+              <h3>优秀内容</h3>
               <p>浏览小红书热门与电商热门内容，查看多图详情，并将优秀表达方式转化为原创内容方向。</p>
               <div class="card-media"><img src="/assets/landing-capability-excellent.webp" alt="优秀内容参考库界面示例" loading="lazy" /></div>
             </article>
             <article class="capability-card">
-              <span class="capability-icon">选</span><h3>内容选题</h3>
+              <div class="card-kicker"><span class="kicker-idx">04</span><span>选题策划</span></div>
+              <h3>内容选题</h3>
               <p>把品牌资产、趋势判断和优秀内容参考，转化成目标人群、切口、标题与推荐理由。</p>
               <div class="topic-preview"><small>方向 01 · 价值证明</small><b>用真实体验讲清产品为什么值得</b><p>人群：价格犹豫用户｜形式：细节证据 + 对比</p></div>
             </article>
             <article class="capability-card">
-              <span class="capability-icon">图</span><h3>多类型内容生成</h3>
+              <div class="card-kicker"><span class="kicker-idx">05</span><span>图文生产</span></div>
+              <h3>多类型内容生成</h3>
               <p>从选题继续生成适合不同渠道和用途的图文内容。</p>
               <div class="format-list"><span>小红书组图<small>3:4 多页</small></span><span>朋友圈图文<small>单页</small></span><span>公众号长图<small>长版面</small></span></div>
             </article>
             <article class="capability-card history-card">
-              <span class="capability-icon">历</span><h3>历史生成：让每一次产出都能继续被使用</h3>
+              <div class="card-kicker"><span class="kicker-idx">06</span><span>数字资产</span></div>
+              <h3>历史生成：让每一次产出都能继续被使用</h3>
               <p>生成结果统一进入历史记录，支持按品牌与类型查看、预览和下载，减少重复生产。</p>
               <div class="history-preview">
                 <img src="/assets/landing-history-thumb-01.webp" alt="历史资产中的小红书组图" loading="lazy" /><img src="/assets/landing-history-thumb-02.webp" alt="历史资产中的产品推广图文" loading="lazy" /><img src="/assets/landing-history-thumb-03.webp" alt="历史资产中的公众号长图" loading="lazy" />
@@ -213,11 +325,23 @@ export const LANDING_HTML = `
           </div>
           <div class="workflow-step landing-reveal">
             <div class="workflow-copy"><span class="eyebrow">01 · Discover</span><h3>先判断哪个机会值得品牌跟进</h3><p>趋势热度只是起点。RedBase 会把趋势信号、讨论内容与品牌上下文放在一起，给出可解释的适配判断。</p><ul><li>不同趋势维度分别分析，避免把所有热点混在一起</li><li>每条趋势包含品牌适配理由与证据来源</li><li>可从趋势结果直接进入内容选题</li></ul></div>
-            <div class="workflow-panel"><header><h4>机会判断示例</h4><span>品牌适配优先</span></header><div class="evidence-list"><div><i>趋</i><p><b>真实体验型内容持续增长</b><small>讨论热度与高阅读内容同时出现</small></p><em>高匹配</em></div><div><i>人</i><p><b>目标人群正处于选择阶段</b><small>需要清单、横测与决策标准</small></p><em>可执行</em></div><div><i>品</i><p><b>品牌具备可被证明的具体价值</b><small>适合用体验细节代替抽象卖点</small></p><em>值得做</em></div></div></div>
+            <div class="workflow-panel"><header><h4>机会判断示例</h4><span>品牌适配优先</span></header><div class="evidence-list"><div><span class="evidence-idx">01</span><p><b>真实体验型内容持续增长</b><small>讨论热度与高阅读内容同时出现</small></p><em>高匹配</em></div><div><span class="evidence-idx">02</span><p><b>目标人群正处于选择阶段</b><small>需要清单、横测与决策标准</small></p><em>可执行</em></div><div><span class="evidence-idx">03</span><p><b>品牌具备可被证明的具体价值</b><small>适合用体验细节代替抽象卖点</small></p><em>值得做</em></div></div></div>
           </div>
           <div class="workflow-step reverse landing-reveal">
             <div class="workflow-copy"><span class="eyebrow">02 · Learn</span><h3>从优秀内容中提取可以学习的表达方式</h3><p>查看热门内容的图文结构、标题切口和视觉表达，再结合自己的品牌方向做原创融合。</p><ul><li>小红书热门与电商热门两个内容板块</li><li>支持多图详情查看与内容结构学习</li><li>支持一键仿图文与选题方向融合</li></ul></div>
-            <div class="workflow-panel learning-panel"><img src="/assets/landing-learning-example.webp" alt="拆解优秀内容表达方式的学习示例" loading="lazy" /><div><h4>重点学习内容解决问题的方式</h4><p>将原内容拆成“问题切入—真实场景—证据说明—行动结论”，再替换为品牌自己的信息与素材。</p><div><span>问题型封面</span><span>真实场景</span><span>证据细节</span><span>清晰结论</span></div></div></div>
+            <div class="workflow-panel learning-panel">
+              <img src="/assets/landing-learning-example.webp" alt="拆解优秀内容表达方式的学习示例" loading="lazy" />
+              <div>
+                <h4>重点学习内容解决问题的方式</h4>
+                <p>将原内容拆成“问题切入—真实场景—证据说明—行动结论”，再替换为品牌自己的信息与素材。</p>
+                <div class="learning-framework">
+                  <div><b>01</b><span>问题型封面切入</span></div>
+                  <div><b>02</b><span>还原真实生活场景</span></div>
+                  <div><b>03</b><span>细节证据与避坑横测</span></div>
+                  <div><b>04</b><span>给出清晰选购结论</span></div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="workflow-step landing-reveal">
             <div class="workflow-copy"><span class="eyebrow">03 · Make</span><h3>从一个内容方向，继续生成可发布、可复用的图文资产</h3><p>选题确定后，可以继续加入产品图、品牌 Logo 和风格参考，生成不同渠道的内容形式，并进入历史资产。</p><ul><li>根据内容选择视觉路线与画面比例</li><li>支持产品图、Logo 与风格参考</li><li>生成结果自动进入历史生成记录</li></ul></div>
@@ -246,13 +370,83 @@ export const LANDING_HTML = `
 
       <section class="commercial-section" id="pricing">
         <div class="container">
-          <div class="commercial-section-head center landing-reveal"><span class="eyebrow">Pricing</span><h2>按需接入你的内容工作流</h2><p>个人用户可直接手机号注册体验；企业团队可联系商务了解合作方案。</p></div>
-          <div class="pricing-grid landing-reveal">
-            <article><span class="price-name">单月版</span><div class="price">¥3,500<small>/ 月</small></div><p>适合需要灵活接入、按月评估使用效果的团队。</p><ul><li>一次到账 1000 积分</li><li>品牌档案与个人 IP</li><li>趋势分析、优秀内容与内容选题</li><li>多类型图文生成与历史记录</li></ul><button class="landing-btn landing-btn-outline" data-business-quote-open type="button">联系商务</button></article>
-            <article class="featured"><span class="price-tag">年付更优惠</span><span class="price-name">包年版</span><div class="price">¥35,000<small>/ 年</small></div><p>适合希望长期使用，并建立稳定内容工作流的团队。</p><ul><li>一次到账 12000 积分</li><li>包含单月版全部产品能力</li><li>全年持续使用</li><li>商务合作沟通支持</li></ul><button class="landing-btn landing-btn-primary" data-business-quote-open type="button">预约产品演示</button></article>
+          <div class="commercial-section-head center landing-reveal"><span class="eyebrow">Pricing</span><h2>按需接入你的小红书内容工作流</h2><p>从单品牌到多项目团队，灵活选择适合的创作额度方案。</p></div>
+          <div class="pricing-cycle-row landing-reveal">
+            <div class="pricing-cycle-switch" role="tablist" aria-label="付费周期">
+              <button class="active" data-cycle-toggle="monthly" type="button" role="tab" aria-selected="true">按月付费</button>
+              <button data-cycle-toggle="annual" type="button" role="tab" aria-selected="false">按年付费 <span class="discount-pill">立省 2 个月</span></button>
+            </div>
           </div>
-          <p class="pricing-note">购买后积分一次到账；具体企业合作范围以商务沟通为准。</p>
-          <div class="business-strip landing-reveal"><div><b>还不确定 RedBase 是否适合你的团队？</b><span>预约一次产品演示，直接看真实工作流程和使用方式。</span></div><button class="landing-btn landing-btn-primary" data-business-quote-open type="button">预约企业演示</button></div>
+          <div class="pricing-grid landing-reveal">
+            <article>
+              <div class="plan-header">
+                <span class="price-tag subtle">个人创作者</span>
+                <span class="price-name">轻量版</span>
+              </div>
+              <div class="price-wrap">
+                <div class="price price-monthly">¥299<small>/ 月</small></div>
+                <div class="price price-annual" hidden>¥2,990<small>/ 年</small></div>
+                <div class="price-alt">或按年付 ¥2,990/年 · 相当 ¥249/月</div>
+              </div>
+              <p class="plan-desc">适合个人 IP、单品牌的日常轻量内容生产。</p>
+              <div class="plan-quota-badge"><b>100</b><span>积分 / 月</span></div>
+              <ul>
+                <li>单品牌档案与个人 IP</li>
+                <li>小红书热点趋势与选题策划</li>
+                <li>约 100 张标准单图或 25 组图</li>
+                <li>单次按月购买，不自动续费</li>
+              </ul>
+              <div class="plan-btn-wrap">
+                <button class="landing-btn landing-btn-outline" data-auth-open="register" type="button">免费体验</button>
+              </div>
+            </article>
+            <article class="featured">
+              <span class="price-tag">推荐选择</span>
+              <div class="plan-header">
+                <span class="price-name">专业版</span>
+              </div>
+              <div class="price-wrap">
+                <div class="price price-monthly">¥999<small>/ 月</small></div>
+                <div class="price price-annual" hidden>¥9,990<small>/ 年</small></div>
+                <div class="price-alt">或按年付 ¥9,990/年 · 相当 ¥832/月</div>
+              </div>
+              <p class="plan-desc">适合品牌常态化运营，把内容生产融入日常。</p>
+              <div class="plan-quota-badge"><b>400</b><span>积分 / 月</span></div>
+              <ul>
+                <li>包含轻量版全部功能</li>
+                <li>约 400 张标准单图或 100 组图</li>
+                <li>爆款复刻与视觉风格深度调优</li>
+                <li>多品牌档案与个人 IP 协同</li>
+              </ul>
+              <div class="plan-btn-wrap">
+                <button class="landing-btn landing-btn-primary" data-auth-open="register" type="button">立即使用</button>
+              </div>
+            </article>
+            <article>
+              <div class="plan-header">
+                <span class="price-tag subtle">团队高频</span>
+                <span class="price-name">业务版</span>
+              </div>
+              <div class="price-wrap">
+                <div class="price price-monthly">¥2,999<small>/ 月</small></div>
+                <div class="price price-annual" hidden>¥29,990<small>/ 年</small></div>
+                <div class="price-alt">或按年付 ¥29,990/年 · 相当 ¥2,499/月</div>
+              </div>
+              <p class="plan-desc">适合多项目运营、高频率批量内容产出团队。</p>
+              <div class="plan-quota-badge"><b>1500</b><span>积分 / 月</span></div>
+              <ul>
+                <li>包含专业版全部功能</li>
+                <li>约 1500 张标准单图或 375 组图</li>
+                <li>多项目并发生成与优先算力调度</li>
+                <li>企业级历史资产沉淀与多端导出</li>
+              </ul>
+              <div class="plan-btn-wrap">
+                <button class="landing-btn landing-btn-outline" data-auth-open="register" type="button">立即使用</button>
+              </div>
+            </article>
+          </div>
+          <p class="pricing-note">购买后积分按周期发放；企业采购方案支持一次到账 1000 积分与一次到账 12000 积分定制。</p>
+          <div class="business-strip landing-reveal"><div><b>需要企业级专属方案或团队规模采购？</b><span>支持定制大额积分与专属服务方案，预约一次产品演示，直接看真实工作流。</span></div><button class="landing-btn landing-btn-primary" data-business-quote-open type="button">预约企业演示</button></div>
         </div>
       </section>
 
@@ -285,6 +479,7 @@ export const LANDING_HTML = `
           <div><h4>账户</h4><button data-auth-open="login" type="button">手机号登录</button><button data-auth-open="register" type="button">免费注册</button><a href="/app/">进入工作台</a></div>
         </div>
         <div class="footer-bottom"><span>Copyright © 2026 RedBase</span><span>京ICP备2026045114号-1</span></div>
+        <div class="footer-wordmark" aria-hidden="true">REDBASE</div>
       </div>
     </footer>
 `;
