@@ -269,10 +269,10 @@ async function handleLogout() {
           @click="toggleSidebar"
         >
           <span class="sidebar-toggle-icon" aria-hidden="true">
-            <svg v-if="sidebarCollapsed" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg v-if="sidebarCollapsed" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="9 18 15 12 9 6" />
             </svg>
-            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </span>
@@ -663,29 +663,29 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 .sidebar-toggle {
   display: flex;
   width: 100%;
-  min-height: 42px;
-  height: 42px;
+  min-height: 38px;
+  height: 38px;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
+  gap: 8px;
   padding: 0 12px 0 4px;
   border: 1px solid rgba(18, 16, 17, 0.08);
-  border-radius: 11px;
+  border-radius: 10px;
   background: #ffffff;
-  color: #4b4045;
+  color: #504448;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   box-sizing: border-box;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(80, 44, 44, 0.02);
-  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .sidebar-toggle:hover {
   border-color: rgba(216, 68, 68, 0.25);
   background: #ffffff;
   color: var(--workspace-brand, #d83b46);
-  box-shadow: 0 3px 12px rgba(216, 68, 68, 0.08);
+  box-shadow: 0 3px 10px rgba(216, 68, 68, 0.06);
 }
 
 .sidebar-toggle-icon {
@@ -695,23 +695,26 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   flex: 0 0 36px;
   margin: 0;
   place-items: center;
-  border-radius: 8px;
-  background: #f7f2f0;
-  border: 1px solid rgba(18, 16, 17, 0.05);
-  color: #6d6064;
-  transition: all 0.18s ease;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  color: #7a6e72;
+  transition: color 0.18s ease;
 }
 
 .sidebar-toggle:hover .sidebar-toggle-icon {
-  background: #ffeff0;
-  border-color: rgba(216, 68, 68, 0.16);
   color: var(--workspace-brand, #d83b46);
 }
 
 .sidebar-toggle-icon svg {
   width: 14px;
   height: 14px;
-  stroke-width: 2;
+  stroke-width: 1.85;
+  transition: transform 0.2s ease;
+}
+
+.sidebar-toggle:hover .sidebar-toggle-icon svg {
+  transform: translateX(-2px);
 }
 
 .sidebar-toggle-label {
@@ -1005,13 +1008,13 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   border: 1px solid rgba(18, 16, 17, 0.08);
   border-radius: 10px;
   background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(80, 44, 44, 0.02);
-  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .sidebar-collapsed .sidebar-toggle:hover {
   border-color: rgba(216, 68, 68, 0.28);
-  box-shadow: 0 3px 12px rgba(216, 68, 68, 0.08);
+  box-shadow: 0 3px 10px rgba(216, 68, 68, 0.08);
   background: #ffffff;
 }
 
@@ -1021,16 +1024,17 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   margin: 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: #f7f2f0;
-  border: 1px solid rgba(18, 16, 17, 0.05);
-  color: #6d6064;
+  background: transparent;
+  border: none;
+  color: #7a6e72;
 }
 
 .sidebar-collapsed .sidebar-toggle:hover .sidebar-toggle-icon {
-  background: #ffeff0;
-  border-color: rgba(216, 68, 68, 0.16);
   color: var(--workspace-brand, #d83b46);
+}
+
+.sidebar-collapsed .sidebar-toggle:hover .sidebar-toggle-icon svg {
+  transform: translateX(2px);
 }
 
 .sidebar-collapsed .workspace-user {
@@ -1138,9 +1142,8 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
     width: 36px;
     height: 36px;
     margin: 0 auto;
-    background: #f7f2f0;
-    border: 1px solid rgba(18, 16, 17, 0.05);
-    border-radius: 8px;
+    background: transparent;
+    border: none;
   }
 
   .workspace-user {
