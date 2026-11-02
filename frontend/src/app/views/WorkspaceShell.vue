@@ -730,21 +730,20 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   min-width: 0;
   align-items: center;
   gap: 8px;
-  padding: 4px;
-  border: 1px solid rgba(18, 16, 17, 0.08);
-  border-radius: 12px;
-  background: #ffffff;
+  padding: 6px 8px 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
   color: inherit;
   text-align: left;
   text-decoration: none;
   box-sizing: border-box;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(80, 44, 44, 0.02);
-  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .workspace-user:hover {
-  border-color: rgba(216, 68, 68, 0.22);
-  box-shadow: 0 4px 14px rgba(216, 68, 68, 0.06);
+  background: rgba(216, 68, 68, 0.05);
+  border-color: rgba(216, 68, 68, 0.1);
 }
 
 .workspace-user-profile {
@@ -893,25 +892,23 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   justify-content: center;
   gap: 6px;
   width: 100%;
-  min-height: 36px;
-  height: 36px;
-  border: 1px solid rgba(18, 16, 17, 0.08);
-  border-radius: 9px;
-  background: #ffffff;
-  color: #6d6064;
-  font-size: 12.5px;
+  min-height: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #8a7c80;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   box-sizing: border-box;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
   transition: all 0.18s ease;
 }
 
 .workspace-logout:hover {
-  border-color: rgba(216, 68, 68, 0.22);
+  border-color: rgba(216, 68, 68, 0.16);
   background: #fff5f5;
   color: var(--workspace-brand, #d83b46);
-  box-shadow: 0 2px 8px rgba(216, 68, 68, 0.06);
 }
 
 .workspace-logout svg {
@@ -1045,16 +1042,12 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   align-items: center;
   padding: 0;
   margin: 0 auto;
-  border: 1px solid rgba(18, 16, 17, 0.08);
-  border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
-  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .sidebar-collapsed .workspace-user:hover {
-  border-color: rgba(216, 68, 68, 0.22);
-  box-shadow: 0 3px 10px rgba(216, 68, 68, 0.07);
 }
 
 .sidebar-collapsed .workspace-user-profile {
@@ -1071,6 +1064,12 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   width: 36px;
   height: 36px;
   margin: 0 auto;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.sidebar-collapsed .workspace-user:hover .user-avatar {
+  transform: scale(1.05);
+  box-shadow: 0 3px 10px rgba(219, 51, 56, 0.35);
 }
 
 @media (max-width: 1100px) {
@@ -1148,13 +1147,13 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 
   .workspace-user {
     width: 44px;
+    height: 44px;
     justify-content: center;
-    padding: 3px 0;
+    padding: 0;
     margin: 0 auto;
-    border: 1px solid rgba(18, 16, 17, 0.08);
-    border-radius: 10px;
-    background: #ffffff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+    border: none;
+    background: transparent;
+    box-shadow: none;
   }
 
   .user-avatar {
