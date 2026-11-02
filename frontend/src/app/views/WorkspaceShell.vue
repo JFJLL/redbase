@@ -268,7 +268,14 @@ async function handleLogout() {
           :aria-expanded="!sidebarCollapsed"
           @click="toggleSidebar"
         >
-          <span class="sidebar-toggle-icon" aria-hidden="true">{{ sidebarCollapsed ? "›" : "‹" }}</span>
+          <span class="sidebar-toggle-icon" aria-hidden="true">
+            <svg v-if="sidebarCollapsed" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </span>
           <span class="sidebar-toggle-label">{{ sidebarCollapsed ? "展开侧边栏" : "收起侧边栏" }}</span>
         </button>
 
@@ -304,7 +311,14 @@ async function handleLogout() {
           </button>
         </div>
 
-        <button type="button" class="workspace-logout" @click="handleLogout">退出登录</button>
+        <button type="button" class="workspace-logout" @click="handleLogout">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          <span>退出登录</span>
+        </button>
       </div>
     </aside>
     <main class="workspace-main">
@@ -639,8 +653,11 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 }
 
 .workspace-session {
-  display: grid;
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(18, 16, 17, 0.06);
 }
 
 .sidebar-toggle {
@@ -650,24 +667,22 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   height: 38px;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
-  padding: 0 3px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  gap: 10px;
+  padding: 0 4px;
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: #ffffff;
-  color: #7a6e72;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
-  font-size: 12px;
-  font-weight: 600;
+  background: transparent;
+  color: #6a5e62;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   box-sizing: border-box;
-  transition: all 0.28s cubic-bezier(0.2, 0, 0, 1);
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .sidebar-toggle:hover {
-  border-color: rgba(216, 68, 68, 0.2);
+  background: rgba(216, 68, 68, 0.05);
   color: var(--workspace-brand, #d83b46);
-  background: #fff8f6;
 }
 
 .sidebar-toggle-icon {
@@ -678,11 +693,19 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   margin: 0;
   place-items: center;
   border-radius: 8px;
-  background: #f7f1ee;
-  color: #8c4c50;
-  font-family: Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1;
+  background: transparent;
+  color: #7a6e72;
+  transition: all 0.18s ease;
+}
+
+.sidebar-toggle:hover .sidebar-toggle-icon {
+  color: var(--workspace-brand, #d83b46);
+}
+
+.sidebar-toggle-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.85;
 }
 
 .sidebar-toggle-label {
@@ -698,8 +721,8 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   min-width: 0;
   align-items: center;
   gap: 8px;
-  padding: 3px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  padding: 4px;
+  border: 1px solid rgba(18, 16, 17, 0.06);
   border-radius: 12px;
   background: #ffffff;
   color: inherit;
@@ -856,18 +879,35 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 }
 
 .workspace-logout {
-  min-height: 42px;
-  border: 1px solid rgba(18, 16, 17, 0.08);
-  border-radius: 4px;
-  background: #fff;
-  color: #4b4244;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  height: 34px;
+  border: 1px solid rgba(18, 16, 17, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.6);
+  color: #7a6e72;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  box-sizing: border-box;
+  transition: all 0.18s ease;
 }
 
 .workspace-logout:hover {
-  border-color: rgba(216, 68, 68, 0.24);
-  color: #b83a3d;
+  border-color: rgba(216, 68, 68, 0.2);
+  background: #fff5f5;
+  color: var(--workspace-brand, #d83b46);
+}
+
+.workspace-logout svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  stroke-width: 1.8;
 }
 
 .workspace-main {
@@ -954,10 +994,14 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   align-items: center;
   padding: 0;
   margin: 0 auto;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  background: transparent;
+  box-shadow: none;
+}
+
+.sidebar-collapsed .sidebar-toggle:hover {
+  background: rgba(216, 68, 68, 0.06);
 }
 
 .sidebar-collapsed .sidebar-toggle-icon {
@@ -970,6 +1014,7 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 
 .sidebar-collapsed .workspace-user {
   width: 44px;
+  height: 44px;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1050,18 +1095,19 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 
   .sidebar-toggle {
     width: 44px;
-    min-height: 36px;
-    justify-self: center;
+    height: 44px;
+    min-height: 44px;
+    justify-content: center;
     padding: 0;
     margin: 0 auto;
-    border: 1px solid rgba(0, 0, 0, 0.06);
-    background: #ffffff;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+    border: 1px solid transparent;
+    background: transparent;
+    box-shadow: none;
   }
 
   .sidebar-toggle-icon {
-    width: 22px;
-    height: 22px;
+    width: 36px;
+    height: 36px;
     margin: 0 auto;
   }
 
