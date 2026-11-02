@@ -269,10 +269,10 @@ async function handleLogout() {
           @click="toggleSidebar"
         >
           <span class="sidebar-toggle-icon" aria-hidden="true">
-            <svg v-if="sidebarCollapsed" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+            <svg v-if="sidebarCollapsed" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="9 18 15 12 9 6" />
             </svg>
-            <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </span>
@@ -663,26 +663,29 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 .sidebar-toggle {
   display: flex;
   width: 100%;
-  min-height: 38px;
-  height: 38px;
+  min-height: 42px;
+  height: 42px;
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  padding: 0 4px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: #6a5e62;
+  padding: 0 12px 0 4px;
+  border: 1px solid rgba(18, 16, 17, 0.08);
+  border-radius: 11px;
+  background: #ffffff;
+  color: #4b4045;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   box-sizing: border-box;
-  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(80, 44, 44, 0.02);
+  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .sidebar-toggle:hover {
-  background: rgba(216, 68, 68, 0.05);
+  border-color: rgba(216, 68, 68, 0.25);
+  background: #ffffff;
   color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 3px 12px rgba(216, 68, 68, 0.08);
 }
 
 .sidebar-toggle-icon {
@@ -693,19 +696,22 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   margin: 0;
   place-items: center;
   border-radius: 8px;
-  background: transparent;
-  color: #7a6e72;
+  background: #f7f2f0;
+  border: 1px solid rgba(18, 16, 17, 0.05);
+  color: #6d6064;
   transition: all 0.18s ease;
 }
 
 .sidebar-toggle:hover .sidebar-toggle-icon {
+  background: #ffeff0;
+  border-color: rgba(216, 68, 68, 0.16);
   color: var(--workspace-brand, #d83b46);
 }
 
 .sidebar-toggle-icon svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.85;
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
 }
 
 .sidebar-toggle-label {
@@ -722,20 +728,20 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   align-items: center;
   gap: 8px;
   padding: 4px;
-  border: 1px solid rgba(18, 16, 17, 0.06);
+  border: 1px solid rgba(18, 16, 17, 0.08);
   border-radius: 12px;
   background: #ffffff;
   color: inherit;
   text-align: left;
   text-decoration: none;
   box-sizing: border-box;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-  transition: all 0.28s cubic-bezier(0.2, 0, 0, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(80, 44, 44, 0.02);
+  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .workspace-user:hover {
-  border-color: rgba(216, 68, 68, 0.16);
-  box-shadow: 0 4px 14px rgba(216, 68, 68, 0.05);
+  border-color: rgba(216, 68, 68, 0.22);
+  box-shadow: 0 4px 14px rgba(216, 68, 68, 0.06);
 }
 
 .workspace-user-profile {
@@ -884,30 +890,32 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   justify-content: center;
   gap: 6px;
   width: 100%;
-  min-height: 34px;
-  height: 34px;
-  border: 1px solid rgba(18, 16, 17, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.6);
-  color: #7a6e72;
-  font-size: 12px;
+  min-height: 36px;
+  height: 36px;
+  border: 1px solid rgba(18, 16, 17, 0.08);
+  border-radius: 9px;
+  background: #ffffff;
+  color: #6d6064;
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
   box-sizing: border-box;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
   transition: all 0.18s ease;
 }
 
 .workspace-logout:hover {
-  border-color: rgba(216, 68, 68, 0.2);
+  border-color: rgba(216, 68, 68, 0.22);
   background: #fff5f5;
   color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 2px 8px rgba(216, 68, 68, 0.06);
 }
 
 .workspace-logout svg {
   width: 13px;
   height: 13px;
   flex-shrink: 0;
-  stroke-width: 1.8;
+  stroke-width: 1.85;
 }
 
 .workspace-main {
@@ -994,14 +1002,17 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   align-items: center;
   padding: 0;
   margin: 0 auto;
-  border: 1px solid transparent;
+  border: 1px solid rgba(18, 16, 17, 0.08);
   border-radius: 10px;
-  background: transparent;
-  box-shadow: none;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03), 0 2px 6px rgba(80, 44, 44, 0.02);
+  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .sidebar-collapsed .sidebar-toggle:hover {
-  background: rgba(216, 68, 68, 0.06);
+  border-color: rgba(216, 68, 68, 0.28);
+  box-shadow: 0 3px 12px rgba(216, 68, 68, 0.08);
+  background: #ffffff;
 }
 
 .sidebar-collapsed .sidebar-toggle-icon {
@@ -1010,6 +1021,16 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   margin: 0 auto;
   display: grid;
   place-items: center;
+  border-radius: 8px;
+  background: #f7f2f0;
+  border: 1px solid rgba(18, 16, 17, 0.05);
+  color: #6d6064;
+}
+
+.sidebar-collapsed .sidebar-toggle:hover .sidebar-toggle-icon {
+  background: #ffeff0;
+  border-color: rgba(216, 68, 68, 0.16);
+  color: var(--workspace-brand, #d83b46);
 }
 
 .sidebar-collapsed .workspace-user {
@@ -1020,9 +1041,16 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   align-items: center;
   padding: 0;
   margin: 0 auto;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  border: 1px solid rgba(18, 16, 17, 0.08);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.sidebar-collapsed .workspace-user:hover {
+  border-color: rgba(216, 68, 68, 0.22);
+  box-shadow: 0 3px 10px rgba(216, 68, 68, 0.07);
 }
 
 .sidebar-collapsed .workspace-user-profile {
@@ -1100,15 +1128,19 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
     justify-content: center;
     padding: 0;
     margin: 0 auto;
-    border: 1px solid transparent;
-    background: transparent;
-    box-shadow: none;
+    border: 1px solid rgba(18, 16, 17, 0.08);
+    border-radius: 10px;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
   }
 
   .sidebar-toggle-icon {
     width: 36px;
     height: 36px;
     margin: 0 auto;
+    background: #f7f2f0;
+    border: 1px solid rgba(18, 16, 17, 0.05);
+    border-radius: 8px;
   }
 
   .workspace-user {
@@ -1116,9 +1148,10 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
     justify-content: center;
     padding: 3px 0;
     margin: 0 auto;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
+    border: 1px solid rgba(18, 16, 17, 0.08);
+    border-radius: 10px;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
   }
 
   .user-avatar {
