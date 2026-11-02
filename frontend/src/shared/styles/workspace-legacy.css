@@ -154,30 +154,37 @@
 
 .workspace-layout .legacy-primary,
 .workspace-layout .workspace-primary {
-  border: 1px solid var(--workspace-brand);
-  background: var(--workspace-brand);
+  border: 1px solid #d83232;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #ff4359 0%, #d83232 100%);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(216, 50, 50, 0.22);
 }
 
 .workspace-layout .legacy-primary:hover:not(:disabled),
 .workspace-layout .workspace-primary:hover:not(:disabled) {
-  border-color: var(--workspace-brand-hover);
-  background: var(--workspace-brand-hover);
+  border-color: #c92828;
+  background: linear-gradient(135deg, #ff576c 0%, #c92828 100%);
+  box-shadow: 0 4px 14px rgba(216, 50, 50, 0.32);
   transform: translateY(-1px);
 }
 
 .workspace-layout .legacy-secondary,
 .workspace-layout .workspace-secondary {
-  border: 1px solid var(--workspace-brand-border);
-  background: var(--workspace-surface);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  background: #ffffff;
   color: var(--workspace-text-body);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 
 .workspace-layout .legacy-secondary:hover:not(:disabled),
 .workspace-layout .workspace-secondary:hover:not(:disabled) {
-  border-color: rgba(216, 68, 68, 0.3);
+  border-color: rgba(216, 68, 68, 0.25);
   color: var(--workspace-brand-ink);
+  background: #fffafa;
   transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(216, 68, 68, 0.06);
 }
 
 .workspace-layout .legacy-danger,

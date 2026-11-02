@@ -377,7 +377,12 @@ function goToIdeas(trend: TrendItem): void {
     <header class="panel-header">
       <div>
         <div class="panel-icon-title">
-          <span class="panel-icon panel-icon-orange">↗</span>
+          <span class="panel-icon panel-icon-orange" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+              <polyline points="17 6 23 6 23 12"/>
+            </svg>
+          </span>
           <h1 class="panel-title">热点趋势分析</h1>
         </div>
         <p class="panel-subtitle">选择品牌或个人 IP，AI 分析全网十大热点趋势</p>
@@ -960,14 +965,23 @@ function goToIdeas(trend: TrendItem): void {
 }
 
 .panel-icon {
-  display: block;
-  width: 28.8125px;
-  height: auto;
-  border-radius: 0;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #fff8f3 0%, #ffede2 100%);
+  border: 1px solid rgba(212, 107, 53, 0.16);
   color: #d46b35;
-  font-size: 1.8rem;
-  font-weight: 400;
+  box-shadow: 0 3px 12px rgba(212, 107, 53, 0.08);
+}
+
+.panel-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
 }
 
 .panel-title {
@@ -991,33 +1005,68 @@ function goToIdeas(trend: TrendItem): void {
   border-radius: var(--workspace-radius-sm);
 }
 
-.brand-chip-row,
-.trend-mode-row {
+.brand-chip-row {
   gap: 8px;
 }
 
-.brand-chip,
-.trend-mode-tab {
-  min-height: 42px;
+.brand-chip {
+  min-height: 36px;
   padding: 0 16px;
-  border-color: var(--workspace-border);
-  border-radius: var(--workspace-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 999px;
   background: #fff;
-  color: var(--workspace-text);
-  font-size: 0.92rem;
+  color: #4b4244;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.16s ease;
 }
 
-.brand-chip:hover,
-.trend-mode-tab:hover {
-  border-color: rgba(216, 68, 68, 0.2);
+.brand-chip:hover {
+  border-color: rgba(216, 68, 68, 0.25);
   background: #fff8f7;
+  color: var(--workspace-brand, #d83b46);
 }
 
-.brand-chip.is-active,
+.brand-chip.is-active {
+  border-color: transparent;
+  background: linear-gradient(135deg, #ff4359 0%, #d83232 100%);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(216, 50, 50, 0.25);
+}
+
+.trend-mode-row {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #eee8e5;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  width: fit-content;
+}
+
+.trend-mode-tab {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64585c;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.16s ease;
+  cursor: pointer;
+}
+
+.trend-mode-tab:hover {
+  color: #1f1b1c;
+}
+
 .trend-mode-tab.is-active {
-  border-color: rgba(216, 68, 68, 0.32);
-  background: #f3e7e2;
-  color: var(--workspace-brand-ink);
+  border: 0;
+  background: #fff;
+  color: #1f1b1c;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  font-weight: 700;
 }
 
 .brand-chip small {
@@ -1047,10 +1096,10 @@ function goToIdeas(trend: TrendItem): void {
 .history-block,
 .trend-card {
   position: relative;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
   background: var(--workspace-surface);
-  box-shadow: none;
+  box-shadow: 0 4px 20px rgba(80, 44, 44, 0.03);
 }
 
 .history-block,
@@ -1060,6 +1109,7 @@ function goToIdeas(trend: TrendItem): void {
 
 .xhs-category-control {
   flex-shrink: 0;
+  border-radius: 12px;
 }
 
 .xhs-category-control,
@@ -1069,22 +1119,31 @@ function goToIdeas(trend: TrendItem): void {
 }
 
 .xhs-category-control select {
-  min-height: 42px;
-  border-color: var(--workspace-border);
-  border-radius: var(--workspace-radius-sm);
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
   background: #fff;
   color: var(--workspace-text);
 }
 
 .primary-btn {
-  min-height: 54px;
+  min-height: 48px;
   padding: 8px 20px;
-  border-radius: var(--workspace-radius-sm);
-  background: var(--workspace-brand);
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ff4359 0%, #d83232 100%);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(216, 50, 50, 0.28);
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .primary-btn:hover:not(:disabled) {
-  background: var(--workspace-brand-hover);
+  background: linear-gradient(135deg, #ff576c 0%, #c92828 100%);
+  box-shadow: 0 6px 18px rgba(216, 50, 50, 0.36);
+  transform: translateY(-1px);
 }
 
 .analysis-notice,
@@ -1132,11 +1191,12 @@ function goToIdeas(trend: TrendItem): void {
 .trend-card::before {
   content: "";
   position: absolute;
-  top: -1px;
-  left: -1px;
+  top: 0;
+  left: 0;
   width: 42px;
-  height: 2px;
-  background: var(--workspace-brand);
+  height: 3px;
+  border-radius: 0 0 3px 0;
+  background: linear-gradient(90deg, var(--workspace-brand), #ff6b7d);
 }
 
 .trend-card h3 {

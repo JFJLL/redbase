@@ -142,7 +142,13 @@ function goTrends(brandId: number): void {
     <header class="panel-header">
       <div>
         <div class="panel-icon-title">
-          <span class="panel-icon">⌘</span>
+          <span class="panel-icon panel-icon-brand" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+              <line x1="12" y1="22.08" x2="12" y2="12"/>
+            </svg>
+          </span>
           <h1 class="panel-title">品牌档案</h1>
         </div>
         <p class="panel-subtitle">管理你的品牌信息，为 AI 分析提供输入</p>
@@ -365,14 +371,23 @@ function goTrends(brandId: number): void {
 }
 
 .panel-icon {
-  display: block;
-  width: 28.8125px;
-  height: auto;
-  border-radius: 0;
-  background: transparent;
-  color: var(--workspace-brand);
-  font-size: 1.8rem;
-  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #fff5f3 0%, #ffece9 100%);
+  border: 1px solid rgba(220, 53, 69, 0.12);
+  color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 3px 12px rgba(220, 53, 69, 0.05);
+}
+
+.panel-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
 }
 
 .panel-title {
@@ -404,21 +419,28 @@ function goTrends(brandId: number): void {
   position: relative;
   overflow: hidden;
   gap: 16px;
-  padding: 22px;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
+  padding: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
   background: var(--workspace-surface);
-  box-shadow: none;
+  box-shadow: 0 4px 20px rgba(80, 44, 44, 0.03);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.brand-card:hover {
+  border-color: rgba(216, 68, 68, 0.16);
+  box-shadow: 0 8px 28px rgba(80, 44, 44, 0.06);
 }
 
 .brand-card::before {
   content: "";
   position: absolute;
-  top: -1px;
-  left: -1px;
+  top: 0;
+  left: 0;
   width: 42px;
-  height: 2px;
-  background: var(--workspace-brand);
+  height: 3px;
+  border-radius: 0 0 3px 0;
+  background: linear-gradient(90deg, var(--workspace-brand), #ff6b7d);
 }
 
 .brand-meta {

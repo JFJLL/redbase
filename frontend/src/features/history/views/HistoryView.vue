@@ -642,7 +642,12 @@ onUnmounted(() => {
     <header class="panel-header">
       <div>
         <div class="panel-icon-title">
-          <span class="panel-icon">◍</span>
+          <span class="panel-icon panel-icon-history" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </span>
           <h1 class="panel-title">历史生成</h1>
         </div>
         <p class="panel-subtitle">集中查看生成图片、组图与视频；完整发布文案在详情中查看。</p>
@@ -2163,11 +2168,23 @@ onUnmounted(() => {
 }
 
 .history-view .panel-icon {
-  display: block;
-  width: 24.0625px;
-  color: var(--workspace-brand);
-  font-size: 1.8rem;
-  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #fff5f3 0%, #ffece9 100%);
+  border: 1px solid rgba(220, 53, 69, 0.12);
+  color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 3px 12px rgba(220, 53, 69, 0.05);
+}
+
+.history-view .panel-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
 }
 
 .history-view .panel-title {

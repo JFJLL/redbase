@@ -75,21 +75,29 @@ const entries = [
   display: flex;
   flex-direction: column;
   min-height: auto;
-  padding: 20px;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
+  padding: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
   background: var(--workspace-surface);
-  box-shadow: none;
+  box-shadow: 0 4px 20px rgba(80, 44, 44, 0.03);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.home-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(216, 68, 68, 0.16);
+  box-shadow: 0 8px 28px rgba(80, 44, 44, 0.06);
 }
 
 .home-card::before {
   content: "";
   position: absolute;
-  top: -1px;
-  left: -1px;
+  top: 0;
+  left: 0;
   width: 42px;
-  height: 2px;
-  background: var(--workspace-brand);
+  height: 3px;
+  border-radius: 0 0 3px 0;
+  background: linear-gradient(90deg, var(--workspace-brand), #ff6b7d);
 }
 
 .home-card-title {

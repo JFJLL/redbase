@@ -701,7 +701,12 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
     <header class="panel-header">
       <div>
         <div class="panel-icon-title">
-          <span class="panel-icon panel-icon-green">◌</span>
+          <span class="panel-icon panel-icon-green" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18h6"/><path d="M10 22h4"/>
+              <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/>
+            </svg>
+          </span>
           <h1 class="panel-title">内容选题</h1>
         </div>
         <p class="panel-subtitle">结合主体档案和热点趋势，生成更匹配品牌或个人 IP 的小红书内容</p>
@@ -1497,14 +1502,23 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 }
 
 .panel-icon {
-  display: block;
-  width: 14.40625px;
-  height: auto;
-  border-radius: 0;
-  background: transparent;
-  color: #4c9775;
-  font-size: 1.8rem;
-  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  color: #16a34a;
+  box-shadow: 0 3px 12px rgba(34, 197, 94, 0.08);
+}
+
+.panel-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
 }
 
 .panel-title {
@@ -1532,10 +1546,16 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
 .idea-card {
   position: relative;
   overflow: hidden;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
   background: var(--workspace-surface);
-  box-shadow: none;
+  box-shadow: 0 4px 20px rgba(80, 44, 44, 0.03);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.idea-card:hover {
+  border-color: rgba(216, 68, 68, 0.16);
+  box-shadow: 0 8px 28px rgba(80, 44, 44, 0.06);
 }
 
 .idea-card {
@@ -1679,10 +1699,24 @@ const productLibraryProp = computed<IdeaProductLibrary>(() => ({
   justify-content: center;
   gap: 2px;
   width: 100%;
-  min-height: 54px;
+  min-height: 48px;
   padding: 8px 10px;
   text-align: center;
   line-height: 1.4;
+  border: 1px solid rgba(216, 68, 68, 0.18);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--workspace-brand, #d83b46);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.idea-actions .cost-button:hover:not(:disabled) {
+  border-color: rgba(216, 68, 68, 0.38);
+  background: #fff8f7;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(216, 68, 68, 0.08);
 }
 
 .idea-actions .cost-button small {

@@ -732,13 +732,15 @@ function avatarInitial(name: string): string {
 
 .panel-icon {
   display: inline-flex;
-  width: 40px;
-  height: 40px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
   border-radius: 12px;
-  background: rgba(255, 36, 66, 0.1);
-  color: var(--workspace-brand);
-  font-size: 1.8rem;
-  font-weight: 400;
+  background: linear-gradient(145deg, #fff5f3 0%, #ffece9 100%);
+  border: 1px solid rgba(220, 53, 69, 0.12);
+  color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 3px 12px rgba(220, 53, 69, 0.05);
 }
 
 .panel-icon svg {
@@ -773,10 +775,16 @@ function avatarInitial(name: string): string {
   overflow: hidden;
   gap: 14px;
   padding: 22px;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
   background: var(--workspace-surface);
-  box-shadow: none;
+  box-shadow: 0 4px 20px rgba(80, 44, 44, 0.03);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.personal-profile-card.is-selected {
+  border-color: rgba(216, 68, 68, 0.28);
+  box-shadow: 0 8px 28px rgba(216, 68, 68, 0.08);
 }
 
 .brand-card::before {

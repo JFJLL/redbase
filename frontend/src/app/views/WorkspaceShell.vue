@@ -213,7 +213,36 @@ async function handleLogout() {
             active-class="is-active"
             :title="sidebarCollapsed ? item.label : undefined"
           >
-            <span class="sidebar-item-icon">{{ item.icon }}</span>
+            <span class="sidebar-item-icon" aria-hidden="true">
+              <svg v-if="item.name === 'home'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                <polyline points="9 22 9 12 15 12 15 22"/>
+              </svg>
+              <svg v-else-if="item.name === 'brands'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                <line x1="12" y1="22.08" x2="12" y2="12"/>
+              </svg>
+              <svg v-else-if="item.name === 'personal'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              <svg v-else-if="item.name === 'trends'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+                <polyline points="17 6 23 6 23 12"/>
+              </svg>
+              <svg v-else-if="item.name === 'ideas'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18h6"/><path d="M10 22h4"/>
+                <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/>
+              </svg>
+              <svg v-else-if="item.name === 'excellent'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </span>
             <span class="sidebar-item-label">{{ item.label }}</span>
             <template v-if="item.name === 'history'">
               <span v-if="tasksStore.hasUnviewedRunningTasks" class="sidebar-task-indicator is-running" title="生成进行中" data-test="sidebar-task-running">
@@ -493,25 +522,31 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 
 .sidebar-item {
   display: flex;
-  min-height: 50px;
+  min-height: 44px;
   align-items: center;
   gap: 12px;
-  padding: 0 14px;
+  padding: 0 12px;
   border: 1px solid transparent;
-  border-radius: var(--workspace-radius);
-  color: #564d50;
-  font-size: 0.98rem;
-  font-weight: 700;
+  border-radius: 10px;
+  color: #52474b;
+  font-size: 0.93rem;
+  font-weight: 600;
   text-decoration: none;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.sidebar-item:hover,
+.sidebar-item:hover {
+  background: rgba(216, 68, 68, 0.05);
+  color: #1a1617;
+  transform: translateX(2px);
+}
+
 .sidebar-item.is-active {
-  border-color: transparent;
-  background: #f3e7e2;
-  color: var(--workspace-brand-ink);
-  box-shadow: none;
+  border-color: rgba(216, 68, 68, 0.12);
+  background: #ffffff;
+  color: var(--workspace-brand, #d83b46);
+  box-shadow: 0 3px 12px rgba(180, 50, 50, 0.06);
+  font-weight: 700;
 }
 
 .sidebar-item-icon {
@@ -520,17 +555,27 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   height: 30px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 7px;
-  background: rgba(216, 68, 68, 0.08);
-  color: var(--workspace-brand-ink);
-  font-size: 0.8rem;
-  font-weight: 700;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.03);
+  color: #7a6e72;
+  transition: all 0.18s ease;
 }
 
-.sidebar-item:hover .sidebar-item-icon,
+.sidebar-item-icon svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.85;
+}
+
+.sidebar-item:hover .sidebar-item-icon {
+  background: rgba(216, 68, 68, 0.08);
+  color: var(--workspace-brand, #d83b46);
+}
+
 .sidebar-item.is-active .sidebar-item-icon {
-  background: var(--workspace-brand);
-  color: #fff;
+  background: linear-gradient(135deg, #ff4359 0%, #d83232 100%);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(216, 50, 50, 0.28);
 }
 
 .sidebar-task-indicator {
@@ -587,35 +632,37 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 
 .sidebar-toggle {
   display: flex;
-  min-height: 40px;
+  min-height: 36px;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid rgba(229, 72, 77, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 999px;
-  background: #fff;
-  color: #7f383d;
-  box-shadow: 0 10px 24px rgba(126, 55, 55, 0.06);
-  font-size: 13px;
-  font-weight: 700;
+  background: #ffffff;
+  color: #7a6e72;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
+  transition: all 0.18s ease;
 }
 
 .sidebar-toggle:hover {
-  border-color: rgba(229, 72, 77, 0.3);
-  background: #fff7f5;
+  border-color: rgba(216, 68, 68, 0.2);
+  color: var(--workspace-brand, #d83b46);
+  background: #fff8f6;
 }
 
 .sidebar-toggle-icon {
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   place-items: center;
   border-radius: 50%;
-  background: #f3e7e2;
-  color: #b84043;
+  background: #f7f1ee;
+  color: #8c4c50;
   font-family: Arial, sans-serif;
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1;
 }
 
@@ -624,14 +671,21 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 8px;
-  padding: 6px 4px;
-  border: 0;
-  border-radius: var(--workspace-radius);
-  background: transparent;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  background: #ffffff;
   color: inherit;
   text-align: left;
   text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+  transition: all 0.18s ease;
+}
+
+.workspace-user:hover {
+  border-color: rgba(216, 68, 68, 0.16);
+  box-shadow: 0 4px 14px rgba(216, 68, 68, 0.05);
 }
 
 .workspace-user-profile {
@@ -639,8 +693,8 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   min-width: 0;
   flex: 1;
   align-items: center;
-  gap: 12px;
-  padding: 4px;
+  gap: 10px;
+  padding: 2px;
   border: 0;
   border-radius: var(--workspace-radius-sm);
   background: transparent;
@@ -649,27 +703,26 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
   text-align: left;
   text-decoration: none;
   cursor: pointer;
-  transition: background 180ms ease;
 }
 
 .workspace-user-profile:hover,
 .workspace-user-profile:focus-visible {
-  background: rgba(216, 68, 68, 0.06);
   outline: none;
 }
 
 .user-avatar {
   display: grid;
-  width: 46px;
-  height: 46px;
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(216, 68, 68, 0.1);
-  border-radius: 50%;
-  background: #efe7e2;
-  color: #a13a3a;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #ff5768 0%, #db3338 100%);
+  color: #ffffff;
   font-size: 14px;
   font-weight: 700;
+  box-shadow: 0 2px 6px rgba(219, 51, 56, 0.25);
 }
 
 .user-details {
@@ -690,35 +743,36 @@ function getAccountPackageExpiry(user: Record<string, unknown> | null): string {
 }
 
 .user-name {
-  color: #31292b;
+  color: #1f1b1c;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .user-phone {
-  color: #7b7073;
-  font-size: 12px;
+  color: #8f8286;
+  font-size: 11px;
 }
 
 .user-credits {
   flex: 0 0 auto;
-  padding: 2px 7px;
-  border: 1px solid rgba(216, 68, 68, 0.08);
+  padding: 3px 8px;
+  border: 1px solid rgba(216, 68, 68, 0.15);
   border-radius: 999px;
-  background: #fff0ed;
-  color: #db4b4e;
+  background: #fff3f0;
+  color: #d83b46;
   font-family: inherit;
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+  transition: all 0.16s ease;
 }
 
 .user-credits:hover,
 .user-credits:focus-visible {
-  border-color: rgba(216, 68, 68, 0.34);
-  background: #ffe7e3;
+  border-color: rgba(216, 68, 68, 0.35);
+  background: #ffebe6;
   outline: none;
-  box-shadow: 0 0 0 3px rgba(216, 68, 68, 0.1);
+  transform: scale(1.03);
 }
 
 .credit-shortage-toast {
