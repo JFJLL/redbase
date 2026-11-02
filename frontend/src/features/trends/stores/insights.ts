@@ -244,11 +244,26 @@ export const useInsightsStore = defineStore("insights", {
         this.selectedTrendId = null;
         return;
       }
-      if (!getTrendBucketsForBrand(brand).some((bucket) => bucket.key === this.selectedTrendMode)) {
+      const buckets = getTrendBucketsForBrand(brand);
+      if (this.selectedTrendId !== null) {
+        for (const b of buckets) {
+          if ((b.items || []).some((item) => Number(item.id) === Number(this.selectedTrendId))) {
+            this.selectedTrendMode = b.key;
+            return;
+          }
+        }
+      }
+      if (!buckets.some((bucket) => bucket.key === this.selectedTrendMode)) {
         this.selectedTrendMode = firstTrendBucket(brand)?.key ?? DEFAULT_TREND_MODE;
       }
-      const currentBucket = this.currentBucket;
+      let currentBucket = this.currentBucket;
       if (!currentBucket?.items?.some((trend) => Number(trend.id) === Number(this.selectedTrendId))) {
+        const withItems = buckets.find((b) => (b.items || []).length > 0);
+        if (withItems && (!currentBucket || !currentBucket.items?.length)) {
+          this.selectedTrendMode = withItems.key;
+          this.selectedTrendId = withItems.items[0]?.id ?? null;
+          return;
+        }
         this.selectedTrendId = currentBucket?.items?.[0]?.id ?? null;
       }
     },

@@ -621,10 +621,19 @@ async function handleSubmit(): Promise<void> {
 
 .primary-btn,
 .secondary-btn {
-  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
+  box-sizing: border-box;
+  min-height: 42px;
   padding: 0 20px;
-  border-radius: var(--workspace-radius-sm);
+  border-radius: 10px;
   font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .primary-btn {

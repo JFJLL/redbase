@@ -677,25 +677,35 @@ function avatarInitial(name: string): string {
   gap: 12px;
 }
 
-.primary-btn {
-  border: 0;
+.primary-btn,
+.secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 0 16px;
   border-radius: 8px;
-  padding: 8px 16px;
-  background: var(--color-brand, #ff2442);
-  color: #fff;
   font: inherit;
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.primary-btn {
+  border: 0;
+  background: linear-gradient(135deg, #ff4359 0%, #d83232 100%);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(216, 50, 50, 0.22);
 }
 
 .secondary-btn {
-  border: 1px solid var(--color-border, #e4e6eb);
-  border-radius: 8px;
-  padding: 8px 16px;
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  color: #4b4244;
 }
 
 .danger-btn {
@@ -883,24 +893,34 @@ function avatarInitial(name: string): string {
 
 .primary-btn,
 .secondary-btn {
-  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1;
+  box-sizing: border-box;
+  min-height: 36px;
   padding: 0 16px;
-  border-radius: var(--workspace-radius-sm);
+  border-radius: 8px;
   font-size: 0.92rem;
-  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+  font-weight: 600;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .primary-btn {
-  background: var(--workspace-brand);
+  border: 0;
+  background: linear-gradient(135deg, #ff4359 0%, #d83232 100%);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(216, 50, 50, 0.22);
 }
 
 .primary-btn:hover {
-  background: var(--workspace-brand-hover);
+  background: linear-gradient(135deg, #ff576c 0%, #c92828 100%);
+  box-shadow: 0 4px 14px rgba(216, 50, 50, 0.32);
 }
 
 .secondary-btn {
-  border-color: var(--workspace-border);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   background: #fff;
   color: var(--workspace-text);
 }

@@ -1128,6 +1128,13 @@ function goToIdeas(trend: TrendItem): void {
 }
 
 .primary-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.2;
+  box-sizing: border-box;
   min-height: 48px;
   padding: 8px 20px;
   border: 0;
